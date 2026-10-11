@@ -6,6 +6,10 @@
 //!
 //! all refined at edges with a guided filter against the image luminance.
 
+pub mod denoise;
+pub mod inpaint;
+pub mod models;
+
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};

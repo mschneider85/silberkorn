@@ -227,6 +227,7 @@ struct Settings {
     softproof: sk_core::softproof::ProofSettings,
     hdr_options: sk_core::hdr::HdrOptions,
     pano_options: sk_core::panorama::PanoramaOptions,
+    denoise_strength: Option<f32>,
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -343,6 +344,9 @@ pub struct App {
     pub before_texture: Option<TextureHandle>,
     before_key: Option<u64>,
     pub magic_tolerance: f32,
+    /// Strokes of the remove tool not yet filled (or being filled).
+    pub remove_strokes: Vec<sk_core::params::BrushStroke>,
+    pub inpaint_busy: bool,
     pub ai_busy: bool,
     pub model_missing: bool,
     pub model_downloading: bool,
@@ -462,6 +466,9 @@ pub struct App {
     pub merge_dialog: Option<crate::merge::MergeDialog>,
     pub hdr_options: sk_core::hdr::HdrOptions,
     pub pano_options: sk_core::panorama::PanoramaOptions,
+    pub denoise_dialog: Option<crate::denoise::DenoiseDialog>,
+    /// 0..100
+    pub denoise_strength: f32,
 }
 
 /// Startup options (separate from `eframe` so that tests can construct the app).
@@ -585,6 +592,8 @@ impl App {
             before_texture: None,
             before_key: None,
             magic_tolerance: 0.3,
+            remove_strokes: Vec::new(),
+            inpaint_busy: false,
             ai_busy: false,
             model_missing: false,
             model_downloading: false,
@@ -667,6 +676,8 @@ impl App {
             merge_dialog: None,
             hdr_options: settings.hdr_options,
             pano_options: settings.pano_options,
+            denoise_dialog: None,
+            denoise_strength: settings.denoise_strength.unwrap_or(60.0).clamp(0.0, 100.0),
         };
         app.reload_styles();
         match session {
@@ -717,6 +728,7 @@ impl App {
             softproof: self.softproof.settings.clone(),
             hdr_options: self.hdr_options,
             pano_options: self.pano_options,
+            denoise_strength: Some(self.denoise_strength),
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -1614,6 +1626,7 @@ impl App {
                     self.select_created();
                 }
                 Event::JobProgress { id, progress } => self.job_progress(id, progress),
+                Event::Removal { generation, result } => self.removal_done(generation, result),
                 Event::JobDone { id, label, result } => self.job_done(id, label, result),
             }
         }
@@ -1780,6 +1793,7 @@ impl App {
             (Key::R, LocalTool::Radial),
             (Key::H, LocalTool::Heal),
             (Key::S, LocalTool::Clone),
+            (Key::X, LocalTool::Remove),
         ] {
             if pressed(k, Modifiers::NONE) {
                 self.tab = Tab::Layers;
@@ -1968,6 +1982,13 @@ impl App {
                 r.watermark = sk_core::watermark::Watermark { enabled: true, text, size: 6.0, opacity: 0.8, ..Default::default() };
             }
             self.proof_view |= std::env::var_os("SILBERKORN_PROOF").is_some();
+            if std::env::var_os("SILBERKORN_DENOISE").is_some() {
+                self.open_denoise();
+            }
+            if std::env::var_os("SILBERKORN_MERGE").is_some() {
+                self.select_all();
+                self.open_merge(crate::merge::MergeKind::Panorama);
+            }
             if std::env::var_os("SILBERKORN_SOFTPROOF").is_some() {
                 self.tab = Tab::Output;
                 self.edit(|a| a.saturation = 60.0);
@@ -2084,6 +2105,7 @@ impl eframe::App for App {
             self.variant_dialogs(&ctx);
             self.stack_dialogs(&ctx);
             self.merge_dialogs(&ctx);
+            self.denoise_dialogs(&ctx);
             self.finish_frame(&ctx);
             return;
         }
@@ -2119,6 +2141,7 @@ impl eframe::App for App {
         self.variant_dialogs(&ctx);
         self.stack_dialogs(&ctx);
         self.merge_dialogs(&ctx);
+        self.denoise_dialogs(&ctx);
         self.finish_frame(&ctx);
     }
 

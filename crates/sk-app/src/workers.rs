@@ -69,6 +69,8 @@ pub enum Event {
     /// Sharpness map of a displayed image for the focus mask.
     /// `version`: edit version of the rendering of the image being edited (`None` for others).
     Focus { path: PathBuf, version: Option<u64>, size: [usize; 2], sharpness: Arc<Vec<u8>> },
+    /// Result of a generative removal (see `remove.rs`).
+    Removal { generation: u64, result: Result<sk_core::params::Removal, String> },
     /// Progress (0..1) of a background job (see `jobs.rs`).
     JobProgress { id: u64, progress: f32 },
     /// A background job finished: the files it created, or why it failed.
@@ -210,6 +212,16 @@ pub struct AiJob {
     pub adjustments: Adjustments,
 }
 
+/// Fills the area marked by `strokes` (see `remove.rs`).
+pub struct InpaintJob {
+    pub generation: u64,
+    pub path: PathBuf,
+    /// Full resolution, if already loaded.
+    pub full: Option<Arc<LinearImage>>,
+    pub wb: [f32; 3],
+    pub strokes: Vec<sk_core::params::BrushStroke>,
+}
+
 pub struct Workers {
     pub events: Receiver<Event>,
     ev_tx: Sender<Event>,
@@ -233,6 +245,7 @@ pub struct Workers {
     detail_tx: Sender<Vec<DetailJob>>,
     focus_tx: Sender<(PathBuf, Arc<ColorImage>, Option<u64>)>,
     match_tx: Sender<MatchJob>,
+    inpaint_tx: Sender<InpaintJob>,
     activity: Activity,
 }
 
@@ -802,6 +815,20 @@ impl Workers {
             });
         }
 
+        let (inpaint_tx, inpaint_rx) = channel::<InpaintJob>();
+        {
+            let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
+            thread::spawn(move || {
+                let mut model: Option<sk_ai::inpaint::Inpainter> = None;
+                while let Ok(job) = inpaint_rx.recv() {
+                    activity.touch();
+                    let result = crate::remove::compute(&job, &mut model);
+                    let _ = ev_tx.send(Event::Removal { generation: job.generation, result });
+                    ctx.request_repaint();
+                }
+            });
+        }
+
         let (export_tx, export_rx) = channel::<ExportJob>();
         {
             let (ev_tx, ctx) = (ev_tx, ctx);
@@ -842,6 +869,7 @@ impl Workers {
             detail_tx,
             focus_tx,
             match_tx,
+            inpaint_tx,
             activity,
         }
     }
@@ -892,6 +920,10 @@ impl Workers {
 
     pub fn focus(&self, path: PathBuf, image: Arc<ColorImage>, version: Option<u64>) {
         let _ = self.focus_tx.send((path, image, version));
+    }
+
+    pub fn inpaint(&self, job: InpaintJob) {
+        let _ = self.inpaint_tx.send(job);
     }
 
     pub fn match_to_reference(&self, job: MatchJob) {

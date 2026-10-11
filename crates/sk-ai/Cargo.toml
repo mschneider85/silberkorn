@@ -7,8 +7,10 @@ version.workspace = true
 anyhow = "1.0.104"
 sk-core = { version = "0.1.0", path = "../sk-core" }
 image = { version = "0.25", default-features = false }
+rayon = "1.12.0"
 tract-onnx = "0.23"
 ureq = "3"
 
 [dev-dependencies]
+mimalloc = "0.1"
 image = { version = "0.25", default-features = false, features = ["png"] }

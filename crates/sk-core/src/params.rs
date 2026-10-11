@@ -183,6 +183,24 @@ pub struct Adjustments {
     pub layers: Vec<Layer>,
     /// Heal and clone spots.
     pub retouch: Vec<Spot>,
+    /// Objects removed by generative fill (applied before the spots).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub removals: Vec<Removal>,
+}
+
+/// Something removed from the image: the strokes that marked it and the generated content
+/// shown there (see `mask::apply_removals`), in normalized source coordinates.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Removal {
+    /// Identifies the generated content (for caches).
+    pub id: u64,
+    pub strokes: Vec<BrushStroke>,
+    /// Area of the patch: x, y, width, height (0..1 of the source).
+    pub rect: [f32; 4],
+    /// Camera RGB (divided by `scale`) and coverage as a 16-bit RGBA PNG, base64 encoded.
+    pub patch: std::sync::Arc<String>,
+    pub scale: f32,
 }
 
 /// Adjustments of a local layer, as deltas added to the background values.
@@ -657,6 +675,7 @@ impl Default for Adjustments {
             black_white: BlackWhite::default(),
             layers: Vec::new(),
             retouch: Vec::new(),
+            removals: Vec::new(),
         }
     }
 }
@@ -676,6 +695,7 @@ impl Adjustments {
         // Masks and retouching are tied to image content.
         self.layers = other.layers.clone();
         self.retouch = other.retouch.clone();
+        self.removals = other.removals.clone();
     }
 }
 

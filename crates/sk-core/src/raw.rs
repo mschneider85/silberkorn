@@ -78,7 +78,9 @@ fn decode_ext(path: &Path, dummy: bool) -> Result<Decoded> {
     let raw = decoder.raw_image(&source, &params, dummy).map_err(|e| anyhow!("RAW-Dekodierung fehlgeschlagen: {e}"))?;
     let md = decoder.raw_metadata(&source, &params).ok();
     let mut meta = build_meta(path, &raw, md.as_ref())?;
-    meta.hdr = raw.cpp == 3 && matches!(raw.data, RawImageData::Float(_));
+    // Merged HDR data goes beyond the white level; float data within it (e.g. denoised raws)
+    // is clipped like any raw file.
+    meta.hdr = raw.cpp == 3 && matches!(&raw.data, RawImageData::Float(d) if d.par_iter().any(|v| *v > 1.0001));
     Ok(Decoded { raw, meta })
 }
 

@@ -21,6 +21,8 @@ pub enum LocalTool {
     Magic,
     /// Picks the color for the color range refinement.
     ColorPick,
+    /// Generative removal (see `remove.rs`).
+    Remove,
 }
 
 /// Style brushes: brush presets with predefined layer adjustments.
@@ -64,6 +66,7 @@ impl LocalTool {
             LocalTool::Clone => "\u{EA48}  Klonen (S)",
             LocalTool::Magic => "\u{E6B6}  Magic Brush (J)",
             LocalTool::ColorPick => "\u{E568}  Farbe wählen",
+            LocalTool::Remove => "\u{E6F0}  Entfernen (X)",
         }
     }
 
@@ -122,12 +125,12 @@ impl App {
     }
 
     /// Screen radius -> radius relative to the long source edge.
-    fn radius_norm(&self, px: f32, scale: f32) -> f32 {
+    pub(crate) fn radius_norm(&self, px: f32, scale: f32) -> f32 {
         let long = self.current.as_ref().map_or(1.0, |c| c.preview.width.max(c.preview.height) as f32);
         px / scale / long
     }
 
-    fn radius_screen(&self, r: f32, scale: f32) -> f32 {
+    pub(crate) fn radius_screen(&self, r: f32, scale: f32) -> f32 {
         let long = self.current.as_ref().map_or(1.0, |c| c.preview.width.max(c.preview.height) as f32);
         r * long * scale
     }
@@ -248,6 +251,7 @@ impl App {
             LocalTool::Heal | LocalTool::Clone => {
                 self.spot_interaction(ui, response, img_rect, scale, tool);
             }
+            LocalTool::Remove => self.remove_interaction(ui, response, img_rect, scale),
             LocalTool::Magic | LocalTool::ColorPick => {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
                 if response.clicked()
@@ -570,6 +574,7 @@ impl App {
         if let Some(t) = tool_click {
             self.set_local_tool(t);
         }
+        self.remove_section(ui);
 
         let mut style = None;
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), ui.make_persistent_id("style_brushes"), false)

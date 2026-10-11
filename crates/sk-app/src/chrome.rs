@@ -81,6 +81,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("L / R", "Linearer / radialer Verlauf"),
             ("J", "Magic Brush"),
             ("H / S", "Reparieren / Klonen"),
+            ("X", "Entfernen (KI): übermalen, die Stelle wird passend gefüllt"),
             ("[ / ]", "Pinselgröße"),
             ("M", "Maske anzeigen"),
             ("Entf", "Retuschepunkt löschen"),
@@ -345,6 +346,9 @@ impl App {
         self.variant_menu(ui);
         self.stack_menu(ui);
         self.merge_menu(ui);
+        if item(ui, icon::SPARKLE, "Entrauschen (KI) …", "", n_sel > 0) {
+            self.open_denoise();
+        }
         ui.separator();
         let ref_text = if self.compare_ref.is_some() && self.compare_ref == self.primary_path() { "Referenzbild entfernen" } else { "Als Referenzbild festlegen" };
         if item(ui, icon::PUSH_PIN, ref_text, "Umschalt+Enter", has) {

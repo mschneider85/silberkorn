@@ -78,6 +78,26 @@ die Umgebung an; „Klonen“ kopiert 1:1. Quelle und Ziel lassen sich verschieb
 - **Luma Range** und **Farbbereich** (mit Pipette) verfeinern jede Maske.
 - **Style Brushes:** Pinsel-Presets (Aufhellen, Abdunkeln, Wärmer, Haut glätten, Dunst entfernen, …).
 
+### KI-Werkzeuge: Entrauschen und Entfernen
+
+Die neuronalen Netze werden nicht mitgeliefert, sondern beim ersten Gebrauch auf Wunsch nach
+`~/.local/share/silberkorn/models/` geladen (`SILBERKORN_MODELS=<ordner>` überschreibt den Ort).
+Sie laufen mit tract auf der CPU.
+
+- **Entrauschen (KI)** (Bild-Menü): NAFNet (Breite 32, megvii-research, MIT), trainiert auf echtem
+  Kamerarauschen (SIDD), 117 MB. Die demosaicten RAW-Daten werden weißabgeglichen, auf normale
+  Helligkeit gebracht und in überlappenden 256er-Kacheln auf allen Kernen entrauscht. Übersteuerte
+  Lichter bleiben unverändert. Es entsteht ein lineares DNG `…-Entrauscht.dng` mit den Einstellungen
+  des Originals (ohne dessen Rauschreduzierung); **Stärke** mischt mit dem Original. Ein 24-MP-Bild
+  braucht auf einem 6-Kern-Laptop etwa 5 Minuten (läuft im Hintergrund).
+  Kommandozeile: `cargo run --release -p sk-ai --example denoise -- <raw> [stärke]`
+- **Entfernen** (X, Tab „Ebenen & Retusche“): Über Störendes malen; beim Loslassen füllt MI-GAN
+  (Picsart, MIT, 30 MB) die Stelle passend zur Umgebung. Gefüllt wird in voller Auflösung, bei
+  größeren Markierungen in mehreren 512er-Fenstern nacheinander; erst sehr große Flächen werden
+  verkleinert berechnet. Das Ergebnis ist ein kleiner Flicken mit weicher Kante im Sidecar (Feld
+  `removals`): Er wird vor Reparieren/Klonen eingesetzt, bleibt am Bildinhalt wie die Masken und
+  ist ein Rückgängig-Schritt. „Letzten zurücknehmen“ und „Alle“ stellen das Original wieder her.
+
 ### Vergleichen und Angleichen
 
 - **Vergleichsansicht:** Sind mehrere Bilder ausgewählt (Strg/Umschalt+Klick), zeigt der Viewer sie
@@ -353,6 +373,7 @@ Daten aus der Zeit als „Capture Room“ werden übernommen: Ordner `capture-ro
 | C / Enter / Esc | Zuschnitt-Werkzeug / übernehmen / beenden |
 | B / N / L / R | Pinsel / Radierer / linearer / radialer Verlauf |
 | H / S | Reparieren / Klonen · Entf: Punkt löschen |
+| X | Entfernen (KI) |
 | M | Maske anzeigen · [ / ]: Pinselgröße · mittlere Maustaste: verschieben |
 | J | Magic Brush |
 | U / Umschalt+U | Vorher/Nachher geteilt / nebeneinander |
@@ -389,4 +410,4 @@ Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verklei
 - **Phase 8 (fertig):** Vorher/Nachher nebeneinander, Wasserzeichen (Text/Logo), EXIF und Copyright im Export, Hilfslinien und Layout-Overlay
 - **Phase 9 (fertig):** automatisches Geraderichten (Drehung, vertikaler/horizontaler Keystone)
 - **Phase 10 (fertig):** Lupe, Verlauf und Schnappschüsse, Umbenennen mit Platzhaltern (auch im Ausgaberezept)
-- **Phase 11:** XMP-Austausch, Stapel, Viewer auf dem Zweitmonitor, Softproof, HDR und Panorama
+- **Phase 11:** XMP-Austausch, Stapel, Viewer auf dem Zweitmonitor, Softproof, HDR und Panorama, KI-Entrauschen, Entfernen

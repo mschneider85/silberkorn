@@ -451,6 +451,7 @@ impl Processor {
         let relevant = serde_json::json!({
             "g": self.adj.geometry, "l": self.adj.lens, "r": self.adj.rotation, "ic": self.opts.ignore_crop,
             "wb": self.wb, "nl": self.adj.detail.nr_luma, "nc": self.adj.detail.nr_color, "rt": self.adj.retouch,
+            "rm": self.adj.removals.iter().map(|r| (r.id, r.rect)).collect::<Vec<_>>(),
         });
         let key = format!("{:p}|{}x{}|{region:?}|{relevant}", src.data.as_ptr(), src.width, src.height);
         crate::cache::fnv1a(key.as_bytes())
@@ -461,6 +462,7 @@ impl Processor {
         let mut timer = Timer::start();
         let mut img = geo.resample(src, region);
         timer.lap("  resample");
+        crate::mask::apply_removals(&mut img, src, geo, region, &self.adj.removals);
         apply_retouch(&mut img, src, geo, region, &self.adj.retouch);
         img.data.par_iter_mut().for_each(|p| *p = self.to_working(*p));
         timer.lap("  to working");

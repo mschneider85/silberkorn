@@ -49,7 +49,8 @@ impl Fixture {
     fn pump(&mut self, what: &str, done: impl Fn(&App) -> bool) {
         let start = Instant::now();
         while !done(&self.app) {
-            assert!(start.elapsed() < Duration::from_secs(60), "Zeitüberschreitung: {what}");
+            // Generous: real raw decoding, and the machine may be busy with other work.
+            assert!(start.elapsed() < Duration::from_secs(180), "Zeitüberschreitung: {what}");
             self.app.handle_events(&self.ctx);
             self.app.send_render();
             std::thread::sleep(Duration::from_millis(20));
@@ -1359,4 +1360,27 @@ fn hdr_merge_job_creates_and_selects_dng() {
     f.pump("DNG ausgewählt", |a| a.current_path().is_some_and(|p| p.ends_with("_DSC0009-HDR.dng")) && a.texture.is_some());
     assert!(f.app.current.as_ref().unwrap().meta.hdr);
     f.pump("Indexiert", |a| a.lists.total == 3);
+}
+
+#[test]
+fn remove_tool_fills_the_painted_area() {
+    if !sk_ai::models::available(&sk_ai::models::INPAINT) {
+        return;
+    }
+    let Some(mut f) = Fixture::new("remove") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    f.app.set_local_tool(crate::layers::LocalTool::Remove);
+    f.app.remove_strokes = vec![sk_core::params::BrushStroke { points: vec![[0.4, 0.5], [0.45, 0.52]], radius: 0.01, hardness: 0.7, flow: 1.0, erase: false }];
+    f.app.request_removal();
+    assert!(f.app.inpaint_busy);
+    f.pump("Entfernt", |a| !a.inpaint_busy);
+    let cur = f.app.current.as_ref().unwrap();
+    assert_eq!(cur.adjustments.removals.len(), 1, "{}", f.app.status);
+    assert!(f.app.remove_strokes.is_empty());
+    // Saved with the image, and one undo step.
+    f.app.commit_and_save();
+    let path = f.app.current_path().unwrap();
+    assert_eq!(sidecar::load(&path).adjustments.removals.len(), 1);
+    f.app.undo();
+    assert!(f.app.current.as_ref().unwrap().adjustments.removals.is_empty());
 }
