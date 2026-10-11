@@ -56,14 +56,14 @@ const ZERO: LayerAdjustments = LayerAdjustments {
 impl LocalTool {
     pub fn label(self) -> &'static str {
         match self {
-            LocalTool::Brush => "✏ Pinsel (B)",
-            LocalTool::Eraser => "✖ Radierer (N)",
-            LocalTool::Linear => "↕ Linear (L)",
-            LocalTool::Radial => "◎ Radial (R)",
-            LocalTool::Heal => "✚ Reparieren (H)",
-            LocalTool::Clone => "⎘ Klonen (S)",
-            LocalTool::Magic => "✨ Magic Brush (J)",
-            LocalTool::ColorPick => "💧 Farbe wählen",
+            LocalTool::Brush => "\u{E6F0}  Pinsel (B)",
+            LocalTool::Eraser => "\u{E21E}  Radierer (N)",
+            LocalTool::Linear => "\u{E098}  Linear (L)",
+            LocalTool::Radial => "\u{E602}  Radial (R)",
+            LocalTool::Heal => "\u{E0B2}  Reparieren (H)",
+            LocalTool::Clone => "\u{EA48}  Klonen (S)",
+            LocalTool::Magic => "\u{E6B6}  Magic Brush (J)",
+            LocalTool::ColorPick => "\u{E568}  Farbe wählen",
         }
     }
 
@@ -455,10 +455,10 @@ impl App {
         let Some(layer) = cur.adjustments.layers.get_mut(li) else { return };
         section(ui, "Auswahl aus Bildinhalt", None, |ui| {
             ui.horizontal_wrapped(|ui| {
-                if ui.add_enabled(!busy, egui::Button::new("👤 Motiv auswählen")).clicked() {
+                if ui.add_enabled(!busy, egui::Button::new("\u{E4C2}  Motiv auswählen")).clicked() {
                     ai_action = Some(1);
                 }
-                if ui.add_enabled(!busy, egui::Button::new("☁ Himmel auswählen")).clicked() {
+                if ui.add_enabled(!busy, egui::Button::new("\u{E1AA}  Himmel auswählen")).clicked() {
                     ai_action = Some(2);
                 }
                 if ui.selectable_label(tool == Some(LocalTool::Magic), LocalTool::Magic.label()).clicked() {
@@ -612,7 +612,7 @@ impl App {
                 if ui.button("+ Gefüllt").on_hover_text("Ebene mit gefüllter Maske").clicked() {
                     action = Some(LayerAction::Add(true));
                 }
-                if self.active_layer.is_some() && ui.button("🗑 Löschen").clicked() {
+                if self.active_layer.is_some() && ui.button("\u{E4A6}  Löschen").clicked() {
                     action = Some(LayerAction::Delete);
                 }
             });

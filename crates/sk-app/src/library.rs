@@ -279,13 +279,13 @@ impl App {
                     open = Some(scope);
                 }
             };
-            entry(ui, Scope::All, format!("🗄 Alle Bilder ({})", self.lists.total));
-            entry(ui, Scope::LastImport, "🕘 Letzter Import".into());
+            entry(ui, Scope::All, format!("\u{E468}  Alle Bilder ({})", self.lists.total));
+            entry(ui, Scope::LastImport, "\u{E1A0}  Letzter Import".into());
             ui.horizontal(|ui| {
-                if ui.button("📥 Ordner importieren").on_hover_text("Aktuellen Ordner inkl. Unterordnern in den Katalog aufnehmen").clicked() {
+                if ui.button("\u{E20C}  Ordner importieren").on_hover_text("Aktuellen Ordner inkl. Unterordnern in den Katalog aufnehmen").clicked() {
                     do_import = true;
                 }
-                if ui.button("♻ Bereinigen").on_hover_text("Fehlende Dateien aus dem Katalog entfernen").clicked() {
+                if ui.button("\u{EC54}  Bereinigen").on_hover_text("Fehlende Dateien aus dem Katalog entfernen").clicked() {
                     do_cleanup = true;
                 }
             });
@@ -326,8 +326,8 @@ impl App {
                     }
                     continue;
                 }
-                let icon = if album.smart.is_some() { "⚙" } else { "🗀" };
-                let resp = ui.selectable_label(self.scope == scope, format!("{icon} {} ({})", album.name, album.count));
+                let icon = if album.smart.is_some() { "\u{E272}" } else { "\u{E25A}" };
+                let resp = ui.selectable_label(self.scope == scope, format!("{icon}  {} ({})", album.name, album.count));
                 if resp.clicked() {
                     open = Some(scope);
                 }
@@ -411,16 +411,22 @@ impl App {
         }
 
         let mut open_folder: Option<PathBuf> = None;
+        let mut browse = false;
         section(ui, "Ordner", None, |ui| {
             ui.horizontal(|ui| {
-                let resp = ui.add(egui::TextEdit::singleline(&mut self.folder_input).desired_width(ui.available_width() - 60.0));
-                if (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) || ui.button("Öffnen").clicked() {
-                    open_folder = Some(self.folder_input.clone().into());
-                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("\u{E256}  Durchsuchen …").on_hover_text("Ordner auswählen (Strg+O)").clicked() {
+                        browse = true;
+                    }
+                    let resp = ui.add(egui::TextEdit::singleline(&mut self.folder_input).desired_width(ui.available_width()));
+                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        open_folder = Some(self.folder_input.clone().into());
+                    }
+                });
             });
             ui.horizontal(|ui| {
                 if let Some(parent) = self.folder.parent()
-                    && ui.button("⬆ Übergeordnet").clicked()
+                    && ui.button("\u{E08E}  Übergeordnet").clicked()
                 {
                     open_folder = Some(parent.to_path_buf());
                 }
@@ -432,7 +438,7 @@ impl App {
             egui::ScrollArea::vertical().id_salt("subdirs").max_height(180.0).show(ui, |ui| {
                 for dir in &self.subdirs {
                     let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                    if ui.selectable_label(false, format!("📁 {name}")).clicked() {
+                    if ui.selectable_label(false, format!("\u{E24A}  {name}")).clicked() {
                         open_folder = Some(dir.clone());
                     }
                 }
@@ -453,7 +459,7 @@ impl App {
         let mut resort = false;
         section(ui, "Filter & Suche", None, |ui| {
             refilter |= ui
-                .add(egui::TextEdit::singleline(&mut self.filter.text).hint_text("🔍 Name, Kamera, Objektiv, Keyword"))
+                .add(egui::TextEdit::singleline(&mut self.filter.text).hint_text("\u{E30C}  Name, Kamera, Objektiv, Keyword"))
                 .changed();
             ui.horizontal(|ui| {
                 ui.label("Mindestens");
@@ -481,11 +487,11 @@ impl App {
                         resort |= ui.selectable_value(&mut self.sort, s, s.label()).changed();
                     }
                 });
-                if ui.button(if self.sort_desc { "⬇" } else { "⬆" }).on_hover_text("Sortierrichtung").clicked() {
+                if ui.button(if self.sort_desc { "\u{E446}" } else { "\u{E444}" }).on_hover_text("Sortierrichtung").clicked() {
                     self.sort_desc = !self.sort_desc;
                     resort = true;
                 }
-                if !self.filter.is_empty() && ui.button("✖ Filter").clicked() {
+                if !self.filter.is_empty() && ui.button("\u{E4F6}  Filter").clicked() {
                     self.filter = Filter::default();
                     refilter = true;
                 }
@@ -498,7 +504,9 @@ impl App {
             self.refilter();
         }
 
-        if let Some(f) = open_folder {
+        if browse {
+            self.open_folder_dialog();
+        } else if let Some(f) = open_folder {
             self.open_folder(f);
         } else if let Some(s) = open {
             self.open_scope(s);
@@ -519,7 +527,7 @@ impl App {
                     }
                     ui.label(&style.name);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::small_button(ui, "🗑", "Stil löschen").clicked() {
+                        if widgets::small_button(ui, "\u{E4A6}", "Stil löschen").clicked() {
                             delete = Some(style.name.clone());
                         }
                     });

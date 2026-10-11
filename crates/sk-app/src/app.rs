@@ -12,10 +12,10 @@ use sk_core::pipeline::{Histogram, Processor, RenderOptions};
 use sk_core::raw::RawMeta;
 use sk_core::sidecar::{self, ColorLabel, Sidecar};
 use sk_core::styles::Style;
-use egui::{Color32, Key, Modifiers, RichText, TextureHandle, TextureOptions, Ui, Vec2, vec2};
+use egui::{Key, Modifiers, TextureHandle, TextureOptions, Ui, Vec2};
 use serde::{Deserialize, Serialize};
 
-use crate::library::{CatalogLists, LibraryUi, scope_label};
+use crate::library::{CatalogLists, LibraryUi};
 use crate::workers::{Event, ExportJob, RenderJob, Workers};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,17 +35,32 @@ impl Tab {
     pub const ALL: [Tab; 9] =
         [Tab::Library, Tab::Lens, Tab::Exposure, Tab::Color, Tab::Details, Tab::Layers, Tab::Metadata, Tab::Styles, Tab::Output];
 
-    pub fn label(self) -> &'static str {
+    pub fn title(self) -> &'static str {
         match self {
-            Tab::Library => "📚 Bibliothek",
-            Tab::Lens => "📐 Objektiv",
-            Tab::Details => "🔍 Details",
-            Tab::Layers => "✏ Ebenen",
-            Tab::Exposure => "☀ Belichtung",
-            Tab::Color => "🎨 Farbe",
-            Tab::Metadata => "ℹ Metadaten",
-            Tab::Styles => "✨ Stile",
-            Tab::Output => "💾 Ausgabe",
+            Tab::Library => "Bibliothek",
+            Tab::Lens => "Objektiv & Geometrie",
+            Tab::Exposure => "Belichtung",
+            Tab::Color => "Farbe",
+            Tab::Details => "Details",
+            Tab::Layers => "Ebenen & Retusche",
+            Tab::Metadata => "Metadaten",
+            Tab::Styles => "Stile",
+            Tab::Output => "Ausgabe",
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        use crate::theme::icon;
+        match self {
+            Tab::Library => icon::IMAGES,
+            Tab::Lens => icon::APERTURE,
+            Tab::Exposure => icon::SUN,
+            Tab::Color => icon::PALETTE,
+            Tab::Details => icon::MAGNIFYING_GLASS_PLUS,
+            Tab::Layers => icon::STACK,
+            Tab::Metadata => icon::INFO,
+            Tab::Styles => icon::SPARKLE,
+            Tab::Output => icon::EXPORT,
         }
     }
 }
@@ -183,9 +198,9 @@ pub struct App {
     pub clip_warning: bool,
     pub show_before: bool,
     render_requested: bool,
-    undo: Vec<Adjustments>,
-    redo: Vec<Adjustments>,
-    clipboard: Option<Adjustments>,
+    pub(crate) undo: Vec<Adjustments>,
+    pub(crate) redo: Vec<Adjustments>,
+    pub(crate) clipboard: Option<Adjustments>,
     pub sidecar_dirty: bool,
     pub keyword_input: String,
     /// None = fit to window; otherwise screen pixels per preview pixel.
@@ -200,6 +215,11 @@ pub struct App {
     pub export_log: Vec<String>,
 
     pub status: String,
+    pub show_filmstrip: bool,
+    pub show_shortcuts: bool,
+    pub show_about: bool,
+    /// Zoom of the viewer relative to the full sensor resolution, for the status bar.
+    pub zoom_pct: Option<f32>,
     /// Debug aid: `SILBERKORN_SCREENSHOT=<file.png>` saves a screenshot once the first image is shown, then quits.
     screenshot: Option<(PathBuf, Option<f64>)>,
 }
@@ -224,7 +244,7 @@ impl Default for AppOptions {
 
 impl App {
     pub fn new(ctx: &egui::Context, opts: AppOptions) -> Self {
-        setup_style(ctx);
+        crate::theme::install(ctx);
         let settings: Settings = settings_path()
             .filter(|_| opts.persist_settings)
             .and_then(|p| std::fs::read_to_string(p).ok())
@@ -304,6 +324,10 @@ impl App {
             undo: Vec::new(),
             redo: Vec::new(),
             clipboard: None,
+            show_filmstrip: true,
+            show_shortcuts: false,
+            show_about: false,
+            zoom_pct: None,
             sidecar_dirty: false,
             keyword_input: String::new(),
             zoom: None,
@@ -323,9 +347,14 @@ impl App {
         app.reload_styles();
         app.open_folder(folder);
         if let Ok(tab) = std::env::var("SILBERKORN_TAB") {
-            app.tab = Tab::ALL.into_iter().find(|t| t.label().to_lowercase().contains(&tab.to_lowercase())).unwrap_or(app.tab);
+            app.tab = Tab::ALL.into_iter().find(|t| t.title().to_lowercase().contains(&tab.to_lowercase())).unwrap_or(app.tab);
         }
         app.grid_view = std::env::var_os("SILBERKORN_GRID").is_some();
+        match std::env::var("SILBERKORN_DIALOG").as_deref() {
+            Ok("shortcuts") => app.show_shortcuts = true,
+            Ok("about") => app.show_about = true,
+            _ => {}
+        }
         app
     }
 
@@ -456,7 +485,7 @@ impl App {
         }
     }
 
-    fn undo(&mut self) {
+    pub(crate) fn undo(&mut self) {
         self.commit_and_save();
         let Some(cur) = self.current.as_mut() else { return };
         if let Some(prev) = self.undo.pop() {
@@ -467,7 +496,7 @@ impl App {
         }
     }
 
-    fn redo(&mut self) {
+    pub(crate) fn redo(&mut self) {
         let Some(cur) = self.current.as_mut() else { return };
         if let Some(next) = self.redo.pop() {
             self.undo.push(std::mem::replace(&mut cur.adjustments, next.clone()));
@@ -809,17 +838,23 @@ impl App {
         if pressed(Key::D, Modifiers::COMMAND) {
             self.export_selection();
         }
+        if pressed(Key::O, Modifiers::COMMAND) {
+            self.open_folder_dialog();
+        }
+        if pressed(Key::F1, Modifiers::NONE) {
+            self.show_shortcuts = !self.show_shortcuts;
+        }
         if pressed(Key::A, Modifiers::COMMAND) {
-            self.selection = self.visible.iter().map(|&i| self.entries[i].path.clone()).collect();
+            self.select_all();
         }
         if pressed(Key::F, Modifiers::COMMAND) {
             self.tab = Tab::Library;
         }
         if pressed(Key::OpenBracket, Modifiers::COMMAND) {
-            self.edit(|a| a.rotation = (a.rotation + 3) % 4);
+            self.rotate(3);
         }
         if pressed(Key::CloseBracket, Modifiers::COMMAND) {
-            self.edit(|a| a.rotation = (a.rotation + 1) % 4);
+            self.rotate(1);
         }
         if pressed(Key::ArrowRight, Modifiers::NONE) {
             self.step(1);
@@ -882,8 +917,7 @@ impl App {
             self.grid_view = !self.grid_view;
         }
         if pressed(Key::E, Modifiers::NONE) {
-            self.clip_warning = !self.clip_warning;
-            self.request_render();
+            self.toggle_clip_warning();
         }
         if pressed(Key::Y, Modifiers::NONE) {
             self.show_before = !self.show_before;
@@ -896,11 +930,7 @@ impl App {
             self.toggle_zoom_100();
         }
         if pressed(Key::C, Modifiers::NONE) {
-            if self.crop_tool.is_some() {
-                self.finish_crop_tool();
-            } else {
-                self.start_crop_tool();
-            }
+            self.toggle_crop();
         }
         if pressed(Key::Enter, Modifiers::NONE) {
             self.finish_crop_tool();
@@ -914,87 +944,6 @@ impl App {
     }
 
     // ---------------------------------------------------------------- layout
-
-    fn toolbar(&mut self, ui: &mut Ui) {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Silberkorn").strong().size(15.0));
-            ui.separator();
-            let has = self.current.is_some();
-            let can_undo = !self.undo.is_empty() || self.current.as_ref().is_some_and(|c| c.adjustments != c.committed);
-            if ui.add_enabled(can_undo, egui::Button::new("↩")).on_hover_text("Rückgängig (Strg+Z)").clicked() {
-                self.undo();
-            }
-            if ui.add_enabled(!self.redo.is_empty(), egui::Button::new("↪")).on_hover_text("Wiederholen (Strg+Y)").clicked() {
-                self.redo();
-            }
-            ui.separator();
-            if ui.add_enabled(has, egui::Button::new("⟲")).on_hover_text("Links drehen (Strg+[)").clicked() {
-                self.edit(|a| a.rotation = (a.rotation + 3) % 4);
-            }
-            if ui.add_enabled(has, egui::Button::new("⟳")).on_hover_text("Rechts drehen (Strg+])").clicked() {
-                self.edit(|a| a.rotation = (a.rotation + 1) % 4);
-            }
-            ui.separator();
-            if ui.add_enabled(has, egui::Button::new("📋 Kopieren")).on_hover_text("Anpassungen kopieren (Strg+Umschalt+C)").clicked() {
-                self.copy_adjustments();
-            }
-            if ui
-                .add_enabled(self.clipboard.is_some(), egui::Button::new("📥 Anwenden"))
-                .on_hover_text("Auf Auswahl anwenden (Strg+Umschalt+V)")
-                .clicked()
-            {
-                self.paste_adjustments();
-            }
-            if ui.add_enabled(has, egui::Button::new("↺ Zurücksetzen")).on_hover_text("Alle Anpassungen zurücksetzen").clicked() {
-                self.edit(|a| {
-                    let mut n = Adjustments::default();
-                    n.keep_geometry_from(a);
-                    *a = n;
-                });
-            }
-            ui.separator();
-            if ui.selectable_label(self.grid_view, "⊞ Raster").on_hover_text("Raster / Viewer (G)").clicked() {
-                self.grid_view = !self.grid_view;
-            }
-            if ui.selectable_label(self.show_before, "◑ Vorher").on_hover_text("Vorher/Nachher (Y)").clicked() {
-                self.show_before = !self.show_before;
-                self.split_view = false;
-                self.request_render();
-            }
-            if ui.selectable_label(self.split_view, "↔ Vergleich").on_hover_text("Geteilte Vorher/Nachher-Ansicht (U)").clicked() {
-                self.toggle_split();
-            }
-            if ui.selectable_label(self.clip_warning, "⚠ Warnung").on_hover_text("Belichtungswarnung (E)").clicked() {
-                self.clip_warning = !self.clip_warning;
-                self.request_render();
-            }
-            if ui.selectable_label(self.zoom.is_none(), "⛶ Einpassen").on_hover_text("Einpassen").clicked() {
-                self.zoom = None;
-                self.pan = Vec2::ZERO;
-            }
-            if ui.button("1:1").on_hover_text("100 % (Z)").clicked() {
-                self.zoom = None;
-                self.toggle_zoom_100();
-            }
-            if ui.selectable_label(self.crop_tool.is_some(), "⛶ Zuschneiden").on_hover_text("Zuschnitt-Werkzeug (C)").clicked() {
-                if self.crop_tool.is_some() {
-                    self.finish_crop_tool();
-                } else {
-                    self.start_crop_tool();
-                }
-            }
-            ui.separator();
-            let n = self.selected_paths().len();
-            if ui.add_enabled(n > 0, egui::Button::new("⚙ Verarbeiten")).on_hover_text("Auswahl exportieren (Strg+D)").clicked() {
-                self.export_selection();
-            }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(&self.status).color(Color32::from_gray(160)));
-                ui.separator();
-                ui.label(RichText::new(format!("{} · {} Bilder", scope_label(&self.scope, &self.lists), self.visible.len())).color(Color32::from_gray(190)));
-            });
-        });
-    }
 
     fn debug_screenshot(&mut self, ctx: &egui::Context) {
         let Some((_, shown_at)) = &mut self.screenshot else { return };
@@ -1065,14 +1014,6 @@ fn merge_ai(old: Option<sk_core::params::AiMask>, new: sk_ai::MaskImage) -> sk_c
     out
 }
 
-fn setup_style(ctx: &egui::Context) {
-    ctx.set_visuals(egui::Visuals::dark());
-    ctx.global_style_mut(|s| {
-        s.spacing.slider_width = 150.0;
-        s.spacing.item_spacing = vec2(6.0, 4.0);
-    });
-}
-
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -1083,12 +1024,28 @@ impl eframe::App for App {
         self.handle_events(&ctx);
         self.shortcuts(&ctx);
 
-        egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
-        egui::Panel::left("tools").resizable(true).default_size(340.0).min_size(260.0).show(ui, |ui| self.tools_ui(ui));
-        if !self.grid_view {
-            egui::Panel::bottom("filmstrip").resizable(true).default_size(150.0).min_size(100.0).show(ui, |ui| self.filmstrip(ui));
+        use crate::chrome::bar_margin;
+        use crate::theme::{self, chrome_frame};
+        egui::Panel::top("menu").frame(chrome_frame(egui::Margin::symmetric(6, 2))).show_separator_line(false).show(ui, |ui| self.menu_bar(ui));
+        egui::Panel::top("toolbar").frame(chrome_frame(bar_margin())).show(ui, |ui| self.toolbar(ui));
+        egui::Panel::bottom("status").frame(chrome_frame(egui::Margin::symmetric(10, 3))).show(ui, |ui| self.status_bar(ui));
+        egui::Panel::left("tabrail").frame(chrome_frame(egui::Margin::symmetric(2, 2))).resizable(false).exact_size(46.0).show(ui, |ui| self.tab_rail(ui));
+        egui::Panel::left("tools")
+            .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin { left: 8, right: 6, top: 0, bottom: 0 }))
+            .resizable(true)
+            .default_size(340.0)
+            .size_range(280.0..=560.0)
+            .show(ui, |ui| self.tool_panel(ui));
+        if !self.grid_view && self.show_filmstrip {
+            egui::Panel::bottom("filmstrip")
+                .frame(egui::Frame::new().fill(theme::BROWSER).inner_margin(egui::Margin::same(6)))
+                .resizable(true)
+                .default_size(150.0)
+                .min_size(100.0)
+                .show(ui, |ui| self.filmstrip(ui));
         }
         egui::CentralPanel::no_frame().show(ui, |ui| if self.grid_view { self.grid(ui) } else { self.viewer(ui) });
+        self.dialogs(&ctx);
 
         // Commit edits once the user lets go of the mouse (one undo step per gesture).
         if !ctx.input(|i| i.pointer.any_down()) {

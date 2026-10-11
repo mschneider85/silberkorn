@@ -5,10 +5,12 @@ mod app;
 #[cfg(test)]
 mod app_tests;
 mod browser;
+mod chrome;
 mod crop;
 mod develop_tools;
 mod layers;
 mod library;
+mod theme;
 mod tools;
 mod widgets;
 mod workers;
@@ -61,8 +63,10 @@ mod tests {
             include_str!("library.rs"),
             include_str!("tools.rs"),
             include_str!("widgets.rs"),
+            include_str!("chrome.rs"),
         ];
         let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
         ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
         let font = egui::FontId::proportional(14.0);
         // A missing glyph is rendered with the replacement character '◻' (same atlas region).

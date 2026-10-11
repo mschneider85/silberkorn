@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use egui::{Color32, Modifiers, Pos2, Rect, Sense, Ui, Vec2, pos2, vec2};
 
 use crate::app::App;
-use crate::widgets;
+use crate::{theme, widgets};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpeedParam {
@@ -31,7 +31,7 @@ impl App {
         let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, Color32::from_gray(38));
+        painter.rect_filled(rect, 0.0, theme::VIEWER);
 
         let Some(tex) = &self.texture else {
             let msg = if let Some(e) = &self.load_error {
@@ -39,7 +39,7 @@ impl App {
             } else if self.loading.is_some() {
                 "Lade…".into()
             } else if self.entries.is_empty() {
-                "Keine Bilder.\nIm Tab „Bibliothek“ einen Ordner öffnen oder importieren.".into()
+                "Keine Bilder.\nÜber Datei \u{E06C} Ordner öffnen (Strg+O) einen Ordner mit RAW-Dateien wählen.".into()
             } else {
                 String::new()
             };
@@ -168,27 +168,27 @@ impl App {
             self.toggle_zoom_100();
         }
 
-        // Overlay: file name, zoom, mode markers.
-        if let Some(cur) = &self.current {
-            let full_w = self.full_output_width().unwrap_or(size.x);
-            // Zoom relative to the full sensor resolution.
-            let pct = scale * size.x / full_w.max(1.0) * 100.0;
-            let mode = if let Some(msg) = &self.speed_message {
-                msg.as_str()
-            } else if self.crop_tool.is_some() {
-                "   ZUSCHNEIDEN – Enter: übernehmen"
-            } else if self.straighten_tool.is_some() {
-                "   GERADERICHTEN – Linie ziehen"
-            } else if self.show_before {
-                "   VORHER"
-            } else {
-                ""
-            };
-            let text = format!("{}   {pct:.0} %{mode}", cur.meta.path.file_name().unwrap_or_default().to_string_lossy());
-            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(13.0), Color32::from_gray(220));
-            let pos = rect.left_top() + vec2(10.0, 8.0);
-            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand(4.0), 3.0, Color32::from_black_alpha(160));
-            painter.galley(pos, galley, Color32::from_gray(220));
+        // File name and zoom are shown in the status bar; the viewer only marks active modes.
+        let full_w = self.full_output_width().unwrap_or(size.x);
+        self.zoom_pct = Some(scale * size.x / full_w.max(1.0) * 100.0);
+        let mode = if let Some(msg) = &self.speed_message {
+            Some(msg.trim().to_string())
+        } else if self.crop_tool.is_some() {
+            Some("Zuschneiden – Enter übernimmt, Esc beendet".into())
+        } else if self.straighten_tool.is_some() {
+            Some("Geraderichten – Linie entlang des Horizonts ziehen".into())
+        } else if self.picking_wb {
+            Some("Weißabgleich – auf eine neutrale Fläche klicken".into())
+        } else if self.show_before {
+            Some("Vorher".into())
+        } else {
+            None
+        };
+        if let Some(text) = mode {
+            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(13.0), Color32::WHITE);
+            let pos = pos2(rect.center().x - galley.size().x / 2.0, rect.top() + 12.0);
+            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand2(vec2(10.0, 5.0)), 12.0, Color32::from_black_alpha(170));
+            painter.galley(pos, galley, Color32::WHITE);
         }
         if self.loading.is_some() {
             painter.text(rect.right_top() + vec2(-10.0, 8.0), egui::Align2::RIGHT_TOP, "Lade…", egui::FontId::proportional(13.0), Color32::from_gray(200));
@@ -324,16 +324,21 @@ impl App {
         }
         let selected = self.selection.contains(&entry.path);
         let painter = ui.painter_at(rect);
-        let bg = if Some(&entry.path) == primary {
-            Color32::from_gray(85)
+        let is_primary = Some(&entry.path) == primary;
+        let bg = if is_primary {
+            Color32::from_rgb(58, 58, 62)
         } else if selected {
-            Color32::from_gray(62)
+            Color32::from_rgb(48, 48, 52)
         } else if resp.hovered() {
-            Color32::from_gray(50)
+            Color32::from_rgb(40, 40, 43)
         } else {
-            Color32::from_gray(32)
+            Color32::from_rgb(32, 32, 34)
         };
-        painter.rect_filled(rect, 3.0, bg);
+        painter.rect_filled(rect, 4.0, bg);
+        if is_primary || selected {
+            let stroke = if is_primary { egui::Stroke::new(2.0, theme::ACCENT) } else { egui::Stroke::new(1.0, Color32::from_rgb(110, 110, 116)) };
+            painter.rect_stroke(rect.shrink(1.0), 4.0, stroke, egui::StrokeKind::Inside);
+        }
         let img_area = Rect::from_min_max(rect.min + vec2(5.0, 5.0), rect.max - vec2(5.0, 20.0));
         if let Some(t) = self.thumbs.get(&entry.path) {
             let s = t.size_vec2();
@@ -346,7 +351,7 @@ impl App {
             egui::Align2::CENTER_CENTER,
             &entry.name,
             egui::FontId::proportional(11.0),
-            Color32::from_gray(190),
+            if is_primary { Color32::WHITE } else { theme::TEXT_DIM },
         );
         widgets::paint_badges(ui, img_area, entry.rating, entry.color_label.rgb());
         let tooltip = [
@@ -390,7 +395,7 @@ impl App {
 
     pub fn grid(&mut self, ui: &mut Ui) {
         let rect = ui.available_rect_before_wrap();
-        ui.painter().rect_filled(rect, 0.0, Color32::from_gray(28));
+        ui.painter().rect_filled(rect, 0.0, theme::BROWSER);
         let visible = self.visible.clone();
         let primary = self.primary_path();
         let mut clicked: Option<(PathBuf, Modifiers)> = None;

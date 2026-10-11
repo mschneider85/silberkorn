@@ -50,10 +50,10 @@ impl App {
         section(ui, "Zuschnitt", Some(&mut || reset_crop = true), |ui| {
             ui.horizontal(|ui| {
                 if crop_active {
-                    if ui.button("✔ Übernehmen").on_hover_text("Enter").clicked() {
+                    if ui.button("\u{E182}  Übernehmen").on_hover_text("Enter").clicked() {
                         finish_crop = true;
                     }
-                } else if ui.button("⛶ Zuschneiden").on_hover_text("C").clicked() {
+                } else if ui.button("\u{E1D4}  Zuschneiden").on_hover_text("C").clicked() {
                     start_crop = true;
                 }
             });
@@ -83,14 +83,14 @@ impl App {
             let g = &mut adj.geometry;
             changed |= slider_row(ui, "Geraderichten", &mut g.straighten, -45.0..=45.0, 0.0, 1);
             ui.horizontal(|ui| {
-                if ui.selectable_label(straighten_active, "📏 Linie ziehen").on_hover_text("Horizont oder Kante nachziehen").clicked() {
+                if ui.selectable_label(straighten_active, "\u{E6B8}  Linie ziehen").on_hover_text("Horizont oder Kante nachziehen").clicked() {
                     toggle_straighten = true;
                 }
-                if ui.button("⟲ 90°").clicked() {
+                if ui.button("\u{E038}  90°").clicked() {
                     adj.rotation = (adj.rotation + 3) % 4;
                     changed = true;
                 }
-                if ui.button("⟳ 90°").clicked() {
+                if ui.button("\u{E036}  90°").clicked() {
                     adj.rotation = (adj.rotation + 1) % 4;
                     changed = true;
                 }

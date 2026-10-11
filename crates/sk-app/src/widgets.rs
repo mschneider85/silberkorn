@@ -4,22 +4,37 @@ use sk_core::params::Curve;
 use sk_core::pipeline::Histogram;
 use egui::{Color32, Pos2, Rect, Response, RichText, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
-/// Collapsible tool section with an optional reset button in the header.
+use crate::theme;
+
+/// Collapsible tool section with a header strip and an optional reset button.
 pub fn section(ui: &mut Ui, title: &str, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
     let id = ui.make_persistent_id(title);
-    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
-        .show_header(ui, |ui| {
-            ui.label(RichText::new(title).strong());
-            if let Some(reset) = reset {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if small_button(ui, "↺", "Werkzeug zurücksetzen").clicked() {
-                        reset();
-                    }
-                });
-            }
-        })
-        .body(body);
-    ui.add_space(4.0);
+    let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(id, true));
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+    let painter = ui.painter();
+    let hovered = resp.hovered();
+    painter.rect_filled(rect, 3.0, if hovered { Color32::from_rgb(60, 60, 64) } else { theme::SECTION });
+    let caret = if open { theme::icon::CARET_DOWN } else { theme::icon::CARET_RIGHT };
+    painter.text(rect.left_center() + vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, caret, egui::FontId::proportional(12.0), theme::TEXT_DIM);
+    painter.text(rect.left_center() + vec2(26.0, 0.0), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(13.0), Color32::WHITE);
+    let mut reset_clicked = false;
+    if let Some(reset) = reset {
+        let r = Rect::from_center_size(rect.right_center() - vec2(15.0, 0.0), vec2(22.0, 20.0));
+        let b = egui::Button::new(RichText::new(theme::icon::ARROW_COUNTER_CLOCKWISE).size(13.0)).frame_when_inactive(false);
+        if ui.put(r, b).on_hover_text("Werkzeug zurücksetzen").clicked() {
+            reset();
+            reset_clicked = true;
+        }
+    }
+    if resp.clicked() && !reset_clicked {
+        open = !open;
+        ui.data_mut(|d| d.insert_persisted(id, open));
+    }
+    if open {
+        ui.add_space(4.0);
+        egui::Frame::new().inner_margin(egui::Margin { left: 6, right: 2, top: 0, bottom: 0 }).show(ui, body);
+    }
+    ui.add_space(6.0);
 }
 
 /// A labeled slider that resets to `default` on double-click of the label.
@@ -34,11 +49,18 @@ pub fn slider_row(
 ) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        let lbl = ui.add_sized([96.0, 18.0], egui::Label::new(label).sense(Sense::click()));
+        let color = if *value != default { Color32::WHITE } else { theme::TEXT };
+        let lbl = ui
+            .allocate_ui_with_layout(vec2(104.0, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_min_width(104.0);
+                ui.add(egui::Label::new(RichText::new(label).color(color)).sense(Sense::click()).truncate())
+            })
+            .inner;
         if lbl.on_hover_text("Doppelklick: zurücksetzen").double_clicked() && *value != default {
             *value = default;
             changed = true;
         }
+        ui.spacing_mut().slider_width = (ui.available_width() - 62.0).max(60.0);
         let resp = ui.add(egui::Slider::new(value, range).fixed_decimals(decimals).clamping(egui::SliderClamping::Always));
         changed |= resp.changed();
     });
@@ -48,7 +70,7 @@ pub fn slider_row(
 pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>) {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 110.0), Sense::hover());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 3.0, Color32::from_gray(18));
+    painter.rect_filled(rect, 4.0, theme::BROWSER);
     let Some(h) = hist else { return };
     // Ignore the extreme bins for scaling so clipping spikes do not flatten everything.
     let max = [&h.r, &h.g, &h.b]

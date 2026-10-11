@@ -10,12 +10,6 @@ use crate::widgets::{self, section, slider_row};
 
 impl App {
     pub fn tools_ui(&mut self, ui: &mut Ui) {
-        ui.horizontal_wrapped(|ui| {
-            for tab in Tab::ALL {
-                ui.selectable_value(&mut self.tab, tab, tab.label());
-            }
-        });
-        ui.separator();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.tab {
             Tab::Library => self.library_tab(ui),
             Tab::Lens => self.lens_tab(ui),
@@ -161,7 +155,7 @@ impl App {
                 changed = true;
             }
             ui.horizontal(|ui| {
-                if ui.selectable_label(*picking, "💧 Weißabgleich-Pipette").on_hover_text("Auf eine neutrale (graue) Stelle im Bild klicken").clicked() {
+                if ui.selectable_label(*picking, "\u{E568}  Weißabgleich-Pipette").on_hover_text("Auf eine neutrale (graue) Stelle im Bild klicken").clicked() {
                     *picking = !*picking;
                 }
             });
@@ -215,7 +209,7 @@ impl App {
         section(ui, "Keywords", None, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for k in &keywords {
-                    if ui.add(egui::Button::new(format!("{k}  ✖")).small()).on_hover_text("Entfernen").clicked() {
+                    if ui.add(egui::Button::new(format!("{k}  \u{E4F6}")).small()).on_hover_text("Entfernen").clicked() {
                         remove_kw = Some(k.clone());
                     }
                 }
@@ -294,7 +288,7 @@ impl App {
                 if ui.button("+ Rezept").clicked() {
                     add = true;
                 }
-                if self.recipes.len() > 1 && ui.button("🗑 Entfernen").clicked() {
+                if self.recipes.len() > 1 && ui.button("\u{E4A6}  Entfernen").clicked() {
                     remove = Some(self.selected_recipe);
                 }
             });
