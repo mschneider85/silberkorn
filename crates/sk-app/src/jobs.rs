@@ -54,10 +54,16 @@ impl App {
         match result {
             Ok(files) => {
                 self.status = match files.as_slice() {
+                    [] => format!("{label}: fertig"),
                     [f] => format!("{label}: {}", f.file_name().unwrap_or_default().to_string_lossy()),
                     _ => format!("{label}: {}", crate::widgets::image_count(files.len())),
                 };
-                self.files_created(files);
+                if files.is_empty() {
+                    // The job changed the catalog (analysis) or nothing visible.
+                    self.reload_entries();
+                } else {
+                    self.files_created(files);
+                }
             }
             Err(e) => self.status = format!("{label} fehlgeschlagen: {e}"),
         }

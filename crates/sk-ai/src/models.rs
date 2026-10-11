@@ -55,6 +55,15 @@ pub const FACE_EMBED: ModelInfo = ModelInfo {
     license: "Apache-2.0",
 };
 
+/// Eye state: open-closed-eye-0001 (Intel OpenVINO Training Extensions), 32 x 32 eye crops.
+pub const EYE_STATE: ModelInfo = ModelInfo {
+    label: "Augen offen/geschlossen",
+    file: "open_closed_eye.onnx",
+    url: "https://storage.openvinotoolkit.org/repositories/open_model_zoo/public/2022.1/open-closed-eye-0001/open_closed_eye.onnx",
+    size_mb: 1,
+    license: "Apache-2.0",
+};
+
 /// Folder of the downloaded models (`SILBERKORN_MODELS` overrides it).
 pub fn models_dir() -> PathBuf {
     std::env::var_os("SILBERKORN_MODELS").map(PathBuf::from).unwrap_or_else(|| sk_core::paths::data_dir().join("models"))

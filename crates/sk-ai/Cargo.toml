@@ -12,5 +12,4 @@ tract-onnx = "0.23"
 ureq = "3"
 
 [dev-dependencies]
-mimalloc = "0.1"
 image = { version = "0.25", default-features = false, features = ["png"] }

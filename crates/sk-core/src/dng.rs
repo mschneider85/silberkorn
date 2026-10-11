@@ -190,8 +190,8 @@ fn encode_tile(data: &[[f32; 3]], width: usize, height: usize, tx: usize, ty: us
         for x in 0..TILE {
             let sx = (tx * TILE + x).min(width - 1);
             let p = data[sy * width + sx];
-            for c in 0..3 {
-                let h = half::f16::from_f32(p[c].max(0.0)).to_bits().to_be_bytes();
+            for (c, v) in p.iter().enumerate() {
+                let h = half::f16::from_f32(v.max(0.0)).to_bits().to_be_bytes();
                 let col = x * 3 + c;
                 row[col] = h[0];
                 row[col + line] = h[1];
@@ -306,7 +306,7 @@ pub fn write_linear_dng(path: &Path, d: &LinearDng) -> Result<()> {
 pub fn quick_preview(meta: &crate::raw::RawMeta, img: &crate::image::LinearImage, max_edge: usize) -> ::image::RgbImage {
     let small = img.clone().fit_within(max_edge);
     let r = crate::pipeline::Processor::new(meta, &crate::params::Adjustments::default()).render(&small, None, None);
-    let rgb: Vec<u8> = r.rgba.chunks_exact(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+    let rgb: Vec<u8> = r.rgba.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
     ::image::RgbImage::from_raw(r.width as u32, r.height as u32, rgb).expect("size")
 }
 

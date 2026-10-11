@@ -98,6 +98,32 @@ Sie laufen mit tract auf der CPU.
   `removals`): Er wird vor Reparieren/Klonen eingesetzt, bleibt am Bildinhalt wie die Masken und
   ist ein Rückgängig-Schritt. „Letzten zurücknehmen“ und „Alle“ stellen das Original wieder her.
 
+### Gesichter und Sichtung
+
+Tab **„Bibliothek“ → Gesichter & Sichtung → „Ansicht analysieren“** untersucht die Bilder der
+Ansicht im Hintergrund (auf dem Kamera-Vorschaubild, daher schnell) und speichert das Ergebnis
+im Katalog bzw. in der Session:
+
+- **Gesichter** findet YuNet (OpenCV Zoo, MIT); Profile werden erkannt, aber nicht weiter bewertet.
+- **Geschlossene Augen:** open-closed-eye-0001 (Intel, Apache-2.0) bewertet beide Augen; ein
+  Gesicht gilt als „Augen zu“, wenn beide geschlossen sind. Im Browser erscheint dann ein
+  Augen-Symbol oben rechts.
+- **Schärfe:** Verhältnis der feinsten zu gröberen Details auf den Gesichtern (ohne Gesichter auf
+  der schärfsten Bildregion), unabhängig von Belichtung und Kontrast. Unter 0,22 gilt ein Bild als
+  **unscharf** (Tropfen-Symbol).
+- **Filter:** „Augen geschlossen“, „Unscharf“, „Mit Gesichtern“, „Nicht analysiert“; sie lassen sich
+  auch als Smart-Album speichern.
+- **Personen:** SFace (OpenCV Zoo, Apache-2.0) berechnet für jedes Gesicht einen Merkmalsvektor;
+  ähnliche Gesichter werden derselben Person zugeordnet. Die Liste zeigt benannte Personen und
+  solche auf mindestens zwei Bildern; ein Klick zeigt ihre Bilder, ein Doppelklick benennt sie.
+  Der Name wird als Keyword der Bilder gesetzt (auch im XMP, wenn aktiviert); eine Person, die
+  bereits so heißt, wird zusammengeführt.
+- **Stapel → „Schärfstes Bild nach oben“** macht in jedem ausgewählten Stapel das schärfste Bild
+  zum obersten.
+
+Die drei Modelle (zusammen etwa 40 MB) werden beim ersten Analysieren geladen.
+Kommandozeile: `cargo run --release -p sk-ai --example faces -- <bild>...`
+
 ### Vergleichen und Angleichen
 
 - **Vergleichsansicht:** Sind mehrere Bilder ausgewählt (Strg/Umschalt+Klick), zeigt der Viewer sie
@@ -410,4 +436,4 @@ Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verklei
 - **Phase 8 (fertig):** Vorher/Nachher nebeneinander, Wasserzeichen (Text/Logo), EXIF und Copyright im Export, Hilfslinien und Layout-Overlay
 - **Phase 9 (fertig):** automatisches Geraderichten (Drehung, vertikaler/horizontaler Keystone)
 - **Phase 10 (fertig):** Lupe, Verlauf und Schnappschüsse, Umbenennen mit Platzhaltern (auch im Ausgaberezept)
-- **Phase 11:** XMP-Austausch, Stapel, Viewer auf dem Zweitmonitor, Softproof, HDR und Panorama, KI-Entrauschen, Entfernen
+- **Phase 11 (fertig):** XMP-Austausch, Stapel, Viewer auf dem Zweitmonitor, Softproof, HDR und Panorama, KI-Entrauschen, Entfernen, Gesichter und Sichtung

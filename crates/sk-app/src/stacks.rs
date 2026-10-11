@@ -19,6 +19,8 @@ pub enum StackAction {
     Dissolve,
     RemoveFromStack,
     MakeTop,
+    /// The sharpest image (by the culling analysis) of each selected stack on top.
+    SharpestTop,
     Toggle,
     ExpandAll,
     CollapseAll,
@@ -141,6 +143,33 @@ impl App {
                 }
                 None => Ok(String::new()),
             },
+            StackAction::SharpestTop => {
+                let ids = self.selected_stack_ids();
+                let members = self.stack_members(&ids);
+                let mut changes = Vec::new();
+                let mut missing = 0;
+                for id in &ids {
+                    let best = members
+                        .iter()
+                        .filter(|(_, s)| s.id == *id)
+                        .filter_map(|(p, _)| {
+                            let c = self.index_of(p).and_then(|i| self.entries[i].culling);
+                            if c.is_none() {
+                                missing += 1;
+                            }
+                            c.map(|c| (p.clone(), c.sharpness))
+                        })
+                        .max_by(|a, b| a.1.total_cmp(&b.1));
+                    if let Some((p, _)) = best {
+                        match stack::set_top(&p, &members) {
+                            Ok(c) => changes.extend(c),
+                            Err(e) => self.status = format!("Stapel: {e:#}"),
+                        }
+                    }
+                }
+                self.apply_stack_changes(changes);
+                Ok(if missing > 0 { format!("{missing} Bild(er) noch nicht analysiert (Bibliothek → Gesichter & Sichtung)") } else { String::new() })
+            }
             StackAction::Toggle => {
                 self.toggle_stack_of_primary();
                 Ok(String::new())
@@ -250,6 +279,7 @@ impl App {
             act(ui, icon::STACK_MINUS, "Stapel auflösen", "Strg+Umschalt+G", in_stack, StackAction::Dissolve);
             act(ui, icon::ARROW_SQUARE_OUT, "Aus Stapel entfernen", "", in_stack, StackAction::RemoveFromStack);
             act(ui, icon::ARROW_LINE_UP, "Als oberstes Bild", "", in_stack, StackAction::MakeTop);
+            act(ui, icon::SCAN, "Schärfstes Bild nach oben", "", in_stack, StackAction::SharpestTop);
             ui.separator();
             act(ui, icon::ARROWS_OUT_SIMPLE, "Stapel auf-/zuklappen", "Umschalt+G", in_stack, StackAction::Toggle);
             act(ui, icon::ARROWS_OUT, "Alle Stapel aufklappen", "", true, StackAction::ExpandAll);

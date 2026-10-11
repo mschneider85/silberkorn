@@ -7,6 +7,7 @@
 //! all refined at edges with a guided filter against the image luminance.
 
 pub mod denoise;
+pub mod faces;
 pub mod inpaint;
 pub mod models;
 

@@ -1384,3 +1384,88 @@ fn remove_tool_fills_the_painted_area() {
     f.app.undo();
     assert!(f.app.current.as_ref().unwrap().adjustments.removals.is_empty());
 }
+
+#[test]
+fn culling_analysis_filters_and_sharpest_on_top() {
+    use sk_core::catalog::CullFilter;
+    if !sk_ai::faces::NEEDED.iter().all(|m| sk_ai::models::available(m)) {
+        return;
+    }
+    let Some(mut f) = Fixture::new("culling") else { return };
+    f.pump("Indexiert", |a| a.lists.total == 2);
+    f.app.analyze_view(false);
+    f.pump("Analysiert", |a| a.jobs.is_empty());
+    f.pump("Neu geladen", |a| a.entries.iter().all(|e| e.culling.is_some()));
+    for e in &f.app.entries {
+        let c = e.culling.unwrap();
+        assert_eq!((c.faces, c.eyes_closed), (0, 0), "{}", e.name);
+        assert!(!c.blurry(), "{}: {}", e.name, c.sharpness);
+    }
+    // Filters.
+    f.app.filter.culling = Some(CullFilter::Blurry);
+    f.app.refilter();
+    assert!(f.app.visible.is_empty());
+    f.app.filter.culling = Some(CullFilter::NotAnalyzed);
+    f.app.refilter();
+    assert!(f.app.visible.is_empty());
+    f.app.filter.culling = None;
+    f.app.refilter();
+    // The sharper of the two goes on top of their stack.
+    f.app.select_all();
+    f.app.run_stack_action(crate::stacks::StackAction::Create);
+    f.app.run_stack_action(crate::stacks::StackAction::SharpestTop);
+    let sharpest = f.app.entries.iter().max_by(|a, b| a.culling.unwrap().sharpness.total_cmp(&b.culling.unwrap().sharpness)).unwrap().path.clone();
+    assert!(sidecar::load(&sharpest).stack.unwrap().top);
+    // Nothing left to analyse.
+    f.app.analyze_view(false);
+    assert!(f.app.jobs.is_empty());
+}
+
+/// Wraps a JPEG into a DNG (the JPEG as its preview), so that the app treats it as a raw file.
+fn dng_from_jpeg(jpeg: &Path, out: &Path, mirror: bool) {
+    let mut img = image::open(jpeg).unwrap().to_rgb8();
+    if mirror {
+        img = image::imageops::flip_horizontal(&img);
+    }
+    let (w, h) = (img.width() as usize, img.height() as usize);
+    let data: Vec<[f32; 3]> = img.pixels().map(|p| p.0.map(|v| sk_core::color::srgb_decode(v as f32 / 255.0))).collect();
+    let info = sk_core::raw::CaptureInfo { make: "Test".into(), model: "JPEG".into(), ..Default::default() };
+    let xyz_to_cam = sk_core::color::mat_inv(&sk_core::color::SRGB_TO_XYZ).unwrap();
+    sk_core::dng::write_linear_dng(out, &sk_core::dng::LinearDng { width: w, height: h, data: &data, xyz_to_cam, as_shot_wb: [1.0; 3], info: &info, baseline_exposure: 0.0, preview: Some(&img) }).unwrap();
+}
+
+#[test]
+fn faces_become_named_persons() {
+    let Some(faces) = std::env::var_os("SILBERKORN_FACE_TEST").map(PathBuf::from) else { return };
+    if !sk_ai::faces::NEEDED.iter().all(|m| sk_ai::models::available(m)) {
+        return;
+    }
+    let Some(mut f) = Fixture::new("persons") else { return };
+    let photos = f.dir.join("photos");
+    dng_from_jpeg(&faces.join("obama.jpg"), &photos.join("p1.dng"), false);
+    dng_from_jpeg(&faces.join("obama.jpg"), &photos.join("p2.dng"), true);
+    dng_from_jpeg(&faces.join("dreis.jpg"), &photos.join("p3.dng"), false);
+    f.app.open_folder(photos.clone());
+    f.pump("Indexiert", |a| a.lists.total == 5);
+    f.app.analyze_view(false);
+    f.pump("Analysiert", |a| a.jobs.is_empty());
+    f.pump("Neu geladen", |a| a.entries.iter().all(|e| e.culling.is_some()));
+    let rec = |a: &App, n: &str| a.entries.iter().find(|e| e.name == n).unwrap().clone();
+    assert_eq!(rec(&f.app, "p1.dng").culling.unwrap().faces, 1);
+    assert_eq!(rec(&f.app, "p3.dng").culling.unwrap().eyes_closed, 1);
+    // The same man twice: one person (seen in two images); she is seen once.
+    assert_eq!(f.app.lists.persons.len(), 1, "{:?}", f.app.lists.persons);
+    let person = f.app.lists.persons[0].clone();
+    assert_eq!(person.count, 2);
+    f.app.name_person(person.id, "Barack");
+    for p in ["p1.dng", "p2.dng"] {
+        assert!(sidecar::load(&f.photo(p)).keywords.contains(&"Barack".to_string()), "{p}");
+    }
+    assert_eq!(f.app.lists.persons[0].name.as_deref(), Some("Barack"));
+    f.app.open_scope(sk_core::catalog::Scope::Person(person.id));
+    assert_eq!(f.app.entries.len(), 2);
+    // Renamed: the keyword follows.
+    f.app.name_person(person.id, "Obama");
+    let kw = sidecar::load(&f.photo("p1.dng")).keywords;
+    assert!(kw.contains(&"Obama".to_string()) && !kw.contains(&"Barack".to_string()), "{kw:?}");
+}

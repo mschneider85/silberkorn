@@ -159,8 +159,9 @@ fn solve(mut a: Vec<Vec<f64>>, mut b: Vec<f64>) -> Option<Vec<f64>> {
         for row in col + 1..n {
             let f = a[row][col] / a[col][col];
             if f != 0.0 {
-                for k in col..n {
-                    a[row][k] -= f * a[col][k];
+                let (top, bottom) = a.split_at_mut(row);
+                for (x, p) in bottom[0][col..n].iter_mut().zip(&top[col][col..n]) {
+                    *x -= f * p;
                 }
                 b[row] -= f * b[col];
             }
@@ -396,10 +397,7 @@ fn ransac(src: &[[f64; 2]], dst: &[[f64; 2]], threshold: f64) -> Option<(M3, Vec
     };
     let mut best: Vec<usize> = Vec::new();
     for _ in 0..1500 {
-        let mut idx = [0usize; 4];
-        for k in 0..4 {
-            idx[k] = rng.next(n);
-        }
+        let idx: [usize; 4] = std::array::from_fn(|_| rng.next(n));
         if (0..4).any(|a| (a + 1..4).any(|b| idx[a] == idx[b])) {
             continue;
         }
@@ -469,7 +467,7 @@ struct Cameras {
 /// reprojection error of all matches, both ways, in pixels.
 fn bundle_adjust(cams: &mut Cameras, pairs: &[PairMatches], fixed: usize, refine_focal: bool) {
     let n = cams.rot.len();
-    let mut params: Vec<f64> = cams.rot.iter().flat_map(|r| log_rotation(r)).collect();
+    let mut params: Vec<f64> = cams.rot.iter().flat_map(log_rotation).collect();
     params.push(cams.focal);
     let f0 = cams.focal;
     let residuals = |p: &[f64]| -> Vec<f64> {
@@ -523,9 +521,8 @@ fn bundle_adjust(cams: &mut Cameras, pairs: &[PairMatches], fixed: usize, refine
         let mut improved = false;
         for _ in 0..8 {
             let mut aug = jtj.clone();
-            for k in 0..m {
-                aug[k][k] *= 1.0 + lambda;
-                aug[k][k] += 1e-12;
+            for (k, row) in aug.iter_mut().enumerate() {
+                row[k] = row[k] * (1.0 + lambda) + 1e-12;
             }
             let Some(delta) = solve(aug, jtr.clone()) else { break };
             let mut p = params.clone();
@@ -628,8 +625,8 @@ fn wave_correct(rot: &mut [M3]) {
 fn exposure_gains(n: usize, pairs: &[PairMatches], guides: &[Plane]) -> Vec<f32> {
     let mut a = vec![vec![0.0; n]; n];
     let mut b = vec![0.0; n];
-    for k in 0..n {
-        a[k][k] += 1.0;
+    for (k, row) in a.iter_mut().enumerate() {
+        row[k] += 1.0;
     }
     for p in pairs {
         let (gi, gj) = (&guides[p.i], &guides[p.j]);

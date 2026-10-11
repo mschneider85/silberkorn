@@ -666,6 +666,7 @@ impl App {
         );
         widgets::paint_badges(ui, img_area, entry.rating, entry.color_label.rgb());
         let stack_toggle = self.stack_badge(ui, idx, img_area);
+        self.culling_badges(ui, idx, img_area);
         let tooltip = [
             Some(entry.name.clone()),
             entry.capture_date.clone(),
@@ -703,6 +704,26 @@ impl App {
         }
         let mods = resp.clicked().then(|| ui.input(|i| i.modifiers));
         (mods, resp.double_clicked())
+    }
+
+    /// Culling marks (top right): closed eyes, blurry.
+    fn culling_badges(&self, ui: &Ui, idx: usize, img_area: Rect) {
+        let Some(c) = self.entries[idx].culling else { return };
+        let mut marks: Vec<(&str, Color32)> = Vec::new();
+        if c.eyes_closed > 0 {
+            marks.push((theme::icon::EYE_CLOSED, Color32::from_rgb(230, 150, 60)));
+        }
+        if c.blurry() {
+            marks.push((theme::icon::DROP_HALF, Color32::from_rgb(220, 80, 80)));
+        }
+        let mut x = img_area.right() - 4.0;
+        for (ic, color) in marks {
+            let galley = ui.painter().layout_no_wrap(ic.to_string(), egui::FontId::proportional(13.0), Color32::WHITE);
+            let rect = Rect::from_min_size(pos2(x - galley.size().x - 6.0, img_area.top() + 2.0), galley.size() + vec2(6.0, 2.0));
+            ui.painter().rect_filled(rect, 3.0, color.gamma_multiply(0.9));
+            ui.painter().galley(rect.min + vec2(3.0, 1.0), galley, Color32::WHITE);
+            x = rect.left() - 3.0;
+        }
     }
 
     /// Badge of a stacked image (top left): the number of images, with an arrow to expand or

@@ -8,6 +8,7 @@ mod browser;
 mod chrome;
 mod compare;
 mod crop;
+mod culling;
 mod denoise;
 mod develop_tools;
 mod focus;

@@ -157,14 +157,14 @@ mod tests {
         sidecar::save(&a, &sidecar::Sidecar { rating: 3, ..Default::default() }).unwrap();
         assert!(sidecar::load(&a).stack.is_some());
         // Removing the top makes another one the top.
-        let changed = remove(&[b.clone()], &members).unwrap();
+        let changed = remove(std::slice::from_ref(&b), &members).unwrap();
         assert!(changed.iter().any(|(p, s)| *p == a && s.as_ref().is_some_and(|s| s.top)));
         let members: Vec<(PathBuf, Stack)> = [&a, &c].iter().map(|p| ((*p).clone(), sidecar::load(p).stack.unwrap())).collect();
         set_top(&c, &members).unwrap();
         assert!(sidecar::load(&c).stack.unwrap().top && !sidecar::load(&a).stack.unwrap().top);
         // A stack of one is no stack.
         let members: Vec<(PathBuf, Stack)> = [&a, &c].iter().map(|p| ((*p).clone(), sidecar::load(p).stack.unwrap())).collect();
-        remove(&[a.clone()], &members).unwrap();
+        remove(std::slice::from_ref(&a), &members).unwrap();
         assert!(sidecar::load(&c).stack.is_none());
         std::fs::remove_dir_all(dir).ok();
     }

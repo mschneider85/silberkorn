@@ -289,6 +289,144 @@ pub fn auto_source(src: &LinearImage, target: [f32; 2], radius: f32) -> [f32; 2]
     best.1
 }
 
+// ------------------------------------------------------------------ removals (generative fill)
+
+/// Coverage of brush strokes over the part `rect` (x, y, w, h; normalized source coordinates)
+/// of a source with aspect ratio `aspect`, rasterized at `w` x `h`.
+pub fn rasterize_strokes_in(strokes: &[crate::params::BrushStroke], rect: [f32; 4], w: usize, h: usize, aspect: f32) -> Vec<f32> {
+    // Distances in units of the long image edge.
+    let (kx, ky) = if aspect >= 1.0 { (1.0, 1.0 / aspect) } else { (aspect, 1.0) };
+    let mut data = vec![0.0f32; w * h];
+    for stroke in strokes {
+        let r = stroke.radius.max(1e-5);
+        let inner = r * stroke.hardness.clamp(0.0, 0.99);
+        let pts: Vec<(f32, f32)> = stroke.points.iter().map(|p| (p[0] * kx, p[1] * ky)).collect();
+        if pts.is_empty() {
+            continue;
+        }
+        let segs: Vec<((f32, f32), (f32, f32))> =
+            if pts.len() == 1 { vec![(pts[0], pts[0])] } else { pts.windows(2).map(|p| (p[0], p[1])).collect() };
+        let flow = stroke.flow.clamp(0.0, 1.0);
+        data.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+            let py = (rect[1] + (y as f32 + 0.5) / h as f32 * rect[3]) * ky;
+            for (x, m) in row.iter_mut().enumerate() {
+                let px = (rect[0] + (x as f32 + 0.5) / w as f32 * rect[2]) * kx;
+                let mut d2min = f32::MAX;
+                for &((ax, ay), (cx, cy)) in &segs {
+                    let (dx, dy) = (cx - ax, cy - ay);
+                    let len2 = dx * dx + dy * dy;
+                    let t = if len2 > 0.0 { (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                    let (qx, qy) = (ax + dx * t - px, ay + dy * t - py);
+                    d2min = d2min.min(qx * qx + qy * qy);
+                }
+                let c = (1.0 - smoothstep(inner, r, d2min.sqrt())) * flow;
+                *m = if stroke.erase { *m * (1.0 - c) } else { *m + (1.0 - *m) * c };
+            }
+        });
+    }
+    data
+}
+
+/// A decoded removal patch: camera RGB and coverage.
+pub struct Patch {
+    pub w: usize,
+    pub h: usize,
+    pub rgba: Vec<[f32; 4]>,
+}
+
+impl Patch {
+    /// Encodes camera RGB (values up to `scale`) and coverage as a base64 16-bit PNG.
+    pub fn encode(&self, scale: f32) -> String {
+        use base64::Engine;
+        let mut raw: Vec<u16> = Vec::with_capacity(self.w * self.h * 4);
+        for p in &self.rgba {
+            for v in &p[..3] {
+                raw.push(((v / scale).clamp(0.0, 1.0) * 65535.0 + 0.5) as u16);
+            }
+            raw.push((p[3].clamp(0.0, 1.0) * 65535.0 + 0.5) as u16);
+        }
+        let img = ::image::ImageBuffer::<::image::Rgba<u16>, Vec<u16>>::from_raw(self.w as u32, self.h as u32, raw).expect("size");
+        let mut png = std::io::Cursor::new(Vec::new());
+        ::image::DynamicImage::ImageRgba16(img).write_to(&mut png, ::image::ImageFormat::Png).expect("in memory");
+        base64::engine::general_purpose::STANDARD.encode(png.into_inner())
+    }
+
+    pub fn decode(data: &str, scale: f32) -> Option<Patch> {
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
+        let img = ::image::load_from_memory_with_format(&bytes, ::image::ImageFormat::Png).ok()?.into_rgba16();
+        let (w, h) = (img.width() as usize, img.height() as usize);
+        let rgba = img.pixels().map(|p| [p[0] as f32 / 65535.0 * scale, p[1] as f32 / 65535.0 * scale, p[2] as f32 / 65535.0 * scale, p[3] as f32 / 65535.0]).collect();
+        Some(Patch { w, h, rgba })
+    }
+
+    #[inline]
+    fn sample(&self, x: f32, y: f32) -> [f32; 4] {
+        let x = (x - 0.5).clamp(0.0, (self.w - 1) as f32);
+        let y = (y - 0.5).clamp(0.0, (self.h - 1) as f32);
+        let (x0, y0) = (x as usize, y as usize);
+        let (x1, y1) = ((x0 + 1).min(self.w - 1), (y0 + 1).min(self.h - 1));
+        let (tx, ty) = (x - x0 as f32, y - y0 as f32);
+        let at = |xx: usize, yy: usize| self.rgba[yy * self.w + xx];
+        let (a, b, c, d) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
+        std::array::from_fn(|k| {
+            let top = a[k] + (b[k] - a[k]) * tx;
+            let bot = c[k] + (d[k] - c[k]) * tx;
+            top + (bot - top) * ty
+        })
+    }
+}
+
+type PatchCache = Mutex<Vec<(u64, Arc<Patch>)>>;
+
+static PATCH_CACHE: LazyLock<PatchCache> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// Decoded patch of a removal from a small cache.
+fn cached_patch(r: &crate::params::Removal) -> Option<Arc<Patch>> {
+    let key = r.id ^ (r.patch.len() as u64).rotate_left(32);
+    if let Some((_, p)) = PATCH_CACHE.lock().unwrap().iter().find(|(k, _)| *k == key) {
+        return Some(p.clone());
+    }
+    let p = Arc::new(Patch::decode(&r.patch, r.scale)?);
+    let mut cache = PATCH_CACHE.lock().unwrap();
+    cache.push((key, p.clone()));
+    if cache.len() > 32 {
+        cache.remove(0);
+    }
+    Some(p)
+}
+
+/// Replaces removed objects by their generated content (camera RGB, before white balance).
+pub fn apply_removals(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, region: Region, removals: &[crate::params::Removal]) {
+    let patches: Vec<(&crate::params::Removal, Arc<Patch>)> = removals.iter().filter_map(|r| cached_patch(r).map(|p| (r, p))).collect();
+    if patches.is_empty() {
+        return;
+    }
+    let (sw, sh) = (src.width as f32, src.height as f32);
+    img.data.par_chunks_mut(region.w).enumerate().for_each(|(ry, line)| {
+        let oy = (region.y + ry) as f32 + 0.5;
+        for (rx, px) in line.iter_mut().enumerate() {
+            let ox = (region.x + rx) as f32 + 0.5;
+            let mut uv: Option<(f32, f32)> = None;
+            for (r, p) in &patches {
+                let (u, v) = *uv.get_or_insert_with(|| {
+                    let (sx, sy) = geo.source_point(ox, oy);
+                    ((sx + 0.5) / sw, (sy + 0.5) / sh)
+                });
+                let [x, y, w, h] = r.rect;
+                if u < x || v < y || u >= x + w || v >= y + h {
+                    continue;
+                }
+                let q = p.sample((u - x) / w * p.w as f32, (v - y) / h * p.h as f32);
+                let q3 = q[3];
+                for (v, q) in px.iter_mut().zip(q) {
+                    *v += (q - *v) * q3;
+                }
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,141 +519,4 @@ mod tests {
         assert!(s[1] * h as f32 > 25.0, "source in the bright band: {s:?}");
         assert!(s != [0.5, 0.6]);
     }
-}
-
-// ------------------------------------------------------------------ removals (generative fill)
-
-/// Coverage of brush strokes over the part `rect` (x, y, w, h; normalized source coordinates)
-/// of a source with aspect ratio `aspect`, rasterized at `w` x `h`.
-pub fn rasterize_strokes_in(strokes: &[crate::params::BrushStroke], rect: [f32; 4], w: usize, h: usize, aspect: f32) -> Vec<f32> {
-    // Distances in units of the long image edge.
-    let (kx, ky) = if aspect >= 1.0 { (1.0, 1.0 / aspect) } else { (aspect, 1.0) };
-    let mut data = vec![0.0f32; w * h];
-    for stroke in strokes {
-        let r = stroke.radius.max(1e-5);
-        let inner = r * stroke.hardness.clamp(0.0, 0.99);
-        let pts: Vec<(f32, f32)> = stroke.points.iter().map(|p| (p[0] * kx, p[1] * ky)).collect();
-        if pts.is_empty() {
-            continue;
-        }
-        let segs: Vec<((f32, f32), (f32, f32))> =
-            if pts.len() == 1 { vec![(pts[0], pts[0])] } else { pts.windows(2).map(|p| (p[0], p[1])).collect() };
-        let flow = stroke.flow.clamp(0.0, 1.0);
-        data.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-            let py = (rect[1] + (y as f32 + 0.5) / h as f32 * rect[3]) * ky;
-            for (x, m) in row.iter_mut().enumerate() {
-                let px = (rect[0] + (x as f32 + 0.5) / w as f32 * rect[2]) * kx;
-                let mut d2min = f32::MAX;
-                for &((ax, ay), (cx, cy)) in &segs {
-                    let (dx, dy) = (cx - ax, cy - ay);
-                    let len2 = dx * dx + dy * dy;
-                    let t = if len2 > 0.0 { (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
-                    let (qx, qy) = (ax + dx * t - px, ay + dy * t - py);
-                    d2min = d2min.min(qx * qx + qy * qy);
-                }
-                let c = (1.0 - smoothstep(inner, r, d2min.sqrt())) * flow;
-                *m = if stroke.erase { *m * (1.0 - c) } else { *m + (1.0 - *m) * c };
-            }
-        });
-    }
-    data
-}
-
-/// A decoded removal patch: camera RGB and coverage.
-pub struct Patch {
-    pub w: usize,
-    pub h: usize,
-    pub rgba: Vec<[f32; 4]>,
-}
-
-impl Patch {
-    /// Encodes camera RGB (values up to `scale`) and coverage as a base64 16-bit PNG.
-    pub fn encode(&self, scale: f32) -> String {
-        use base64::Engine;
-        let mut raw: Vec<u16> = Vec::with_capacity(self.w * self.h * 4);
-        for p in &self.rgba {
-            for c in 0..3 {
-                raw.push(((p[c] / scale).clamp(0.0, 1.0) * 65535.0 + 0.5) as u16);
-            }
-            raw.push((p[3].clamp(0.0, 1.0) * 65535.0 + 0.5) as u16);
-        }
-        let img = ::image::ImageBuffer::<::image::Rgba<u16>, Vec<u16>>::from_raw(self.w as u32, self.h as u32, raw).expect("size");
-        let mut png = std::io::Cursor::new(Vec::new());
-        ::image::DynamicImage::ImageRgba16(img).write_to(&mut png, ::image::ImageFormat::Png).expect("in memory");
-        base64::engine::general_purpose::STANDARD.encode(png.into_inner())
-    }
-
-    pub fn decode(data: &str, scale: f32) -> Option<Patch> {
-        use base64::Engine;
-        let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok()?;
-        let img = ::image::load_from_memory_with_format(&bytes, ::image::ImageFormat::Png).ok()?.into_rgba16();
-        let (w, h) = (img.width() as usize, img.height() as usize);
-        let rgba = img.pixels().map(|p| [p[0] as f32 / 65535.0 * scale, p[1] as f32 / 65535.0 * scale, p[2] as f32 / 65535.0 * scale, p[3] as f32 / 65535.0]).collect();
-        Some(Patch { w, h, rgba })
-    }
-
-    #[inline]
-    fn sample(&self, x: f32, y: f32) -> [f32; 4] {
-        let x = (x - 0.5).clamp(0.0, (self.w - 1) as f32);
-        let y = (y - 0.5).clamp(0.0, (self.h - 1) as f32);
-        let (x0, y0) = (x as usize, y as usize);
-        let (x1, y1) = ((x0 + 1).min(self.w - 1), (y0 + 1).min(self.h - 1));
-        let (tx, ty) = (x - x0 as f32, y - y0 as f32);
-        let at = |xx: usize, yy: usize| self.rgba[yy * self.w + xx];
-        let (a, b, c, d) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
-        std::array::from_fn(|k| {
-            let top = a[k] + (b[k] - a[k]) * tx;
-            let bot = c[k] + (d[k] - c[k]) * tx;
-            top + (bot - top) * ty
-        })
-    }
-}
-
-type PatchCache = Mutex<Vec<(u64, Arc<Patch>)>>;
-
-static PATCH_CACHE: LazyLock<PatchCache> = LazyLock::new(|| Mutex::new(Vec::new()));
-
-/// Decoded patch of a removal from a small cache.
-fn cached_patch(r: &crate::params::Removal) -> Option<Arc<Patch>> {
-    let key = r.id ^ (r.patch.len() as u64).rotate_left(32);
-    if let Some((_, p)) = PATCH_CACHE.lock().unwrap().iter().find(|(k, _)| *k == key) {
-        return Some(p.clone());
-    }
-    let p = Arc::new(Patch::decode(&r.patch, r.scale)?);
-    let mut cache = PATCH_CACHE.lock().unwrap();
-    cache.push((key, p.clone()));
-    if cache.len() > 32 {
-        cache.remove(0);
-    }
-    Some(p)
-}
-
-/// Replaces removed objects by their generated content (camera RGB, before white balance).
-pub fn apply_removals(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, region: Region, removals: &[crate::params::Removal]) {
-    let patches: Vec<(&crate::params::Removal, Arc<Patch>)> = removals.iter().filter_map(|r| cached_patch(r).map(|p| (r, p))).collect();
-    if patches.is_empty() {
-        return;
-    }
-    let (sw, sh) = (src.width as f32, src.height as f32);
-    img.data.par_chunks_mut(region.w).enumerate().for_each(|(ry, line)| {
-        let oy = (region.y + ry) as f32 + 0.5;
-        for (rx, px) in line.iter_mut().enumerate() {
-            let ox = (region.x + rx) as f32 + 0.5;
-            let mut uv: Option<(f32, f32)> = None;
-            for (r, p) in &patches {
-                let (u, v) = *uv.get_or_insert_with(|| {
-                    let (sx, sy) = geo.source_point(ox, oy);
-                    ((sx + 0.5) / sw, (sy + 0.5) / sh)
-                });
-                let [x, y, w, h] = r.rect;
-                if u < x || v < y || u >= x + w || v >= y + h {
-                    continue;
-                }
-                let q = p.sample((u - x) / w * p.w as f32, (v - y) / h * p.h as f32);
-                for c in 0..3 {
-                    px[c] += (q[c] - px[c]) * q[3];
-                }
-            }
-        }
-    });
 }

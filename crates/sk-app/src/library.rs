@@ -23,6 +23,8 @@ pub struct CatalogLists {
     pub total: usize,
     /// Session favorites (folders).
     pub favorites: Vec<PathBuf>,
+    /// People recognized by face (named, or seen in several images).
+    pub persons: Vec<catalog::Person>,
 }
 
 /// Transient UI state of the library tab.
@@ -31,6 +33,8 @@ pub struct LibraryUi {
     pub new_album: String,
     pub renaming: Option<(i64, String)>,
     pub new_style: String,
+    /// Person being named, with the text typed so far.
+    pub naming: Option<(i64, String)>,
 }
 
 fn record_from_sidecar(path: PathBuf) -> ImageRecord {
@@ -47,6 +51,8 @@ fn record_from_sidecar(path: PathBuf) -> ImageRecord {
         color_label: sc.color_label,
         keywords: sc.keywords,
         stack: sc.stack,
+        culling: None,
+        persons: Vec::new(),
     }
 }
 
@@ -65,6 +71,7 @@ pub fn scope_label(scope: &Scope, lists: &CatalogLists, session: Option<&sk_core
             if *recursive { format!("{name} (mit Unterordnern)") } else { name }
         }
         Scope::Album(id) => lists.albums.iter().find(|a| a.id == *id).map_or("Album".into(), |a| a.name.clone()),
+        Scope::Person(id) => lists.persons.iter().find(|p| p.id == *id).and_then(|p| p.name.clone()).unwrap_or_else(|| "Person".into()),
     }
 }
 
@@ -77,6 +84,7 @@ impl App {
             keywords: c.keywords().unwrap_or_default(),
             total: c.image_count().unwrap_or(0),
             favorites: c.favorites().unwrap_or_default(),
+            persons: c.persons(2).unwrap_or_default(),
         };
     }
 
@@ -384,6 +392,7 @@ impl App {
             let folder = self.folder.clone();
             self.import_folder(&folder);
         }
+        self.culling_section(ui);
         if do_cleanup && let Some(c) = &self.catalog {
             let n = c.remove_missing().unwrap_or(0);
             self.status = format!("{n} fehlende Einträge entfernt");

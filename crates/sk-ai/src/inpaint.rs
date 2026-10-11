@@ -192,8 +192,8 @@ fn fill_windows(work: &mut Work, model: &Inpainter) -> Result<()> {
                     }
                 }
             }
-            if n > 0 {
-                centers.push((sx / n, sy / n));
+            if let (Some(x), Some(y)) = (sx.checked_div(n), sy.checked_div(n)) {
+                centers.push((x, y));
             }
         }
     }

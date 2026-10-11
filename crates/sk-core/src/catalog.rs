@@ -29,7 +29,92 @@ pub struct ImageRecord {
     pub color_label: ColorLabel,
     pub keywords: Vec<String>,
     pub stack: Option<Stack>,
+    /// Result of the face and culling analysis, if the image was analysed.
+    pub culling: Option<Culling>,
+    /// People recognized in the image (ids of `Person`).
+    pub persons: Vec<i64>,
 }
+
+/// Culling information of an image (see `store_analysis`).
+#[derive(Clone, Copy, Debug, PartialEq, Default)]
+pub struct Culling {
+    pub faces: u32,
+    /// Faces with closed eyes.
+    pub eyes_closed: u32,
+    /// Sharpness of the faces, or of the sharpest part (about 0.4 and more for sharp images).
+    pub sharpness: f32,
+}
+
+/// Below this sharpness an image counts as blurry.
+pub const BLURRY: f32 = 0.22;
+
+impl Culling {
+    pub fn blurry(&self) -> bool {
+        self.sharpness < BLURRY
+    }
+}
+
+/// What the culling filter shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CullFilter {
+    EyesClosed,
+    Blurry,
+    WithFaces,
+    NotAnalyzed,
+}
+
+impl CullFilter {
+    pub const ALL: [CullFilter; 4] = [CullFilter::EyesClosed, CullFilter::Blurry, CullFilter::WithFaces, CullFilter::NotAnalyzed];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CullFilter::EyesClosed => "Augen geschlossen",
+            CullFilter::Blurry => "Unscharf",
+            CullFilter::WithFaces => "Mit Gesichtern",
+            CullFilter::NotAnalyzed => "Nicht analysiert",
+        }
+    }
+
+    pub fn matches(self, c: Option<&Culling>) -> bool {
+        match (self, c) {
+            (CullFilter::NotAnalyzed, c) => c.is_none(),
+            (_, None) => false,
+            (CullFilter::EyesClosed, Some(c)) => c.eyes_closed > 0,
+            (CullFilter::Blurry, Some(c)) => c.blurry(),
+            (CullFilter::WithFaces, Some(c)) => c.faces > 0,
+        }
+    }
+}
+
+/// A person recognized by face (named or not).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Person {
+    pub id: i64,
+    pub name: Option<String>,
+    /// Images showing the person.
+    pub count: usize,
+    /// A face of the person: image and box (normalized x, y, w, h).
+    pub sample: Option<(PathBuf, [f32; 4])>,
+}
+
+/// A face found by the analysis.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FaceRecord {
+    pub bbox: [f32; 4],
+    pub embedding: Vec<f32>,
+    pub eyes_closed: f32,
+}
+
+fn embedding_to_blob(e: &[f32]) -> Vec<u8> {
+    e.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+fn embedding_from_blob(b: &[u8]) -> Vec<f32> {
+    b.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
+}
+
+/// Eyes count as closed above this probability.
+pub const EYES_CLOSED: f32 = 0.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum SortKey {
@@ -60,6 +145,8 @@ pub struct Filter {
     pub min_rating: u8,
     pub color_label: Option<ColorLabel>,
     pub keyword: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub culling: Option<CullFilter>,
 }
 
 impl Filter {
@@ -77,6 +164,11 @@ impl Filter {
         }
         if let Some(k) = &self.keyword
             && !r.keywords.iter().any(|x| x.eq_ignore_ascii_case(k))
+        {
+            return false;
+        }
+        if let Some(c) = self.culling
+            && !c.matches(r.culling.as_ref())
         {
             return false;
         }
@@ -103,6 +195,8 @@ pub enum Scope {
     Album(i64),
     /// Images added by the most recent import.
     LastImport,
+    /// Images showing a person.
+    Person(i64),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -251,7 +345,27 @@ impl Catalog {
         // Columns added later.
         let columns: Vec<String> =
             conn.prepare("SELECT name FROM pragma_table_info('images')")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
-        for (name, def) in [("stack", "TEXT"), ("stack_top", "INTEGER NOT NULL DEFAULT 0")] {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS persons (id INTEGER PRIMARY KEY, name TEXT);
+             CREATE TABLE IF NOT EXISTS faces (
+                 id INTEGER PRIMARY KEY,
+                 image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
+                 x REAL, y REAL, w REAL, h REAL,
+                 embedding BLOB,
+                 eyes_closed REAL NOT NULL DEFAULT 0,
+                 person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL
+             );
+             CREATE INDEX IF NOT EXISTS faces_image ON faces(image_id);
+             CREATE INDEX IF NOT EXISTS faces_person ON faces(person_id);",
+        )?;
+        for (name, def) in [
+            ("stack", "TEXT"),
+            ("stack_top", "INTEGER NOT NULL DEFAULT 0"),
+            ("analyzed", "INTEGER NOT NULL DEFAULT 0"),
+            ("sharpness", "REAL"),
+            ("face_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("eyes_closed", "INTEGER NOT NULL DEFAULT 0"),
+        ] {
             if !columns.iter().any(|c| c == name) {
                 conn.execute_batch(&format!("ALTER TABLE images ADD COLUMN {name} {def}"))?;
             }
@@ -437,6 +551,134 @@ impl Catalog {
         Ok(())
     }
 
+    // ------------------------------------------------------------ faces and culling
+
+    fn image_id(&self, path: &Path) -> Result<Option<i64>> {
+        Ok(self.conn.query_row("SELECT id FROM images WHERE path = ?1", [self.key(path)], |r| r.get(0)).optional()?)
+    }
+
+    /// Has the image been analysed (faces, sharpness)?
+    pub fn is_analyzed(&self, path: &Path) -> bool {
+        self.conn
+            .query_row("SELECT analyzed FROM images WHERE path = ?1", [self.key(path)], |r| r.get::<_, i64>(0))
+            .is_ok_and(|a| a > 0)
+    }
+
+    /// Normalized mean embedding of each person.
+    fn person_centroids(&self) -> Result<Vec<(i64, Vec<f32>)>> {
+        let mut stmt = self.conn.prepare("SELECT person_id, embedding FROM faces WHERE person_id IS NOT NULL AND embedding IS NOT NULL")?;
+        let rows: Vec<(i64, Vec<u8>)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+        let mut sums: Vec<(i64, Vec<f32>)> = Vec::new();
+        for (pid, blob) in rows {
+            let e = embedding_from_blob(&blob);
+            match sums.iter_mut().find(|(p, _)| *p == pid) {
+                Some((_, s)) if s.len() == e.len() => s.iter_mut().zip(&e).for_each(|(a, b)| *a += b),
+                Some(_) => {}
+                None => sums.push((pid, e)),
+            }
+        }
+        for (_, s) in &mut sums {
+            let n = s.iter().map(|v| v * v).sum::<f32>().sqrt().max(1e-9);
+            s.iter_mut().for_each(|v| *v /= n);
+        }
+        Ok(sums)
+    }
+
+    /// Stores the analysis of an image (and its variants): sharpness and faces. Each face goes to
+    /// the most similar known person (cosine similarity of the embeddings above `same_person`)
+    /// or becomes a new, unnamed person.
+    pub fn store_analysis(&self, path: &Path, sharpness: f32, faces: &[FaceRecord], same_person: f32) -> Result<()> {
+        let Some(id) = self.image_id(path)? else { return Ok(()) };
+        let closed = faces.iter().filter(|f| f.eyes_closed > EYES_CLOSED).count();
+        self.conn.execute("DELETE FROM faces WHERE image_id = ?1", [id])?;
+        let mut centroids = self.person_centroids()?;
+        for f in faces {
+            let best = centroids
+                .iter()
+                .map(|(pid, c)| (*pid, c.iter().zip(&f.embedding).map(|(a, b)| a * b).sum::<f32>()))
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .filter(|(_, s)| *s > same_person);
+            let pid = match best {
+                Some((pid, _)) => pid,
+                None => {
+                    self.conn.execute("INSERT INTO persons(name) VALUES (NULL)", [])?;
+                    let pid = self.conn.last_insert_rowid();
+                    centroids.push((pid, f.embedding.clone()));
+                    pid
+                }
+            };
+            self.conn.execute(
+                "INSERT INTO faces(image_id, x, y, w, h, embedding, eyes_closed, person_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![id, f.bbox[0], f.bbox[1], f.bbox[2], f.bbox[3], embedding_to_blob(&f.embedding), f.eyes_closed, pid],
+            )?;
+        }
+        // The file and its variants show the same.
+        let prefix = format!("{}#", self.key(path));
+        self.conn.execute(
+            "UPDATE images SET analyzed = 1, sharpness = ?2, face_count = ?3, eyes_closed = ?4
+             WHERE path = ?1 OR substr(path, 1, length(?5)) = ?5",
+            params![self.key(path), sharpness, faces.len() as i64, closed as i64, prefix],
+        )?;
+        // Persons without faces are gone.
+        self.conn.execute("DELETE FROM persons WHERE id NOT IN (SELECT DISTINCT person_id FROM faces WHERE person_id IS NOT NULL)", [])?;
+        Ok(())
+    }
+
+    /// Recognized people: named ones and those seen in at least `min_count` images.
+    pub fn persons(&self, min_count: usize) -> Result<Vec<Person>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.id, p.name, count(DISTINCT f.image_id),
+                    (SELECT i.path FROM faces g JOIN images i ON i.id = g.image_id WHERE g.person_id = p.id ORDER BY g.w * g.h DESC LIMIT 1),
+                    (SELECT g.x || ',' || g.y || ',' || g.w || ',' || g.h FROM faces g WHERE g.person_id = p.id ORDER BY g.w * g.h DESC LIMIT 1)
+             FROM persons p JOIN faces f ON f.person_id = p.id GROUP BY p.id",
+        )?;
+        let mut out: Vec<Person> = stmt
+            .query_map([], |r| {
+                let path: Option<String> = r.get(3)?;
+                let bbox: Option<String> = r.get(4)?;
+                let bbox = bbox.and_then(|b| {
+                    let v: Vec<f32> = b.split(',').filter_map(|x| x.parse().ok()).collect();
+                    <[f32; 4]>::try_from(v).ok()
+                });
+                Ok(Person {
+                    id: r.get(0)?,
+                    name: r.get::<_, Option<String>>(1)?.filter(|n| !n.trim().is_empty()),
+                    count: r.get::<_, i64>(2)? as usize,
+                    sample: path.map(|p| self.resolve(&p)).zip(bbox),
+                })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        out.retain(|p| p.name.is_some() || p.count >= min_count);
+        out.sort_by(|a, b| b.name.is_some().cmp(&a.name.is_some()).then(b.count.cmp(&a.count)).then(a.id.cmp(&b.id)));
+        Ok(out)
+    }
+
+    /// Names a person. A person of the same name already known is merged into this one.
+    /// Returns the images of the person (to update their keywords).
+    pub fn name_person(&self, id: i64, name: &str) -> Result<Vec<PathBuf>> {
+        let name = name.trim();
+        let other: Option<i64> = self
+            .conn
+            .query_row("SELECT id FROM persons WHERE id <> ?1 AND name = ?2 COLLATE NOCASE", params![id, name], |r| r.get(0))
+            .optional()?;
+        if let Some(o) = other {
+            self.conn.execute("UPDATE faces SET person_id = ?1 WHERE person_id = ?2", params![id, o])?;
+            self.conn.execute("DELETE FROM persons WHERE id = ?1", [o])?;
+        }
+        self.conn.execute("UPDATE persons SET name = ?2 WHERE id = ?1", params![id, (!name.is_empty()).then_some(name)])?;
+        self.person_images(id)
+    }
+
+    pub fn person_images(&self, id: i64) -> Result<Vec<PathBuf>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT i.path FROM faces f JOIN images i ON i.id = f.image_id WHERE f.person_id = ?1")?;
+        let rows: Vec<String> = stmt.query_map([id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        Ok(rows.iter().map(|p| self.resolve(p)).collect())
+    }
+
+    pub fn person_name(&self, id: i64) -> Option<String> {
+        self.conn.query_row("SELECT name FROM persons WHERE id = ?1", [id], |r| r.get::<_, Option<String>>(0)).ok().flatten()
+    }
+
     /// Favorite folders (used by sessions), sorted by name.
     pub fn favorites(&self) -> Result<Vec<PathBuf>> {
         let mut stmt = self.conn.prepare("SELECT path FROM favorites")?;
@@ -459,7 +701,9 @@ impl Catalog {
     pub fn query(&self, scope: &Scope, filter: &Filter, sort: SortKey, descending: bool) -> Result<Vec<ImageRecord>> {
         let mut sql = String::from(
             "SELECT i.id, i.path, i.name, i.capture_date, i.camera, i.lens, i.iso, i.rating, i.color_label,
-                    (SELECT group_concat(keyword, char(31)) FROM keywords k WHERE k.image_id = i.id), i.stack, i.stack_top
+                    (SELECT group_concat(keyword, char(31)) FROM keywords k WHERE k.image_id = i.id), i.stack, i.stack_top,
+                    i.analyzed, i.sharpness, i.face_count, i.eyes_closed,
+                    (SELECT group_concat(DISTINCT person_id) FROM faces f WHERE f.image_id = i.id AND f.person_id IS NOT NULL)
              FROM images i WHERE 1=1",
         );
         let mut args: Vec<Value> = Vec::new();
@@ -500,6 +744,17 @@ impl Catalog {
             Scope::LastImport => {
                 sql += " AND i.import_id = (SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'last_import')";
             }
+            Scope::Person(id) => {
+                sql += " AND EXISTS (SELECT 1 FROM faces f WHERE f.image_id = i.id AND f.person_id = ?)";
+                args.push(Value::Integer(*id));
+            }
+        }
+        match filter.culling {
+            Some(CullFilter::EyesClosed) => sql += " AND i.analyzed > 0 AND i.eyes_closed > 0",
+            Some(CullFilter::Blurry) => sql += &format!(" AND i.analyzed > 0 AND i.sharpness < {BLURRY}"),
+            Some(CullFilter::WithFaces) => sql += " AND i.analyzed > 0 AND i.face_count > 0",
+            Some(CullFilter::NotAnalyzed) => sql += " AND i.analyzed = 0",
+            None => {}
         }
         if filter.min_rating > 0 {
             sql += " AND i.rating >= ?";
@@ -542,6 +797,15 @@ impl Catalog {
                 color_label: label_from_str(&r.get::<_, String>(8)?),
                 keywords: kw.map(|s| s.split('\u{1f}').map(String::from).collect()).unwrap_or_default(),
                 stack: r.get::<_, Option<String>>(10)?.map(|id| Stack { id, top: r.get::<_, bool>(11).unwrap_or(false) }),
+                culling: (r.get::<_, i64>(12)? > 0).then(|| Culling {
+                    sharpness: r.get::<_, Option<f64>>(13).ok().flatten().unwrap_or(0.0) as f32,
+                    faces: r.get::<_, i64>(14).unwrap_or(0) as u32,
+                    eyes_closed: r.get::<_, i64>(15).unwrap_or(0) as u32,
+                }),
+                persons: r
+                    .get::<_, Option<String>>(16)?
+                    .map(|s| s.split(',').filter_map(|v| v.parse().ok()).collect())
+                    .unwrap_or_default(),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
@@ -864,5 +1128,51 @@ mod tests {
         let v = crate::variant::path_for(Path::new("/p/a/a.ARW"), 2);
         c.upsert(&meta(v.to_str().unwrap(), "2024:01:01 10:00:00", "50mm"), &Sidecar::default(), 0).unwrap();
         assert_eq!(c.query(&Scope::LastImport, &Filter::default(), SortKey::Name, false).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn faces_persons_and_culling() {
+        let c = Catalog::open_in_memory().unwrap();
+        for p in ["/f/a.ARW", "/f/b.ARW", "/f/c.ARW"] {
+            c.upsert(&meta(p, "2024:01:01 10:00:00", "L"), &Sidecar::default(), 0).unwrap();
+        }
+        let unit = |k: usize| -> Vec<f32> { (0..8).map(|i| if i == k { 1.0 } else { 0.0 }).collect() };
+        let near = |k: usize| -> Vec<f32> {
+            let mut v = unit(k);
+            v[(k + 1) % 8] = 0.2;
+            let n = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+            v.iter().map(|x| x / n).collect()
+        };
+        let face = |e: Vec<f32>, closed: f32| FaceRecord { bbox: [0.4, 0.3, 0.2, 0.25], embedding: e, eyes_closed: closed };
+        // a: Anna with closed eyes, b: Anna and Ben, c: blurry landscape.
+        c.store_analysis(Path::new("/f/a.ARW"), 0.5, &[face(unit(0), 0.9)], 0.42).unwrap();
+        c.store_analysis(Path::new("/f/b.ARW"), 0.45, &[face(near(0), 0.1), face(unit(4), 0.0)], 0.42).unwrap();
+        c.store_analysis(Path::new("/f/c.ARW"), 0.1, &[], 0.42).unwrap();
+        let persons = c.persons(2).unwrap();
+        assert_eq!(persons.len(), 1, "{persons:?}");
+        assert_eq!(persons[0].count, 2);
+        assert_eq!(c.persons(1).unwrap().len(), 2);
+        let anna = persons[0].id;
+        let q = |scope: Scope, cull: Option<CullFilter>| -> Vec<String> {
+            c.query(&scope, &Filter { culling: cull, ..Default::default() }, SortKey::Name, false).unwrap().into_iter().map(|r| r.name).collect()
+        };
+        assert_eq!(q(Scope::Person(anna), None), vec!["a.ARW", "b.ARW"]);
+        assert_eq!(q(Scope::All, Some(CullFilter::EyesClosed)), vec!["a.ARW"]);
+        assert_eq!(q(Scope::All, Some(CullFilter::Blurry)), vec!["c.ARW"]);
+        assert_eq!(q(Scope::All, Some(CullFilter::WithFaces)), vec!["a.ARW", "b.ARW"]);
+        // The in-memory filter agrees with the query.
+        let all = c.query(&Scope::All, &Filter::default(), SortKey::Name, false).unwrap();
+        let f = Filter { culling: Some(CullFilter::Blurry), ..Default::default() };
+        assert_eq!(all.iter().filter(|r| f.matches(r)).count(), 1);
+        assert!(all.iter().find(|r| r.name == "b.ARW").unwrap().persons.contains(&anna));
+        // Naming; a second person of the same name is merged into the first.
+        assert_eq!(c.name_person(anna, "Anna").unwrap().len(), 2);
+        let ben = c.persons(1).unwrap().into_iter().find(|p| p.id != anna).unwrap().id;
+        c.name_person(ben, "anna").unwrap();
+        assert_eq!(c.persons(1).unwrap().len(), 1);
+        // Analysing again replaces the faces; persons without faces disappear.
+        c.store_analysis(Path::new("/f/b.ARW"), 0.45, &[], 0.42).unwrap();
+        c.store_analysis(Path::new("/f/a.ARW"), 0.5, &[], 0.42).unwrap();
+        assert!(c.persons(1).unwrap().is_empty());
     }
 }
