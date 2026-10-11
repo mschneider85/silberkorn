@@ -221,6 +221,8 @@ struct Settings {
     rename_template: String,
     /// The image selected when the app was closed.
     last_image: Option<PathBuf>,
+    /// Write rating, label and keywords into XMP sidecars automatically.
+    write_xmp: bool,
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -469,6 +471,7 @@ impl App {
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
         // Without an explicit folder, reopen the session that was open last time.
+        sk_core::xmp::set_write_enabled(settings.write_xmp && opts.persist_settings);
         let session = opts.session.or_else(|| settings.last_session.clone().filter(|p| p.exists() && opts.start_folder.is_none()));
         let folder = opts
             .start_folder
@@ -671,6 +674,7 @@ impl App {
             overlay_opacity: Some(self.overlay.opacity),
             rename_template: self.rename_template.clone(),
             last_image: self.primary_path().or_else(|| self.restore_image.clone()),
+            write_xmp: sk_core::xmp::write_enabled(),
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);

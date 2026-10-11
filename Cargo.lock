@@ -4046,6 +4046,7 @@ dependencies = [
  "anyhow",
  "epaint_default_fonts",
  "image",
+ "log",
  "rawler",
  "rayon",
  "roxmltree",

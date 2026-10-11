@@ -235,6 +235,53 @@ impl App {
         self.refresh_catalog_lists();
     }
 
+    /// Writes rating, label and keywords of the selected images into XMP files.
+    pub fn write_xmp_selection(&mut self) {
+        self.commit_and_save();
+        let files = sk_core::variant::files_of(&self.selected_paths());
+        let failed: Vec<String> = files.iter().filter_map(|f| sidecar::write_xmp(f).err().map(|e| format!("{e:#}"))).collect();
+        self.status = match failed.first() {
+            None => format!("XMP geschrieben: {}", crate::widgets::image_count(files.len())),
+            Some(e) => format!("XMP nicht geschrieben ({} von {}): {e}", failed.len(), files.len()),
+        };
+    }
+
+    /// Takes rating, label and keywords of the selected images from their XMP files again.
+    pub fn read_xmp_selection(&mut self) {
+        self.commit_and_save();
+        let files = sk_core::variant::files_of(&self.selected_paths());
+        let current = self.current_path();
+        let mut read = 0;
+        for f in &files {
+            if sk_core::xmp::existing(f).is_none() {
+                continue;
+            }
+            if let Err(e) = sidecar::reread_xmp(f) {
+                self.status = format!("{e:#}");
+                continue;
+            }
+            read += 1;
+            let sc = sidecar::load(f);
+            // Keep it from now on (also if the XMP file is older than the settings).
+            let _ = sidecar::save(f, &sc);
+            if let Some(c) = &self.catalog {
+                let _ = c.sync_sidecar(f, &sc);
+            }
+            if current.as_ref() == Some(f)
+                && let Some(cur) = self.current.as_mut()
+            {
+                (cur.rating, cur.color_label, cur.keywords) = (sc.rating, sc.color_label, sc.keywords.clone());
+            }
+            if let Some(i) = self.index_of(f) {
+                let e = &mut self.entries[i];
+                (e.rating, e.color_label, e.keywords) = (sc.rating, sc.color_label, sc.keywords);
+            }
+        }
+        self.status = if read == 0 { "Keine XMP-Dateien gefunden".into() } else { format!("XMP gelesen: {}", crate::widgets::image_count(read)) };
+        self.refilter();
+        self.refresh_catalog_lists();
+    }
+
     /// Selected paths in browser order (the current image if nothing is selected).
     pub fn selected_paths(&self) -> Vec<PathBuf> {
         let mut v: Vec<PathBuf> =

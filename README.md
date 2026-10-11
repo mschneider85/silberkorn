@@ -249,6 +249,22 @@ beziehen sich aber nur auf die Bilder der Session.
 
 Sidecars bleiben die maßgebliche Quelle; der Katalog ist ein Index und kann jederzeit neu aufgebaut werden.
 
+### XMP (Lightroom, Bridge, Capture One)
+
+Bewertung, Farb-Label und Keywords werden mit XMP-Sidecars ausgetauscht (`IMG_0001.xmp`, auch
+darktables `IMG_0001.ARW.xmp`).
+
+- **Lesen:** Ändert ein anderes Programm die XMP-Datei, übernimmt Silberkorn deren Werte beim
+  nächsten Laden. Gilt die eigene Änderung als neuer, bleibt sie. **Bild → XMP → „Metadaten aus
+  XMP lesen“** übernimmt die XMP-Werte der Auswahl in jedem Fall.
+- **Schreiben:** **„Metadaten in XMP schreiben“** für die Auswahl, oder automatisch bei jeder
+  Änderung („Änderungen automatisch in XMP schreiben“, standardmäßig aus). Nur diese drei
+  Eigenschaften werden ersetzt; Entwicklungseinstellungen anderer Programme und alles Übrige
+  in der Datei bleiben erhalten. Label-Namen werden englisch geschrieben („Red“), deutsche
+  Lightroom-Namen („Rot“) werden gelesen.
+- XMP-Dateien wandern beim Verschieben, Umbenennen und Importieren mit. Varianten haben eigene
+  Werte, die nicht ins XMP gehen.
+
 Daten aus der Zeit als „Capture Room“ werden übernommen: Ordner `capture-room` in `~/.config`,
 `~/.local/share` und `~/.cache` werden beim ersten Start nach `silberkorn` verschoben, und alte
 `<Bild>.crs.json`-Sidecars werden gelesen und beim nächsten Speichern durch `.sk.json` ersetzt.
@@ -308,3 +324,4 @@ Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verklei
 - **Phase 8 (fertig):** Vorher/Nachher nebeneinander, Wasserzeichen (Text/Logo), EXIF und Copyright im Export, Hilfslinien und Layout-Overlay
 - **Phase 9 (fertig):** automatisches Geraderichten (Drehung, vertikaler/horizontaler Keystone)
 - **Phase 10 (fertig):** Lupe, Verlauf und Schnappschüsse, Umbenennen mit Platzhaltern (auch im Ausgaberezept)
+- **Phase 11:** XMP-Austausch

@@ -1273,3 +1273,25 @@ fn last_selected_image_is_selected_again_after_starting() {
     // Only once: opening the folder later starts with the current image as usual.
     assert!(f.app.restore_image.is_none());
 }
+
+#[test]
+fn xmp_exchange() {
+    let Some(mut f) = Fixture::new("xmp") else { return };
+    f.pump("Indexiert", |a| a.lists.total == 2);
+    let a = f.photo("_DSC0009.ARW");
+    let b = f.photo("_DSC0010.ARW");
+    // Written by another program: read on request and mirrored in catalog and browser.
+    std::fs::write(f.dir.join("photos/_DSC0010.xmp"), sk_core::xmp::updated(None, 3, ColorLabel::Green, &["Lightroom".into()]).unwrap()).unwrap();
+    f.app.selection = [b.clone()].into_iter().collect();
+    f.app.read_xmp_selection();
+    let e = &f.app.entries[f.app.index_of(&b).unwrap()];
+    assert_eq!((e.rating, e.color_label, e.keywords.clone()), (3, ColorLabel::Green, vec!["Lightroom".to_string()]));
+    assert_eq!(sidecar::load(&b).rating, 3);
+    assert!(f.app.lists.keywords.iter().any(|(k, _)| k == "Lightroom"));
+    // Written on request for another image.
+    f.app.selection = [a.clone()].into_iter().collect();
+    f.app.set_rating(5);
+    f.app.write_xmp_selection();
+    let x = sk_core::xmp::parse(&std::fs::read_to_string(f.dir.join("photos/_DSC0009.xmp")).unwrap()).unwrap();
+    assert_eq!(x.rating, Some(5));
+}

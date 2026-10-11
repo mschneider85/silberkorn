@@ -320,6 +320,22 @@ impl App {
                     }
                 }
             });
+            ui.menu_button(format!("{}  XMP", icon::FILE_CODE), |ui| {
+                if item(ui, icon::UPLOAD_SIMPLE, "Metadaten in XMP schreiben", "", true) {
+                    self.write_xmp_selection();
+                }
+                if item(ui, icon::DOWNLOAD_SIMPLE, "Metadaten aus XMP lesen", "", true) {
+                    self.read_xmp_selection();
+                }
+                ui.separator();
+                let auto = sk_core::xmp::write_enabled();
+                if check(ui, auto, "Änderungen automatisch in XMP schreiben", "") {
+                    sk_core::xmp::set_write_enabled(!auto);
+                    self.save_settings();
+                }
+            })
+            .response
+            .on_hover_text("Bewertung, Farb-Label und Keywords mit Lightroom, Bridge und Capture One austauschen");
         });
         ui.separator();
         self.variant_menu(ui);

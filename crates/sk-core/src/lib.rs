@@ -25,3 +25,4 @@ pub mod styles;
 pub mod upright;
 pub mod variant;
 pub mod watermark;
+pub mod xmp;

@@ -74,6 +74,10 @@ pub struct Sidecar {
     /// Saved states of the adjustments (snapshots).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub snapshots: Vec<Snapshot>,
+    /// Modification time of the XMP file (see `xmp`) when Silberkorn last read or wrote it;
+    /// a newer XMP file overrides rating, label and keywords.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub xmp_mtime: Option<i64>,
 }
 
 /// A named state of the adjustments.
@@ -107,6 +111,7 @@ impl Variant {
             adjustments: self.adjustments.clone(),
             variants: Vec::new(),
             snapshots: self.snapshots.clone(),
+            xmp_mtime: None,
         }
     }
 
@@ -138,18 +143,63 @@ fn legacy_sidecar_path(image: &Path) -> PathBuf {
     image.with_file_name(name)
 }
 
-/// All sidecar names an image can have (current and legacy), whether they exist or not.
-pub fn sidecar_files_for(image: &Path) -> [PathBuf; 2] {
+/// Silberkorn's own sidecar names of an image (current and legacy).
+fn json_files_for(image: &Path) -> [PathBuf; 2] {
     [sidecar_path(image), legacy_sidecar_path(image)]
 }
 
+/// All sidecar names an image can have (current and legacy, and XMP), whether they exist or
+/// not; they move with the image.
+pub fn sidecar_files_for(image: &Path) -> [PathBuf; 4] {
+    let [json, legacy] = json_files_for(image);
+    let [xmp, xmp_long] = crate::xmp::files_for(image);
+    [json, legacy, xmp, xmp_long]
+}
+
 /// Settings of an image or variant. The raw file's sidecar also lists its further variants.
+/// Rating, label and keywords come from the XMP file instead if it changed since Silberkorn last
+/// read or wrote it (see `xmp`).
 pub fn load(image: &Path) -> Sidecar {
     let file = load_file(image);
     match crate::variant::number(image) {
-        1 => file,
+        1 => with_xmp(image, file),
         n => file.variants.iter().find(|v| v.id == n).map(Variant::to_sidecar).unwrap_or_default(),
     }
+}
+
+/// Takes rating, label and keywords from a changed XMP file.
+fn with_xmp(image: &Path, mut sc: Sidecar) -> Sidecar {
+    let Some(mtime) = crate::xmp::mtime(image) else { return sc };
+    if sc.xmp_mtime == Some(mtime) {
+        return sc;
+    }
+    if let Some(x) = crate::xmp::read(image) {
+        sc.rating = x.rating.unwrap_or(sc.rating);
+        sc.color_label = x.label.unwrap_or(sc.color_label);
+        if let Some(k) = x.keywords {
+            sc.keywords = k;
+        }
+    }
+    sc
+}
+
+/// Reads the image's XMP file again on the next load, even if it is older than the last save.
+pub fn reread_xmp(image: &Path) -> Result<()> {
+    let mut file = load_for_update(image)?;
+    if file.xmp_mtime.take().is_some() {
+        write_file(image, &file)?;
+    }
+    Ok(())
+}
+
+/// Writes rating, label and keywords of an image into its XMP file now (also when automatic
+/// writing is off).
+pub fn write_xmp(image: &Path) -> Result<()> {
+    let sc = load(image);
+    let mut file = load_for_update(image)?;
+    file.xmp_mtime = crate::xmp::write(image, sc.rating, sc.color_label, &sc.keywords)?;
+    (file.rating, file.color_label, file.keywords) = (sc.rating, sc.color_label, sc.keywords);
+    write_file(image, &file)
 }
 
 fn load_file(image: &Path) -> Sidecar {
@@ -158,7 +208,7 @@ fn load_file(image: &Path) -> Sidecar {
 
 /// The sidecar file of an image: `None` if there is none, an error if it can't be read.
 fn read_file(image: &Path) -> Result<Option<Sidecar>> {
-    for path in sidecar_files_for(image) {
+    for path in json_files_for(image) {
         match std::fs::read_to_string(&path) {
             Ok(text) => return Ok(Some(serde_json::from_str(&text).with_context(|| format!("{} ist beschädigt", path.display()))?)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -175,7 +225,7 @@ fn load_for_update(image: &Path) -> Result<Sidecar> {
         Ok(sc) => Ok(sc.unwrap_or_default()),
         Err(e) if e.chain().any(|c| c.is::<serde_json::Error>()) => {
             let _ = e;
-            for path in sidecar_files_for(image).into_iter().filter(|p| p.exists()) {
+            for path in json_files_for(image).into_iter().filter(|p| p.exists()) {
                 let mut backup = path.clone().into_os_string();
                 backup.push(".bak");
                 std::fs::rename(&path, &backup).with_context(|| format!("{} kann nicht gesichert werden", path.display()))?;
@@ -193,9 +243,20 @@ pub fn save(image: &Path, sidecar: &Sidecar) -> Result<()> {
     let mut file = load_for_update(image)?;
     match crate::variant::number(image) {
         1 => {
+            // From now on these settings count, not an older XMP file (written along if enabled).
+            let xmp_mtime = if crate::xmp::write_enabled() {
+                crate::xmp::write(image, sidecar.rating, sidecar.color_label, &sidecar.keywords).unwrap_or_else(|e| {
+                    // The settings themselves are still saved.
+                    log::warn!("{e:#}");
+                    crate::xmp::mtime(image)
+                })
+            } else {
+                crate::xmp::mtime(image)
+            };
             file = Sidecar {
                 variants: std::mem::take(&mut file.variants),
                 snapshots: std::mem::take(&mut file.snapshots),
+                xmp_mtime,
                 ..sidecar.clone()
             }
         }
@@ -363,15 +424,37 @@ mod tests {
     }
 
     #[test]
-    fn damaged_sidecar_is_kept_as_backup() {
-        let dir = std::env::temp_dir().join(format!("sk-damaged-test-{}", std::process::id()));
+    fn xmp_changes_override_rating_label_keywords() {
+        let dir = std::env::temp_dir().join(format!("sk-xmp-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let img = dir.join("d.ARW");
-        std::fs::write(sidecar_path(&img), "{ \"variants\": [ kaputt").unwrap();
-        save(&img, &Sidecar { rating: 3, ..Default::default() }).unwrap();
-        assert_eq!(load(&img).rating, 3);
-        let backup = dir.join("d.ARW.sk.json.bak");
-        assert!(std::fs::read_to_string(backup).unwrap().contains("kaputt"));
+        let img = dir.join("x.ARW");
+        let xmp = dir.join("x.xmp");
+        let write_xmp = |text: String, secs: u64| {
+            std::fs::write(&xmp, text).unwrap();
+            let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
+            std::fs::File::options().write(true).open(&xmp).unwrap().set_modified(t).unwrap();
+        };
+        write_xmp(crate::xmp::updated(None, 4, ColorLabel::Red, &["Lightroom".into()]).unwrap(), 1_000_000);
+        let sc = load(&img);
+        assert_eq!((sc.rating, sc.color_label, sc.keywords.clone()), (4, ColorLabel::Red, vec!["Lightroom".to_string()]));
+        // Changed in Silberkorn: the older XMP no longer counts.
+        save(&img, &Sidecar { rating: 1, ..sc }).unwrap();
+        assert_eq!(load(&img).rating, 1);
+        // Changed again elsewhere: the XMP wins, the adjustments stay.
+        let mut sc = load(&img);
+        sc.adjustments.exposure = 0.3;
+        save(&img, &sc).unwrap();
+        write_xmp(crate::xmp::updated(None, 5, ColorLabel::Blue, &[]).unwrap(), 2_000_000);
+        let sc = load(&img);
+        assert_eq!((sc.rating, sc.color_label, sc.adjustments.exposure), (5, ColorLabel::Blue, 0.3));
+        // Variants keep their own values.
+        let v2 = add_variant(&img, &Sidecar { rating: 2, ..Default::default() }).unwrap();
+        assert_eq!(load(&v2).rating, 2);
+        // On request the XMP is read again although it is older.
+        save(&img, &Sidecar { rating: 0, ..load(&img) }).unwrap();
+        assert_eq!(load(&img).rating, 0);
+        reread_xmp(&img).unwrap();
+        assert_eq!(load(&img).rating, 5);
         std::fs::remove_dir_all(dir).ok();
     }
 }
