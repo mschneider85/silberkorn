@@ -10,12 +10,14 @@ use sk_core::image::LinearImage;
 use sk_core::params::{Adjustments, WbMode, WhiteBalance};
 use sk_core::pipeline::{Histogram, Processor, RenderOptions};
 use sk_core::raw::RawMeta;
+use sk_core::session::Session;
 use sk_core::sidecar::{self, ColorLabel, Sidecar};
 use sk_core::styles::Style;
 use egui::{Key, Modifiers, TextureHandle, TextureOptions, Ui, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::library::{CatalogLists, LibraryUi};
+use crate::session::{PendingAction, SessionUi};
 use crate::workers::{Event, ExportJob, RenderJob, Workers};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +116,9 @@ pub struct Tile {
 #[serde(default)]
 struct Settings {
     last_folder: Option<PathBuf>,
+    /// Session file that was open when the app was closed.
+    last_session: Option<PathBuf>,
+    recent_sessions: Vec<PathBuf>,
     /// Legacy single recipe (before multiple recipes existed).
     recipe: Option<ExportRecipe>,
     recipes: Vec<ExportRecipe>,
@@ -128,7 +133,15 @@ fn settings_path() -> Option<PathBuf> {
 pub struct App {
     pub(crate) workers: Workers,
     persist_settings: bool,
+    /// The catalog database, or the session database while a session is open.
     pub(crate) catalog: Option<Catalog>,
+    /// Database used when no session is open.
+    pub(crate) global_catalog: PathBuf,
+    pub session: Option<Session>,
+    pub recent_sessions: Vec<PathBuf>,
+    pub session_ui: SessionUi,
+    /// Action chosen in a browser context menu, run after the browser has been drawn.
+    pub pending: Option<PendingAction>,
     pub lists: CatalogLists,
     pub library_ui: LibraryUi,
     pub styles: Vec<Style>,
@@ -143,6 +156,8 @@ pub struct App {
     pub sort: SortKey,
     pub sort_desc: bool,
     pub folder: PathBuf,
+    /// Last folder browsed outside a session (restored when the session is closed).
+    pub(crate) catalog_folder: PathBuf,
     pub folder_input: String,
     pub subdirs: Vec<PathBuf>,
     pub entries: Vec<ImageRecord>,
@@ -218,6 +233,7 @@ pub struct App {
     pub show_filmstrip: bool,
     pub show_shortcuts: bool,
     pub show_about: bool,
+    window_title: String,
     /// Zoom of the viewer relative to the full sensor resolution, for the status bar.
     pub zoom_pct: Option<f32>,
     /// Debug aid: `SILBERKORN_SCREENSHOT=<file.png>` saves a screenshot once the first image is shown, then quits.
@@ -227,6 +243,8 @@ pub struct App {
 /// Startup options (separate from `eframe` so that tests can construct the app).
 pub struct AppOptions {
     pub start_folder: Option<PathBuf>,
+    /// Session file or folder to open at startup (takes precedence over `start_folder`).
+    pub session: Option<PathBuf>,
     pub catalog_path: PathBuf,
     /// Read/write `settings.json` (disabled in tests).
     pub persist_settings: bool,
@@ -236,6 +254,7 @@ impl Default for AppOptions {
     fn default() -> Self {
         Self {
             start_folder: None,
+            session: None,
             catalog_path: std::env::var_os("SILBERKORN_CATALOG").map(PathBuf::from).unwrap_or_else(catalog::default_catalog_path),
             persist_settings: true,
         }
@@ -250,6 +269,8 @@ impl App {
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
+        // Without an explicit folder, reopen the session that was open last time.
+        let session = opts.session.or_else(|| settings.last_session.clone().filter(|p| p.exists() && opts.start_folder.is_none()));
         let folder = opts
             .start_folder
             .or(settings.last_folder.filter(|p| p.is_dir()))
@@ -261,9 +282,14 @@ impl App {
             Err(e) => (None, format!("Katalog nicht verfügbar: {e:#}")),
         };
         let mut app = Self {
-            workers: Workers::spawn(ctx.clone(), catalog_path),
+            workers: Workers::spawn(ctx.clone()),
             persist_settings: opts.persist_settings,
             catalog,
+            global_catalog: catalog_path,
+            session: None,
+            recent_sessions: settings.recent_sessions.into_iter().filter(|p| p.exists()).collect(),
+            session_ui: SessionUi::default(),
+            pending: None,
             lists: CatalogLists::default(),
             library_ui: LibraryUi::default(),
             styles: Vec::new(),
@@ -275,6 +301,7 @@ impl App {
             sort: settings.sort,
             sort_desc: settings.sort_desc,
             folder: PathBuf::new(),
+            catalog_folder: folder.clone(),
             folder_input: String::new(),
             subdirs: Vec::new(),
             entries: Vec::new(),
@@ -327,6 +354,7 @@ impl App {
             show_filmstrip: true,
             show_shortcuts: false,
             show_about: false,
+            window_title: "Silberkorn".into(),
             zoom_pct: None,
             sidecar_dirty: false,
             keyword_input: String::new(),
@@ -345,7 +373,15 @@ impl App {
             screenshot: std::env::var_os("SILBERKORN_SCREENSHOT").map(|p| (PathBuf::from(p), None)),
         };
         app.reload_styles();
-        app.open_folder(folder);
+        match session {
+            Some(s) => {
+                app.open_session(&s);
+                if app.session.is_none() {
+                    app.open_folder(folder);
+                }
+            }
+            None => app.open_folder(folder),
+        }
         if let Ok(tab) = std::env::var("SILBERKORN_TAB") {
             app.tab = Tab::ALL.into_iter().find(|t| t.title().to_lowercase().contains(&tab.to_lowercase())).unwrap_or(app.tab);
         }
@@ -358,10 +394,17 @@ impl App {
         app
     }
 
+    /// Database file in use: the session's, or the catalog's.
+    pub fn catalog_path(&self) -> PathBuf {
+        self.session.as_ref().map_or_else(|| self.global_catalog.clone(), |s| s.file.clone())
+    }
+
     pub fn save_settings(&self) {
         let Some(path) = settings_path().filter(|_| self.persist_settings) else { return };
         let s = Settings {
-            last_folder: Some(self.folder.clone()),
+            last_folder: Some(self.catalog_folder.clone()),
+            last_session: self.session.as_ref().map(|s| s.file.clone()),
+            recent_sessions: self.recent_sessions.clone(),
             recipe: None,
             recipes: self.recipes.clone(),
             sort: self.sort,
@@ -551,7 +594,13 @@ impl App {
         self.export_progress = Some((0, items.len()));
         self.status = format!("Verarbeite {} Bild(er)…", items.len());
         self.save_settings();
-        let recipes: Vec<ExportRecipe> = self.recipes.iter().filter(|r| r.enabled).cloned().collect();
+        let mut recipes: Vec<ExportRecipe> = self.recipes.iter().filter(|r| r.enabled).cloned().collect();
+        // In a session, relative output folders belong to the session (default: its Output folder).
+        if let Some(s) = &self.session {
+            for r in &mut recipes {
+                r.output_dir = s.output_dir(&r.output_dir);
+            }
+        }
         if recipes.is_empty() {
             self.status = "Kein Ausgaberezept aktiviert".into();
             self.export_progress = None;
@@ -756,8 +805,11 @@ impl App {
                 Event::IndexProgress { done, total } => {
                     self.index_progress = (done < total).then_some((done, total));
                 }
-                Event::IndexDone { indexed, failed, import } => {
+                Event::IndexDone { catalog, indexed, failed, import } => {
                     self.index_progress = None;
+                    if catalog != self.catalog_path() {
+                        continue;
+                    }
                     if import {
                         self.status = format!("Import: {indexed} Bilder{}", if failed > 0 { format!(", {failed} Fehler") } else { String::new() });
                         self.open_scope(Scope::LastImport);
@@ -838,8 +890,20 @@ impl App {
         if pressed(Key::D, Modifiers::COMMAND) {
             self.export_selection();
         }
+        if pressed(Key::O, Modifiers::COMMAND | Modifiers::SHIFT) {
+            self.open_session_dialog();
+        }
         if pressed(Key::O, Modifiers::COMMAND) {
             self.open_folder_dialog();
+        }
+        if pressed(Key::N, Modifiers::COMMAND) {
+            self.session_ui.start_new(&self.folder);
+        }
+        if pressed(Key::J, Modifiers::COMMAND) {
+            self.move_to_session_folder(sk_core::session::SessionFolder::Selects);
+        }
+        if pressed(Key::Delete, Modifiers::COMMAND) || pressed(Key::Backspace, Modifiers::COMMAND) {
+            self.move_to_session_folder(sk_core::session::SessionFolder::Trash);
         }
         if pressed(Key::F1, Modifiers::NONE) {
             self.show_shortcuts = !self.show_shortcuts;
@@ -1023,6 +1087,11 @@ impl eframe::App for App {
         }
         self.handle_events(&ctx);
         self.shortcuts(&ctx);
+        let title = self.session.as_ref().map_or_else(|| "Silberkorn".to_string(), |s| format!("{} – Silberkorn", s.name));
+        if title != self.window_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.window_title = title;
+        }
 
         use crate::chrome::bar_margin;
         use crate::theme::{self, chrome_frame};
@@ -1046,6 +1115,8 @@ impl eframe::App for App {
         }
         egui::CentralPanel::no_frame().show(ui, |ui| if self.grid_view { self.grid(ui) } else { self.viewer(ui) });
         self.dialogs(&ctx);
+        self.session_dialogs(&ctx);
+        self.run_pending();
 
         // Commit edits once the user lets go of the mouse (one undo step per gesture).
         if !ctx.input(|i| i.pointer.any_down()) {

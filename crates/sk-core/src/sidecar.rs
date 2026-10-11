@@ -83,6 +83,11 @@ fn legacy_sidecar_path(image: &Path) -> PathBuf {
     image.with_file_name(name)
 }
 
+/// All sidecar names an image can have (current and legacy), whether they exist or not.
+pub fn sidecar_files_for(image: &Path) -> [PathBuf; 2] {
+    [sidecar_path(image), legacy_sidecar_path(image)]
+}
+
 pub fn load(image: &Path) -> Sidecar {
     std::fs::read_to_string(sidecar_path(image))
         .or_else(|_| std::fs::read_to_string(legacy_sidecar_path(image)))

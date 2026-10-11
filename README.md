@@ -92,6 +92,48 @@ Einstellungen werden nicht-destruktiv als `<Bild>.sk.json` neben dem RAW gespeic
 
 ## Bibliothek
 
+Silberkorn arbeitet wahlweise mit dem **Katalog** oder mit **Sessions**.
+
+### Sessions
+
+Eine Session ist ein in sich geschlossener Projektordner mit eigener Datenbank:
+
+```
+Hochzeit Müller/
+  Hochzeit Müller.sksession   Session-Datenbank (Alben, Favoriten, Index)
+  Capture/                    „Aufnahmen“ – neue Bilder
+  Selects/                    „Auswahl“ – die Auswahl
+  Output/                     „Ausgabe“ – verarbeitete Dateien
+  Trash/                      „Papierkorb“ – bis er geleert wird
+  Silberkorn/Cache/           Vorschaubilder der Session
+```
+
+- **Datei → Neue Session** (Strg+N) legt den Ordner samt Unterordnern an, **Session öffnen**
+  (Strg+Umschalt+O) öffnet eine `.sksession`-Datei; zuletzt verwendete Sessions stehen im
+  Menü, und die zuletzt offene Session wird beim Start wieder geöffnet. Eine Session lässt sich
+  auch als Programmargument übergeben (`silberkorn "Hochzeit Müller"`).
+- **Importieren** kopiert RAWs samt Sidecars in „Aufnahmen“ (die Originale bleiben liegen).
+- **Strg+J** verschiebt die Auswahl nach „Auswahl“, **Strg+Entf** in den Papierkorb; per
+  Rechtsklick auf ein Vorschaubild oder im Menü „Bild“ geht es auch nach „Aufnahmen“, in
+  einen Favoriten oder einen beliebigen Ordner. Sidecars wandern mit, bei Namensgleichheit
+  wird `-2`, `-3` … angehängt.
+- **Session-Favoriten:** häufig genutzte Ordner, gespeichert in der Session.
+- **Verarbeiten** schreibt relative Ausgabeordner in den Session-Ordner, das Standardrezept
+  also nach `Output/`.
+- **Papierkorb leeren** löscht die Bilder darin endgültig (mit Rückfrage).
+- **Session schließen** kehrt zum Katalog und zum zuvor geöffneten Ordner zurück.
+- **Portabel:** Die Session-Datenbank speichert Pfade relativ zum Session-Ordner. Eine Session
+  lässt sich daher als Ganzes verschieben, umbenennen oder auf einen anderen Rechner kopieren
+  (auch zwischen Windows und Linux), ohne dass Alben, Favoriten oder der Index verloren gehen.
+  Nur Favoriten außerhalb des Session-Ordners bleiben absolute Pfade.
+- **Vorschaubilder** einer Session liegen in `Silberkorn/Cache/Thumbnails` im Session-Ordner
+  und wandern mit; Bilder außerhalb von Sessions nutzen den Cache unter `~/.cache/silberkorn`.
+
+Alben, Smart-Alben, Keywords und Suche funktionieren in einer Session genauso wie im Katalog,
+beziehen sich aber nur auf die Bilder der Session.
+
+### Katalog
+
 - **Ordner** werden wie eine Session direkt durchsucht und im Hintergrund indexiert.
 - **Katalog** (SQLite, `~/.local/share/silberkorn/catalog.sqlite`, überschreibbar mit
   `SILBERKORN_CATALOG`): „Ordner importieren“ nimmt einen Ordnerbaum auf; danach stehen
@@ -121,6 +163,8 @@ Daten aus der Zeit als „Capture Room“ werden übernommen: Ordner `capture-ro
 | Strg+Z / Strg+Y | Rückgängig / Wiederholen |
 | Strg+Umschalt+C / V | Anpassungen kopieren / auf Auswahl anwenden |
 | Strg+D | Auswahl verarbeiten (Export) |
+| Strg+N / Strg+Umschalt+O | neue Session / Session öffnen |
+| Strg+J / Strg+Entf | nach „Auswahl“ / in den Papierkorb verschieben (Session) |
 | Strg+A | alle auswählen · Strg/Umschalt+Klick: Mehrfachauswahl |
 | Strg+[ / Strg+] | drehen |
 | Y | Vorher/Nachher |

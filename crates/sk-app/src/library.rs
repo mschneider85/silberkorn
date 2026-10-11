@@ -21,6 +21,8 @@ pub struct CatalogLists {
     pub folders: Vec<(PathBuf, usize)>,
     pub keywords: Vec<(String, usize)>,
     pub total: usize,
+    /// Session favorites (folders).
+    pub favorites: Vec<PathBuf>,
 }
 
 /// Transient UI state of the library tab.
@@ -47,7 +49,13 @@ fn record_from_sidecar(path: PathBuf) -> ImageRecord {
     }
 }
 
-pub fn scope_label(scope: &Scope, lists: &CatalogLists) -> String {
+pub fn scope_label(scope: &Scope, lists: &CatalogLists, session: Option<&sk_core::session::Session>) -> String {
+    // Session folders are shown by their label ("Auswahl" rather than "Selects").
+    if let (Scope::Folder { path, recursive: false }, Some(s)) = (scope, session)
+        && let Some(f) = s.folder_of(path).filter(|f| s.folder(*f) == *path)
+    {
+        return f.label().into();
+    }
     match scope {
         Scope::All => "Alle Bilder".into(),
         Scope::LastImport => "Letzter Import".into(),
@@ -67,6 +75,7 @@ impl App {
             folders: c.folders().unwrap_or_default(),
             keywords: c.keywords().unwrap_or_default(),
             total: c.image_count().unwrap_or(0),
+            favorites: c.favorites().unwrap_or_default(),
         };
     }
 
@@ -84,15 +93,22 @@ impl App {
             .flatten()
             .map(|e| e.path())
             .filter(|p| p.is_dir() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+            // The session's own data folder (cache) is not for browsing.
+            .filter(|p| !self.session.as_ref().is_some_and(|s| *p == s.root.join(sk_core::session::APP_FOLDER)))
             .collect();
         self.subdirs.sort();
         self.folder = folder.clone();
+        if self.session.is_none() {
+            self.catalog_folder = folder.clone();
+        }
         self.save_settings();
         self.open_scope(Scope::Folder { path: folder.clone(), recursive: false });
-        // Index silently so that dates, cameras and search work for this folder.
+        // Index silently so that dates, cameras and search work for this folder;
+        // in a session only its own folders belong in its database.
         let paths = catalog::scan_folder(&folder, false);
-        if !paths.is_empty() {
-            self.workers.index(IndexJob { paths, import: false });
+        let belongs = self.session.as_ref().is_none_or(|s| folder.starts_with(&s.root));
+        if !paths.is_empty() && belongs {
+            self.workers.index(IndexJob { catalog: self.catalog_path(), paths, import: false, copy_to: None });
         }
     }
 
@@ -111,15 +127,24 @@ impl App {
         }
     }
 
-    /// Imports a folder tree into the catalog (shown as "last import").
+    /// Imports a folder tree (shown as "last import"). In a session the files are copied
+    /// into its Capture folder, unless they already are inside the session.
     pub fn import_folder(&mut self, folder: &Path) {
         let paths = catalog::scan_folder(folder, true);
         if paths.is_empty() {
             self.status = "Keine RAW-Dateien gefunden".into();
             return;
         }
-        self.status = format!("Importiere {} Bilder…", paths.len());
-        self.workers.index(IndexJob { paths, import: true });
+        let copy_to = self
+            .session
+            .as_ref()
+            .filter(|s| !folder.starts_with(&s.root))
+            .map(|s| s.folder(sk_core::session::SessionFolder::Capture));
+        self.status = match &copy_to {
+            Some(_) => format!("Kopiere {} Bilder in die Session…", paths.len()),
+            None => format!("Importiere {} Bilder…", paths.len()),
+        };
+        self.workers.index(IndexJob { catalog: self.catalog_path(), paths, import: true, copy_to });
     }
 
     /// Re-reads the entries of the current scope, keeping selection by path.
@@ -273,7 +298,9 @@ impl App {
         let mut open: Option<Scope> = None;
         let (mut do_import, mut do_cleanup) = (false, false);
 
-        section(ui, "Katalog", None, |ui| {
+        self.session_sections(ui);
+        let title = if self.session.is_some() { "Session-Katalog" } else { "Katalog" };
+        section(ui, title, None, |ui| {
             let mut entry = |ui: &mut Ui, scope: Scope, text: String| {
                 if ui.selectable_label(self.scope == scope, text).clicked() {
                     open = Some(scope);
@@ -282,7 +309,9 @@ impl App {
             entry(ui, Scope::All, format!("\u{E468}  Alle Bilder ({})", self.lists.total));
             entry(ui, Scope::LastImport, "\u{E1A0}  Letzter Import".into());
             ui.horizontal(|ui| {
-                if ui.button("\u{E20C}  Ordner importieren").on_hover_text("Aktuellen Ordner inkl. Unterordnern in den Katalog aufnehmen").clicked() {
+                if self.session.is_none()
+                    && ui.button("\u{E20C}  Ordner importieren").on_hover_text("Aktuellen Ordner inkl. Unterordnern in den Katalog aufnehmen").clicked()
+                {
                     do_import = true;
                 }
                 if ui.button("\u{EC54}  Bereinigen").on_hover_text("Fehlende Dateien aus dem Katalog entfernen").clicked() {

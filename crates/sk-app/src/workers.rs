@@ -13,6 +13,7 @@ use sk_core::image::LinearImage;
 use sk_core::params::Adjustments;
 use sk_core::pipeline::{Histogram, Processor, RenderOptions, StageCache};
 use sk_core::raw::{self, RawMeta};
+use sk_core::session;
 use sk_core::sidecar;
 use egui::ColorImage;
 
@@ -31,13 +32,18 @@ pub enum Event {
     LensDbDownloaded(Result<PathBuf, String>),
     AiMask { generation: u64, layer: usize, result: Result<sk_ai::MaskImage, String> },
     ModelDownloaded(Result<PathBuf, String>),
-    IndexDone { indexed: usize, failed: usize, import: bool },
+    /// `catalog` identifies the database, so that results for a closed session can be ignored.
+    IndexDone { catalog: PathBuf, indexed: usize, failed: usize, import: bool },
 }
 
-/// Adds files to the catalog. `import` marks them as a new import ("last import").
+/// Adds files to a catalog. `import` marks them as a new import ("last import").
 pub struct IndexJob {
+    /// Catalog or session database to write to.
+    pub catalog: PathBuf,
     pub paths: Vec<PathBuf>,
     pub import: bool,
+    /// Copy the files into this folder first and index the copies (session import).
+    pub copy_to: Option<PathBuf>,
 }
 
 pub struct RenderJob {
@@ -95,7 +101,8 @@ pub struct Workers {
     full_tx: Sender<(u64, PathBuf)>,
     tile_tx: Sender<TileJob>,
     render_tx: Sender<RenderJob>,
-    thumb_tx: Sender<PathBuf>,
+    /// Image and the root of the open session (whose images are cached inside it).
+    thumb_tx: Sender<(PathBuf, Option<PathBuf>)>,
     export_tx: Sender<ExportJob>,
     index_tx: Sender<IndexJob>,
     ai_tx: Sender<AiJob>,
@@ -112,7 +119,7 @@ fn recv_latest<T>(rx: &Receiver<T>) -> Option<T> {
 }
 
 impl Workers {
-    pub fn spawn(ctx: egui::Context, catalog_path: PathBuf) -> Self {
+    pub fn spawn(ctx: egui::Context) -> Self {
         let (ev_tx, events) = channel();
         let (ev_tx_keep, ctx_keep) = (ev_tx.clone(), ctx.clone());
 
@@ -120,22 +127,39 @@ impl Workers {
         {
             let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
             thread::spawn(move || {
-                // The indexer owns its own connection (SQLite in WAL mode allows concurrent readers).
-                let catalog = match Catalog::open(&catalog_path) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        log::error!("Katalog nicht verfügbar: {e:#}");
-                        return;
-                    }
-                };
+                // The indexer owns its own connection (SQLite in WAL mode allows concurrent readers);
+                // it is reopened when the app switches between catalog and session.
+                let mut open: Option<(PathBuf, Catalog)> = None;
                 while let Ok(job) = index_rx.recv() {
+                    if open.as_ref().is_none_or(|(p, _)| *p != job.catalog) {
+                        open = match Catalog::open(&job.catalog) {
+                            Ok(c) => Some((job.catalog.clone(), c)),
+                            Err(e) => {
+                                log::error!("Katalog nicht verfügbar: {e:#}");
+                                let _ = ev_tx.send(Event::IndexDone { catalog: job.catalog.clone(), indexed: 0, failed: job.paths.len(), import: job.import });
+                                continue;
+                            }
+                        };
+                    }
+                    let catalog = &open.as_ref().expect("opened").1;
                     let import_id = if job.import { catalog.begin_import().unwrap_or(0) } else { 0 };
                     let total = job.paths.len();
                     let (mut indexed, mut failed) = (0, 0);
                     for (i, path) in job.paths.iter().enumerate() {
-                        let needs = job.import || catalog.needs_index(path).unwrap_or(true);
+                        let path = match &job.copy_to {
+                            Some(dest) => match session::copy_image(path, dest) {
+                                Ok(p) => p,
+                                Err(e) => {
+                                    log::warn!("{e:#}");
+                                    failed += 1;
+                                    continue;
+                                }
+                            },
+                            None => path.clone(),
+                        };
+                        let needs = job.import || catalog.needs_index(&path).unwrap_or(true);
                         if needs {
-                            match catalog.index_file(path, import_id) {
+                            match catalog.index_file(&path, import_id) {
                                 Ok(_) => indexed += 1,
                                 Err(e) => {
                                     log::warn!("{}: {e:#}", path.display());
@@ -148,7 +172,7 @@ impl Workers {
                             ctx.request_repaint();
                         }
                     }
-                    let _ = ev_tx.send(Event::IndexDone { indexed, failed, import: job.import });
+                    let _ = ev_tx.send(Event::IndexDone { catalog: job.catalog.clone(), indexed, failed, import: job.import });
                     ctx.request_repaint();
                 }
             });
@@ -296,14 +320,14 @@ impl Workers {
             });
         }
 
-        let (thumb_tx, thumb_rx) = channel::<PathBuf>();
+        let (thumb_tx, thumb_rx) = channel::<(PathBuf, Option<PathBuf>)>();
         let thumb_rx = Arc::new(Mutex::new(thumb_rx));
         for _ in 0..thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 4)) {
             let (ev_tx, ctx, rx) = (ev_tx.clone(), ctx.clone(), thumb_rx.clone());
             thread::spawn(move || {
                 loop {
-                    let Ok(path) = rx.lock().unwrap().recv() else { break };
-                    if let Some(image) = make_thumbnail(&path) {
+                    let Ok((path, session)) = rx.lock().unwrap().recv() else { break };
+                    if let Some(image) = make_thumbnail(&path, session.as_deref()) {
                         let _ = ev_tx.send(Event::Thumbnail { path, image });
                         ctx.request_repaint();
                     }
@@ -362,8 +386,8 @@ impl Workers {
         let _ = self.render_tx.send(job);
     }
 
-    pub fn thumbnail(&self, path: PathBuf) {
-        let _ = self.thumb_tx.send(path);
+    pub fn thumbnail(&self, path: PathBuf, session: Option<PathBuf>) {
+        let _ = self.thumb_tx.send((path, session));
     }
 
     pub fn export(&self, job: ExportJob) {
@@ -404,9 +428,9 @@ impl Workers {
 
 /// Thumbnail: from the disk cache, else the embedded camera JPEG, or a real
 /// development if the image has edits.
-fn make_thumbnail(path: &std::path::Path) -> Option<ColorImage> {
+fn make_thumbnail(path: &std::path::Path, session: Option<&std::path::Path>) -> Option<ColorImage> {
     let sc = sidecar::load(path);
-    if let Some(img) = cache::load(path, &sc.adjustments) {
+    if let Some(img) = cache::load(path, &sc.adjustments, session) {
         return Some(to_color_image(&img));
     }
     let img = if sc.adjustments != Adjustments::default() {
@@ -417,7 +441,7 @@ fn make_thumbnail(path: &std::path::Path) -> Option<ColorImage> {
         raw::embedded_preview(path).ok()?
     };
     let thumb = img.thumbnail(THUMB_EDGE, THUMB_EDGE);
-    cache::store(path, &sc.adjustments, &thumb);
+    cache::store(path, &sc.adjustments, session, &thumb);
     Some(to_color_image(&thumb))
 }
 

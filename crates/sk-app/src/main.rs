@@ -10,6 +10,7 @@ mod crop;
 mod develop_tools;
 mod layers;
 mod library;
+mod session;
 mod theme;
 mod tools;
 mod widgets;
@@ -19,10 +20,13 @@ use std::path::PathBuf;
 
 fn main() -> eframe::Result {
     env_logger::init();
-    let folder = std::env::args().nth(1).map(PathBuf::from);
+    // The argument is a folder to browse, or a session (its `.sksession` file or folder).
+    let arg = std::env::args().nth(1).map(PathBuf::from);
+    let is_session = arg.as_ref().is_some_and(|p| sk_core::session::is_session_file(p) || (p.is_dir() && sk_core::session::find_session_file(p).is_some()));
+    let (folder, session) = if is_session { (None, arg) } else { (arg, None) };
 
     let run = |renderer: eframe::Renderer| {
-        let folder = folder.clone();
+        let (folder, session) = (folder.clone(), session.clone());
         let options = eframe::NativeOptions {
             renderer,
             viewport: egui::ViewportBuilder::default()
@@ -32,7 +36,7 @@ fn main() -> eframe::Result {
             ..Default::default()
         };
         eframe::run_native("Silberkorn", options, Box::new(move |cc| {
-            let opts = app::AppOptions { start_folder: folder, ..Default::default() };
+            let opts = app::AppOptions { start_folder: folder, session, ..Default::default() };
             Ok(Box::new(app::App::new(&cc.egui_ctx, opts)))
         }))
     };
@@ -64,6 +68,7 @@ mod tests {
             include_str!("tools.rs"),
             include_str!("widgets.rs"),
             include_str!("chrome.rs"),
+            include_str!("session.rs"),
         ];
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);

@@ -38,6 +38,7 @@ impl Fixture {
             &ctx,
             AppOptions {
                 start_folder: Some(dir.join("photos")),
+                session: None,
                 catalog_path: dir.join("catalog.sqlite"),
                 persist_settings: false,
             },
@@ -330,4 +331,105 @@ fn phase5_speed_edit_ai_masks_split_and_recipes() {
     f.app.export_selection();
     f.pump("Export", |a| a.export_progress.is_none() && a.export_log.len() == 2);
     assert!(out.join("_DSC0009.jpg").exists() && out.join("_DSC0009.png").exists(), "{:?}", f.app.export_log);
+}
+
+#[test]
+fn session_workflow() {
+    use sk_core::session::SessionFolder;
+    let Some(mut f) = Fixture::new("session") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.set_rating(3);
+    let global = f.app.catalog_path();
+
+    // Creating a session switches to its database; importing copies into Capture.
+    f.app.create_session(&f.dir, "Shooting").unwrap();
+    let s = f.app.session.clone().unwrap();
+    assert_eq!(f.app.catalog_path(), s.file);
+    assert_eq!(f.app.folder, s.folder(SessionFolder::Capture));
+    let photos = f.dir.join("photos");
+    f.app.import_folder(&photos);
+    f.pump("Import", |a| a.scope == Scope::LastImport && a.entries.len() == 2);
+    let capture = s.folder(SessionFolder::Capture);
+    let a = capture.join("_DSC0009.ARW");
+    let b = capture.join("_DSC0010.ARW");
+    assert!(a.exists() && b.exists() && photos.join("_DSC0009.ARW").exists());
+    assert_eq!(sidecar::load(&a).rating, 3, "Sidecar wird mitkopiert");
+
+    // Move to Selects: file and sidecar move, the database follows, the next image opens.
+    f.app.open_folder(capture.clone());
+    f.app.selection = [a.clone()].into_iter().collect();
+    f.app.move_to_session_folder(SessionFolder::Selects);
+    let a2 = s.folder(SessionFolder::Selects).join("_DSC0009.ARW");
+    assert!(!a.exists() && a2.exists());
+    assert_eq!(sidecar::load(&a2).rating, 3);
+    assert_eq!(f.app.entries.len(), 1);
+    assert_eq!(f.app.primary_path().as_ref(), Some(&b));
+    let cat = f.app.catalog.as_ref().unwrap();
+    let selects = Scope::Folder { path: s.folder(SessionFolder::Selects), recursive: false };
+    assert_eq!(cat.query(&selects, &Filter::default(), SortKey::Name, false).unwrap().len(), 1);
+
+    // Favorites live in the session.
+    let fav = s.root.join("Kunde");
+    std::fs::create_dir_all(&fav).unwrap();
+    f.app.toggle_favorite(&fav);
+    assert_eq!(f.app.lists.favorites, vec![fav.clone()]);
+
+    // Processing goes to the session's Output folder.
+    f.app.recipes[0].output_dir = "Output".into();
+    f.app.recipes[0].long_edge = Some(300);
+    f.app.selection = [b.clone()].into_iter().collect();
+    f.app.export_selection();
+    f.pump("Export", |app| app.export_progress.is_none() && app.export_log.len() == 1);
+    assert!(s.folder(SessionFolder::Output).join("_DSC0010.jpg").exists(), "{:?}", f.app.export_log);
+
+    // Trash, then empty it.
+    f.app.move_to_session_folder(SessionFolder::Trash);
+    let b2 = s.folder(SessionFolder::Trash).join("_DSC0010.ARW");
+    assert!(b2.exists() && f.app.entries.is_empty());
+    f.app.empty_trash();
+    assert!(!b2.exists() && !sidecar::sidecar_path(&b2).exists());
+
+    // Closing returns to the catalog; reopening restores the session state.
+    f.app.close_session();
+    assert!(f.app.session.is_none());
+    assert_eq!(f.app.catalog_path(), global);
+    assert_eq!(f.app.folder, photos.canonicalize().unwrap());
+    f.app.open_session(&s.root);
+    assert_eq!(f.app.lists.favorites, vec![fav]);
+    f.pump("Session indexiert", |a| a.lists.total == 1);
+    assert_eq!(f.app.recent_sessions.first(), Some(&s.file));
+    let cat = f.app.catalog.as_ref().unwrap();
+    let album = cat.create_album("Favoriten", None).unwrap();
+    cat.add_to_album(album, std::slice::from_ref(&a2)).unwrap();
+
+    // Portable: the moved and renamed session keeps albums, favorites and its index.
+    f.app.close_session();
+    let moved = f.dir.join("Archiv");
+    std::fs::create_dir_all(&moved).unwrap();
+    std::fs::rename(&s.root, moved.join("Shooting 2026")).unwrap();
+    f.app.open_session(&moved.join("Shooting 2026"));
+    let s2 = f.app.session.clone().expect("Session geöffnet");
+    assert_eq!(s2.name, "Shooting");
+    assert_eq!(f.app.lists.favorites, vec![s2.root.join("Kunde")]);
+    f.app.open_scope(Scope::Album(album));
+    let a3 = s2.folder(SessionFolder::Selects).join("_DSC0009.ARW");
+    assert_eq!(f.app.entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>(), vec![a3.clone()]);
+    assert_eq!(f.app.entries[0].rating, 3);
+    assert_eq!(f.app.lists.total, 1);
+
+    // Thumbnails are cached inside the session and are still valid after another move.
+    f.app.workers.thumbnail(a3.clone(), Some(s2.root.clone()));
+    f.pump("Vorschaubild", |a| a.thumbs.contains_key(&a3));
+    let adj = sidecar::load(&a3).adjustments;
+    assert!(sk_core::cache::load(&a3, &adj, Some(&s2.root)).is_some());
+    assert!(sk_core::session::thumbnail_dir(&s2.root).is_dir());
+    f.app.close_session();
+    let again = f.dir.join("Kopie");
+    std::fs::rename(&s2.root, &again).unwrap();
+    let a4 = again.join("Selects").join("_DSC0009.ARW");
+    assert!(sk_core::cache::load(&a4, &adj, Some(&again)).is_some(), "Cache wandert mit");
+    f.app.open_session(&again);
+    f.app.open_folder(again.clone());
+    assert!(!f.app.subdirs.contains(&f.app.session.as_ref().unwrap().root.join("Silberkorn")));
+    assert!(f.app.subdirs.iter().any(|d| d.ends_with("Selects")));
 }

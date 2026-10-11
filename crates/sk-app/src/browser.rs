@@ -320,7 +320,7 @@ impl App {
         let entry = &self.entries[idx];
         if !self.thumb_requested.contains(&entry.path) {
             self.thumb_requested.insert(entry.path.clone());
-            self.workers.thumbnail(entry.path.clone());
+            self.workers.thumbnail(entry.path.clone(), self.session.as_ref().map(|s| s.root.clone()));
         }
         let selected = self.selection.contains(&entry.path);
         let painter = ui.painter_at(rect);
@@ -369,6 +369,12 @@ impl App {
             resp.scroll_to_me(Some(egui::Align::Center));
         }
         let resp = resp.on_hover_text_at_pointer(tooltip);
+        // Right-click acts on the selection; an unselected image becomes the selection first.
+        if resp.secondary_clicked() && !selected {
+            let path = entry.path.clone();
+            self.select_path(&path, Modifiers::NONE);
+        }
+        resp.context_menu(|ui| self.move_menu(ui));
         let mods = resp.clicked().then(|| ui.input(|i| i.modifiers));
         (mods, resp.double_clicked())
     }

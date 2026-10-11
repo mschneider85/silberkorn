@@ -15,5 +15,6 @@ pub mod params;
 pub mod paths;
 pub mod pipeline;
 pub mod raw;
+pub mod session;
 pub mod sidecar;
 pub mod styles;

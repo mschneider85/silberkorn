@@ -2,6 +2,9 @@
 //!
 //! Sidecars stay the source of truth for adjustments, ratings, labels and keywords;
 //! the catalog mirrors them so that queries across folders are fast.
+//!
+//! A session database (`.sksession`) stores paths relative to the session folder, with `/` as
+//! separator, so that the session can be moved, renamed or copied to another computer.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -113,6 +116,8 @@ pub struct Album {
 pub struct Catalog {
     conn: Connection,
     pub path: PathBuf,
+    /// Folder that stored paths are relative to (the session folder); `None` for the catalog.
+    base: Option<PathBuf>,
 }
 
 pub fn default_catalog_path() -> PathBuf {
@@ -146,14 +151,64 @@ impl Catalog {
             std::fs::create_dir_all(dir)?;
         }
         let conn = Connection::open(path).with_context(|| format!("Katalog {} nicht lesbar", path.display()))?;
-        Self::init(conn, path.to_path_buf())
+        let is_session = path.extension().is_some_and(|e| e.eq_ignore_ascii_case(crate::session::SESSION_EXT));
+        let base = is_session.then(|| path.parent().map(|d| d.canonicalize().unwrap_or_else(|_| d.to_path_buf()))).flatten();
+        Self::init(conn, path.to_path_buf(), base)
     }
 
     pub fn open_in_memory() -> Result<Self> {
-        Self::init(Connection::open_in_memory()?, PathBuf::from(":memory:"))
+        Self::init(Connection::open_in_memory()?, PathBuf::from(":memory:"), None)
     }
 
-    fn init(conn: Connection, path: PathBuf) -> Result<Self> {
+    /// Text stored for a path: relative to the base folder (joined with `/`) if inside it, else absolute.
+    fn key(&self, path: &Path) -> String {
+        match self.base.as_ref().and_then(|b| path.strip_prefix(b).ok()) {
+            Some(rel) => rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"),
+            None => path.to_string_lossy().to_string(),
+        }
+    }
+
+    fn folder_key(&self, path: &Path) -> String {
+        self.key(path.parent().unwrap_or(Path::new("")))
+    }
+
+    /// Inverse of [`Self::key`].
+    fn resolve(&self, stored: &str) -> PathBuf {
+        match &self.base {
+            // A leading '/' is an absolute Unix path even when read on Windows.
+            Some(b) if !Path::new(stored).is_absolute() && !stored.starts_with('/') => {
+                stored.split('/').filter(|c| !c.is_empty()).fold(b.clone(), |p, c| p.join(c))
+            }
+            _ => PathBuf::from(stored),
+        }
+    }
+
+    /// Converts absolute paths inside the base folder to relative ones (databases written
+    /// before sessions stored relative paths).
+    fn make_paths_relative(&self) -> Result<()> {
+        let rows: Vec<(i64, String)> = self
+            .conn
+            .prepare("SELECT id, path FROM images")?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        for (id, stored) in rows {
+            let path = PathBuf::from(&stored);
+            if path.is_absolute() && self.key(&path) != stored {
+                self.conn.execute(
+                    "UPDATE OR REPLACE images SET path = ?2, folder = ?3 WHERE id = ?1",
+                    params![id, self.key(&path), self.folder_key(&path)],
+                )?;
+            }
+        }
+        let favs: Vec<String> =
+            self.conn.prepare("SELECT path FROM favorites")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        for stored in favs {
+            self.conn.execute("UPDATE OR REPLACE favorites SET path = ?2 WHERE path = ?1", params![stored, self.key(Path::new(&stored))])?;
+        }
+        Ok(())
+    }
+
+    fn init(conn: Connection, path: PathBuf, base: Option<PathBuf>) -> Result<Self> {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
@@ -189,9 +244,14 @@ impl Catalog {
                  image_id INTEGER NOT NULL REFERENCES images(id) ON DELETE CASCADE,
                  PRIMARY KEY (album_id, image_id)
              );
-             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);",
+             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
+             CREATE TABLE IF NOT EXISTS favorites (path TEXT PRIMARY KEY);",
         )?;
-        Ok(Self { conn, path })
+        let catalog = Self { conn, path, base };
+        if catalog.base.is_some() {
+            catalog.make_paths_relative()?;
+        }
+        Ok(catalog)
     }
 
     /// True if the file is unknown or changed since it was indexed.
@@ -201,7 +261,7 @@ impl Catalog {
             .conn
             .query_row(
                 "SELECT file_mtime, file_size FROM images WHERE path = ?1",
-                [path.to_string_lossy()],
+                [self.key(path)],
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .optional()?;
@@ -225,7 +285,7 @@ impl Catalog {
     pub fn upsert(&self, meta: &RawMeta, sc: &Sidecar, import_id: i64) -> Result<i64> {
         let path = &meta.path;
         let (mtime, size) = file_stamp(path);
-        let folder = path.parent().unwrap_or(Path::new("")).to_string_lossy().to_string();
+        let folder = self.folder_key(path);
         let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
         let info = &meta.info;
         let camera = format!("{} {}", info.make, info.model).trim().to_string();
@@ -239,7 +299,7 @@ impl Catalog {
                  color_label=excluded.color_label, file_mtime=excluded.file_mtime, file_size=excluded.file_size
              RETURNING id",
             params![
-                path.to_string_lossy(),
+                self.key(path),
                 folder,
                 name,
                 info.date,
@@ -269,7 +329,7 @@ impl Catalog {
     /// Mirrors the editable metadata from a sidecar (no-op if the image is not indexed).
     pub fn sync_sidecar(&self, path: &Path, sc: &Sidecar) -> Result<()> {
         let id: Option<i64> =
-            self.conn.query_row("SELECT id FROM images WHERE path = ?1", [path.to_string_lossy()], |r| r.get(0)).optional()?;
+            self.conn.query_row("SELECT id FROM images WHERE path = ?1", [self.key(path)], |r| r.get(0)).optional()?;
         if let Some(id) = id {
             self.conn.execute(
                 "UPDATE images SET rating = ?2, color_label = ?3 WHERE id = ?1",
@@ -289,12 +349,49 @@ impl Catalog {
             .collect::<rusqlite::Result<_>>()?;
         let mut n = 0;
         for (id, p) in paths {
-            if !Path::new(&p).exists() {
+            if !self.resolve(&p).exists() {
                 self.conn.execute("DELETE FROM images WHERE id = ?1", [id])?;
                 n += 1;
             }
         }
         Ok(n)
+    }
+
+    /// Follows a file that was moved or renamed; album memberships and keywords are kept.
+    pub fn rename_path(&self, from: &Path, to: &Path) -> Result<()> {
+        let (from, to_key) = (self.key(from), self.key(to));
+        let name = to.file_name().unwrap_or_default().to_string_lossy().to_string();
+        // A stale entry at the destination would violate the unique path.
+        self.conn.execute("DELETE FROM images WHERE path = ?1 AND path <> ?2", params![to_key, from])?;
+        self.conn.execute(
+            "UPDATE images SET path = ?2, folder = ?3, name = ?4 WHERE path = ?1",
+            params![from, to_key, self.folder_key(to), name],
+        )?;
+        Ok(())
+    }
+
+    pub fn remove_path(&self, path: &Path) -> Result<()> {
+        self.conn.execute("DELETE FROM images WHERE path = ?1", [self.key(path)])?;
+        Ok(())
+    }
+
+    /// Favorite folders (used by sessions), sorted by name.
+    pub fn favorites(&self) -> Result<Vec<PathBuf>> {
+        let mut stmt = self.conn.prepare("SELECT path FROM favorites")?;
+        let stored: Vec<String> = stmt.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        let mut v: Vec<PathBuf> = stored.iter().map(|s| self.resolve(s)).collect();
+        v.sort_by_key(|p| p.file_name().unwrap_or_default().to_string_lossy().to_lowercase());
+        Ok(v)
+    }
+
+    pub fn add_favorite(&self, folder: &Path) -> Result<()> {
+        self.conn.execute("INSERT OR IGNORE INTO favorites(path) VALUES (?1)", [self.key(folder)])?;
+        Ok(())
+    }
+
+    pub fn remove_favorite(&self, folder: &Path) -> Result<()> {
+        self.conn.execute("DELETE FROM favorites WHERE path = ?1", [self.key(folder)])?;
+        Ok(())
     }
 
     pub fn query(&self, scope: &Scope, filter: &Filter, sort: SortKey, descending: bool) -> Result<Vec<ImageRecord>> {
@@ -307,12 +404,16 @@ impl Catalog {
         match scope {
             Scope::All => {}
             Scope::Folder { path, recursive } => {
-                let folder = path.to_string_lossy().to_string();
-                if *recursive {
+                let folder = self.key(path);
+                let relative = self.base.as_ref().is_some_and(|b| path.starts_with(b));
+                if *recursive && relative && folder.is_empty() {
+                    // The whole session.
+                } else if *recursive {
                     sql += " AND (i.folder = ? OR i.folder LIKE ? ESCAPE '\\')";
                     let escaped = folder.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+                    let sep = if relative { '/' } else { std::path::MAIN_SEPARATOR };
                     args.push(Value::Text(folder.clone()));
-                    args.push(Value::Text(format!("{escaped}{}%", std::path::MAIN_SEPARATOR)));
+                    args.push(Value::Text(format!("{escaped}{sep}%")));
                 } else {
                     sql += " AND i.folder = ?";
                     args.push(Value::Text(folder));
@@ -369,7 +470,7 @@ impl Catalog {
             let kw: Option<String> = r.get(9)?;
             Ok(ImageRecord {
                 id: r.get(0)?,
-                path: PathBuf::from(r.get::<_, String>(1)?),
+                path: self.resolve(&r.get::<_, String>(1)?),
                 name: r.get(2)?,
                 capture_date: r.get(3)?,
                 camera: r.get(4)?,
@@ -386,7 +487,7 @@ impl Catalog {
     /// All indexed folders with image counts, sorted.
     pub fn folders(&self) -> Result<Vec<(PathBuf, usize)>> {
         let mut stmt = self.conn.prepare("SELECT folder, count(*) FROM images GROUP BY folder ORDER BY folder")?;
-        let rows = stmt.query_map([], |r| Ok((PathBuf::from(r.get::<_, String>(0)?), r.get::<_, i64>(1)? as usize)))?;
+        let rows = stmt.query_map([], |r| Ok((self.resolve(&r.get::<_, String>(0)?), r.get::<_, i64>(1)? as usize)))?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
@@ -444,7 +545,7 @@ impl Catalog {
         for p in paths {
             n += self.conn.execute(
                 "INSERT OR IGNORE INTO album_images(album_id, image_id) SELECT ?1, id FROM images WHERE path = ?2",
-                params![album, p.to_string_lossy()],
+                params![album, self.key(p)],
             )?;
         }
         Ok(n)
@@ -454,7 +555,7 @@ impl Catalog {
         for p in paths {
             self.conn.execute(
                 "DELETE FROM album_images WHERE album_id = ?1 AND image_id = (SELECT id FROM images WHERE path = ?2)",
-                params![album, p.to_string_lossy()],
+                params![album, self.key(p)],
             )?;
         }
         Ok(())
@@ -583,6 +684,88 @@ mod tests {
         assert_eq!(r.len(), 1);
         assert_eq!(r[0].camera.as_deref(), Some("Sony ILCE-7M3"));
         assert_eq!(r[0].capture_date.as_deref(), Some("2018:03:13 16:38:13"));
+    }
+
+    #[test]
+    fn rename_remove_and_favorites() {
+        let c = catalog();
+        let a = c.create_album("A", None).unwrap();
+        c.add_to_album(a, &[PathBuf::from("/p/a/a.ARW")]).unwrap();
+        c.rename_path(Path::new("/p/a/a.ARW"), Path::new("/p/sel/a-2.ARW")).unwrap();
+        let r = c.query(&Scope::Album(a), &Filter::default(), SortKey::Name, false).unwrap();
+        assert_eq!(names(r.clone()), ["a-2.ARW"]);
+        assert_eq!(r[0].keywords, ["Portrait"]);
+        let sel = Scope::Folder { path: "/p/sel".into(), recursive: false };
+        assert_eq!(c.query(&sel, &Filter::default(), SortKey::Name, false).unwrap().len(), 1);
+        // Moving onto a stale entry replaces it.
+        c.rename_path(Path::new("/p/a/b.ARW"), Path::new("/p/sel/a-2.ARW")).unwrap();
+        assert_eq!(c.image_count().unwrap(), 2);
+        c.remove_path(Path::new("/p/sel/a-2.ARW")).unwrap();
+        assert_eq!(c.image_count().unwrap(), 1);
+
+        c.add_favorite(Path::new("/p/z")).unwrap();
+        c.add_favorite(Path::new("/p/b")).unwrap();
+        c.add_favorite(Path::new("/p/b")).unwrap();
+        assert_eq!(c.favorites().unwrap(), [PathBuf::from("/p/b"), PathBuf::from("/p/z")]);
+        c.remove_favorite(Path::new("/p/b")).unwrap();
+        assert_eq!(c.favorites().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn session_paths_are_portable() {
+        let tmp = std::env::temp_dir().join(format!("skcat-portable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let (old, new) = (tmp.join("Alt"), tmp.join("Neu"));
+        std::fs::create_dir_all(old.join("Capture")).unwrap();
+        let old = old.canonicalize().unwrap();
+        let db = old.join("S.sksession");
+        {
+            let c = Catalog::open(&db).unwrap();
+            let p = old.join("Capture/a.ARW");
+            c.upsert(&meta(p.to_str().unwrap(), "2020:01:01", "FE 35mm"), &Sidecar::default(), 1).unwrap();
+            let album = c.create_album("Best", None).unwrap();
+            c.add_to_album(album, &[p]).unwrap();
+            c.add_favorite(&old.join("Kunde")).unwrap();
+            c.add_favorite(Path::new("/extern/ordner")).unwrap();
+            let stored: String = c.conn.query_row("SELECT path FROM images", [], |r| r.get(0)).unwrap();
+            assert_eq!(stored, "Capture/a.ARW");
+        }
+        std::fs::rename(&old, &new).unwrap();
+        let new = new.canonicalize().unwrap();
+        let c = Catalog::open(&new.join("S.sksession")).unwrap();
+        let r = c.query(&Scope::All, &Filter::default(), SortKey::Name, false).unwrap();
+        assert_eq!(r[0].path, new.join("Capture").join("a.ARW"));
+        assert_eq!(c.folders().unwrap()[0].0, new.join("Capture"));
+        let album = c.albums().unwrap()[0].id;
+        assert_eq!(c.query(&Scope::Album(album), &Filter::default(), SortKey::Name, false).unwrap().len(), 1);
+        let rec = Scope::Folder { path: new.clone(), recursive: true };
+        assert_eq!(c.query(&rec, &Filter::default(), SortKey::Name, false).unwrap().len(), 1);
+        let cap = Scope::Folder { path: new.join("Capture"), recursive: true };
+        assert_eq!(c.query(&cap, &Filter::default(), SortKey::Name, false).unwrap().len(), 1);
+        assert_eq!(c.favorites().unwrap(), [new.join("Kunde"), PathBuf::from("/extern/ordner")]);
+        std::fs::remove_dir_all(tmp).ok();
+    }
+
+    #[test]
+    fn absolute_session_paths_are_migrated() {
+        let tmp = std::env::temp_dir().join(format!("skcat-migrate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let tmp = tmp.canonicalize().unwrap();
+        let plain = tmp.join("S.sqlite");
+        {
+            let c = Catalog::open(&plain).unwrap();
+            let p = tmp.join("Capture").join("a.ARW");
+            c.upsert(&meta(p.to_str().unwrap(), "2020:01:01", "x"), &Sidecar::default(), 1).unwrap();
+            c.add_favorite(&tmp.join("Kunde")).unwrap();
+        }
+        std::fs::rename(&plain, tmp.join("S.sksession")).unwrap();
+        let c = Catalog::open(&tmp.join("S.sksession")).unwrap();
+        let (path, folder): (String, String) = c.conn.query_row("SELECT path, folder FROM images", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((path.as_str(), folder.as_str()), ("Capture/a.ARW", "Capture"));
+        let fav: String = c.conn.query_row("SELECT path FROM favorites", [], |r| r.get(0)).unwrap();
+        assert_eq!(fav, "Kunde");
+        std::fs::remove_dir_all(tmp).ok();
     }
 
     #[test]

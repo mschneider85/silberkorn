@@ -13,6 +13,8 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     (
         "Datei",
         &[
+            ("Strg+N", "Neue Session"),
+            ("Strg+Umschalt+O", "Session öffnen"),
             ("Strg+O", "Ordner öffnen"),
             ("Strg+D", "Auswahl verarbeiten (exportieren)"),
             ("F1", "Diese Übersicht"),
@@ -35,6 +37,8 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("\u{E058} / \u{E06C}", "Vorheriges / nächstes Bild"),
             ("0 – 5", "Bewertung"),
             ("6 – 9", "Farb-Label Rot, Gelb, Grün, Blau"),
+            ("Strg+J", "Nach Auswahl (Selects) verschieben"),
+            ("Strg+Entf", "In den Session-Papierkorb"),
             ("Strg+[ / Strg+]", "Links / rechts drehen"),
             ("C", "Zuschneiden (Enter übernimmt)"),
             ("W", "Weißabgleich-Pipette"),
@@ -119,8 +123,12 @@ impl App {
     }
 
     pub fn import_folder_dialog(&mut self) {
-        if let Some(dir) = rfd::FileDialog::new().set_title("Ordner in Katalog importieren").set_directory(&self.folder).pick_folder() {
-            self.open_folder(dir.clone());
+        let title = if self.session.is_some() { "Bilder in die Session importieren" } else { "Ordner in Katalog importieren" };
+        if let Some(dir) = rfd::FileDialog::new().set_title(title).set_directory(&self.folder).pick_folder() {
+            // A session copies the files into its Capture folder; the catalog indexes them where they are.
+            if self.session.is_none() {
+                self.open_folder(dir.clone());
+            }
             self.import_folder(&dir);
         }
     }
@@ -132,10 +140,13 @@ impl App {
         let n_sel = self.selected_paths().len();
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("Datei", |ui| {
+                self.session_file_menu(ui);
+                ui.separator();
                 if item(ui, icon::FOLDER_OPEN, "Ordner öffnen …", "Strg+O", true) {
                     self.open_folder_dialog();
                 }
-                if item(ui, icon::FOLDER_PLUS, "Ordner in Katalog importieren …", "", true) {
+                let import = if self.session.is_some() { "In Session importieren …" } else { "Ordner in Katalog importieren …" };
+                if item(ui, icon::FOLDER_PLUS, import, "", true) {
                     self.import_folder_dialog();
                 }
                 ui.separator();
@@ -207,6 +218,8 @@ impl App {
                         }
                     });
                 });
+                ui.separator();
+                self.move_menu(ui);
                 ui.separator();
                 if item(ui, icon::CARET_LEFT, "Vorheriges Bild", icon::ARROW_LEFT, !self.visible.is_empty()) {
                     self.step(-1);
@@ -411,7 +424,7 @@ impl App {
                     1 => "1 Bild".to_string(),
                     n => format!("{n} Bilder"),
                 };
-                ui.label(dim(format!("{}  ·  {count}{sel}", scope_label(&self.scope, &self.lists))));
+                ui.label(dim(format!("{}  ·  {count}{sel}", scope_label(&self.scope, &self.lists, self.session.as_ref()))));
                 if let Some((done, total)) = self.export_progress.or(self.index_progress) {
                     ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(120.0).desired_height(12.0));
                 }
