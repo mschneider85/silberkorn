@@ -278,8 +278,44 @@ impl App {
     }
 
     fn output_tab(&mut self, ui: &mut Ui) {
-        let r = &mut self.recipe;
-        section(ui, "Ausgaberezept", None, |ui| {
+        let mut add = false;
+        let mut remove = None;
+        section(ui, "Ausgaberezepte", None, |ui| {
+            for (i, r) in self.recipes.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut r.enabled, "").on_hover_text("Beim Verarbeiten verwenden");
+                    if ui.selectable_label(self.selected_recipe == i, &r.name).clicked() {
+                        self.selected_recipe = i;
+                    }
+                    ui.label(RichText::new(format!("{} · {}", r.format.label(), r.output_space.label())).small().color(Color32::from_gray(140)));
+                });
+            }
+            ui.horizontal(|ui| {
+                if ui.button("+ Rezept").clicked() {
+                    add = true;
+                }
+                if self.recipes.len() > 1 && ui.button("🗑 Entfernen").clicked() {
+                    remove = Some(self.selected_recipe);
+                }
+            });
+        });
+        if add {
+            let mut r = self.recipes.get(self.selected_recipe).cloned().unwrap_or_default();
+            r.name = format!("Rezept {}", self.recipes.len() + 1);
+            self.recipes.push(r);
+            self.selected_recipe = self.recipes.len() - 1;
+        }
+        if let Some(i) = remove {
+            self.recipes.remove(i);
+            self.selected_recipe = self.selected_recipe.min(self.recipes.len() - 1);
+        }
+        self.selected_recipe = self.selected_recipe.min(self.recipes.len().saturating_sub(1));
+        let Some(r) = self.recipes.get_mut(self.selected_recipe) else { return };
+        section(ui, "Rezept bearbeiten", None, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut r.name);
+            });
             egui::ComboBox::from_label("Format").selected_text(r.format.label()).show_ui(ui, |ui| {
                 for f in ExportFormat::ALL {
                     ui.selectable_value(&mut r.format, f, f.label());
@@ -317,7 +353,8 @@ impl App {
         });
         section(ui, "Verarbeiten", None, |ui| {
             let n = self.selected_paths().len();
-            if ui.add_enabled(n > 0, egui::Button::new(format!("Ausgewählte verarbeiten ({n})"))).clicked() {
+            let k = self.recipes.iter().filter(|r| r.enabled).count();
+            if ui.add_enabled(n > 0 && k > 0, egui::Button::new(format!("Verarbeiten: {n} Bild(er) × {k} Rezept(e)"))).clicked() {
                 self.export_selection();
             }
             if let Some((done, total)) = self.export_progress {

@@ -29,6 +29,8 @@ pub enum Event {
     ExportProgress { done: usize, total: usize, last: Result<PathBuf, String> },
     IndexProgress { done: usize, total: usize },
     LensDbDownloaded(Result<PathBuf, String>),
+    AiMask { generation: u64, layer: usize, result: Result<cr_ai::MaskImage, String> },
+    ModelDownloaded(Result<PathBuf, String>),
     IndexDone { indexed: usize, failed: usize, import: bool },
 }
 
@@ -64,7 +66,25 @@ pub struct TileJob {
 
 pub struct ExportJob {
     pub items: Vec<(PathBuf, Adjustments)>,
-    pub recipe: ExportRecipe,
+    pub recipes: Vec<ExportRecipe>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AiKind {
+    Subject,
+    Sky,
+    Magic { seed: [f32; 2], tolerance: f32 },
+}
+
+/// Computes a content-based mask for a layer.
+pub struct AiJob {
+    pub generation: u64,
+    pub layer: usize,
+    pub kind: AiKind,
+    pub meta: Arc<RawMeta>,
+    pub preview: Arc<LinearImage>,
+    /// White balance / exposure used to build the guide image (no geometry).
+    pub adjustments: Adjustments,
 }
 
 pub struct Workers {
@@ -78,6 +98,8 @@ pub struct Workers {
     thumb_tx: Sender<PathBuf>,
     export_tx: Sender<ExportJob>,
     index_tx: Sender<IndexJob>,
+    ai_tx: Sender<AiJob>,
+    before_tx: Sender<RenderJob>,
 }
 
 /// Receives the newest message, discarding older queued ones ("latest wins").
@@ -190,6 +212,56 @@ impl Workers {
             });
         }
 
+        let (ai_tx, ai_rx) = channel::<AiJob>();
+        {
+            let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
+            thread::spawn(move || {
+                let mut model: Option<cr_ai::SubjectModel> = None;
+                while let Ok(job) = ai_rx.recv() {
+                    // Guide: the image in source orientation, only white balance and exposure applied.
+                    let guide_adj = Adjustments {
+                        white_balance: job.adjustments.white_balance.clone(),
+                        exposure: job.adjustments.exposure,
+                        detail: cr_core::params::Detail { sharpen_amount: 0.0, nr_color: 0.0, ..Default::default() },
+                        ..Default::default()
+                    };
+                    let r = Processor::new(&job.meta, &guide_adj).render(&job.preview, None, None);
+                    let guide = cr_ai::guide_from_rgba(r.width, r.height, &r.rgba);
+                    let result = match job.kind {
+                        AiKind::Sky => Ok(cr_ai::sky_mask(&guide)),
+                        AiKind::Magic { seed, tolerance } => Ok(cr_ai::magic_mask(&guide, seed, tolerance)),
+                        AiKind::Subject => {
+                            if model.is_none() {
+                                model = cr_ai::SubjectModel::load(&cr_ai::default_model_path()).map_err(|e| log::warn!("{e:#}")).ok();
+                            }
+                            match &model {
+                                Some(m) => m.subject_mask(&guide).map_err(|e| format!("{e:#}")),
+                                None => Err("MODEL_MISSING".into()),
+                            }
+                        }
+                    };
+                    let _ = ev_tx.send(Event::AiMask { generation: job.generation, layer: job.layer, result });
+                    ctx.request_repaint();
+                }
+            });
+        }
+
+        // Separate renderer for the "before" image of the split view.
+        let (before_tx, before_rx) = channel::<RenderJob>();
+        {
+            let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
+            thread::spawn(move || {
+                while let Some(job) = recv_latest(&before_rx) {
+                    let mut adj = Adjustments::default();
+                    adj.keep_framing_from(&job.adjustments);
+                    let r = Processor::new(&job.meta, &adj).render(&job.preview, None, None);
+                    let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
+                    let _ = ev_tx.send(Event::Rendered { generation: job.generation, image, thumb: None, histogram: r.histogram, before: true });
+                    ctx.request_repaint();
+                }
+            });
+        }
+
         let (render_tx, render_rx) = channel::<RenderJob>();
         {
             let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
@@ -206,7 +278,9 @@ impl Workers {
                     let opts = RenderOptions { clip_warning: job.clip_warning, ignore_crop: job.ignore_crop, mask_overlay: job.mask_overlay };
                     let r = Processor::with_options(&job.meta, &adj, opts).render(&job.preview, None, Some(&cache));
                     let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
-                    let thumb = (!job.before)
+                    // Thumbnails only from regular renderings (no overlays, warnings or crop tool view).
+                    let plain = !job.before && !job.clip_warning && job.mask_overlay.is_none() && !job.ignore_crop;
+                    let thumb = plain
                         .then(|| ::image::RgbaImage::from_raw(r.width as u32, r.height as u32, r.rgba))
                         .flatten()
                         .map(|img| to_color_image(&::image::DynamicImage::ImageRgba8(img).thumbnail(THUMB_EDGE, THUMB_EDGE)));
@@ -242,17 +316,34 @@ impl Workers {
             let (ev_tx, ctx) = (ev_tx, ctx);
             thread::spawn(move || {
                 while let Ok(job) = export_rx.recv() {
-                    let total = job.items.len();
-                    for (i, (path, adj)) in job.items.into_iter().enumerate() {
-                        let last = export::export(&path, &adj, &job.recipe).map_err(|e| format!("{}: {e:#}", path.display()));
-                        let _ = ev_tx.send(Event::ExportProgress { done: i + 1, total, last });
-                        ctx.request_repaint();
+                    let total = job.items.len() * job.recipes.len();
+                    let mut done = 0;
+                    for (path, adj) in job.items {
+                        for r in export::export_many(&path, &adj, &job.recipes) {
+                            done += 1;
+                            let last = r.map_err(|e| format!("{}: {e:#}", path.display()));
+                            let _ = ev_tx.send(Event::ExportProgress { done, total, last });
+                            ctx.request_repaint();
+                        }
                     }
                 }
             });
         }
 
-        Self { events, ev_tx: ev_tx_keep, ctx: ctx_keep, load_tx, full_tx, tile_tx, render_tx, thumb_tx, export_tx, index_tx }
+        Self {
+            events,
+            ev_tx: ev_tx_keep,
+            ctx: ctx_keep,
+            load_tx,
+            full_tx,
+            tile_tx,
+            render_tx,
+            thumb_tx,
+            export_tx,
+            index_tx,
+            ai_tx,
+            before_tx,
+        }
     }
 
     pub fn load(&self, generation: u64, path: PathBuf) {
@@ -277,6 +368,23 @@ impl Workers {
 
     pub fn export(&self, job: ExportJob) {
         let _ = self.export_tx.send(job);
+    }
+
+    pub fn ai_mask(&self, job: AiJob) {
+        let _ = self.ai_tx.send(job);
+    }
+
+    pub fn render_before(&self, job: RenderJob) {
+        let _ = self.before_tx.send(job);
+    }
+
+    pub fn download_model(&self) {
+        let (tx, ctx) = (self.ev_tx.clone(), self.ctx.clone());
+        thread::spawn(move || {
+            let r = cr_ai::download_model().map_err(|e| format!("{e:#}"));
+            let _ = tx.send(Event::ModelDownloaded(r));
+            ctx.request_repaint();
+        });
     }
 
     /// Downloads the lensfun database in the background.

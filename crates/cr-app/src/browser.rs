@@ -7,6 +7,25 @@ use egui::{Color32, Modifiers, Pos2, Rect, Sense, Ui, Vec2, pos2, vec2};
 use crate::app::App;
 use crate::widgets;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SpeedParam {
+    Exposure,
+    Contrast,
+    Saturation,
+    Highlights,
+    Shadows,
+    Temperature,
+}
+
+pub const SPEED_KEYS: [(egui::Key, SpeedParam); 6] = [
+    (egui::Key::Q, SpeedParam::Exposure),
+    (egui::Key::A, SpeedParam::Contrast),
+    (egui::Key::D, SpeedParam::Saturation),
+    (egui::Key::F, SpeedParam::Highlights),
+    (egui::Key::V, SpeedParam::Shadows),
+    (egui::Key::T, SpeedParam::Temperature),
+];
+
 impl App {
     pub fn viewer(&mut self, ui: &mut Ui) {
         let rect = ui.available_rect_before_wrap();
@@ -34,8 +53,29 @@ impl App {
         let fit = ((rect.width() - margin) / size.x).min((rect.height() - margin) / size.y).max(0.01);
         let scale = self.zoom.unwrap_or(fit);
 
+        // Speed Edit: hold a key and scroll to change a value.
+        let speed = SPEED_KEYS.iter().find(|(k, _)| ui.input(|i| i.key_down(*k))).map(|(_, p)| *p);
+        if let Some(param) = speed
+            && response.hovered()
+        {
+            // Discrete wheel notches from the raw events (not the smoothed scroll).
+            let notches: f32 = ui.input(|i| {
+                i.raw.events.iter().filter_map(|e| match e {
+                    egui::Event::MouseWheel { delta, .. } if delta.y != 0.0 => Some(delta.y.signum()),
+                    _ => None,
+                }).sum()
+            });
+            if notches != 0.0 {
+                self.speed_edit(param, notches);
+                // egui smooths scrolling over several frames; ignore the remainder for zooming.
+                self.zoom_blocked_until = ui.input(|i| i.time) + 0.5;
+            }
+            ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+        }
+
         // Mouse wheel zoom around the cursor.
-        if response.hovered() && (self.crop_tool.is_none() && self.straighten_tool.is_none()) {
+        let zoom_blocked = ui.input(|i| i.time) < self.zoom_blocked_until;
+        if response.hovered() && speed.is_none() && !zoom_blocked && self.crop_tool.is_none() && self.straighten_tool.is_none() {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 let new_scale = (scale * (1.0 + scroll * 0.0015)).clamp(fit.min(0.05), 16.0);
@@ -47,7 +87,7 @@ impl App {
                 self.zoom = Some(new_scale);
             }
         }
-        if (response.dragged() && !self.picking_wb && !tools_active) || response.dragged_by(egui::PointerButton::Middle) {
+        if (response.dragged() && !self.picking_wb && !tools_active && !self.split_dragging) || response.dragged_by(egui::PointerButton::Middle) {
             self.pan += response.drag_delta();
         }
         let scale = self.zoom.unwrap_or(fit);
@@ -73,7 +113,44 @@ impl App {
             painter.image(tile.texture.id(), tr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
 
-        if self.local_tool.is_some() {
+        // Split before/after view.
+        let mut split_drag = false;
+        if self.split_view
+            && let Some(before) = &self.before_texture
+            && before.size_vec2() == size
+        {
+            let x = img_rect.left() + img_rect.width() * self.split_pos;
+            let left = Rect::from_min_max(img_rect.min, pos2(x, img_rect.bottom()));
+            painter.image(before.id(), left, Rect::from_min_max(pos2(0.0, 0.0), pos2(self.split_pos, 1.0)), Color32::WHITE);
+            painter.line_segment([pos2(x, img_rect.top()), pos2(x, img_rect.bottom())], egui::Stroke::new(2.0, Color32::WHITE));
+            painter.circle_filled(pos2(x, img_rect.center().y), 7.0, Color32::WHITE);
+            for (text, align, dx) in [("Vorher", egui::Align2::RIGHT_TOP, -10.0), ("Nachher", egui::Align2::LEFT_TOP, 10.0)] {
+                let galley = painter.layout_no_wrap(text.into(), egui::FontId::proportional(12.0), Color32::WHITE);
+                let r = align.anchor_size(pos2(x + dx, img_rect.top() + 40.0), galley.size());
+                painter.rect_filled(r.expand(4.0), 3.0, Color32::from_black_alpha(160));
+                painter.galley(r.min, galley, Color32::WHITE);
+            }
+            let near = response.hover_pos().is_some_and(|p| (p.x - x).abs() < 10.0);
+            if near || self.split_dragging {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+            if response.drag_started() && near {
+                self.split_dragging = true;
+            }
+            if self.split_dragging {
+                split_drag = true;
+                if let Some(p) = response.interact_pointer_pos() {
+                    self.split_pos = ((p.x - img_rect.left()) / img_rect.width()).clamp(0.0, 1.0);
+                }
+                if response.drag_stopped() {
+                    self.split_dragging = false;
+                }
+            }
+        }
+
+        if split_drag {
+            // The divider takes the drag.
+        } else if self.local_tool.is_some() {
             self.local_overlay(ui, &response, img_rect, scale);
         } else if self.crop_tool.is_some() {
             self.crop_overlay(ui, &response, img_rect);
@@ -96,7 +173,9 @@ impl App {
             let full_w = self.full_output_width().unwrap_or(size.x);
             // Zoom relative to the full sensor resolution.
             let pct = scale * size.x / full_w.max(1.0) * 100.0;
-            let mode = if self.crop_tool.is_some() {
+            let mode = if let Some(msg) = &self.speed_message {
+                msg.as_str()
+            } else if self.crop_tool.is_some() {
                 "   ZUSCHNEIDEN – Enter: übernehmen"
             } else if self.straighten_tool.is_some() {
                 "   GERADERICHTEN – Linie ziehen"
@@ -114,6 +193,44 @@ impl App {
         if self.loading.is_some() {
             painter.text(rect.right_top() + vec2(-10.0, 8.0), egui::Align2::RIGHT_TOP, "Lade…", egui::FontId::proportional(13.0), Color32::from_gray(200));
         }
+    }
+
+    /// Changes a value by one step: on the active layer, or on the background.
+    pub fn speed_edit(&mut self, param: SpeedParam, dir: f32) {
+        let layer = self.active_layer;
+        let Some(cur) = self.current.as_mut() else { return };
+        let as_shot = cur.as_shot_temp_tint;
+        let msg;
+        let adj = &mut cur.adjustments;
+        if let Some(l) = layer.and_then(|i| adj.layers.get_mut(i)) {
+            let a = &mut l.adjustments;
+            let (name, v, step, lo, hi) = match param {
+                SpeedParam::Exposure => ("Belichtung", &mut a.exposure, 0.05, -4.0, 4.0),
+                SpeedParam::Contrast => ("Kontrast", &mut a.contrast, 2.0, -100.0, 100.0),
+                SpeedParam::Saturation => ("Sättigung", &mut a.saturation, 2.0, -100.0, 100.0),
+                SpeedParam::Highlights => ("Lichter", &mut a.highlights, 2.0, -100.0, 100.0),
+                SpeedParam::Shadows => ("Tiefen", &mut a.shadows, 2.0, -100.0, 100.0),
+                SpeedParam::Temperature => ("Temperatur", &mut a.temperature, 2.0, -100.0, 100.0),
+            };
+            *v = (*v + step * dir).clamp(lo, hi);
+            msg = format!("   SPEED EDIT ({}) {name}: {:+.2}", l.name, *v);
+        } else {
+            if param == SpeedParam::Temperature && adj.white_balance.mode == cr_core::params::WbMode::AsShot {
+                adj.white_balance = cr_core::params::WhiteBalance { mode: cr_core::params::WbMode::Custom, kelvin: as_shot.0, tint: as_shot.1 };
+            }
+            let (name, v, step, lo, hi) = match param {
+                SpeedParam::Exposure => ("Belichtung", &mut adj.exposure, 0.05, -4.0, 4.0),
+                SpeedParam::Contrast => ("Kontrast", &mut adj.contrast, 2.0, -100.0, 100.0),
+                SpeedParam::Saturation => ("Sättigung", &mut adj.saturation, 2.0, -100.0, 100.0),
+                SpeedParam::Highlights => ("Lichter", &mut adj.highlights, 2.0, -100.0, 100.0),
+                SpeedParam::Shadows => ("Tiefen", &mut adj.shadows, 2.0, -100.0, 100.0),
+                SpeedParam::Temperature => ("Kelvin", &mut adj.white_balance.kelvin, 50.0, 2000.0, 15000.0),
+            };
+            *v = (*v + step * dir).clamp(lo, hi);
+            msg = format!("   SPEED EDIT {name}: {:+.2}", *v);
+        }
+        self.speed_message = Some(msg);
+        self.request_render();
     }
 
     /// Width of the output at full sensor resolution (estimated from the sensor size until loaded).

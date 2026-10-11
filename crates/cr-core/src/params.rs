@@ -201,6 +201,8 @@ pub struct LayerAdjustments {
     pub temperature: f32,
     /// Magenta (+) / green (-), -100..100
     pub tint: f32,
+    /// Haze removal, -100..100
+    pub dehaze: f32,
 }
 
 impl LayerAdjustments {
@@ -489,6 +491,8 @@ pub struct Detail {
     pub grain_size: f32,
     /// Post-crop vignette, -100 (dark) .. 100 (light).
     pub vignette_amount: f32,
+    /// Haze removal (+) or added haze (-), -100..100.
+    pub dehaze: f32,
 }
 
 impl Default for Detail {
@@ -504,6 +508,7 @@ impl Default for Detail {
             grain_amount: 0.0,
             grain_size: 25.0,
             vignette_amount: 0.0,
+            dehaze: 0.0,
         }
     }
 }

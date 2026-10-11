@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+cr-ai = { version = "0.1.0", path = "../cr-ai" }
 cr-core = { version = "0.1.0", path = "../cr-core" }
 eframe = { version = "0.36", features = ["glow"] }
 egui = "0.36"

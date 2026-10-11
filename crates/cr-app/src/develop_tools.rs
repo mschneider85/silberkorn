@@ -222,6 +222,14 @@ impl App {
             changed |= slider_row(ui, "Klarheit", &mut d.clarity, -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Struktur", &mut d.structure, -100.0..=100.0, 0.0, 0);
         });
+        let mut r_haze = false;
+        section(ui, "Dunst entfernen", Some(&mut || r_haze = true), |ui| {
+            changed |= slider_row(ui, "Stärke", &mut d.dehaze, -100.0..=100.0, 0.0, 0);
+        });
+        if r_haze {
+            d.dehaze = 0.0;
+            changed = true;
+        }
         section(ui, "Vignettierung", Some(&mut || r_vig = true), |ui| {
             changed |= slider_row(ui, "Stärke", &mut d.vignette_amount, -100.0..=100.0, 0.0, 0);
         });

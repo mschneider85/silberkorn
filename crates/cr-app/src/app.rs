@@ -99,7 +99,9 @@ pub struct Tile {
 #[serde(default)]
 struct Settings {
     last_folder: Option<PathBuf>,
-    recipe: ExportRecipe,
+    /// Legacy single recipe (before multiple recipes existed).
+    recipe: Option<ExportRecipe>,
+    recipes: Vec<ExportRecipe>,
     sort: SortKey,
     sort_desc: bool,
 }
@@ -162,6 +164,19 @@ pub struct App {
     pub spot_size: f32,
     pub selected_spot: Option<usize>,
     pub show_mask: bool,
+    pub split_view: bool,
+    /// Divider position (0..1 of the image width).
+    pub split_pos: f32,
+    pub split_dragging: bool,
+    /// Shown while a Speed Edit key is held.
+    pub speed_message: Option<String>,
+    pub zoom_blocked_until: f64,
+    pub before_texture: Option<TextureHandle>,
+    before_key: Option<u64>,
+    pub magic_tolerance: f32,
+    pub ai_busy: bool,
+    pub model_missing: bool,
+    pub model_downloading: bool,
     pub tile: Option<Tile>,
     /// Requested tile (version, region), to avoid resending identical jobs.
     pub tile_requested: Option<(u64, cr_core::geometry::Region)>,
@@ -182,7 +197,8 @@ pub struct App {
     pub scroll_to_primary: bool,
 
     // output
-    pub recipe: ExportRecipe,
+    pub recipes: Vec<ExportRecipe>,
+    pub selected_recipe: usize,
     pub export_progress: Option<(usize, usize)>,
     pub export_log: Vec<String>,
 
@@ -270,6 +286,17 @@ impl App {
             spot_size: 25.0,
             selected_spot: None,
             show_mask: false,
+            split_view: false,
+            split_pos: 0.5,
+            split_dragging: false,
+            speed_message: None,
+            zoom_blocked_until: 0.0,
+            before_texture: None,
+            before_key: None,
+            magic_tolerance: 0.3,
+            ai_busy: false,
+            model_missing: false,
+            model_downloading: false,
             tile: None,
             tile_requested: None,
             edit_version: 0,
@@ -285,7 +312,12 @@ impl App {
             zoom: None,
             pan: Vec2::ZERO,
             scroll_to_primary: false,
-            recipe: settings.recipe,
+            recipes: if !settings.recipes.is_empty() {
+                settings.recipes
+            } else {
+                vec![settings.recipe.unwrap_or_default()]
+            },
+            selected_recipe: 0,
             export_progress: None,
             export_log: Vec::new(),
             status,
@@ -304,7 +336,8 @@ impl App {
         let Some(path) = settings_path().filter(|_| self.persist_settings) else { return };
         let s = Settings {
             last_folder: Some(self.folder.clone()),
-            recipe: self.recipe.clone(),
+            recipe: None,
+            recipes: self.recipes.clone(),
             sort: self.sort,
             sort_desc: self.sort_desc,
         };
@@ -317,6 +350,13 @@ impl App {
     }
 
     // ---------------------------------------------------------------- selection
+
+    pub fn toggle_split(&mut self) {
+        self.split_view = !self.split_view;
+        self.show_before = false;
+        self.before_key = None;
+        self.request_render();
+    }
 
     /// Layer whose mask is shown as overlay.
     pub fn mask_overlay(&self) -> Option<usize> {
@@ -485,7 +525,13 @@ impl App {
         self.export_progress = Some((0, items.len()));
         self.status = format!("Verarbeite {} Bild(er)…", items.len());
         self.save_settings();
-        self.workers.export(ExportJob { items, recipe: self.recipe.clone() });
+        let recipes: Vec<ExportRecipe> = self.recipes.iter().filter(|r| r.enabled).cloned().collect();
+        if recipes.is_empty() {
+            self.status = "Kein Ausgaberezept aktiviert".into();
+            self.export_progress = None;
+            return;
+        }
+        self.workers.export(ExportJob { items, recipes });
     }
 
     /// White balance from a neutral spot; `image_pos` is in displayed preview pixels.
@@ -552,6 +598,8 @@ impl App {
                             self.straighten_tool = None;
                             self.active_layer = None;
                             self.selected_spot = None;
+                            self.before_texture = None;
+                            self.before_key = None;
                             self.local_drag = Default::default();
                             self.current = Some(Current {
                                 meta,
@@ -579,7 +627,17 @@ impl App {
                 }
                 Event::Loaded { .. } => {}
                 Event::Rendered { generation, image, thumb, histogram, before } => {
-                    if generation != self.generation || before != self.show_before {
+                    if generation != self.generation {
+                        continue;
+                    }
+                    if before && self.split_view {
+                        match &mut self.before_texture {
+                            Some(t) => t.set(image, TextureOptions::LINEAR),
+                            None => self.before_texture = Some(ctx.load_texture("before", image, TextureOptions::LINEAR)),
+                        }
+                        continue;
+                    }
+                    if before != self.show_before {
                         continue;
                     }
                     match &mut self.texture {
@@ -626,6 +684,38 @@ impl App {
                         self.status = format!("Verarbeitung abgeschlossen ({total})");
                     }
                 }
+                Event::AiMask { generation, layer, result } => {
+                    self.ai_busy = false;
+                    if generation != self.generation {
+                        continue;
+                    }
+                    match result {
+                        Ok(m) => {
+                            self.model_missing = false;
+                            self.edit(|a| {
+                                if let Some(l) = a.layers.get_mut(layer) {
+                                    l.mask.ai = Some(merge_ai(l.mask.ai.take(), m));
+                                }
+                            });
+                            self.status = "Maske erstellt".into();
+                        }
+                        Err(e) if e == "MODEL_MISSING" => {
+                            self.model_missing = true;
+                            self.status = "KI-Modell fehlt – bitte im Tab „Ebenen“ herunterladen".into();
+                        }
+                        Err(e) => self.status = format!("Maske fehlgeschlagen: {e}"),
+                    }
+                }
+                Event::ModelDownloaded(r) => {
+                    self.model_downloading = false;
+                    match r {
+                        Ok(p) => {
+                            self.model_missing = false;
+                            self.status = format!("KI-Modell geladen ({})", p.display());
+                        }
+                        Err(e) => self.status = format!("Download fehlgeschlagen: {e}"),
+                    }
+                }
                 Event::LensDbDownloaded(r) => {
                     self.lens_db_downloading = false;
                     self.lens_db = None;
@@ -668,6 +758,26 @@ impl App {
             return;
         }
         self.render_requested = false;
+        if self.split_view
+            && let Some(cur) = &self.current
+        {
+            let key = cr_core::cache::fnv1a(
+                format!("{}|{}|{}", self.generation, cur.adjustments.rotation, serde_json::to_string(&cur.adjustments.geometry).unwrap_or_default()).as_bytes(),
+            );
+            if self.before_key != Some(key) {
+                self.before_key = Some(key);
+                self.workers.render_before(RenderJob {
+                    generation: self.generation,
+                    meta: cur.meta.clone(),
+                    preview: cur.preview.clone(),
+                    adjustments: cur.adjustments.clone(),
+                    clip_warning: false,
+                    before: true,
+                    ignore_crop: false,
+                    mask_overlay: None,
+                });
+            }
+        }
         if let Some(cur) = &self.current {
             self.workers.render(RenderJob {
                 generation: self.generation,
@@ -748,6 +858,13 @@ impl App {
                 self.tab = Tab::Layers;
                 self.set_local_tool(t);
             }
+        }
+        if pressed(Key::U, Modifiers::NONE) {
+            self.toggle_split();
+        }
+        if pressed(Key::J, Modifiers::NONE) {
+            self.tab = Tab::Layers;
+            self.set_local_tool(LocalTool::Magic);
         }
         if pressed(Key::M, Modifiers::NONE) {
             self.show_mask = !self.show_mask;
@@ -844,7 +961,11 @@ impl App {
             }
             if ui.selectable_label(self.show_before, "◑ Vorher").on_hover_text("Vorher/Nachher (Y)").clicked() {
                 self.show_before = !self.show_before;
+                self.split_view = false;
                 self.request_render();
+            }
+            if ui.selectable_label(self.split_view, "↔ Vergleich").on_hover_text("Geteilte Vorher/Nachher-Ansicht (U)").clicked() {
+                self.toggle_split();
             }
             if ui.selectable_label(self.clip_warning, "⚠ Warnung").on_hover_text("Belichtungswarnung (E)").clicked() {
                 self.clip_warning = !self.clip_warning;
@@ -887,6 +1008,14 @@ impl App {
             if std::env::var_os("CAPTURE_ROOM_CROP").is_some() {
                 self.start_crop_tool();
             }
+            if let Some(i) = std::env::var("CAPTURE_ROOM_LAYER").ok().and_then(|v| v.parse().ok()) {
+                self.active_layer = Some(i);
+                self.show_mask = std::env::var_os("CAPTURE_ROOM_MASK").is_some();
+                self.request_render();
+            }
+            if std::env::var_os("CAPTURE_ROOM_SPLIT").is_some() {
+                self.toggle_split();
+            }
         }
         let wants_zoom = std::env::var_os("CAPTURE_ROOM_ZOOM").is_some();
         if wants_zoom && self.zoom.is_none() && self.current.as_ref().is_some_and(|c| c.full.is_some()) {
@@ -922,6 +1051,23 @@ impl App {
     }
 }
 
+/// Union (max) of an existing AI mask with a new one of the same kind of resolution.
+fn merge_ai(old: Option<cr_core::params::AiMask>, new: cr_ai::MaskImage) -> cr_core::params::AiMask {
+    let mut out = cr_core::params::AiMask { kind: "ai".into(), width: new.width, height: new.height, data: new.data };
+    if let Some(o) = old
+        && o.width > 0
+        && o.height > 0
+    {
+        for (i, v) in out.data.iter_mut().enumerate() {
+            let (x, y) = (i % out.width, i / out.width);
+            let ox = (x * o.width / out.width).min(o.width - 1);
+            let oy = (y * o.height / out.height).min(o.height - 1);
+            *v = (*v).max(o.data[oy * o.width + ox]);
+        }
+    }
+    out
+}
+
 fn setup_style(ctx: &egui::Context) {
     ctx.set_visuals(egui::Visuals::dark());
     ctx.global_style_mut(|s| {
@@ -934,6 +1080,9 @@ impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.pointer_down = ctx.input(|i| i.pointer.any_down());
+        if !crate::browser::SPEED_KEYS.iter().any(|(k, _)| ctx.input(|i| i.key_down(*k))) {
+            self.speed_message = None;
+        }
         self.handle_events(&ctx);
         self.shortcuts(&ctx);
 

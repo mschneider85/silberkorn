@@ -8,6 +8,7 @@ RAW-Entwickler und Bildverwaltung in Rust.
 cargo run --release -p cr-app -- /pfad/zu/raws
 ```
 
+Der erste Build dauert einige Minuten (u. a. wegen der ONNX-Inferenz-Bibliothek tract).
 Ohne Pfad wird der zuletzt geöffnete Ordner verwendet. Falls wgpu (Vulkan) nicht startet,
 fällt die App automatisch auf OpenGL zurück; erzwingen mit `CAPTURE_ROOM_RENDERER=glow`.
 
@@ -22,6 +23,7 @@ CR_ADJ='{"exposure":0.5,"shadows":40}' cargo run --release -p cr-core --example 
 | Crate | Inhalt |
 |---|---|
 | `cr-core` | RAW-Dekodierung (rawler), Farbmathematik, Entwicklungs-Pipeline, Sidecars, Export |
+| `cr-ai`   | Masken aus Bildinhalt: Motiv (U²-Net via tract/ONNX), Himmel, Magic Brush, Kantenverfeinerung |
 | `cr-app`  | egui/wgpu-Oberfläche, Hintergrund-Worker |
 
 Pipeline (Arbeitsfarbraum: lineares Rec.2020):
@@ -52,6 +54,19 @@ Drehen oder Objektivkorrektur am Bildinhalt.
 
 „Reparieren“ übernimmt Struktur von einer automatisch gewählten Quelle und gleicht Farbe/Helligkeit an
 die Umgebung an; „Klonen“ kopiert 1:1. Quelle und Ziel lassen sich verschieben.
+
+### Auswahl aus Bildinhalt
+
+- **Motiv auswählen:** neuronales Netz U²-Net-p (Apache-2.0, 4,6 MB). Das Modell wird im Tab „Ebenen“
+  auf Wunsch nach `~/.local/share/capture-room/models/` geladen (oder `CAPTURE_ROOM_MODEL=<pfad>`).
+- **Himmel auswählen:** helle, strukturarme, blaue oder neutrale Bereiche, die mit dem oberen Rand verbunden sind.
+- **Magic Brush (J):** Klick wählt zusammenhängende, farbähnliche Bereiche (Toleranz einstellbar).
+- **Luma Range** und **Farbbereich** (mit Pipette) verfeinern jede Maske.
+- **Style Brushes:** Pinsel-Presets (Aufhellen, Abdunkeln, Wärmer, Haut glätten, Dunst entfernen, …).
+
+Weitere Funktionen: **Dunst entfernen** (Dark-Channel-Prior, global und pro Ebene), **Speed Edit**
+(Taste halten + Mausrad), **geteilte Vorher/Nachher-Ansicht** und **mehrere Ausgaberezepte**, die
+in einem Durchgang verarbeitet werden (das RAW wird pro Bild nur einmal entwickelt).
 
 ### Objektivprofile
 
@@ -98,6 +113,9 @@ Sidecars bleiben die maßgebliche Quelle; der Katalog ist ein Index und kann jed
 | B / N / L / R | Pinsel / Radierer / linearer / radialer Verlauf |
 | H / S | Reparieren / Klonen · Entf: Punkt löschen |
 | M | Maske anzeigen · [ / ]: Pinselgröße · mittlere Maustaste: verschieben |
+| J | Magic Brush |
+| U | geteilte Vorher/Nachher-Ansicht |
+| Q / A / D / F / V / T + Mausrad | Speed Edit: Belichtung / Kontrast / Sättigung / Lichter / Tiefen / Temperatur (auf der aktiven Ebene, sonst global) |
 
 Doppelklick auf einen Reglernamen setzt den Regler zurück.
 
@@ -107,4 +125,4 @@ Doppelklick auf einen Reglernamen setzt den Regler zurück.
 - **Phase 2 (fertig):** Katalog (SQLite), Thumbnail-Cache, Alben/Smart-Alben, Keywords, Suche, Sortierung, Stile, Rasteransicht
 - **Phase 3 (fertig):** Zuschnitt/Geraderichten/Keystone, Schärfen, Rauschreduzierung, Objektivkorrektur (manuell + Lensfun), Color Editor, Color Balance, Schwarzweiß, Klarheit/Struktur, lokales HDR, Körnung/Vignette, Auto-Anpassungen, echtes 100 % (Kachel-Rendering), Highlight-Rekonstruktion, Ausgabe-Farbräume mit ICC
 - **Phase 4 (fertig):** Ebenen und Masken (Pinsel, Radierer, linearer/radialer Verlauf, Deckkraft), Reparieren/Klonen
-- **Phase 5:** Luma Range, Farbbereichsmasken, Style Brushes, KI-Masken (ONNX)
+- **Phase 5 (fertig):** Luma Range, Farbbereichsmasken, Style Brushes, KI-Motivmaske (ONNX), Himmelmaske, Magic Brush, Dunst entfernen, Speed Edit, Vergleichsansicht, mehrere Ausgaberezepte

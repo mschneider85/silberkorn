@@ -138,8 +138,8 @@ fn edit_copy_apply_style_and_export() {
     assert_eq!(sidecar::load(&b).adjustments.contrast, 30.0);
 
     // Export both images.
-    f.app.recipe.output_dir = f.dir.join("out");
-    f.app.recipe.long_edge = Some(800);
+    f.app.recipes[0].output_dir = f.dir.join("out");
+    f.app.recipes[0].long_edge = Some(800);
     f.app.selection = [a.clone(), b.clone()].into_iter().collect();
     f.app.export_selection();
     f.pump("Export", |app| app.export_progress.is_none() && app.export_log.len() == 2);
@@ -253,4 +253,81 @@ fn viewer_tools_brush_heal_crop() {
     let crop = f.app.current.as_ref().unwrap().adjustments.geometry.crop;
     assert!(crop.w < 0.8 && crop.h < 0.8 && crop.x > 0.0, "{crop:?}");
     f.app.finish_crop_tool();
+}
+
+fn key(k: egui::Key, pressed: bool) -> egui::Event {
+    egui::Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers: Default::default() }
+}
+
+fn wheel(dy: f32) -> egui::Event {
+    egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: egui::vec2(0.0, dy),
+        phase: egui::TouchPhase::Move,
+        modifiers: Default::default(),
+    }
+}
+
+fn click(f: &mut Fixture, p: egui::Pos2) {
+    viewer_frame(f, vec![egui::Event::PointerMoved(p)]);
+    viewer_frame(f, vec![press(p, true)]);
+    viewer_frame(f, vec![press(p, false)]);
+    viewer_frame(f, vec![]);
+}
+
+#[test]
+fn phase5_speed_edit_ai_masks_split_and_recipes() {
+    let Some(mut f) = Fixture::new("phase5") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    viewer_frame(&mut f, vec![]);
+    let c = egui::pos2(600.0, 400.0);
+
+    // Speed Edit: hold Q and scroll two notches up -> exposure +0.10.
+    viewer_frame(&mut f, vec![egui::Event::PointerMoved(c), key(egui::Key::Q, true)]);
+    viewer_frame(&mut f, vec![wheel(1.0)]);
+    viewer_frame(&mut f, vec![wheel(1.0)]);
+    viewer_frame(&mut f, vec![key(egui::Key::Q, false)]);
+    let ev = f.app.current.as_ref().unwrap().adjustments.exposure;
+    assert!((ev - 0.1).abs() < 1e-4, "exposure {ev}");
+    assert!(f.app.zoom.is_none(), "scrolling with a speed key must not zoom");
+
+    // Magic brush click -> AI mask on a new layer.
+    f.app.set_local_tool(crate::layers::LocalTool::Magic);
+    click(&mut f, c + egui::vec2(-300.0, 250.0));
+    f.pump("Magic Brush", |a| !a.ai_busy && a.current.as_ref().is_some_and(|c| c.adjustments.layers.first().is_some_and(|l| l.mask.ai.is_some())));
+    let ai = f.app.current.as_ref().unwrap().adjustments.layers[0].mask.ai.clone().unwrap();
+    assert!(ai.data.iter().any(|v| *v > 200) && ai.data.iter().any(|v| *v < 20));
+
+    // Sky selection merges into the same layer's AI mask.
+    f.app.request_ai(crate::workers::AiKind::Sky);
+    f.pump("Himmel", |a| !a.ai_busy);
+    let merged = f.app.current.as_ref().unwrap().adjustments.layers[0].mask.ai.clone().unwrap();
+    assert!(merged.data.iter().zip(&ai.data).all(|(m, a)| m >= a), "union keeps the magic selection");
+
+    // Color pick sets a color range on the active layer.
+    f.app.set_local_tool(crate::layers::LocalTool::ColorPick);
+    click(&mut f, c);
+    assert!(f.app.current.as_ref().unwrap().adjustments.layers[0].mask.color_range.is_some());
+
+    // Split view gets its own "before" texture.
+    f.app.toggle_split();
+    f.app.send_render();
+    f.pump("Vergleich", |a| a.before_texture.is_some());
+
+    // Two recipes -> two files per image.
+    let out = f.dir.join("out5");
+    f.app.recipes = vec![
+        cr_core::export::ExportRecipe { output_dir: out.clone(), long_edge: Some(300), ..Default::default() },
+        cr_core::export::ExportRecipe {
+            name: "PNG".into(),
+            format: cr_core::export::ExportFormat::Png,
+            output_dir: out.clone(),
+            long_edge: Some(200),
+            ..Default::default()
+        },
+    ];
+    f.app.selection = [f.photo("_DSC0009.ARW")].into_iter().collect();
+    f.app.export_selection();
+    f.pump("Export", |a| a.export_progress.is_none() && a.export_log.len() == 2);
+    assert!(out.join("_DSC0009.jpg").exists() && out.join("_DSC0009.png").exists(), "{:?}", f.app.export_log);
 }

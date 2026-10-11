@@ -88,7 +88,73 @@ struct LocalPlanes {
     /// Local contrast detail in EV (clarity + structure combined, unscaled per kind).
     clarity: Option<Plane>,
     structure: Option<Plane>,
+    dehaze: Option<DarkChannel>,
 }
+
+/// Low-resolution dark channel (haze density) and airlight for dehazing.
+struct DarkChannel {
+    plane: Plane,
+    /// Downsampling factor relative to the working region.
+    step: usize,
+    airlight: f32,
+}
+
+impl DarkChannel {
+    fn new(img: &LinearImage) -> Self {
+        let (w, h) = (img.width, img.height);
+        let step = (w.max(h) / 256).max(1);
+        let min_c: Vec<f32> = img.data.par_iter().map(|p| p[0].min(p[1]).min(p[2])).collect();
+        // Airlight: bright end of the minimum channel.
+        let mut sorted: Vec<f32> = min_c.iter().step_by(7).copied().collect();
+        let idx = ((sorted.len() as f32 * 0.997) as usize).min(sorted.len().saturating_sub(1));
+        let airlight = if sorted.is_empty() { 1.0 } else { *sorted.select_nth_unstable_by(idx, |a, b| a.total_cmp(b)).1 }.max(0.05);
+        // Min-pool into blocks, then smooth.
+        let (lw, lh) = (w.div_ceil(step), h.div_ceil(step));
+        let pooled: Vec<f32> = (0..lw * lh)
+            .into_par_iter()
+            .map(|i| {
+                let (bx, by) = (i % lw * step, i / lw * step);
+                let mut m = f32::MAX;
+                for y in by..(by + step).min(h) {
+                    for x in bx..(bx + step).min(w) {
+                        m = m.min(min_c[y * w + x]);
+                    }
+                }
+                (m / airlight).clamp(0.0, 1.0)
+            })
+            .collect();
+        let plane = gaussian_blur(&Plane::new(lw, lh, pooled), 1.5);
+        Self { plane, step, airlight }
+    }
+
+    #[inline]
+    fn at(&self, x: usize, y: usize) -> f32 {
+        let fx = ((x as f32 + 0.5) / self.step as f32 - 0.5).clamp(0.0, (self.plane.w - 1) as f32);
+        let fy = ((y as f32 + 0.5) / self.step as f32 - 0.5).clamp(0.0, (self.plane.h - 1) as f32);
+        let (x0, y0) = (fx as usize, fy as usize);
+        let (x1, y1) = ((x0 + 1).min(self.plane.w - 1), (y0 + 1).min(self.plane.h - 1));
+        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+        let d = &self.plane.data;
+        let w = self.plane.w;
+        let top = d[y0 * w + x0] * (1.0 - tx) + d[y0 * w + x1] * tx;
+        let bot = d[y1 * w + x0] * (1.0 - tx) + d[y1 * w + x1] * tx;
+        top * (1.0 - ty) + bot * ty
+    }
+
+    /// Removes (strength > 0) or adds (strength < 0) haze.
+    #[inline]
+    fn apply(&self, p: [f32; 3], dark: f32, strength: f32) -> [f32; 3] {
+        let a = self.airlight;
+        if strength > 0.0 {
+            let t = (1.0 - 0.95 * strength * dark).max(0.12);
+            p.map(|v| ((v - a * (1.0 - t)) / t).max(0.0))
+        } else {
+            let s = -strength * 0.6 * (1.0 - dark * 0.5);
+            p.map(|v| v + (a - v) * s)
+        }
+    }
+}
+
 
 /// Tone parameters that can vary per pixel (background + weighted layer deltas).
 #[derive(Clone, Copy, Debug)]
@@ -102,6 +168,7 @@ struct ToneParams {
     temperature: f32,
     tint: f32,
     brightness: f32,
+    dehaze: f32,
 }
 
 impl ToneParams {
@@ -116,6 +183,7 @@ impl ToneParams {
         self.temperature += l.temperature * w;
         self.tint += l.tint * w;
         self.brightness += l.brightness * w;
+        self.dehaze += l.dehaze * w;
     }
 }
 
@@ -179,6 +247,7 @@ impl Processor {
             temperature: 0.0,
             tint: 0.0,
             brightness: 0.0,
+            dehaze: adj.detail.dehaze,
         };
         Self {
             base,
@@ -420,6 +489,7 @@ impl Processor {
         let hdr_active = self.base.hdr.iter().any(|v| *v != 0.0) || any_layer(&|l| l.highlights != 0.0 || l.shadows != 0.0);
         let clarity_active = d.clarity != 0.0 || any_layer(&|l| l.clarity != 0.0);
         let structure_active = d.structure != 0.0 || any_layer(&|l| l.structure != 0.0);
+        let dehaze_active = d.dehaze != 0.0 || any_layer(&|l| l.dehaze != 0.0);
 
         // Margin for neighborhood operations, so that tiles match the full rendering.
         let r_hdr = (long_edge * 0.02).max(2.0);
@@ -440,6 +510,9 @@ impl Processor {
         }
         if d.nr_luma > 0.0 || d.nr_color > 0.0 {
             margin = margin.max(20.0 * scale + 4.0);
+        }
+        if dehaze_active {
+            margin = margin.max(long_edge / 64.0);
         }
         let m = margin.ceil() as usize;
         let ext = Region {
@@ -470,10 +543,10 @@ impl Processor {
 
         // Local operators on log luminance. They are shift invariant in log space, so they
         // are computed before exposure and cached independently of tone settings.
-        let need_log = hdr_active || clarity_active || structure_active;
+        let need_log = hdr_active || clarity_active || structure_active || dehaze_active;
         let local = if need_log {
             let key = {
-                let k = format!("{}|{hdr_active}|{clarity_active}|{structure_active}", self.stage_key(src, ext));
+                let k = format!("{}|{hdr_active}|{clarity_active}|{structure_active}|{dehaze_active}", self.stage_key(src, ext));
                 crate::cache::fnv1a(k.as_bytes())
             };
             let compute = || {
@@ -489,6 +562,7 @@ impl Processor {
                         let base = gaussian_blur(&log_l, r_structure);
                         log_l.zip(&base, |a, b| (a - b).clamp(-2.0, 2.0))
                     }),
+                    dehaze: dehaze_active.then(|| DarkChannel::new(&working)),
                 }
             };
             Some(match cache {
@@ -527,7 +601,12 @@ impl Processor {
                     ev = lp.hdr_base.as_ref().map(|pl| pl.data[i]);
                     det = [lp.clarity.as_ref().map_or(0.0, |c| c.data[i]), lp.structure.as_ref().map_or(0.0, |c| c.data[i])];
                 }
-                let base_disp = || self.color(self.tone(p, ev, det, &self.base), self.base.saturation);
+                let dark = local.as_ref().and_then(|lp| lp.dehaze.as_ref()).map(|dc| (dc, dc.at(i % w, i / w)));
+                let haze = |p: [f32; 3], strength: f32| match dark {
+                    Some((dc, dv)) if strength != 0.0 => dc.apply(p, dv, strength / 100.0),
+                    _ => p,
+                };
+                let base_disp = || self.color(self.tone(haze(p, self.base.dehaze), ev, det, &self.base), self.base.saturation);
                 if self.layers.is_empty() {
                     return (self.encode(base_disp()), 0.0);
                 }
@@ -560,7 +639,7 @@ impl Processor {
                     let bd = base_cache.unwrap_or_else(base_disp);
                     return (self.encode(bd), overlay);
                 }
-                let mut e = self.encode(self.color(self.tone(p, ev, det, &tp), tp.saturation));
+                let mut e = self.encode(self.color(self.tone(haze(p, tp.dehaze), ev, det, &tp), tp.saturation));
                 if tp.brightness != 0.0 {
                     let g = 2f32.powf(-tp.brightness / 100.0 * 0.6);
                     e = e.map(|v| v.max(0.0).powf(g));
@@ -1081,6 +1160,27 @@ mod tests {
         let r = Processor::new(&meta(), &adj).render(&src, None, None);
         let i = (10 * 20 + 10) * 4;
         assert!(base.rgba[i] > 200 && r.rgba[i] < 120, "{} -> {}", base.rgba[i], r.rgba[i]);
+    }
+
+    #[test]
+    fn dehaze_increases_contrast_of_hazy_image() {
+        // A low-contrast, bright ("hazy") image.
+        let src = LinearImage::new(32, 32, (0..1024).map(|i| {
+            let v = 0.45 + 0.1 * ((i % 32) / 16) as f32;
+            [v, v, v * 1.05]
+        }).collect());
+        let spread = |r: &Rendered| {
+            let l: Vec<i32> = r.rgba.chunks(4).map(|p| p[1] as i32).collect();
+            l.iter().max().unwrap() - l.iter().min().unwrap()
+        };
+        let base = Processor::new(&meta(), &plain()).render(&src, None, None);
+        let mut adj = plain();
+        adj.detail.dehaze = 80.0;
+        let d = Processor::new(&meta(), &adj).render(&src, None, None);
+        assert!(spread(&d) > spread(&base) + 10, "{} vs {}", spread(&d), spread(&base));
+        adj.detail.dehaze = -80.0;
+        let f = Processor::new(&meta(), &adj).render(&src, None, None);
+        assert!(spread(&f) < spread(&base));
     }
 
     #[test]

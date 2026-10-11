@@ -45,6 +45,9 @@ impl ExportFormat {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExportRecipe {
+    pub name: String,
+    /// Included when processing.
+    pub enabled: bool,
     pub format: ExportFormat,
     /// JPEG quality 1..100
     pub quality: u8,
@@ -60,6 +63,8 @@ pub struct ExportRecipe {
 impl Default for ExportRecipe {
     fn default() -> Self {
         Self {
+            name: "JPEG".into(),
+            enabled: true,
             format: ExportFormat::Jpeg,
             quality: 90,
             long_edge: None,
@@ -84,12 +89,37 @@ impl ExportRecipe {
 
 /// Develops `image` at full resolution and writes it according to `recipe`.
 pub fn export(image: &Path, adj: &Adjustments, recipe: &ExportRecipe) -> Result<PathBuf> {
-    let (meta, linear) = raw::load_full(image)?;
-    let out = Processor::new(&meta, adj).process(&linear, None, recipe.output_space);
-    drop(linear);
+    export_many(image, adj, std::slice::from_ref(recipe)).remove(0)
+}
+
+/// Develops `image` once and writes one file per recipe.
+pub fn export_many(image: &Path, adj: &Adjustments, recipes: &[ExportRecipe]) -> Vec<Result<PathBuf>> {
+    let (meta, linear) = match raw::load_full(image) {
+        Ok(v) => v,
+        Err(e) => {
+            let msg = format!("{e:#}");
+            return recipes.iter().map(|_| Err(anyhow::anyhow!(msg.clone()))).collect();
+        }
+    };
+    let processor = Processor::new(&meta, adj);
+    // Recipes sharing a color space share the processing.
+    let mut cache: Vec<(OutputSpace, crate::image::LinearImage)> = Vec::new();
+    recipes
+        .iter()
+        .map(|recipe| {
+            if !cache.iter().any(|(s, _)| *s == recipe.output_space) {
+                cache.push((recipe.output_space, processor.process(&linear, None, recipe.output_space)));
+            }
+            let out = &cache.iter().find(|(s, _)| *s == recipe.output_space).unwrap().1;
+            write_output(image, out, recipe)
+        })
+        .collect()
+}
+
+fn write_output(image: &Path, out: &crate::image::LinearImage, recipe: &ExportRecipe) -> Result<PathBuf> {
 
     let mut buf: ImageBuffer<Rgb<f32>, Vec<f32>> =
-        ImageBuffer::from_raw(out.width as u32, out.height as u32, out.data.into_iter().flatten().collect())
+        ImageBuffer::from_raw(out.width as u32, out.height as u32, out.data.iter().flatten().copied().collect())
             .context("Puffergröße ungültig")?;
     if let Some(edge) = recipe.long_edge {
         let (w, h) = buf.dimensions();
@@ -137,4 +167,38 @@ pub fn export(image: &Path, adj: &Adjustments, recipe: &ExportRecipe) -> Result<
         }
     }
     Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn export_many_writes_each_recipe() {
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/_DSC0010.ARW");
+        if !sample.exists() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("cr-export-{}", std::process::id()));
+        let recipes = vec![
+            ExportRecipe { output_dir: dir.clone(), long_edge: Some(400), ..Default::default() },
+            ExportRecipe {
+                name: "TIFF".into(),
+                format: ExportFormat::Tiff16,
+                output_space: OutputSpace::AdobeRgb,
+                long_edge: Some(300),
+                output_dir: dir.clone(),
+                suffix: "_ar".into(),
+                ..Default::default()
+            },
+        ];
+        let res = export_many(&sample, &Adjustments::default(), &recipes);
+        let paths: Vec<PathBuf> = res.into_iter().map(|r| r.unwrap()).collect();
+        let jpg = image::open(&paths[0]).unwrap();
+        assert_eq!(jpg.width(), 400);
+        let tif = image::open(&paths[1]).unwrap();
+        assert_eq!(tif.width(), 300);
+        assert!(matches!(tif, image::DynamicImage::ImageRgb16(_)));
+        std::fs::remove_dir_all(dir).ok();
+    }
 }
