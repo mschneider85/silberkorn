@@ -20,6 +20,7 @@ mod jobs;
 mod layers;
 mod library;
 mod merge;
+mod palette;
 mod remove;
 mod rename;
 mod session;
@@ -92,6 +93,7 @@ mod tests {
             include_str!("chrome.rs"),
             include_str!("session.rs"),
             include_str!("splash.rs"),
+            include_str!("palette.rs"),
         ];
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);

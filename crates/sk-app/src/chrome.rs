@@ -22,6 +22,8 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Strg+Umschalt+O", "Session öffnen"),
             ("Strg+O", "Ordner öffnen"),
             ("Strg+D", "Auswahl verarbeiten (exportieren)"),
+            ("Strg+K", "Befehl oder Werkzeug suchen"),
+            ("Strg+1 – Strg+0", "Werkzeug-Tabs"),
             ("F1", "Diese Übersicht"),
             ("Alt+F4", "Beenden"),
         ],
@@ -182,13 +184,26 @@ impl App {
             })
             .inner;
 
-        // Window title: centered on the window like VS Code, shifted right if the menus are in the way.
-        let font = FontId::proportional(12.5);
-        let galley = ui.painter().layout_no_wrap(self.window_title.clone(), font, theme::TEXT_DIM);
-        let w = galley.size().x;
-        let x = (bar.center().x - w / 2.0).max(menus_right + 24.0);
-        if x + w < buttons_left - 12.0 {
-            ui.painter().galley(pos2(x, bar.center().y - galley.size().y / 2.0), galley, theme::TEXT_DIM);
+        // Search field with the window title, centered like in VS Code; it opens the command
+        // palette. Shifted right if the menus are in the way.
+        let w = 380.0f32.min(buttons_left - menus_right - 48.0);
+        if w > 160.0 {
+            let x = (bar.center().x - w / 2.0).max(menus_right + 24.0);
+            let rect = Rect::from_min_size(pos2(x, bar.center().y - 11.0), vec2(w, 22.0));
+            let resp = ui.interact(rect, ui.id().with("search"), Sense::click()).on_hover_text("Befehle, Werkzeuge und Einstellungen suchen (Strg+K)");
+            let p = ui.painter();
+            let fill = if resp.hovered() { Color32::from_rgb(48, 48, 53) } else { Color32::from_rgb(38, 38, 42) };
+            p.rect(rect, 6.0, fill, Stroke::new(1.0, if resp.hovered() { Color32::from_rgb(70, 70, 77) } else { theme::BORDER }), StrokeKind::Inside);
+            p.text(rect.left_center() + vec2(12.0, 0.0), egui::Align2::CENTER_CENTER, icon::MAGNIFYING_GLASS, FontId::proportional(13.0), theme::TEXT_DIM);
+            let title = p.layout_no_wrap(self.window_title.clone(), FontId::proportional(12.5), theme::TEXT_DIM);
+            let key = p.layout_no_wrap("Strg+K".into(), FontId::proportional(11.0), theme::TEXT_FAINT);
+            if title.size().x + key.size().x + 60.0 < w {
+                p.galley(pos2(rect.center().x - title.size().x / 2.0, rect.center().y - title.size().y / 2.0), title, theme::TEXT_DIM);
+            }
+            p.galley(pos2(rect.right() - key.size().x - 9.0, rect.center().y - key.size().y / 2.0), key, theme::TEXT_FAINT);
+            if resp.clicked() {
+                self.palette.show();
+            }
         }
 
         let kinds = [WindowButton::Minimize, if maximized { WindowButton::Restore } else { WindowButton::Maximize }, WindowButton::Close];
@@ -453,7 +468,7 @@ impl App {
             self.choose_overlay();
         }
         if let Some(e) = &self.overlay.error {
-            ui.label(RichText::new(e).small().color(Color32::from_rgb(230, 110, 100)));
+            ui.label(RichText::new(e).small().color(theme::DANGER));
         }
         if self.overlay.file.is_some() {
             ui.horizontal(|ui| {
@@ -482,6 +497,9 @@ impl App {
     }
 
     fn help_menu(&mut self, ui: &mut Ui) {
+        if item(ui, icon::MAGNIFYING_GLASS, "Befehl suchen …", "Strg+K", true) {
+            self.palette.show();
+        }
         if item(ui, icon::KEYBOARD, "Tastenkürzel", "F1", true) {
             self.show_shortcuts = true;
         }
@@ -493,12 +511,27 @@ impl App {
 
     // ------------------------------------------------------------ toolbar
 
+    /// Toolbar in groups: browsing and the view mode on the left, editing in the middle,
+    /// viewing aids, zoom and export on the right.
     pub fn toolbar(&mut self, ui: &mut Ui) {
         let has = self.current.is_some();
+        let ctx = ui.ctx().clone();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             if tool(ui, icon::FOLDER_OPEN, "Ordner öffnen (Strg+O)", false, true).clicked() {
                 self.open_folder_dialog();
+            }
+            let import = if self.session.is_some() { "Bilder in die Session importieren" } else { "Ordner in den Katalog importieren" };
+            if tool(ui, icon::FOLDER_PLUS, import, false, true).clicked() {
+                self.import_folder_dialog();
+            }
+            group_gap(ui);
+            let modes = [
+                Seg { icon: icon::SQUARES_FOUR, label: "Raster", hover: "Raster: alle Bilder im Überblick (G)", active: self.grid_view, enabled: true },
+                Seg { icon: icon::IMAGE, label: "Viewer", hover: "Viewer: ein Bild groß bearbeiten (G)", active: !self.grid_view, enabled: true },
+            ];
+            if let Some(i) = segmented(ui, &modes) {
+                self.grid_view = i == 0;
             }
             group_gap(ui);
             if tool(ui, icon::ARROW_U_UP_LEFT, "Rückgängig (Strg+Z)", false, self.can_undo()).clicked() {
@@ -514,6 +547,18 @@ impl App {
             if tool(ui, icon::ARROW_CLOCKWISE, "Rechts drehen (Strg+])", false, has).clicked() {
                 self.rotate(1);
             }
+            if tool(ui, icon::CROP, "Zuschneiden (C, Enter übernimmt)", self.crop_tool.is_some(), has).clicked() {
+                self.toggle_crop();
+            }
+            if tool(ui, icon::RULER, "Geraderichten: eine Linie entlang des Horizonts ziehen", self.straighten_tool.is_some(), has).clicked() {
+                self.toggle_straighten();
+            }
+            if tool(ui, icon::EYEDROPPER, "Weißabgleich-Pipette: auf eine neutrale Stelle klicken (W)", self.picking_wb, has).clicked() {
+                self.picking_wb = !self.picking_wb;
+                if self.picking_wb {
+                    self.tab = Tab::Color;
+                }
+            }
             group_gap(ui);
             if tool(ui, icon::COPY, "Anpassungen kopieren (Strg+Umschalt+C)", false, has).clicked() {
                 self.copy_adjustments();
@@ -524,50 +569,71 @@ impl App {
             if tool(ui, icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", false, has).clicked() {
                 self.reset_adjustments();
             }
-            group_gap(ui);
-            if tool(ui, icon::SQUARES_FOUR, "Raster (G)", self.grid_view, true).clicked() {
-                self.grid_view = true;
-            }
-            if tool(ui, icon::IMAGE, "Viewer (G)", !self.grid_view, true).clicked() {
-                self.grid_view = false;
-            }
-            group_gap(ui);
-            if tool(ui, icon::CIRCLE_HALF, "Vorher / Nachher (Y)", self.show_before, has).clicked() {
-                self.toggle_before();
-            }
-            if tool(ui, icon::SQUARE_SPLIT_HORIZONTAL, "Geteilter Vergleich (U)", self.split_view && !self.split_side, has).clicked() {
-                self.toggle_split();
-            }
-            if tool(ui, icon::COLUMNS, "Vorher | Nachher nebeneinander (Umschalt+U)", self.split_view && self.split_side, has).clicked() {
-                self.toggle_side_by_side();
-            }
-            if tool(ui, icon::WARNING, "Belichtungswarnung (E)", self.clip_warning, has).clicked() {
-                self.toggle_clip_warning();
-            }
-            if tool(ui, icon::CROSSHAIR, "Fokusmaske: scharfe Bereiche markieren (K)", self.focus_mask, has).clicked() {
-                self.toggle_focus_mask();
-            }
-            if tool(ui, icon::FILE_MAGNIFYING_GLASS, "Proof: wie vom Ausgabe-Rezept geschrieben (P)", self.proof_view, has).clicked() {
-                self.toggle_proof();
-            }
-            if tool(ui, icon::ARROWS_OUT, "Vollbild ohne Ablenkung (F11)", false, has).clicked() {
-                self.toggle_fullscreen(&ui.ctx().clone());
-            }
-            group_gap(ui);
-            if tool(ui, icon::CORNERS_OUT, "Einpassen", self.zoom.is_none(), has).clicked() {
-                self.zoom_fit();
-            }
-            if tool(ui, icon::MAGNIFYING_GLASS_PLUS, "100 % (Z, Doppelklick)", self.zoom.is_some(), has).clicked() {
-                self.zoom = None;
-                self.toggle_zoom_100();
-            }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
                 let n = self.selected_paths().len();
-                let text = RichText::new(format!("{}  Verarbeiten", icon::EXPORT)).color(Color32::WHITE);
-                let button = Button::new(text).fill(theme::ACCENT).min_size(vec2(0.0, 28.0));
-                if ui.add_enabled(n > 0, button).on_hover_text(format!("{n} Bild(er) mit dem gewählten Rezept exportieren (Strg+D)")).clicked() {
+                let text = RichText::new(format!("{}  Verarbeiten", icon::EXPORT)).color(Color32::WHITE).strong();
+                let button = Button::new(text).fill(theme::ACCENT).corner_radius(6).min_size(vec2(0.0, 28.0));
+                if ui.add_enabled(n > 0, button).on_hover_text(format!("{} mit den gewählten Rezepten exportieren (Strg+D)", image_count(n))).clicked() {
                     self.export_selection();
+                }
+                ui.add_space(6.0);
+                if tool(ui, icon::ARROWS_OUT, "Vollbild ohne Ablenkung (F11)", false, has).clicked() {
+                    self.toggle_fullscreen(&ctx);
+                }
+                group_gap(ui);
+                // Right to left: the segments are listed in reverse.
+                let zoom = [
+                    Seg { icon: icon::MAGNIFYING_GLASS_PLUS, label: "", hover: "100 % (Z, Doppelklick ins Bild)", active: self.zoom.is_some(), enabled: has },
+                    Seg { icon: icon::CORNERS_OUT, label: "", hover: "Einpassen", active: self.zoom.is_none(), enabled: has },
+                ];
+                match segmented(ui, &zoom) {
+                    Some(0) => {
+                        self.zoom = None;
+                        self.toggle_zoom_100();
+                    }
+                    Some(_) => self.zoom_fit(),
+                    None => {}
+                }
+                group_gap(ui);
+                let guides_on = self.guides != crate::guides::Guides::Off || self.overlay.shown;
+                let resp = tool(ui, icon::GRID_NINE, "Hilfslinien und Overlay (O)", guides_on, true);
+                Popup::menu(&resp).show(|ui| {
+                    for g in crate::guides::Guides::ALL {
+                        if check(ui, self.guides == g, g.label(), "") {
+                            self.guides = g;
+                            self.save_settings();
+                        }
+                    }
+                    ui.separator();
+                    if check(ui, self.overlay.shown, "Overlay anzeigen", "Umschalt+O") {
+                        self.toggle_overlay();
+                    }
+                    if item(ui, icon::IMAGE, "Overlay wählen …", "", true) {
+                        self.choose_overlay();
+                    }
+                });
+                if tool(ui, icon::FILE_MAGNIFYING_GLASS, "Proof: so, wie das Ausgabe-Rezept das Bild schreibt (P)", self.proof_view, has).clicked() {
+                    self.toggle_proof();
+                }
+                if tool(ui, icon::CROSSHAIR, "Fokusmaske: scharfe Bereiche markieren (K)", self.focus_mask, has).clicked() {
+                    self.toggle_focus_mask();
+                }
+                if tool(ui, icon::WARNING, "Belichtungswarnung: ausgefressene und abgesoffene Stellen (E)", self.clip_warning, has).clicked() {
+                    self.toggle_clip_warning();
+                }
+                group_gap(ui);
+                let compare = [
+                    Seg { icon: icon::COLUMNS, label: "", hover: "Vorher | Nachher nebeneinander (Umschalt+U)", active: self.split_view && self.split_side, enabled: has },
+                    Seg { icon: icon::SQUARE_SPLIT_HORIZONTAL, label: "", hover: "Geteilter Vergleich mit Trennlinie (U)", active: self.split_view && !self.split_side, enabled: has },
+                    Seg { icon: icon::CIRCLE_HALF, label: "", hover: "Vorher / Nachher (Y)", active: self.show_before, enabled: has },
+                ];
+                match segmented(ui, &compare) {
+                    Some(0) => self.toggle_side_by_side(),
+                    Some(1) => self.toggle_split(),
+                    Some(_) => self.toggle_before(),
+                    None => {}
                 }
             });
         });
@@ -575,24 +641,36 @@ impl App {
 
     // ------------------------------------------------------------ tool tabs
 
-    /// Vertical strip of tool tab icons.
+    /// Vertical strip of tool tab icons, in groups.
     pub fn tab_rail(&mut self, ui: &mut Ui) {
         ui.vertical_centered(|ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            ui.add_space(4.0);
-            for tab in Tab::ALL {
+            ui.add_space(6.0);
+            let mut group = Tab::ALL[0].group();
+            for (i, tab) in Tab::ALL.into_iter().enumerate() {
+                if tab.group() != group {
+                    group = tab.group();
+                    ui.add_space(4.0);
+                    let (r, _) = ui.allocate_exact_size(vec2(22.0, 1.0), Sense::hover());
+                    ui.painter().rect_filled(r, 0.0, theme::BORDER);
+                    ui.add_space(4.0);
+                }
                 let selected = self.tab == tab;
                 let (rect, resp) = ui.allocate_exact_size(vec2(40.0, 38.0), Sense::click());
                 let painter = ui.painter();
-                if selected {
-                    painter.rect_filled(rect, 4.0, theme::PANEL);
-                    painter.rect_filled(egui::Rect::from_min_size(rect.left_top() + vec2(0.0, 7.0), vec2(3.0, 24.0)), 1.5, theme::ACCENT);
-                } else if resp.hovered() {
-                    painter.rect_filled(rect, 4.0, Color32::from_rgb(44, 44, 47));
+                let t = ui.ctx().animate_bool_with_time(resp.id, selected, 0.12);
+                if resp.hovered() && !selected {
+                    painter.rect_filled(rect, 7.0, Color32::from_rgb(38, 38, 42));
+                }
+                if t > 0.0 {
+                    painter.rect_filled(rect, 7.0, theme::ACCENT_SOFT.gamma_multiply(t));
+                    let bar = egui::Rect::from_center_size(pos2(rect.left() - 2.0, rect.center().y), vec2(3.0, 20.0 * t));
+                    painter.rect_filled(bar, 1.5, theme::ACCENT);
                 }
                 let color = if selected { Color32::WHITE } else if resp.hovered() { theme::TEXT } else { theme::TEXT_DIM };
                 painter.text(rect.center(), egui::Align2::CENTER_CENTER, tab.icon(), egui::FontId::proportional(20.0), color);
-                if resp.on_hover_text(tab.title()).clicked() {
+                let key = crate::palette::tab_shortcut(i);
+                if resp.on_hover_text(format!("{}  ({key})", tab.title())).clicked() {
                     self.tab = tab;
                 }
             }
@@ -600,12 +678,20 @@ impl App {
     }
 
     pub fn tool_panel(&mut self, ui: &mut Ui) {
-        ui.add_space(8.0);
+        ui.add_space(10.0);
         ui.horizontal(|ui| {
             ui.add_space(4.0);
-            ui.label(RichText::new(format!("{}  {}", self.tab.icon(), self.tab.title())).size(15.0).strong().color(Color32::WHITE));
+            ui.label(RichText::new(self.tab.icon()).size(17.0).color(theme::ACCENT));
+            ui.label(RichText::new(self.tab.title()).size(15.0).strong().color(Color32::WHITE));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(4.0);
+                let b = Button::new(RichText::new(icon::MAGNIFYING_GLASS).size(14.0).color(theme::TEXT_DIM)).frame_when_inactive(false);
+                if ui.add(b).on_hover_text("Werkzeug oder Einstellung suchen (Strg+K)").clicked() {
+                    self.palette.show();
+                }
+            });
         });
-        ui.add_space(6.0);
+        ui.add_space(8.0);
         self.tools_ui(ui);
     }
 
@@ -637,6 +723,16 @@ impl App {
                 ui.label(dim(self.status.clone()));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if self.grid_view {
+                    let (lo, hi) = crate::app::GRID_THUMB;
+                    ui.label(RichText::new(icon::IMAGE).size(14.0).color(theme::TEXT_DIM));
+                    let changed = crate::widgets::compact_slider(ui, "Vorschaugröße", &mut self.grid_thumb, lo..=hi, 190.0, 90.0);
+                    ui.label(RichText::new(icon::IMAGE).size(11.0).color(theme::TEXT_DIM));
+                    if changed {
+                        self.save_settings();
+                    }
+                    ui.separator();
+                }
                 if let Some(pct) = self.zoom_pct.filter(|_| !self.grid_view && self.current.is_some()) {
                     ui.label(RichText::new(format!("{pct:.0} %")).size(12.0).color(theme::TEXT));
                     ui.separator();
@@ -858,20 +954,74 @@ fn check(ui: &mut Ui, on: bool, text: &str, shortcut: &str) -> bool {
 
 /// Square toolbar button; `active` draws it as pressed.
 fn tool(ui: &mut Ui, ic: &str, hover: &str, active: bool, enabled: bool) -> egui::Response {
-    let mut b = Button::new(RichText::new(ic).size(18.0)).min_size(vec2(32.0, 28.0)).frame_when_inactive(active);
+    let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 28.0), if enabled { Sense::click() } else { Sense::hover() });
+    paint_tool(ui, rect, &resp, ic, "", active, enabled, 7.0);
+    resp.on_hover_text(hover)
+}
+
+/// One segment of a [`segmented`] control.
+struct Seg<'a> {
+    icon: &'a str,
+    /// Text after the icon; empty for an icon-only segment.
+    label: &'a str,
+    hover: &'a str,
+    active: bool,
+    enabled: bool,
+}
+
+/// Buttons joined into one pill (mode switches and related toggles); returns the clicked one.
+fn segmented(ui: &mut Ui, segs: &[Seg]) -> Option<usize> {
+    let mut clicked = None;
+    egui::Frame::new().fill(Color32::from_rgb(34, 34, 37)).corner_radius(8).inner_margin(Margin::same(2)).show(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        for (i, s) in segs.iter().enumerate() {
+            let font = FontId::proportional(13.0);
+            let text_w = if s.label.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(s.label.to_string(), font, Color32::WHITE).size().x + 8.0 };
+            let size = vec2(if s.label.is_empty() { 30.0 } else { 34.0 + text_w }, 24.0);
+            let (rect, resp) = ui.allocate_exact_size(size, if s.enabled { Sense::click() } else { Sense::hover() });
+            paint_tool(ui, rect, &resp, s.icon, s.label, s.active, s.enabled, 6.0);
+            if resp.on_hover_text(s.hover).clicked() {
+                clicked = Some(i);
+            }
+        }
+    });
+    clicked
+}
+
+/// Background and icon (plus optional label) of a toolbar button.
+#[allow(clippy::too_many_arguments)]
+fn paint_tool(ui: &Ui, rect: Rect, resp: &Response, ic: &str, label: &str, active: bool, enabled: bool, radius: f32) {
+    let p = ui.painter();
+    let hovered = enabled && resp.hovered();
     if active {
-        b = b.fill(Color32::from_rgb(56, 76, 100)).stroke(egui::Stroke::new(1.0, theme::ACCENT));
+        p.rect_filled(rect, radius, if hovered { Color32::from_rgb(52, 80, 116) } else { theme::ACCENT_SOFT });
+    } else if hovered {
+        p.rect_filled(rect, radius, Color32::from_rgb(46, 46, 51));
     }
-    ui.add_enabled(enabled, b).on_hover_text(hover).on_disabled_hover_text(hover)
+    let color = if !enabled {
+        Color32::from_rgb(78, 78, 84)
+    } else if active {
+        Color32::WHITE
+    } else if hovered {
+        theme::TEXT
+    } else {
+        Color32::from_rgb(186, 186, 192)
+    };
+    if label.is_empty() {
+        p.text(rect.center(), egui::Align2::CENTER_CENTER, ic, FontId::proportional(17.0), color);
+    } else {
+        p.text(rect.left_center() + vec2(16.0, 0.0), egui::Align2::CENTER_CENTER, ic, FontId::proportional(16.0), color);
+        p.text(rect.left_center() + vec2(30.0, 0.0), egui::Align2::LEFT_CENTER, label, FontId::proportional(13.0), color);
+    }
 }
 
 fn group_gap(ui: &mut Ui) {
-    ui.add_space(6.0);
-    let (rect, _) = ui.allocate_exact_size(vec2(1.0, 20.0), Sense::hover());
-    ui.painter().rect_filled(rect, 0.0, Color32::from_rgb(58, 58, 62));
-    ui.add_space(6.0);
+    ui.add_space(7.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(1.0, 18.0), Sense::hover());
+    ui.painter().rect_filled(rect, 0.0, theme::BORDER);
+    ui.add_space(7.0);
 }
 
 pub fn bar_margin() -> Margin {
-    Margin::symmetric(8, 4)
+    Margin::symmetric(8, 5)
 }

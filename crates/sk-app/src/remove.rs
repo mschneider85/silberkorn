@@ -172,14 +172,16 @@ impl App {
         let mut download = false;
         let downloading = self.model_download_progress(&models::INPAINT);
         section(ui, "Entfernen (KI)", None, |ui| {
-            if ui.selectable_label(self.local_tool == Some(LocalTool::Remove), LocalTool::Remove.label()).clicked() {
+            let (ic, name, key) = LocalTool::Remove.tile();
+            let w = ui.available_width();
+            if crate::widgets::tool_tile(ui, ic, &format!("{name}: über das Störende malen"), key, self.local_tool == Some(LocalTool::Remove), w).clicked() {
                 tool = true;
             }
             if self.local_tool == Some(LocalTool::Remove) {
                 if crate::layers::brush_controls(ui, &mut self.brushes.remove, Some(LocalTool::Remove), true) {
                     self.brushes_changed_at = Some(std::time::Instant::now());
                 }
-                ui.label(RichText::new("Über das Störende malen; beim Loslassen füllt die KI die Stelle passend zur Umgebung.").small().color(Color32::from_gray(140)));
+                ui.label(RichText::new("Über das Störende malen; beim Loslassen füllt die KI die Stelle passend zur Umgebung.").small().color(crate::theme::TEXT_FAINT));
             }
             if !models::available(&models::INPAINT) {
                 match downloading {

@@ -58,7 +58,7 @@ impl App {
 
     pub fn history_tab(&mut self, ui: &mut Ui) {
         if self.current.is_none() {
-            ui.label("Kein Bild ausgewählt.");
+            crate::widgets::no_image(ui);
             return;
         }
         let mut action = None;
@@ -70,7 +70,7 @@ impl App {
                 action = Some(SnapshotAction::Add);
             }
             if cur.snapshots.is_empty() {
-                ui.label(RichText::new("Noch keine. Ein Schnappschuss sichert den jetzigen Stand; ein Klick darauf stellt ihn wieder her.").small().color(Color32::from_gray(140)));
+                ui.label(RichText::new("Noch keine. Ein Schnappschuss sichert den jetzigen Stand; ein Klick darauf stellt ihn wieder her.").small().color(crate::theme::TEXT_FAINT));
             }
             for (i, s) in cur.snapshots.iter().enumerate() {
                 ui.horizontal(|ui| {
@@ -110,7 +110,7 @@ impl App {
         let mut jump = None;
         if let Some((steps, now)) = self.history_steps() {
             section(ui, "Verlauf", None, |ui| {
-                ui.label(RichText::new("Klick springt zu diesem Stand; neue Änderungen verwerfen die Schritte darüber.").small().color(Color32::from_gray(140)));
+                ui.label(RichText::new("Klick springt zu diesem Stand; neue Änderungen verwerfen die Schritte darüber.").small().color(crate::theme::TEXT_FAINT));
                 for j in (0..steps.len()).rev() {
                     let label = if j == 0 { "Geöffnet".to_string() } else { describe(steps[j - 1], steps[j]) };
                     let text = if j > now { RichText::new(label).color(Color32::from_gray(120)).italics() } else { RichText::new(label) };

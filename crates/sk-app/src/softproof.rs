@@ -10,7 +10,7 @@ use sk_core::softproof::{ProofSettings, ProofTarget, RenderIntent, SoftProof};
 
 use crate::app::App;
 use crate::theme::icon;
-use crate::widgets::section;
+use crate::widgets::{self, section};
 
 /// Soft proof state of the app.
 #[derive(Default)]
@@ -73,7 +73,7 @@ impl App {
                 toggle = true;
             }
             let name = sk_core::softproof::target_name(&s.target);
-            egui::ComboBox::from_label("Profil").selected_text(name).width(220.0).show_ui(ui, |ui| {
+            widgets::combo_field(ui, "Profil", name, |ui| {
                 for sp in [OutputSpace::Srgb, OutputSpace::AdobeRgb, OutputSpace::DisplayP3] {
                     ui.selectable_value(&mut s.target, ProofTarget::Space(sp), sp.label());
                 }
@@ -90,7 +90,7 @@ impl App {
                     pick = true;
                 }
             });
-            egui::ComboBox::from_label("Priorität").selected_text(s.intent.label()).width(220.0).show_ui(ui, |ui| {
+            widgets::combo_field(ui, "Priorität", s.intent.label(), |ui| {
                 for i in RenderIntent::ALL {
                     ui.selectable_value(&mut s.intent, i, i.label());
                 }

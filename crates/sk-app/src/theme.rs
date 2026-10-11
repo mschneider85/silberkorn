@@ -1,22 +1,34 @@
-//! Look and feel: a neutral dark theme, plus the Phosphor icon font.
+//! Look and feel: a calm, neutral dark theme, plus the Phosphor icon font.
+//!
+//! The greys are strictly neutral so they don't tint the judgement of colors; depth comes from
+//! a few steps of lightness: chrome (darkest) < browser < viewer < panel < section < controls.
 
 use egui::{Color32, CornerRadius, FontFamily, FontId, Margin, Shadow, Stroke, TextStyle, vec2};
 
 pub use egui_phosphor::regular as icon;
 
-/// Menu bar, toolbar, tool tab rail and status bar.
-pub const CHROME: Color32 = Color32::from_rgb(30, 30, 32);
+/// Title bar, toolbar, tool tab rail and status bar.
+pub const CHROME: Color32 = Color32::from_rgb(24, 24, 26);
 /// Tool panel background.
-pub const PANEL: Color32 = Color32::from_rgb(40, 40, 42);
+pub const PANEL: Color32 = Color32::from_rgb(36, 36, 39);
 /// Tool section header strip.
-pub const SECTION: Color32 = Color32::from_rgb(52, 52, 55);
+pub const SECTION: Color32 = Color32::from_rgb(45, 45, 49);
 /// Neutral background behind the image, dark enough to judge tones.
-pub const VIEWER: Color32 = Color32::from_rgb(33, 33, 34);
+pub const VIEWER: Color32 = Color32::from_rgb(30, 30, 32);
 /// Browser / filmstrip background.
-pub const BROWSER: Color32 = Color32::from_rgb(26, 26, 27);
-pub const ACCENT: Color32 = Color32::from_rgb(64, 140, 220);
-pub const TEXT: Color32 = Color32::from_rgb(218, 218, 220);
-pub const TEXT_DIM: Color32 = Color32::from_rgb(150, 150, 154);
+pub const BROWSER: Color32 = Color32::from_rgb(27, 27, 29);
+/// Fill of controls (buttons, text fields, slider rails).
+pub const CONTROL: Color32 = Color32::from_rgb(54, 54, 59);
+/// Fine separating lines.
+pub const BORDER: Color32 = Color32::from_rgb(50, 50, 55);
+pub const ACCENT: Color32 = Color32::from_rgb(78, 146, 230);
+/// Accent for pressed toggles and selected rows: the accent, darkened towards the panel.
+pub const ACCENT_SOFT: Color32 = Color32::from_rgb(45, 70, 102);
+pub const TEXT: Color32 = Color32::from_rgb(222, 222, 226);
+pub const TEXT_DIM: Color32 = Color32::from_rgb(150, 150, 158);
+pub const TEXT_FAINT: Color32 = Color32::from_rgb(108, 108, 116);
+pub const DANGER: Color32 = Color32::from_rgb(230, 110, 100);
+pub const STAR: Color32 = Color32::from_rgb(240, 196, 70);
 
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -27,34 +39,36 @@ pub fn install(ctx: &egui::Context) {
 
     let mut v = egui::Visuals::dark();
     v.panel_fill = PANEL;
-    v.window_fill = Color32::from_rgb(44, 44, 47);
-    v.extreme_bg_color = Color32::from_rgb(24, 24, 25);
-    v.faint_bg_color = Color32::from_rgb(46, 46, 49);
-    v.code_bg_color = Color32::from_rgb(24, 24, 25);
-    v.window_stroke = Stroke::new(1.0, Color32::from_rgb(64, 64, 68));
-    v.window_corner_radius = CornerRadius::same(6);
-    v.menu_corner_radius = CornerRadius::same(4);
-    v.window_shadow = Shadow { offset: [0, 6], blur: 18, spread: 0, color: Color32::from_black_alpha(110) };
-    v.popup_shadow = Shadow { offset: [0, 3], blur: 10, spread: 0, color: Color32::from_black_alpha(100) };
+    v.window_fill = Color32::from_rgb(40, 40, 44);
+    v.extreme_bg_color = Color32::from_rgb(26, 26, 28);
+    v.faint_bg_color = Color32::from_rgb(42, 42, 46);
+    v.code_bg_color = Color32::from_rgb(26, 26, 28);
+    v.window_stroke = Stroke::new(1.0, Color32::from_rgb(62, 62, 68));
+    v.window_corner_radius = CornerRadius::same(10);
+    v.menu_corner_radius = CornerRadius::same(8);
+    v.window_shadow = Shadow { offset: [0, 10], blur: 32, spread: 0, color: Color32::from_black_alpha(140) };
+    v.popup_shadow = Shadow { offset: [0, 6], blur: 20, spread: 0, color: Color32::from_black_alpha(120) };
     v.selection.bg_fill = ACCENT;
     v.selection.stroke = Stroke::new(1.0, Color32::WHITE);
     v.hyperlink_color = ACCENT;
-    v.slider_trailing_fill = false;
+    v.slider_trailing_fill = true;
     v.handle_shape = egui::style::HandleShape::Circle;
     v.indent_has_left_vline = false;
+    v.striped = false;
+    v.text_cursor.stroke = Stroke::new(1.5, ACCENT);
 
-    let r = CornerRadius::same(3);
+    let r = CornerRadius::same(5);
     let w = &mut v.widgets;
     w.noninteractive.bg_fill = PANEL;
     w.noninteractive.weak_bg_fill = PANEL;
-    w.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(58, 58, 62));
+    w.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
     w.noninteractive.fg_stroke = Stroke::new(1.0, TEXT);
     w.noninteractive.corner_radius = r;
     for (state, bg, fg) in [
-        (&mut w.inactive, Color32::from_rgb(58, 58, 62), Color32::from_rgb(205, 205, 208)),
-        (&mut w.hovered, Color32::from_rgb(72, 72, 77), Color32::WHITE),
-        (&mut w.active, Color32::from_rgb(84, 84, 90), Color32::WHITE),
-        (&mut w.open, Color32::from_rgb(64, 64, 69), Color32::WHITE),
+        (&mut w.inactive, CONTROL, Color32::from_rgb(210, 210, 215)),
+        (&mut w.hovered, Color32::from_rgb(66, 66, 72), Color32::WHITE),
+        (&mut w.active, Color32::from_rgb(78, 78, 85), Color32::WHITE),
+        (&mut w.open, Color32::from_rgb(62, 62, 68), Color32::WHITE),
     ] {
         state.bg_fill = bg;
         state.weak_bg_fill = bg;
@@ -63,9 +77,9 @@ pub fn install(ctx: &egui::Context) {
         state.expansion = 0.0;
     }
     w.inactive.bg_stroke = Stroke::NONE;
-    w.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(96, 96, 102));
+    w.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(88, 88, 96));
     w.active.bg_stroke = Stroke::new(1.0, ACCENT);
-    w.open.bg_stroke = Stroke::new(1.0, Color32::from_rgb(96, 96, 102));
+    w.open.bg_stroke = Stroke::new(1.0, Color32::from_rgb(88, 88, 96));
     ctx.set_visuals(v);
 
     ctx.global_style_mut(|s| {
@@ -79,14 +93,16 @@ pub fn install(ctx: &egui::Context) {
         .into();
         let sp = &mut s.spacing;
         sp.item_spacing = vec2(6.0, 5.0);
-        sp.button_padding = vec2(7.0, 3.0);
-        sp.interact_size = vec2(36.0, 22.0);
+        sp.button_padding = vec2(9.0, 4.0);
+        sp.interact_size = vec2(36.0, 24.0);
         sp.slider_width = 150.0;
-        sp.slider_rail_height = 4.0;
+        sp.slider_rail_height = 3.0;
         sp.menu_margin = Margin::same(6);
-        sp.menu_width = 260.0;
-        sp.window_margin = Margin::same(12);
+        sp.menu_width = 270.0;
+        sp.window_margin = Margin::same(16);
         sp.indent = 14.0;
+        sp.combo_height = 300.0;
+        s.interaction.tooltip_delay = 0.35;
     });
 }
 

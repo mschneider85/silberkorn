@@ -6,21 +6,63 @@ use egui::{Color32, Pos2, Rect, Response, RichText, Sense, Shape, Stroke, Stroke
 
 use crate::theme;
 
+fn reveal_id() -> egui::Id {
+    egui::Id::new("reveal_section")
+}
+
+/// Asks the tool section with this title to open, scroll into view and flash briefly the next
+/// time it is drawn (used by the command palette).
+pub fn reveal_section(ctx: &egui::Context, title: &str) {
+    ctx.data_mut(|d| d.insert_temp(reveal_id(), title.to_string()));
+}
+
 /// Collapsible tool section with a header strip and an optional reset button.
 pub fn section(ui: &mut Ui, title: &str, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
+    section_with(ui, title, true, reset, body);
+}
+
+/// [`section`] that starts closed unless `default_open`.
+pub fn section_with(ui: &mut Ui, title: &str, default_open: bool, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
     let id = ui.make_persistent_id(title);
-    let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(id, true));
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+    let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(id, default_open));
+    let reveal = ui.data(|d| d.get_temp::<String>(reveal_id())).is_some_and(|t| t == title);
+    let flash_id = id.with("flash");
+    let now = ui.input(|i| i.time);
+    if reveal {
+        open = true;
+        ui.data_mut(|d| {
+            d.insert_persisted(id, true);
+            d.remove::<String>(reveal_id());
+            d.insert_temp(flash_id, now);
+        });
+    }
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
+    if reveal {
+        resp.scroll_to_me(Some(egui::Align::TOP));
+    }
     let painter = ui.painter();
     let hovered = resp.hovered();
-    painter.rect_filled(rect, 3.0, if hovered { Color32::from_rgb(60, 60, 64) } else { theme::SECTION });
+    painter.rect_filled(rect, 6.0, if hovered { Color32::from_rgb(52, 52, 57) } else { theme::SECTION });
     let caret = if open { theme::icon::CARET_DOWN } else { theme::icon::CARET_RIGHT };
-    painter.text(rect.left_center() + vec2(8.0, 0.0), egui::Align2::LEFT_CENTER, caret, egui::FontId::proportional(12.0), theme::TEXT_DIM);
-    painter.text(rect.left_center() + vec2(26.0, 0.0), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(13.0), Color32::WHITE);
+    let dim = if hovered { theme::TEXT } else { theme::TEXT_FAINT };
+    painter.text(rect.left_center() + vec2(9.0, 0.0), egui::Align2::LEFT_CENTER, caret, egui::FontId::proportional(11.0), dim);
+    let title_color = if open { Color32::WHITE } else { theme::TEXT };
+    painter.text(rect.left_center() + vec2(26.0, 0.0), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(13.0), title_color);
+    // Brief accent outline after the command palette jumped here.
+    if let Some(t0) = ui.data(|d| d.get_temp::<f64>(flash_id)) {
+        let a = 1.0 - ((now - t0) / 1.4) as f32;
+        if a > 0.0 {
+            painter.rect_stroke(rect, 6.0, Stroke::new(1.5, theme::ACCENT.gamma_multiply(a)), StrokeKind::Inside);
+            ui.ctx().request_repaint();
+        } else {
+            ui.data_mut(|d| d.remove::<f64>(flash_id));
+        }
+    }
     let mut reset_clicked = false;
     if let Some(reset) = reset {
-        let r = Rect::from_center_size(rect.right_center() - vec2(15.0, 0.0), vec2(22.0, 20.0));
-        let b = egui::Button::new(RichText::new(theme::icon::ARROW_COUNTER_CLOCKWISE).size(13.0)).frame_when_inactive(false);
+        let r = Rect::from_center_size(rect.right_center() - vec2(16.0, 0.0), vec2(24.0, 22.0));
+        let color = if hovered || ui.rect_contains_pointer(r) { theme::TEXT } else { theme::TEXT_FAINT };
+        let b = egui::Button::new(RichText::new(theme::icon::ARROW_COUNTER_CLOCKWISE).size(13.0).color(color)).frame_when_inactive(false);
         if ui.put(r, b).on_hover_text("Werkzeug zurücksetzen").clicked() {
             reset();
             reset_clicked = true;
@@ -31,11 +73,66 @@ pub fn section(ui: &mut Ui, title: &str, reset: Option<&mut dyn FnMut()>, body: 
         ui.data_mut(|d| d.insert_persisted(id, open));
     }
     if open {
+        ui.add_space(6.0);
+        egui::Frame::new().inner_margin(egui::Margin { left: 6, right: 4, top: 0, bottom: 0 }).show(ui, body);
         ui.add_space(4.0);
-        egui::Frame::new().inner_margin(egui::Margin { left: 6, right: 2, top: 0, bottom: 0 }).show(ui, body);
     }
     ui.add_space(6.0);
 }
+
+/// Width of the label column of slider rows and form fields, so they line up.
+fn label_width(ui: &Ui) -> f32 {
+    (ui.available_width() * 0.32).clamp(70.0, 112.0)
+}
+
+/// Form row: a dim label in the label column, then the control filling the rest of the width.
+pub fn field<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let w = label_width(ui);
+        ui.allocate_ui_with_layout(vec2(w, 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_min_width(w);
+            ui.add(egui::Label::new(RichText::new(label).color(theme::TEXT_DIM)).truncate());
+        });
+        ui.spacing_mut().text_edit_width = ui.available_width();
+        add(ui)
+    })
+    .inner
+}
+
+/// Drop-down list as a form row; `show` lists the choices.
+pub fn combo_field(ui: &mut Ui, label: &str, selected: impl Into<egui::WidgetText>, show: impl FnOnce(&mut Ui)) {
+    field(ui, label, |ui| {
+        egui::ComboBox::from_id_salt(label).selected_text(selected).width(ui.available_width() - 8.0).show_ui(ui, show);
+    });
+}
+
+/// Options of a [`slider_row_with`].
+#[derive(Clone, Copy, Default)]
+pub struct SliderOpts {
+    /// Unit after the value, e.g. " %".
+    pub suffix: &'static str,
+    /// Colors painted along the rail (left to right) instead of the accent fill, e.g. blue to
+    /// yellow for a color temperature.
+    pub rail: Option<&'static [Color32]>,
+}
+
+/// Rail colors for color temperature (cool to warm).
+pub const RAIL_KELVIN: &[Color32] = &[Color32::from_rgb(70, 120, 230), Color32::from_rgb(200, 200, 200), Color32::from_rgb(235, 190, 60)];
+/// Rail colors for tint (green to magenta).
+pub const RAIL_TINT: &[Color32] = &[Color32::from_rgb(70, 190, 90), Color32::from_rgb(200, 200, 200), Color32::from_rgb(210, 80, 200)];
+/// Rail colors for a hue from 0° to 360°.
+pub const RAIL_HUE: &[Color32] = &[
+    Color32::from_rgb(230, 70, 70),
+    Color32::from_rgb(230, 200, 60),
+    Color32::from_rgb(80, 200, 80),
+    Color32::from_rgb(70, 200, 210),
+    Color32::from_rgb(80, 100, 230),
+    Color32::from_rgb(210, 80, 210),
+    Color32::from_rgb(230, 70, 70),
+];
+/// Rail colors for saturation (grey to colorful).
+pub const RAIL_SATURATION: &[Color32] = &[Color32::from_rgb(140, 140, 140), Color32::from_rgb(220, 90, 170), Color32::from_rgb(240, 160, 40)];
 
 /// A labeled slider that resets to `default` on double-click of the label.
 /// Returns true when the value changed.
@@ -47,30 +144,217 @@ pub fn slider_row(
     default: f32,
     decimals: usize,
 ) -> bool {
+    slider_row_with(ui, label, value, range, default, decimals, SliderOpts::default())
+}
+
+/// [`slider_row`] with a unit and/or a colored rail.
+pub fn slider_row_with(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    default: f32,
+    decimals: usize,
+    opts: SliderOpts,
+) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
-        let color = if *value != default { Color32::WHITE } else { theme::TEXT };
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let modified = (*value - default).abs() > f32::EPSILON;
+        let color = if modified { Color32::WHITE } else { theme::TEXT_DIM };
+        let label_w = label_width(ui);
         let lbl = ui
-            .allocate_ui_with_layout(vec2(104.0, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                ui.set_min_width(104.0);
+            .allocate_ui_with_layout(vec2(label_w, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_min_width(label_w);
                 ui.add(egui::Label::new(RichText::new(label).color(color)).sense(Sense::click()).truncate())
             })
             .inner;
-        if lbl.on_hover_text("Doppelklick: zurücksetzen").double_clicked() && *value != default {
+        if lbl.on_hover_text("Doppelklick: zurücksetzen").double_clicked() && modified {
             *value = default;
             changed = true;
         }
-        ui.spacing_mut().slider_width = (ui.available_width() - 62.0).max(60.0);
-        let resp = ui.add(egui::Slider::new(value, range).fixed_decimals(decimals).clamping(egui::SliderClamping::Always));
-        changed |= resp.changed();
-        // Double-click on the slider (or its label) resets it.
-        // (Sliders only sense drags, so the double-click is taken from the pointer.)
-        if resp.contains_pointer() && ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary)) {
-            *value = default;
-            changed = true;
-        }
+        // Wide enough for the longest value, so the row never overflows (which would make the panel grow).
+        let font = egui::TextStyle::Button.resolve(ui.style());
+        let text_w = [*range.start(), *range.end()]
+            .map(|v| ui.painter().layout_no_wrap(format!("{v:.decimals$}{}", opts.suffix), font.clone(), Color32::WHITE).size().x)
+            .into_iter()
+            .fold(0.0, f32::max);
+        let value_w = (text_w + 2.0 * ui.spacing().button_padding.x + 4.0).max(44.0);
+        let slider_w = (ui.available_width() - value_w - 8.0).max(60.0);
+        changed |= rail_slider(ui, label, value, range.clone(), default, decimals, slider_w, opts.rail);
+        // The number: plain text until hovered, then an editable field (drag or type).
+        ui.scope(|ui| {
+            let w = &mut ui.visuals_mut().widgets;
+            w.inactive.weak_bg_fill = Color32::TRANSPARENT;
+            w.inactive.bg_fill = Color32::TRANSPARENT;
+            w.inactive.fg_stroke.color = if modified { Color32::WHITE } else { theme::TEXT_DIM };
+            let span = range.end() - range.start();
+            let drag = egui::DragValue::new(value)
+                .range(range.clone())
+                .fixed_decimals(decimals)
+                .suffix(opts.suffix)
+                .speed(span as f64 / 400.0);
+            changed |= ui.add_sized(vec2(value_w, 20.0), drag).changed();
+        });
     });
     changed
+}
+
+/// Slim slider: a thin rail filled from the default to the value, a small round handle.
+/// Click or drag to set; Shift while dragging for fine steps; double-click resets.
+#[allow(clippy::too_many_arguments)]
+fn rail_slider(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    default: f32,
+    decimals: usize,
+    width: f32,
+    rail: Option<&[Color32]>,
+) -> bool {
+    let (lo, hi) = (*range.start(), *range.end());
+    let span = (hi - lo).max(f32::EPSILON);
+    let fill_from = default.clamp(lo, hi);
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click_and_drag());
+    let x0 = rect.left() + 7.0;
+    let x1 = rect.right() - 7.0;
+    let to_x = |v: f32| x0 + (x1 - x0) * ((v - lo) / span).clamp(0.0, 1.0);
+    let from_x = |x: f32| lo + span * ((x - x0) / (x1 - x0)).clamp(0.0, 1.0);
+    let before = *value;
+
+    if let Some(p) = resp.interact_pointer_pos() {
+        let fine = ui.input(|i| i.modifiers.shift);
+        if fine && resp.dragged() && !resp.drag_started() {
+            let dx = ui.input(|i| i.pointer.delta().x);
+            *value = (*value + dx / (x1 - x0) * span * 0.1).clamp(lo, hi);
+        } else {
+            *value = from_x(p.x);
+        }
+        let q = 10f32.powi(decimals as i32);
+        *value = (*value * q).round() / q;
+    }
+    if resp.has_focus() {
+        let step = (span / 100.0).max(1.0 / 10f32.powi(decimals as i32));
+        let n = ui.input(|i| {
+            i.num_presses(egui::Key::ArrowRight) as i32 + i.num_presses(egui::Key::ArrowUp) as i32
+                - i.num_presses(egui::Key::ArrowLeft) as i32
+                - i.num_presses(egui::Key::ArrowDown) as i32
+        });
+        if n != 0 {
+            *value = (*value + n as f32 * step).clamp(lo, hi);
+        }
+    }
+    // Double-click resets.
+    if resp.double_clicked() {
+        *value = default;
+    }
+    resp.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), *value as f64, label));
+
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let cy = rect.center().y;
+        let rail_rect = Rect::from_min_max(pos2(x0, cy - 1.5), pos2(x1, cy + 1.5));
+        match rail {
+            Some(colors) if colors.len() >= 2 => {
+                let mut mesh = egui::Mesh::default();
+                let n = colors.len() - 1;
+                for (i, c) in colors.iter().enumerate() {
+                    let x = x0 + (x1 - x0) * i as f32 / n as f32;
+                    let c = c.gamma_multiply(0.85);
+                    mesh.colored_vertex(pos2(x, cy - 2.0), c);
+                    mesh.colored_vertex(pos2(x, cy + 2.0), c);
+                    if i > 0 {
+                        let k = (2 * i) as u32;
+                        mesh.add_triangle(k - 2, k - 1, k);
+                        mesh.add_triangle(k - 1, k, k + 1);
+                    }
+                }
+                painter.add(mesh);
+            }
+            _ => {
+                painter.rect_filled(rail_rect, 1.5, Color32::from_rgb(64, 64, 70));
+                let (a, b) = (to_x(fill_from), to_x(*value));
+                if (a - b).abs() > 0.5 {
+                    let fill = Rect::from_min_max(pos2(a.min(b), cy - 1.5), pos2(a.max(b), cy + 1.5));
+                    painter.rect_filled(fill, 1.5, theme::ACCENT);
+                }
+                // A tick at the default when it lies inside the range (bipolar sliders).
+                let d = to_x(default);
+                if d > x0 + 1.0 && d < x1 - 1.0 {
+                    painter.line_segment([pos2(d, cy - 4.0), pos2(d, cy + 4.0)], Stroke::new(1.0, Color32::from_rgb(90, 90, 98)));
+                }
+            }
+        }
+        let active = resp.dragged() || resp.is_pointer_button_down_on();
+        let r = if active { 7.0 } else if resp.hovered() { 6.5 } else { 5.5 };
+        let r = ui.ctx().animate_value_with_time(resp.id.with("r"), r, 0.08);
+        let c = pos2(to_x(*value), cy);
+        painter.circle_filled(c + vec2(0.0, 1.0), r + 1.0, Color32::from_black_alpha(90));
+        painter.circle_filled(c, r, if ui.is_enabled() { Color32::from_rgb(238, 238, 242) } else { Color32::from_gray(120) });
+        if resp.has_focus() {
+            painter.circle_stroke(c, r + 2.5, Stroke::new(1.5, theme::ACCENT));
+        }
+    }
+    *value != before
+}
+
+/// Slider without label and number, e.g. for the thumbnail size; double-click resets.
+pub fn compact_slider(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, default: f32, width: f32) -> bool {
+    rail_slider(ui, name, value, range, default, 2, width, None)
+}
+
+/// Tool tile: icon above the name, the key in the corner; `selected` highlights it.
+pub fn tool_tile(ui: &mut Ui, ic: &str, label: &str, key: &str, selected: bool, width: f32) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, 50.0), Sense::click());
+    let p = ui.painter();
+    let hovered = resp.hovered();
+    let fill = if selected {
+        theme::ACCENT_SOFT
+    } else if hovered {
+        Color32::from_rgb(54, 54, 60)
+    } else {
+        Color32::from_rgb(44, 44, 49)
+    };
+    p.rect_filled(rect, 7.0, fill);
+    if selected {
+        p.rect_stroke(rect, 7.0, Stroke::new(1.0, theme::ACCENT), StrokeKind::Inside);
+    }
+    let color = if selected || hovered { Color32::WHITE } else { theme::TEXT };
+    p.text(rect.center_top() + vec2(0.0, 18.0), egui::Align2::CENTER_CENTER, ic, egui::FontId::proportional(19.0), color);
+    let mut job = egui::text::LayoutJob::simple_singleline(label.to_string(), egui::FontId::proportional(11.5), color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width - 8.0);
+    let galley = p.layout_job(job);
+    p.galley(pos2(rect.center().x - galley.size().x / 2.0, rect.bottom() - 18.0), galley, color);
+    if !key.is_empty() {
+        p.text(rect.right_top() + vec2(-6.0, 5.0), egui::Align2::RIGHT_TOP, key, egui::FontId::proportional(10.0), theme::TEXT_FAINT);
+    }
+    resp
+}
+
+/// Small faint explanatory text.
+pub fn hint(ui: &mut Ui, text: impl Into<String>) -> Response {
+    ui.label(RichText::new(text.into()).small().color(theme::TEXT_FAINT))
+}
+
+/// Centered placeholder for an empty view or tool: a large icon, a line of text and a hint.
+pub fn empty_state(ui: &mut Ui, ic: &str, title: &str, hint: &str) {
+    ui.add_space(24.0);
+    ui.vertical_centered(|ui| {
+        ui.label(RichText::new(ic).size(34.0).color(theme::TEXT_FAINT));
+        ui.add_space(6.0);
+        ui.label(RichText::new(title).size(14.0).color(theme::TEXT_DIM));
+        if !hint.is_empty() {
+            ui.add_space(2.0);
+            ui.label(RichText::new(hint).small().color(theme::TEXT_FAINT));
+        }
+    });
+    ui.add_space(12.0);
+}
+
+/// Placeholder of the develop tools while no image is open.
+pub fn no_image(ui: &mut Ui) {
+    empty_state(ui, theme::icon::IMAGE_SQUARE, "Kein Bild ausgewählt", "Ein Bild im Filmstreifen oder Raster anklicken");
 }
 
 pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>) {
@@ -231,7 +515,7 @@ pub fn stars(ui: &mut Ui, rating: &mut u8, size: f32) -> bool {
             let filled = i <= *rating;
             let text = egui::RichText::new(if filled { "★" } else { "☆" })
                 .size(size)
-                .color(if filled { Color32::from_rgb(240, 200, 60) } else { Color32::from_gray(110) });
+                .color(if filled { theme::STAR } else { Color32::from_gray(110) });
             if ui.add(egui::Label::new(text).sense(Sense::click())).clicked() {
                 *rating = if *rating == i { 0 } else { i };
                 changed = true;
@@ -250,7 +534,7 @@ pub fn paint_badges(ui: &Ui, rect: Rect, rating: u8, label: Option<[u8; 3]>) {
             egui::Align2::LEFT_BOTTOM,
             "★".repeat(rating as usize),
             egui::FontId::proportional(11.0),
-            Color32::from_rgb(240, 200, 60),
+            theme::STAR,
         );
     }
     if let Some([r, g, b]) = label {

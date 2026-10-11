@@ -400,6 +400,9 @@ Daten aus der Zeit als „Capture Room“ werden übernommen: Ordner `capture-ro
 
 | Taste | Funktion |
 |---|---|
+| Strg+K | Befehlspalette: jede Funktion, jedes Werkzeug und jeden Tool-Abschnitt per Suche finden (auch über das Suchfeld in der Titelleiste) |
+| Strg+1 … Strg+0 | Werkzeug-Tabs in der Reihenfolge der Tab-Leiste |
+| Strg+Mausrad | Vorschaugröße im Raster (auch Regler in der Statusleiste) |
 | ← / → | vorheriges / nächstes Bild |
 | 0–5 | Bewertung |
 | 6 / 7 / 8 / 9 | Farb-Label Rot / Gelb / Grün / Blau |

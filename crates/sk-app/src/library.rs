@@ -556,21 +556,14 @@ impl App {
             refilter |= ui
                 .add(egui::TextEdit::singleline(&mut self.filter.text).hint_text("\u{E30C}  Name, Kamera, Objektiv, Keyword"))
                 .changed();
-            ui.horizontal(|ui| {
-                ui.label("Mindestens");
-                refilter |= widgets::stars(ui, &mut self.filter.min_rating, 16.0);
-            });
-            egui::ComboBox::from_label("Farb-Label")
-                .selected_text(self.filter.color_label.map_or("Alle", |l| l.label()))
-                .show_ui(ui, |ui| {
+            widgets::field(ui, "Mindestens", |ui| refilter |= widgets::stars(ui, &mut self.filter.min_rating, 16.0));
+            widgets::combo_field(ui, "Farb-Label", self.filter.color_label.map_or("Alle", |l| l.label()), |ui| {
                     refilter |= ui.selectable_value(&mut self.filter.color_label, None, "Alle").changed();
                     for l in ColorLabel::ALL {
                         refilter |= ui.selectable_value(&mut self.filter.color_label, Some(l), l.label()).changed();
                     }
                 });
-            egui::ComboBox::from_label("Keyword")
-                .selected_text(self.filter.keyword.clone().unwrap_or_else(|| "Alle".into()))
-                .show_ui(ui, |ui| {
+            widgets::combo_field(ui, "Keyword", self.filter.keyword.clone().unwrap_or_else(|| "Alle".into()), |ui| {
                     refilter |= ui.selectable_value(&mut self.filter.keyword, None, "Alle").changed();
                     for (k, n) in &self.lists.keywords {
                         refilter |= ui.selectable_value(&mut self.filter.keyword, Some(k.clone()), format!("{k} ({n})")).changed();

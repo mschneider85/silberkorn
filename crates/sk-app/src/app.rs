@@ -36,18 +36,29 @@ pub enum Tab {
 }
 
 impl Tab {
+    /// In rail order: organizing, developing, presets and history, output.
     pub const ALL: [Tab; 10] = [
         Tab::Library,
+        Tab::Metadata,
         Tab::Lens,
         Tab::Exposure,
         Tab::Color,
         Tab::Details,
         Tab::Layers,
-        Tab::Metadata,
         Tab::Styles,
         Tab::History,
         Tab::Output,
     ];
+
+    /// Group of the tab in the rail; groups are set apart by a gap.
+    pub fn group(self) -> u8 {
+        match self {
+            Tab::Library | Tab::Metadata => 0,
+            Tab::Lens | Tab::Exposure | Tab::Color | Tab::Details | Tab::Layers => 1,
+            Tab::Styles | Tab::History => 2,
+            Tab::Output => 3,
+        }
+    }
 
     pub fn title(self) -> &'static str {
         match self {
@@ -199,6 +210,9 @@ pub struct ViewTile {
     pub focus: Option<crate::focus::FocusMap>,
 }
 
+/// Smallest and largest thumbnail size in the grid.
+pub const GRID_THUMB: (f32, f32) = (110.0, 420.0);
+
 /// Settings persisted between sessions.
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -231,6 +245,8 @@ struct Settings {
     /// AI on the graphics card (if available).
     ai_gpu: Option<bool>,
     brushes: crate::layers::Brushes,
+    /// Thumbnail size in the grid.
+    grid_thumb: Option<f32>,
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -428,6 +444,10 @@ pub struct App {
 
     pub status: String,
     pub show_filmstrip: bool,
+    /// Thumbnail size (long edge) in the grid.
+    pub grid_thumb: f32,
+    /// Command palette (Ctrl+K).
+    pub palette: crate::palette::Palette,
     /// Minimap of the whole image while zoomed in.
     pub show_navigator: bool,
     pub guides: crate::guides::Guides,
@@ -625,6 +645,8 @@ impl App {
             redo: Vec::new(),
             clipboard: None,
             show_filmstrip: true,
+            grid_thumb: settings.grid_thumb.unwrap_or(190.0).clamp(GRID_THUMB.0, GRID_THUMB.1),
+            palette: Default::default(),
             fullscreen: false,
             fullscreen_hint_until: None,
             restore: None,
@@ -713,6 +735,7 @@ impl App {
             Ok("shortcuts") => app.show_shortcuts = true,
             Ok("about") => app.splash = Some(crate::splash::Splash::about()),
             Ok("gpu") => app.show_gpu_dialog = true,
+            Ok(d) if d.starts_with("palette") => app.palette.show_with(d.trim_start_matches("palette").trim_start_matches(':')),
             _ => {}
         }
         app
@@ -748,6 +771,7 @@ impl App {
             denoise_strength: Some(self.denoise_strength),
             ai_gpu: Some(sk_ai::runtime::gpu_enabled()),
             brushes: self.brushes.clone(),
+            grid_thumb: Some(self.grid_thumb),
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -1732,9 +1756,19 @@ impl App {
     }
 
     pub(crate) fn shortcuts(&mut self, ctx: &egui::Context) {
-        // While a menu is open the keyboard belongs to it, as in native applications.
-        if ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) {
+        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::K)) {
+            self.palette.toggle();
+        }
+        // While a menu or the palette is open the keyboard belongs to it, as in native applications.
+        if self.palette.open || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) {
             return;
+        }
+        // Ctrl+1 … Ctrl+0: the tool tabs in rail order.
+        for (i, tab) in Tab::ALL.into_iter().enumerate() {
+            let key = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9, Key::Num0][i];
+            if ctx.input_mut(|inp| inp.consume_key(Modifiers::COMMAND, key)) {
+                self.tab = tab;
+            }
         }
         let pressed = |k: Key, m: Modifiers| ctx.input_mut(|i| i.consume_key(m, k));
         if pressed(Key::Z, Modifiers::COMMAND | Modifiers::SHIFT) || pressed(Key::Y, Modifiers::COMMAND) {
@@ -1960,7 +1994,8 @@ impl App {
     fn debug_screenshot(&mut self, ctx: &egui::Context) {
         let Some((_, shown_at)) = &mut self.screenshot else { return };
         let now = ctx.input(|i| i.time);
-        if (self.texture.is_some() || self.grid_view) && shown_at.is_none() {
+        let empty = self.entries.is_empty() && self.loading.is_none();
+        if (self.texture.is_some() || self.grid_view || empty) && shown_at.is_none() {
             *shown_at = Some(now);
             // Optional tool states for screenshots.
             if std::env::var_os("SILBERKORN_CROP").is_some() {
@@ -2182,7 +2217,7 @@ impl eframe::App for App {
             .size_range(280.0..=560.0)
             .show(ui, |ui| self.tool_panel(ui));
         let grid = self.grid_view || self.viewer_detached();
-        if !grid && self.show_filmstrip {
+        if !grid && self.show_filmstrip && !self.entries.is_empty() {
             egui::Panel::bottom("filmstrip")
                 .frame(egui::Frame::new().fill(theme::BROWSER).inner_margin(egui::Margin::same(6)))
                 .resizable(true)
@@ -2194,6 +2229,7 @@ impl eframe::App for App {
         self.show_viewer_window(&ctx);
         crate::chrome::resize_edges(ui);
         self.dialogs(&ctx);
+        self.palette_ui(&ctx);
         self.session_dialogs(&ctx);
         self.variant_dialogs(&ctx);
         self.stack_dialogs(&ctx);

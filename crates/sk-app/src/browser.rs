@@ -76,7 +76,8 @@ impl App {
             } else if self.loading.is_some() {
                 "Lade…".into()
             } else if self.entries.is_empty() {
-                "Keine Bilder.\nÜber Datei \u{E06C} Ordner öffnen (Strg+O) einen Ordner mit RAW-Dateien wählen.".into()
+                self.welcome(ui, rect);
+                return;
             } else {
                 String::new()
             };
@@ -644,33 +645,36 @@ impl App {
         let painter = ui.painter_at(rect);
         let is_primary = Some(&entry.path) == primary;
         let bg = if is_primary {
-            Color32::from_rgb(58, 58, 62)
+            Color32::from_rgb(52, 56, 64)
         } else if selected {
-            Color32::from_rgb(48, 48, 52)
+            Color32::from_rgb(46, 47, 52)
         } else if resp.hovered() {
-            Color32::from_rgb(40, 40, 43)
+            Color32::from_rgb(40, 40, 44)
         } else {
-            Color32::from_rgb(32, 32, 34)
+            Color32::from_rgb(33, 33, 36)
         };
-        painter.rect_filled(rect, 4.0, bg);
+        painter.rect_filled(rect, 8.0, bg);
         if is_primary || selected {
-            let stroke = if is_primary { egui::Stroke::new(2.0, theme::ACCENT) } else { egui::Stroke::new(1.0, Color32::from_rgb(110, 110, 116)) };
-            painter.rect_stroke(rect.shrink(1.0), 4.0, stroke, egui::StrokeKind::Inside);
+            let stroke = if is_primary { egui::Stroke::new(2.0, theme::ACCENT) } else { egui::Stroke::new(1.0, Color32::from_rgb(96, 104, 120)) };
+            painter.rect_stroke(rect, 8.0, stroke, egui::StrokeKind::Inside);
         }
-        let img_area = Rect::from_min_max(rect.min + vec2(5.0, 5.0), rect.max - vec2(5.0, 20.0));
+        let img_area = Rect::from_min_max(rect.min + vec2(7.0, 7.0), rect.max - vec2(7.0, 22.0));
         if let Some(t) = self.thumbs.get(&entry.path) {
             let s = t.size_vec2();
             let k = (img_area.width() / s.x).min(img_area.height() / s.y);
             let r = Rect::from_center_size(img_area.center(), s * k);
+            painter.rect_filled(r.translate(vec2(0.0, 2.0)).expand(1.0), 2.0, Color32::from_black_alpha(70));
             painter.image(t.id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+        } else {
+            // Not loaded yet: a quiet placeholder of the usual 3:2 shape.
+            let k = (img_area.width() / 3.0).min(img_area.height() / 2.0);
+            painter.rect_filled(Rect::from_center_size(img_area.center(), vec2(3.0 * k, 2.0 * k)), 2.0, Color32::from_rgb(42, 42, 46));
         }
-        painter.text(
-            pos2(rect.center().x, rect.bottom() - 10.0),
-            egui::Align2::CENTER_CENTER,
-            &entry.name,
-            egui::FontId::proportional(11.0),
-            if is_primary { Color32::WHITE } else { theme::TEXT_DIM },
-        );
+        let name_font = egui::FontId::proportional(11.5);
+        let mut job = egui::text::LayoutJob::simple_singleline(entry.name.clone(), name_font, if is_primary { Color32::WHITE } else { theme::TEXT_DIM });
+        job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 12.0);
+        let name = painter.layout_job(job);
+        painter.galley(pos2(rect.center().x - name.size().x / 2.0, rect.bottom() - 11.0 - name.size().y / 2.0), name, theme::TEXT_DIM);
         widgets::paint_badges(ui, img_area, entry.rating, entry.color_label.rgb());
         let stack_toggle = self.stack_badge(ui, idx, img_area);
         self.culling_badges(ui, idx, img_area);
@@ -760,6 +764,37 @@ impl App {
         resp.on_hover_text(hover).clicked().then(|| s.id.clone())
     }
 
+    /// Start screen when no folder with images is open.
+    fn welcome(&mut self, ui: &mut Ui, rect: Rect) {
+        let inner = Rect::from_center_size(rect.center(), vec2(rect.width().min(440.0), 300.0));
+        let mut ui = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Center)));
+        let ui = &mut ui;
+        ui.label(egui::RichText::new(theme::icon::APERTURE).size(56.0).color(theme::ACCENT));
+        ui.add_space(8.0);
+        ui.label(egui::RichText::new("Willkommen bei Silberkorn").size(22.0).color(Color32::WHITE));
+        ui.add_space(2.0);
+        ui.label(egui::RichText::new("Einen Ordner mit RAW-Dateien öffnen oder eine Session anlegen.").color(theme::TEXT_DIM));
+        ui.add_space(18.0);
+        let big = |text: String, primary: bool| {
+            let b = egui::Button::new(egui::RichText::new(text).size(14.0).color(Color32::WHITE)).min_size(vec2(220.0, 36.0)).corner_radius(8);
+            if primary { b.fill(theme::ACCENT) } else { b }
+        };
+        if ui.add(big(format!("{}  Ordner öffnen …", theme::icon::FOLDER_OPEN), true)).on_hover_text("Strg+O").clicked() {
+            self.open_folder_dialog();
+        }
+        ui.add_space(4.0);
+        if ui.add(big(format!("{}  Neue Session …", theme::icon::FOLDER_STAR), false)).on_hover_text("Strg+N").clicked() {
+            let folder = self.folder.clone();
+            self.session_ui.start_new(&folder);
+        }
+        ui.add_space(4.0);
+        if ui.add(big(format!("{}  Session öffnen …", theme::icon::FOLDER_OPEN), false)).on_hover_text("Strg+Umschalt+O").clicked() {
+            self.open_session_dialog();
+        }
+        ui.add_space(18.0);
+        ui.label(egui::RichText::new("Tipp: Strg+K findet jede Funktion, F1 zeigt alle Tastenkürzel.").small().color(theme::TEXT_FAINT));
+    }
+
     pub fn filmstrip(&mut self, ui: &mut Ui) {
         let visible = self.visible.clone();
         let mut clicked: Option<(PathBuf, Modifiers)> = None;
@@ -795,13 +830,29 @@ impl App {
         let primary = self.primary_path();
         let mut clicked: Option<(PathBuf, Modifiers)> = None;
         let mut open: Option<PathBuf> = None;
-        let cell = vec2(200.0, 180.0);
-        let cols = ((rect.width() - 16.0) / (cell.x + 6.0)).floor().max(1.0) as usize;
+        // Ctrl + mouse wheel changes the thumbnail size.
+        if ui.rect_contains_pointer(rect) {
+            let zoom = ui.input(|i| i.zoom_delta());
+            if zoom != 1.0 {
+                self.grid_thumb = (self.grid_thumb * zoom).clamp(crate::app::GRID_THUMB.0, crate::app::GRID_THUMB.1);
+            }
+        }
+        let gap = 8.0;
+        let cols = ((rect.width() - 24.0 + gap) / (self.grid_thumb + gap)).floor().max(1.0) as usize;
+        // Stretch the cells so the rows fill the width.
+        let w = ((rect.width() - 24.0 + gap) / cols as f32 - gap).max(60.0);
+        let cell = vec2(w, (w * 0.78 + 24.0).round());
+        if visible.is_empty() {
+            let r = ui.available_rect_before_wrap();
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(0.0, r.height() * 0.25))));
+            widgets::empty_state(&mut child, theme::icon::IMAGES, "Keine Bilder in dieser Ansicht", "Filter lockern oder in der Bibliothek einen anderen Ordner wählen");
+        }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            ui.add_space(8.0);
+            ui.add_space(12.0);
             for row in visible.chunks(cols) {
                 ui.horizontal(|ui| {
-                    ui.add_space(8.0);
+                    ui.spacing_mut().item_spacing.x = gap;
+                    ui.add_space(12.0);
                     for &i in row {
                         let (m, double) = self.thumb_cell(ui, i, cell, primary.as_ref());
                         if let Some(m) = m {
@@ -812,9 +863,6 @@ impl App {
                         }
                     }
                 });
-            }
-            if visible.is_empty() {
-                ui.centered_and_justified(|ui| ui.label("Keine Bilder in dieser Ansicht."));
             }
         });
         self.scroll_to_primary = false;

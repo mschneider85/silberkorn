@@ -87,6 +87,12 @@ impl App {
         g.aspect.value(frame.x / frame.y, g.aspect_portrait)
     }
 
+    /// The straighten tool (draw a line along the horizon) on or off.
+    pub fn toggle_straighten(&mut self) {
+        self.straighten_tool = if self.straighten_tool.is_some() { None } else { Some(Default::default()) };
+        self.finish_crop_tool();
+    }
+
     pub fn start_crop_tool(&mut self) {
         if self.crop_tool.is_none() {
             self.crop_tool = Some(CropTool::default());

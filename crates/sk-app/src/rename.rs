@@ -117,7 +117,7 @@ impl App {
             ui.label(
                 RichText::new("Varianten und Einstellungen wandern mit. Ist ein Name schon vergeben, wird „-2“ usw. angehängt.")
                     .small()
-                    .color(Color32::from_gray(140)),
+                    .color(crate::theme::TEXT_FAINT),
             );
             ui.add_space(12.0);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

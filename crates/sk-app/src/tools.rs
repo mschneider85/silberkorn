@@ -29,11 +29,15 @@ impl App {
     }
 
     fn exposure_tab(&mut self, ui: &mut Ui) {
+        if self.current.is_none() {
+            widgets::no_image(ui);
+            return;
+        }
         widgets::histogram(ui, self.histogram.as_ref());
         ui.add_space(4.0);
         self.auto_section(ui);
         let Some(cur) = self.current.as_mut() else {
-            ui.label("Kein Bild ausgewählt.");
+            crate::widgets::no_image(ui);
             return;
         };
         let adj = &mut cur.adjustments;
@@ -120,7 +124,7 @@ impl App {
     fn color_tab(&mut self, ui: &mut Ui) {
         let picking = &mut self.picking_wb;
         let Some(cur) = self.current.as_mut() else {
-            ui.label("Kein Bild ausgewählt.");
+            crate::widgets::no_image(ui);
             return;
         };
         let as_shot = cur.as_shot_temp_tint;
@@ -128,9 +132,7 @@ impl App {
         let mut changed = false;
 
         section(ui, "Basismerkmale", None, |ui| {
-            egui::ComboBox::from_label("Kurve")
-                .selected_text(adj.base_curve.label())
-                .show_ui(ui, |ui| {
+            widgets::combo_field(ui, "Kurve", adj.base_curve.label(), |ui| {
                     for c in BaseCurve::ALL {
                         changed |= ui.selectable_value(&mut adj.base_curve, c, c.label()).changed();
                     }
@@ -153,8 +155,8 @@ impl App {
             });
             // In as-shot mode the sliders show the estimated values; moving one switches to custom.
             let (mut kelvin, mut tint) = if wb.mode == WbMode::AsShot { as_shot } else { (wb.kelvin, wb.tint) };
-            let mut wb_changed = slider_row(ui, "Kelvin", &mut kelvin, 2000.0..=15000.0, as_shot.0, 0);
-            wb_changed |= slider_row(ui, "Tint", &mut tint, -150.0..=150.0, as_shot.1, 1);
+            let mut wb_changed = widgets::slider_row_with(ui, "Kelvin", &mut kelvin, 2000.0..=15000.0, as_shot.0, 0, widgets::SliderOpts { suffix: " K", rail: Some(widgets::RAIL_KELVIN) });
+            wb_changed |= widgets::slider_row_with(ui, "Tint", &mut tint, -150.0..=150.0, as_shot.1, 1, widgets::SliderOpts { rail: Some(widgets::RAIL_TINT), ..Default::default() });
             if wb_changed {
                 *wb = WhiteBalance { mode: WbMode::Custom, kelvin, tint };
                 changed = true;
@@ -172,7 +174,8 @@ impl App {
 
         let mut reset_color = false;
         section(ui, "Farbe", Some(&mut || reset_color = true), |ui| {
-            changed |= slider_row(ui, "Sättigung", &mut adj.saturation, -100.0..=100.0, 0.0, 0);
+            let rail = widgets::SliderOpts { rail: Some(widgets::RAIL_SATURATION), ..Default::default() };
+            changed |= widgets::slider_row_with(ui, "Sättigung", &mut adj.saturation, -100.0..=100.0, 0.0, 0, rail);
             changed |= slider_row(ui, "Dynamik", &mut adj.vibrance, -100.0..=100.0, 0.0, 0);
         });
         if reset_color {
@@ -189,7 +192,7 @@ impl App {
 
     fn metadata_tab(&mut self, ui: &mut Ui) {
         let Some(cur) = self.current.as_ref() else {
-            ui.label("Kein Bild ausgewählt.");
+            crate::widgets::no_image(ui);
             return;
         };
         let n_sel = self.selected_paths().len();
@@ -219,7 +222,7 @@ impl App {
                     }
                 }
                 if keywords.is_empty() {
-                    ui.label(RichText::new("Keine Keywords").color(Color32::from_gray(140)));
+                    ui.label(RichText::new("Keine Keywords").color(crate::theme::TEXT_FAINT));
                 }
             });
             let resp = ui.add(egui::TextEdit::singleline(&mut self.keyword_input).hint_text("Keyword hinzufügen (Enter)"));
@@ -258,8 +261,9 @@ impl App {
         section(ui, "Aufnahme", None, |ui| {
             egui::Grid::new("meta").num_columns(2).striped(true).show(ui, |ui| {
                 let mut row = |k: &str, v: Option<String>| {
-                    ui.label(RichText::new(k).color(Color32::from_gray(150)));
-                    ui.label(v.unwrap_or_else(|| "–".into()));
+                    ui.label(RichText::new(k).color(crate::theme::TEXT_DIM));
+                    let v = v.unwrap_or_else(|| "–".into());
+                    ui.add(egui::Label::new(&v).truncate()).on_hover_text(&v);
                     ui.end_row();
                 };
                 row("Datei", Some(sk_core::variant::display_name(&cur.meta.path)));
@@ -286,7 +290,7 @@ impl App {
                     if ui.selectable_label(self.selected_recipe == i, &r.name).clicked() {
                         self.selected_recipe = i;
                     }
-                    ui.label(RichText::new(format!("{} · {}", r.format.label(), r.output_space.label())).small().color(Color32::from_gray(140)));
+                    ui.label(RichText::new(format!("{} · {}", r.format.label(), r.output_space.label())).small().color(crate::theme::TEXT_FAINT));
                 });
             }
             ui.horizontal(|ui| {
@@ -311,22 +315,22 @@ impl App {
         self.selected_recipe = self.selected_recipe.min(self.recipes.len().saturating_sub(1));
         let Some(r) = self.recipes.get_mut(self.selected_recipe) else { return };
         section(ui, "Rezept bearbeiten", None, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Name");
-                ui.text_edit_singleline(&mut r.name);
-            });
-            egui::ComboBox::from_label("Format").selected_text(r.format.label()).show_ui(ui, |ui| {
+            widgets::field(ui, "Name", |ui| ui.text_edit_singleline(&mut r.name));
+            widgets::combo_field(ui, "Format", r.format.label(), |ui| {
                 for f in ExportFormat::ALL {
                     ui.selectable_value(&mut r.format, f, f.label());
                 }
             });
-            egui::ComboBox::from_label("Farbraum").selected_text(r.output_space.label()).show_ui(ui, |ui| {
+            widgets::combo_field(ui, "Farbraum", r.output_space.label(), |ui| {
                 for sp in sk_core::color::OutputSpace::ALL {
                     ui.selectable_value(&mut r.output_space, sp, sp.label());
                 }
             });
             if r.format == ExportFormat::Jpeg {
-                ui.add(egui::Slider::new(&mut r.quality, 1..=100).text("Qualität"));
+                let mut q = r.quality as f32;
+                if slider_row(ui, "Qualität", &mut q, 1.0..=100.0, 90.0, 0) {
+                    r.quality = q.round() as _;
+                }
             }
             let mut resize = r.long_edge.is_some();
             ui.checkbox(&mut resize, "Skalieren (lange Kante)");
@@ -337,18 +341,14 @@ impl App {
             } else {
                 r.long_edge = None;
             }
-            ui.horizontal(|ui| {
-                ui.label("Ordner");
+            widgets::field(ui, "Ordner", |ui| {
                 let mut dir = r.output_dir.to_string_lossy().to_string();
                 if ui.text_edit_singleline(&mut dir).changed() {
                     r.output_dir = dir.into();
                 }
             });
-            ui.label(RichText::new("Relativ zum Bildordner, z. B. „Output“").small().color(Color32::from_gray(140)));
-            ui.horizontal(|ui| {
-                ui.label("Dateiname");
-                ui.add(egui::TextEdit::singleline(&mut r.name_template).hint_text("{Name}"));
-            });
+            ui.label(RichText::new("Relativ zum Bildordner, z. B. „Output“").small().color(crate::theme::TEXT_FAINT));
+            widgets::field(ui, "Dateiname", |ui| ui.add(egui::TextEdit::singleline(&mut r.name_template).hint_text("{Name}")));
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 for (token, help) in sk_core::naming::TOKENS {
@@ -357,10 +357,7 @@ impl App {
                     }
                 }
             });
-            ui.horizontal(|ui| {
-                ui.label("Suffix");
-                ui.text_edit_singleline(&mut r.suffix);
-            });
+            widgets::field(ui, "Suffix", |ui| ui.text_edit_singleline(&mut r.suffix));
         });
         section(ui, "Wasserzeichen", None, |ui| {
             let wm = &mut r.watermark;
@@ -390,43 +387,41 @@ impl App {
                         let name = wm.image.file_name().map_or("kein Logo".into(), |n| n.to_string_lossy().to_string());
                         ui.label(RichText::new(name).small().color(Color32::from_gray(160)));
                     });
-                    ui.label(RichText::new("PNG mit Transparenz empfohlen").small().color(Color32::from_gray(140)));
+                    ui.label(RichText::new("PNG mit Transparenz empfohlen").small().color(crate::theme::TEXT_FAINT));
                 }
             }
-            egui::ComboBox::from_label("Position").selected_text(wm.anchor.label()).show_ui(ui, |ui| {
+            widgets::combo_field(ui, "Position", wm.anchor.label(), |ui| {
                 for a in Anchor::ALL {
                     ui.selectable_value(&mut wm.anchor, a, a.label());
                 }
             });
-            ui.add(egui::Slider::new(&mut wm.size, 1.0..=30.0).text("Größe").suffix(" %").fixed_decimals(1));
-            ui.add(egui::Slider::new(&mut wm.margin, 0.0..=20.0).text("Abstand").suffix(" %").fixed_decimals(1));
+            let pct = widgets::SliderOpts { suffix: " %", ..Default::default() };
+            let d = sk_core::watermark::Watermark::default();
+            widgets::slider_row_with(ui, "Größe", &mut wm.size, 1.0..=30.0, d.size, 1, pct);
+            widgets::slider_row_with(ui, "Abstand", &mut wm.margin, 0.0..=20.0, d.margin, 1, pct);
             let mut opacity = wm.opacity * 100.0;
-            if ui.add(egui::Slider::new(&mut opacity, 5.0..=100.0).text("Deckkraft").suffix(" %").fixed_decimals(0)).changed() {
+            if widgets::slider_row_with(ui, "Deckkraft", &mut opacity, 5.0..=100.0, d.opacity * 100.0, 0, pct) {
                 wm.opacity = opacity / 100.0;
             }
-            ui.label(RichText::new("Größe und Abstand in % der kurzen Bildkante. Vorschau mit P (Proof).").small().color(Color32::from_gray(140)));
+            ui.label(RichText::new("Größe und Abstand in % der kurzen Bildkante. Vorschau mit P (Proof).").small().color(crate::theme::TEXT_FAINT));
         });
         section(ui, "Metadaten", None, |ui| {
             ui.checkbox(&mut r.capture_metadata, "Aufnahmedaten übernehmen").on_hover_text("Kamera, Objektiv, Belichtung und Aufnahmedatum");
-            ui.horizontal(|ui| {
-                ui.label("Fotograf");
-                ui.text_edit_singleline(&mut r.artist);
-            });
-            ui.horizontal(|ui| {
-                ui.label("Copyright");
-                ui.text_edit_singleline(&mut r.copyright);
-            });
+            widgets::field(ui, "Fotograf", |ui| ui.text_edit_singleline(&mut r.artist));
+            widgets::field(ui, "Copyright", |ui| ui.text_edit_singleline(&mut r.copyright));
             let note = if r.format == ExportFormat::Jpeg || r.format == ExportFormat::Png {
                 "GPS-Daten werden nie übernommen."
             } else {
                 "TIFF-Dateien erhalten keine Metadaten."
             };
-            ui.label(RichText::new(note).small().color(Color32::from_gray(140)));
+            ui.label(RichText::new(note).small().color(crate::theme::TEXT_FAINT));
         });
         section(ui, "Verarbeiten", None, |ui| {
             let n = self.selected_paths().len();
             let k = self.recipes.iter().filter(|r| r.enabled).count();
-            if ui.add_enabled(n > 0 && k > 0, egui::Button::new(format!("Verarbeiten: {n} Bild(er) × {k} Rezept(e)"))).clicked() {
+            let text = RichText::new(format!("{}  {} × {} verarbeiten", crate::theme::icon::EXPORT, widgets::image_count(n), if k == 1 { "1 Rezept".to_string() } else { format!("{k} Rezepte") })).color(Color32::WHITE);
+            let button = egui::Button::new(text).fill(crate::theme::ACCENT).corner_radius(6).min_size(egui::vec2(ui.available_width(), 30.0));
+            if ui.add_enabled(n > 0 && k > 0, button).clicked() {
                 self.export_selection();
             }
             if let Some((done, total)) = self.export_progress {

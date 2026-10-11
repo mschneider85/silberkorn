@@ -5,7 +5,8 @@ use sk_core::params::{AspectRatio, ColorWheel, CropRect, Detail, HUE_BANDS, HslB
 use egui::{Color32, RichText, Ui};
 
 use crate::app::App;
-use crate::widgets::{section, slider_row};
+use crate::theme::icon;
+use crate::widgets::{self, section, slider_row};
 
 /// Approximate display color of a hue band (for swatches).
 fn band_color(hue: f32) -> Color32 {
@@ -22,6 +23,14 @@ fn skin_color(st: &SkinTone) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
+/// The automatic adjustments of the exposure tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Auto {
+    Exposure,
+    Levels,
+    WhiteBalance,
+}
+
 /// Hue slider with a colored swatch; returns true when changed.
 fn wheel_ui(ui: &mut Ui, label: &str, wheel: &mut ColorWheel, with_lightness: bool) -> bool {
     let mut changed = false;
@@ -31,7 +40,7 @@ fn wheel_ui(ui: &mut Ui, label: &str, wheel: &mut ColorWheel, with_lightness: bo
         ui.painter().circle_filled(rect.center(), 6.0, Color32::from(c));
         ui.label(RichText::new(label).strong());
     });
-    changed |= slider_row(ui, "Farbton", &mut wheel.hue, 0.0..=360.0, 0.0, 0);
+    changed |= crate::widgets::slider_row_with(ui, "Farbton", &mut wheel.hue, 0.0..=360.0, 0.0, 0, crate::widgets::SliderOpts { suffix: "°", rail: Some(crate::widgets::RAIL_HUE) });
     changed |= slider_row(ui, "Stärke", &mut wheel.amount, 0.0..=100.0, 0.0, 0);
     if with_lightness {
         changed |= slider_row(ui, "Helligkeit", &mut wheel.lightness, -100.0..=100.0, 0.0, 0);
@@ -42,7 +51,7 @@ fn wheel_ui(ui: &mut Ui, label: &str, wheel: &mut ColorWheel, with_lightness: bo
 impl App {
     pub fn lens_tab(&mut self, ui: &mut Ui) {
         if self.current.is_none() {
-            ui.label("Kein Bild ausgewählt.");
+            crate::widgets::no_image(ui);
             return;
         }
         let mut start_crop = false;
@@ -69,7 +78,7 @@ impl App {
             });
             let g = &mut adj.geometry;
             ui.horizontal(|ui| {
-                egui::ComboBox::from_label("Seitenverhältnis").selected_text(g.aspect.label()).show_ui(ui, |ui| {
+                widgets::combo_field(ui, "Seitenverhältnis", g.aspect.label(), |ui| {
                     for a in AspectRatio::PRESETS {
                         if ui.selectable_value(&mut g.aspect, a, a.label()).changed() {
                             apply_aspect = true;
@@ -165,7 +174,7 @@ impl App {
                 }
             });
             if let Some(f) = &focal {
-                ui.label(RichText::new(format!("Brennweite {f}")).small().color(Color32::from_gray(140)));
+                ui.label(RichText::new(format!("Brennweite {f}")).small().color(crate::theme::TEXT_FAINT));
             }
             if db_missing {
                 ui.horizontal(|ui| {
@@ -207,8 +216,7 @@ impl App {
             self.auto_upright(mode);
         }
         if toggle_straighten {
-            self.straighten_tool = if straighten_active { None } else { Some(Default::default()) };
-            self.finish_crop_tool();
+            self.toggle_straighten();
         }
         if download {
             self.lens_db_downloading = true;
@@ -226,7 +234,7 @@ impl App {
 
     pub fn details_tab(&mut self, ui: &mut Ui) {
         let Some(cur) = self.current.as_mut() else {
-            ui.label("Kein Bild ausgewählt.");
+            crate::widgets::no_image(ui);
             return;
         };
         let d = &mut cur.adjustments.detail;
@@ -238,7 +246,7 @@ impl App {
             changed |= slider_row(ui, "Stärke", &mut d.sharpen_amount, 0.0..=500.0, defaults.sharpen_amount, 0);
             changed |= slider_row(ui, "Radius", &mut d.sharpen_radius, 0.2..=3.0, defaults.sharpen_radius, 1);
             changed |= slider_row(ui, "Schwelle", &mut d.sharpen_threshold, 0.0..=20.0, defaults.sharpen_threshold, 1);
-            ui.label(RichText::new("Wirkung bei 100 % prüfen (Z)").small().color(Color32::from_gray(140)));
+            ui.label(RichText::new("Wirkung bei 100 % prüfen (Z)").small().color(crate::theme::TEXT_FAINT));
         });
         section(ui, "Rauschreduzierung", Some(&mut || r_nr = true), |ui| {
             changed |= slider_row(ui, "Luminanz", &mut d.nr_luma, 0.0..=100.0, defaults.nr_luma, 0);
@@ -383,30 +391,34 @@ impl App {
     pub fn auto_section(&mut self, ui: &mut Ui) {
         let mut action = None;
         ui.horizontal(|ui| {
-            if ui.button("Auto Belichtung").clicked() {
-                action = Some(0);
-            }
-            if ui.button("Auto Levels").clicked() {
-                action = Some(1);
-            }
-            if ui.button("Auto WB").clicked() {
-                action = Some(2);
-            }
-        });
-        let Some(cur) = self.current.as_mut() else { return };
-        match action {
-            Some(0) => {
-                cur.adjustments.exposure = auto::auto_exposure(&cur.meta, &cur.adjustments, &cur.preview);
-            }
-            Some(1) => {
-                if let Some(h) = &self.histogram {
-                    cur.adjustments.levels = auto::auto_levels(h);
+            for (kind, text, hover) in [
+                (Auto::Exposure, "Auto Belichtung", "Belichtung so setzen, dass die Mitteltöne stimmen"),
+                (Auto::Levels, "Auto Levels", "Schwarz- und Weißpunkt aus dem Histogramm"),
+                (Auto::WhiteBalance, "Auto WB", "Weißabgleich aus dem Bildinhalt schätzen"),
+            ] {
+                if ui.add_enabled(self.current.is_some(), egui::Button::new(format!("{}  {text}", icon::MAGIC_WAND))).on_hover_text(hover).clicked() {
+                    action = Some(kind);
                 }
             }
-            Some(2) => {
+        });
+        if let Some(kind) = action {
+            self.run_auto(kind);
+        }
+    }
+
+    pub fn run_auto(&mut self, kind: Auto) {
+        let Some(cur) = self.current.as_mut() else { return };
+        match kind {
+            Auto::Exposure => {
+                cur.adjustments.exposure = auto::auto_exposure(&cur.meta, &cur.adjustments, &cur.preview);
+            }
+            Auto::Levels => {
+                let Some(h) = &self.histogram else { return };
+                cur.adjustments.levels = auto::auto_levels(h);
+            }
+            Auto::WhiteBalance => {
                 cur.adjustments.white_balance = auto::auto_white_balance(&cur.meta, &cur.preview);
             }
-            _ => return,
         }
         self.request_render();
     }

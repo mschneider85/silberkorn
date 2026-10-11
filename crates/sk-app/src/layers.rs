@@ -70,6 +70,22 @@ impl LocalTool {
         }
     }
 
+    /// Icon, short name and key for the tool tiles.
+    pub fn tile(self) -> (&'static str, &'static str, &'static str) {
+        use crate::theme::icon;
+        match self {
+            LocalTool::Brush => (icon::PAINT_BRUSH, "Pinsel", "B"),
+            LocalTool::Eraser => (icon::ERASER, "Radierer", "N"),
+            LocalTool::Linear => (icon::GRADIENT, "Linear", "L"),
+            LocalTool::Radial => (icon::CIRCLE_DASHED, "Radial", "R"),
+            LocalTool::Heal => (icon::BANDAIDS, "Reparieren", "H"),
+            LocalTool::Clone => (icon::STAMP, "Klonen", "S"),
+            LocalTool::Magic => (icon::MAGIC_WAND, "Magic Brush", "J"),
+            LocalTool::ColorPick => (icon::EYEDROPPER, "Farbe", ""),
+            LocalTool::Remove => (icon::SPARKLE, "Entfernen", "X"),
+        }
+    }
+
     pub fn is_mask_tool(self) -> bool {
         matches!(self, LocalTool::Brush | LocalTool::Eraser | LocalTool::Linear | LocalTool::Radial | LocalTool::Magic)
     }
@@ -153,7 +169,7 @@ pub fn brush_controls(ui: &mut Ui, b: &mut BrushSettings, tool: Option<LocalTool
         ui.checkbox(&mut b.auto_mask, "Automatisch maskieren")
             .on_hover_text("Wirkt nur dort, wo das Bild der Stelle unter der Pinselmitte ähnelt (Kanten werden respektiert)");
     }
-    ui.label(RichText::new("[ und ] ändern die Größe · Doppelklick auf einen Regler: Standard").small().color(Color32::from_gray(140)));
+    ui.label(RichText::new("[ und ] ändern die Größe · Doppelklick auf einen Regler: Standard").small().color(crate::theme::TEXT_FAINT));
     *b != before
 }
 
@@ -617,26 +633,38 @@ impl App {
 
     pub fn layers_tab(&mut self, ui: &mut Ui) {
         if self.current.is_none() {
-            ui.label("Kein Bild ausgewählt.");
+            crate::widgets::no_image(ui);
             return;
         }
         let mut tool_click = None;
         let mut brushes_changed = false;
         section(ui, "Werkzeuge", None, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for t in [LocalTool::Brush, LocalTool::Eraser, LocalTool::Linear, LocalTool::Radial, LocalTool::Heal, LocalTool::Clone] {
-                    if ui.selectable_label(self.local_tool == Some(t), t.label()).clicked() {
-                        tool_click = Some(t);
+            let tools = [
+                [LocalTool::Brush, LocalTool::Eraser, LocalTool::Linear, LocalTool::Radial],
+                [LocalTool::Magic, LocalTool::Heal, LocalTool::Clone, LocalTool::Remove],
+            ];
+            let gap = 4.0;
+            let w = ((ui.available_width() - 3.0 * gap) / 4.0).floor();
+            for row in tools {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for t in row {
+                        let (ic, name, key) = t.tile();
+                        let hover = if key.is_empty() { name.to_string() } else { format!("{name} ({key})") };
+                        if crate::widgets::tool_tile(ui, ic, name, key, self.local_tool == Some(t), w).on_hover_text(hover).clicked() {
+                            tool_click = Some(t);
+                        }
                     }
-                }
-            });
+                });
+            }
+            ui.add_space(4.0);
             match self.local_tool {
                 Some(t @ (LocalTool::Brush | LocalTool::Eraser)) => {
                     brushes_changed |= brush_controls(ui, self.brushes.of(Some(t)), Some(t), true);
                 }
                 Some(t @ (LocalTool::Heal | LocalTool::Clone)) => {
                     brushes_changed |= brush_controls(ui, self.brushes.of(Some(t)), Some(t), false);
-                    ui.label(RichText::new("Klicken: Punkt setzen · Ziehen: verschieben · Entf: löschen").small().color(Color32::from_gray(140)));
+                    ui.label(RichText::new("Klicken: Punkt setzen · Ziehen: verschieben · Entf: löschen").small().color(crate::theme::TEXT_FAINT));
                 }
                 _ => {}
             }
@@ -650,17 +678,16 @@ impl App {
         self.remove_section(ui);
 
         let mut style = None;
-        egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), ui.make_persistent_id("style_brushes"), false)
-            .show_header(ui, |ui| ui.label(RichText::new("Style Brushes").strong()))
-            .body(|ui| {
-                ui.horizontal_wrapped(|ui| {
-                    for (name, adj) in STYLE_BRUSHES {
-                        if ui.button(*name).clicked() {
-                            style = Some((*name, *adj));
-                        }
+        crate::widgets::section_with(ui, "Style Brushes", false, None, |ui| {
+            crate::widgets::hint(ui, "Neue Ebene mit fertigen Einstellungen, dann malen");
+            ui.horizontal_wrapped(|ui| {
+                for (name, adj) in STYLE_BRUSHES {
+                    if ui.button(*name).clicked() {
+                        style = Some((*name, *adj));
                     }
-                });
+                }
             });
+        });
         if let Some((name, adj)) = style {
             self.add_style_brush(name, adj);
         }
@@ -700,10 +727,7 @@ impl App {
             let layer = &mut layers[li];
             let show_mask = &mut self.show_mask;
             section(ui, "Ebene", None, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Name");
-                    ui.text_edit_singleline(&mut layer.name);
-                });
+                crate::widgets::field(ui, "Name", |ui| ui.text_edit_singleline(&mut layer.name));
                 changed |= slider_row(ui, "Deckkraft", &mut layer.opacity, 0.0..=100.0, 100.0, 0);
                 ui.horizontal_wrapped(|ui| {
                     if ui.button("Füllen").clicked() {
@@ -732,8 +756,8 @@ impl App {
                 changed |= slider_row(ui, "Tiefen", &mut a.shadows, -100.0..=100.0, 0.0, 0);
                 changed |= slider_row(ui, "Klarheit", &mut a.clarity, -100.0..=100.0, 0.0, 0);
                 changed |= slider_row(ui, "Struktur", &mut a.structure, -100.0..=100.0, 0.0, 0);
-                changed |= slider_row(ui, "Temperatur", &mut a.temperature, -100.0..=100.0, 0.0, 0);
-                changed |= slider_row(ui, "Tint", &mut a.tint, -100.0..=100.0, 0.0, 0);
+                changed |= crate::widgets::slider_row_with(ui, "Temperatur", &mut a.temperature, -100.0..=100.0, 0.0, 0, crate::widgets::SliderOpts { rail: Some(crate::widgets::RAIL_KELVIN), ..Default::default() });
+                changed |= crate::widgets::slider_row_with(ui, "Tint", &mut a.tint, -100.0..=100.0, 0.0, 0, crate::widgets::SliderOpts { rail: Some(crate::widgets::RAIL_TINT), ..Default::default() });
                 changed |= slider_row(ui, "Dunst", &mut a.dehaze, -100.0..=100.0, 0.0, 0);
             });
             if reset {

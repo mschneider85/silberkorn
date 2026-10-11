@@ -88,7 +88,7 @@ impl App {
             .collect()
     }
 
-    fn selected_stack_ids(&self) -> HashSet<String> {
+    pub(crate) fn selected_stack_ids(&self) -> HashSet<String> {
         let selected: HashSet<PathBuf> = self.selected_paths().into_iter().collect();
         self.entries.iter().filter(|e| selected.contains(&e.path)).filter_map(|e| e.stack.as_ref().map(|s| s.id.clone())).collect()
     }
