@@ -149,3 +149,30 @@ fn edit_copy_apply_style_and_export() {
         assert_eq!(img.width().max(img.height()), 800);
     }
 }
+
+#[test]
+fn crop_full_resolution_and_tiles() {
+    let Some(mut f) = Fixture::new("tiles") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    let full_w = f.app.texture.as_ref().unwrap().size()[0];
+
+    // Cropping to half the width halves the rendered preview.
+    f.app.edit(|adj| adj.geometry.crop = cr_core::params::CropRect { x: 0.25, y: 0.0, w: 0.5, h: 1.0 });
+    let v = f.app.edit_version;
+    f.pump("Zuschnitt gerendert", |a| a.texture.as_ref().is_some_and(|t| t.size()[0] < full_w * 6 / 10) && a.edit_version == v);
+    let w = f.app.texture.as_ref().unwrap().size()[0];
+    assert!((w as i32 - full_w as i32 / 2).abs() <= 2, "{w} vs {full_w}");
+
+    // The full-resolution image arrives in the background; a zoomed view requests a tile.
+    f.pump("Vollauflösung", |a| a.current.as_ref().is_some_and(|c| c.full.is_some()));
+    let tex = f.app.texture.as_ref().unwrap().size_vec2();
+    let viewport = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+    let scale = 3.0;
+    let img_rect = egui::Rect::from_center_size(viewport.center(), tex * scale);
+    f.app.update_tile(viewport, img_rect, scale);
+    f.pump("Kachel", |a| a.tile.as_ref().is_some_and(|t| t.version == a.edit_version));
+    let tile = f.app.tile.as_ref().unwrap();
+    let full = f.app.current.as_ref().unwrap().full.as_ref().unwrap();
+    assert!(tile.full_size.0 > 2000 && tile.full_size.0 < full.width, "{:?}", tile.full_size);
+    assert!(tile.region.w > 300 && tile.region.w < tile.full_size.0);
+}

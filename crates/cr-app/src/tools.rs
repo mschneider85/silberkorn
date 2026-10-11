@@ -18,6 +18,8 @@ impl App {
         ui.separator();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.tab {
             Tab::Library => self.library_tab(ui),
+            Tab::Lens => self.lens_tab(ui),
+            Tab::Details => self.details_tab(ui),
             Tab::Styles => self.styles_tab(ui),
             Tab::Exposure => self.exposure_tab(ui),
             Tab::Color => self.color_tab(ui),
@@ -29,6 +31,7 @@ impl App {
     fn exposure_tab(&mut self, ui: &mut Ui) {
         widgets::histogram(ui, self.histogram.as_ref());
         ui.add_space(4.0);
+        self.auto_section(ui);
         let Some(cur) = self.current.as_mut() else {
             ui.label("Kein Bild ausgewählt.");
             return;
@@ -181,6 +184,7 @@ impl App {
         if changed {
             self.request_render();
         }
+        self.color_advanced(ui);
     }
 
     fn metadata_tab(&mut self, ui: &mut Ui) {
@@ -278,6 +282,11 @@ impl App {
             egui::ComboBox::from_label("Format").selected_text(r.format.label()).show_ui(ui, |ui| {
                 for f in ExportFormat::ALL {
                     ui.selectable_value(&mut r.format, f, f.label());
+                }
+            });
+            egui::ComboBox::from_label("Farbraum").selected_text(r.output_space.label()).show_ui(ui, |ui| {
+                for sp in cr_core::color::OutputSpace::ALL {
+                    ui.selectable_value(&mut r.output_space, sp, sp.label());
                 }
             });
             if r.format == ExportFormat::Jpeg {

@@ -9,6 +9,112 @@ pub const SRGB_TO_XYZ: Mat3 = [
     [0.019_333_9, 0.119_192, 0.950_304_1],
 ];
 
+/// Linear Rec.2020 (D65) to CIE XYZ. Rec.2020 is the internal working space.
+pub const REC2020_TO_XYZ: Mat3 = [
+    [0.636_958, 0.144_617, 0.168_881],
+    [0.262_700, 0.677_998, 0.059_302],
+    [0.000_000, 0.028_073, 1.060_985],
+];
+
+pub const ADOBE_RGB_TO_XYZ: Mat3 = [
+    [0.576_669, 0.185_558, 0.188_229],
+    [0.297_345, 0.627_364, 0.075_291],
+    [0.027_031, 0.070_689, 0.991_338],
+];
+
+pub const DISPLAY_P3_TO_XYZ: Mat3 = [
+    [0.486_571, 0.265_668, 0.198_217],
+    [0.228_975, 0.691_739, 0.079_287],
+    [0.000_000, 0.045_113, 1.043_944],
+];
+
+/// ProPhoto RGB is defined relative to D50.
+pub const PROPHOTO_TO_XYZ_D50: Mat3 = [
+    [0.797_675, 0.135_192, 0.031_353],
+    [0.288_040, 0.711_874, 0.000_086],
+    [0.000_000, 0.000_000, 0.825_210],
+];
+
+/// Bradford chromatic adaptation D65 -> D50.
+pub const BRADFORD_D65_TO_D50: Mat3 = [
+    [1.047_811_2, 0.022_886_6, -0.050_127_0],
+    [0.029_542_4, 0.990_484_4, -0.017_049_1],
+    [-0.009_234_5, 0.015_043_6, 0.752_131_6],
+];
+
+/// Transfer function of an RGB space.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Trc {
+    Srgb,
+    Gamma(f32),
+}
+
+impl Trc {
+    #[inline]
+    pub fn encode(self, v: f32) -> f32 {
+        match self {
+            Trc::Srgb => srgb_encode(v),
+            Trc::Gamma(g) => v.max(0.0).powf(1.0 / g),
+        }
+    }
+
+    #[inline]
+    pub fn decode(self, v: f32) -> f32 {
+        match self {
+            Trc::Srgb => srgb_decode(v),
+            Trc::Gamma(g) => v.max(0.0).powf(g),
+        }
+    }
+}
+
+/// Output color spaces for export and display.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum OutputSpace {
+    #[default]
+    Srgb,
+    AdobeRgb,
+    DisplayP3,
+    ProPhoto,
+}
+
+impl OutputSpace {
+    pub const ALL: [OutputSpace; 4] = [OutputSpace::Srgb, OutputSpace::AdobeRgb, OutputSpace::DisplayP3, OutputSpace::ProPhoto];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            OutputSpace::Srgb => "sRGB",
+            OutputSpace::AdobeRgb => "Adobe RGB (1998)",
+            OutputSpace::DisplayP3 => "Display P3",
+            OutputSpace::ProPhoto => "ProPhoto RGB",
+        }
+    }
+
+    pub fn trc(self) -> Trc {
+        match self {
+            OutputSpace::Srgb | OutputSpace::DisplayP3 => Trc::Srgb,
+            OutputSpace::AdobeRgb => Trc::Gamma(563.0 / 256.0),
+            OutputSpace::ProPhoto => Trc::Gamma(1.8),
+        }
+    }
+
+    /// RGB -> XYZ relative to D50 (as needed for ICC profiles).
+    pub fn to_xyz_d50(self) -> Mat3 {
+        match self {
+            OutputSpace::Srgb => mat_mul(&BRADFORD_D65_TO_D50, &SRGB_TO_XYZ),
+            OutputSpace::AdobeRgb => mat_mul(&BRADFORD_D65_TO_D50, &ADOBE_RGB_TO_XYZ),
+            OutputSpace::DisplayP3 => mat_mul(&BRADFORD_D65_TO_D50, &DISPLAY_P3_TO_XYZ),
+            OutputSpace::ProPhoto => PROPHOTO_TO_XYZ_D50,
+        }
+    }
+
+    /// Linear Rec.2020 working space -> linear output space.
+    pub fn from_working(self) -> Mat3 {
+        let working_d50 = mat_mul(&BRADFORD_D65_TO_D50, &REC2020_TO_XYZ);
+        let inv = mat_inv(&self.to_xyz_d50()).expect("invertible");
+        mat_mul(&inv, &working_d50)
+    }
+}
+
 pub fn mat_mul(a: &Mat3, b: &Mat3) -> Mat3 {
     let mut r = [[0.0; 3]; 3];
     for i in 0..3 {
@@ -61,21 +167,32 @@ pub struct CameraColor {
     pub xyz_to_cam: Mat3,
     /// Maps white-balanced camera RGB to linear sRGB.
     pub cam_to_srgb: Mat3,
+    /// Maps white-balanced camera RGB to the linear Rec.2020 working space.
+    pub cam_to_working: Mat3,
 }
+
+/// Inverse of the row-normalized `xyz_to_cam * rgb_to_xyz` (dcraw approach): a
+/// white-balanced neutral (1,1,1) in camera space maps to RGB white.
+fn cam_to_rgb(xyz_to_cam: &Mat3, rgb_to_xyz: &Mat3) -> Mat3 {
+    let mut cam_rgb = mat_mul(xyz_to_cam, rgb_to_xyz);
+    for row in cam_rgb.iter_mut() {
+        let s: f32 = row.iter().sum();
+        if s.abs() > 1e-9 {
+            row.iter_mut().for_each(|v| *v /= s);
+        }
+    }
+    mat_inv(&cam_rgb).unwrap_or(IDENTITY)
+}
+
+pub const IDENTITY: Mat3 = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
 
 impl CameraColor {
     pub fn new(xyz_to_cam: Mat3) -> Self {
-        // dcraw approach: normalize rows of (xyz->cam * srgb->xyz) so that a
-        // white-balanced neutral (1,1,1) in camera space maps to sRGB white.
-        let mut cam_rgb = mat_mul(&xyz_to_cam, &SRGB_TO_XYZ);
-        for row in cam_rgb.iter_mut() {
-            let s: f32 = row.iter().sum();
-            if s.abs() > 1e-9 {
-                row.iter_mut().for_each(|v| *v /= s);
-            }
+        Self {
+            xyz_to_cam,
+            cam_to_srgb: cam_to_rgb(&xyz_to_cam, &SRGB_TO_XYZ),
+            cam_to_working: cam_to_rgb(&xyz_to_cam, &REC2020_TO_XYZ),
         }
-        let cam_to_srgb = mat_inv(&cam_rgb).unwrap_or([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]);
-        Self { xyz_to_cam, cam_to_srgb }
     }
 
     /// Per-channel camera multipliers that neutralize the given illuminant (green = 1).
@@ -199,6 +316,56 @@ pub fn srgb_decode(v: f32) -> f32 {
     if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
 }
 
+// ------------------------------------------------------------------ Oklab
+
+/// Linear Rec.2020 -> Oklab LMS (the Oklab M1 matrix composed with Rec.2020 -> sRGB).
+#[allow(clippy::excessive_precision)] // published Oklab constants
+pub fn working_to_lms() -> Mat3 {
+    const M1: Mat3 = [
+        [0.412_221_470_8, 0.536_332_536_3, 0.051_445_992_9],
+        [0.211_903_498_2, 0.680_699_545_1, 0.107_396_956_6],
+        [0.088_302_461_9, 0.281_718_837_6, 0.629_978_700_5],
+    ];
+    let srgb_from_working = mat_mul(&mat_inv(&SRGB_TO_XYZ).expect("invertible"), &REC2020_TO_XYZ);
+    mat_mul(&M1, &srgb_from_working)
+}
+
+#[derive(Clone, Debug)]
+pub struct Oklab {
+    to_lms: Mat3,
+    from_lms: Mat3,
+}
+
+impl Default for Oklab {
+    fn default() -> Self {
+        let to_lms = working_to_lms();
+        Self { from_lms: mat_inv(&to_lms).expect("invertible"), to_lms }
+    }
+}
+
+#[allow(clippy::excessive_precision)] // published Oklab constants
+impl Oklab {
+    /// Linear working RGB -> (L, a, b).
+    #[inline]
+    pub fn from_linear(&self, rgb: [f32; 3]) -> [f32; 3] {
+        let lms = mat_vec(&self.to_lms, rgb).map(|v| v.cbrt());
+        [
+            0.210_454_255_3 * lms[0] + 0.793_617_785 * lms[1] - 0.004_072_046_8 * lms[2],
+            1.977_998_495_1 * lms[0] - 2.428_592_205 * lms[1] + 0.450_593_709_9 * lms[2],
+            0.025_904_037_1 * lms[0] + 0.782_771_766_2 * lms[1] - 0.808_675_766 * lms[2],
+        ]
+    }
+
+    #[inline]
+    pub fn to_linear(&self, lab: [f32; 3]) -> [f32; 3] {
+        let [l, a, b] = lab;
+        let l_ = l + 0.396_337_777_4 * a + 0.215_803_757_3 * b;
+        let m_ = l - 0.105_561_345_8 * a - 0.063_854_172_8 * b;
+        let s_ = l - 0.089_484_177_5 * a - 1.291_485_548 * b;
+        mat_vec(&self.from_lms, [l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_])
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +405,32 @@ mod tests {
         // Warmer assumed illuminant (lower K) -> more blue gain.
         let warm = cc.wb_for_temp_tint(3000.0, 0.0);
         assert!(warm[2] > a[2] && warm[0] < a[0]);
+    }
+
+    #[test]
+    fn oklab_roundtrip_and_neutral_axis() {
+        let ok = Oklab::default();
+        let grey = ok.from_linear([0.18, 0.18, 0.18]);
+        assert!(grey[1].abs() < 1e-3 && grey[2].abs() < 1e-3, "{grey:?}");
+        let c = [0.3, 0.12, 0.05];
+        let back = ok.to_linear(ok.from_linear(c));
+        for i in 0..3 {
+            assert!((back[i] - c[i]).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn output_space_white_stays_white() {
+        for space in OutputSpace::ALL {
+            let w = mat_vec(&space.from_working(), [1.0, 1.0, 1.0]);
+            for c in w {
+                assert!((c - 1.0).abs() < 2e-3, "{space:?}: {w:?}");
+            }
+        }
+        // sRGB red is inside Rec.2020: converting it back must give pure red.
+        let to_working = mat_inv(&OutputSpace::Srgb.from_working()).unwrap();
+        let red = mat_vec(&OutputSpace::Srgb.from_working(), mat_vec(&to_working, [1.0, 0.0, 0.0]));
+        assert!((red[0] - 1.0).abs() < 1e-3 && red[1].abs() < 1e-3);
     }
 
     #[test]

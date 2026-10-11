@@ -29,14 +29,16 @@ impl App {
         };
         let size = tex.size_vec2();
         let tex_id = tex.id();
-        let fit = ((rect.width() - 20.0) / size.x).min((rect.height() - 20.0) / size.y).max(0.01);
+        let tools_active = self.crop_tool.is_some() || self.straighten_tool.is_some();
+        let margin = if self.crop_tool.is_some() { 40.0 } else { 20.0 };
+        let fit = ((rect.width() - margin) / size.x).min((rect.height() - margin) / size.y).max(0.01);
         let scale = self.zoom.unwrap_or(fit);
 
         // Mouse wheel zoom around the cursor.
-        if response.hovered() {
+        if response.hovered() && !tools_active {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
-                let new_scale = (scale * (1.0 + scroll * 0.0015)).clamp(fit.min(0.05), 8.0);
+                let new_scale = (scale * (1.0 + scroll * 0.0015)).clamp(fit.min(0.05), 16.0);
                 if let Some(cursor) = response.hover_pos() {
                     let center = rect.center() + self.pan;
                     let rel = (cursor - center) / scale;
@@ -45,7 +47,7 @@ impl App {
                 self.zoom = Some(new_scale);
             }
         }
-        if response.dragged() && !self.picking_wb {
+        if response.dragged() && !self.picking_wb && !tools_active {
             self.pan += response.drag_delta();
         }
         let scale = self.zoom.unwrap_or(fit);
@@ -55,7 +57,26 @@ impl App {
         let img_rect = Rect::from_center_size(rect.center() + self.pan, size * scale);
         painter.image(tex_id, img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 
-        if self.picking_wb {
+        // Full-resolution tile when the preview would be magnified.
+        self.update_tile(rect, img_rect, scale);
+        if let Some(tile) = &self.tile
+            && tile.version == self.edit_version
+            && !tools_active
+        {
+            let k = tile.full_size.0 as f32 / size.x;
+            let r = tile.region;
+            let tr = Rect::from_min_size(
+                img_rect.min + vec2(r.x as f32, r.y as f32) / k * scale,
+                vec2(r.w as f32, r.h as f32) / k * scale,
+            );
+            painter.image(tile.texture.id(), tr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+
+        if self.crop_tool.is_some() {
+            self.crop_overlay(ui, &response, img_rect);
+        } else if self.straighten_tool.is_some() {
+            self.straighten_overlay(ui, &response);
+        } else if self.picking_wb {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             if response.clicked()
                 && let Some(pos) = response.interact_pointer_pos()
@@ -64,20 +85,24 @@ impl App {
                 self.pick_white_balance((pos - img_rect.min) / scale);
             }
         } else if response.double_clicked() {
-            self.zoom = if self.zoom.is_some() { None } else { Some(1.0) };
-            self.pan = Vec2::ZERO;
+            self.toggle_zoom_100();
         }
 
-        // Overlay: file name, zoom, before marker.
+        // Overlay: file name, zoom, mode markers.
         if let Some(cur) = &self.current {
-            let full_w = if (cur.adjustments.rotation % 2) == 1 { cur.meta.info.height } else { cur.meta.info.width } as f32;
+            let full_w = self.full_output_width().unwrap_or(size.x);
             // Zoom relative to the full sensor resolution.
             let pct = scale * size.x / full_w.max(1.0) * 100.0;
-            let text = format!(
-                "{}   {pct:.0} %{}",
-                cur.meta.path.file_name().unwrap_or_default().to_string_lossy(),
-                if self.show_before { "   VORHER" } else { "" }
-            );
+            let mode = if self.crop_tool.is_some() {
+                "   ZUSCHNEIDEN – Enter: übernehmen"
+            } else if self.straighten_tool.is_some() {
+                "   GERADERICHTEN – Linie ziehen"
+            } else if self.show_before {
+                "   VORHER"
+            } else {
+                ""
+            };
+            let text = format!("{}   {pct:.0} %{mode}", cur.meta.path.file_name().unwrap_or_default().to_string_lossy());
             let galley = painter.layout_no_wrap(text, egui::FontId::proportional(13.0), Color32::from_gray(220));
             let pos = rect.left_top() + vec2(10.0, 8.0);
             painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand(4.0), 3.0, Color32::from_black_alpha(160));
@@ -86,6 +111,84 @@ impl App {
         if self.loading.is_some() {
             painter.text(rect.right_top() + vec2(-10.0, 8.0), egui::Align2::RIGHT_TOP, "Lade…", egui::FontId::proportional(13.0), Color32::from_gray(200));
         }
+    }
+
+    /// Width of the output at full sensor resolution (estimated from the sensor size until loaded).
+    fn full_output_width(&self) -> Option<f32> {
+        let cur = self.current.as_ref()?;
+        let opts = cr_core::pipeline::RenderOptions { ignore_crop: self.crop_tool.is_some(), ..Default::default() };
+        let p = cr_core::pipeline::Processor::with_options(&cur.meta, &cur.adjustments, opts);
+        let (w, h) = match &cur.full {
+            Some(f) => (f.width, f.height),
+            None => {
+                let k = cur.meta.info.width.max(cur.meta.info.height) as f32 / cur.preview.width.max(cur.preview.height) as f32;
+                ((cur.preview.width as f32 * k) as usize, (cur.preview.height as f32 * k) as usize)
+            }
+        };
+        Some(p.output_size(w, h).0 as f32)
+    }
+
+    /// Zoom to 100 % (one full-resolution pixel per screen pixel) or back to fit.
+    pub fn toggle_zoom_100(&mut self) {
+        if self.zoom.is_some() {
+            self.zoom = None;
+        } else if let (Some(full_w), Some(tex)) = (self.full_output_width(), &self.texture) {
+            self.zoom = Some(full_w / tex.size_vec2().x);
+        }
+        self.pan = Vec2::ZERO;
+    }
+
+    /// Requests a full-resolution tile for the visible area when zoomed in.
+    pub(crate) fn update_tile(&mut self, viewport: Rect, img_rect: Rect, scale: f32) {
+        let Some(cur) = &self.current else { return };
+        let Some(full) = &cur.full else { return };
+        if scale <= 1.05 || self.crop_tool.is_some() || self.straighten_tool.is_some() {
+            return;
+        }
+        let Some(tex) = &self.texture else { return };
+        let p = cr_core::pipeline::Processor::new(&cur.meta, &cur.adjustments);
+        let (fw, fh) = p.output_size(full.width, full.height);
+        let k = fw as f32 / tex.size_vec2().x;
+        let vis = viewport.intersect(img_rect);
+        if vis.width() <= 0.0 || vis.height() <= 0.0 {
+            return;
+        }
+        let to_full = |pt: Pos2| ((pt - img_rect.min) / scale) * k;
+        let (a, b) = (to_full(vis.min), to_full(vis.max));
+        let pad = 32.0;
+        let x0 = (a.x - pad).max(0.0) as usize;
+        let y0 = (a.y - pad).max(0.0) as usize;
+        let x1 = ((b.x + pad) as usize).min(fw);
+        let y1 = ((b.y + pad) as usize).min(fh);
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let region = cr_core::geometry::Region { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+        // Reuse the current tile if it already covers the visible area.
+        let covers = |r: &cr_core::geometry::Region| {
+            r.x <= a.x.max(0.0) as usize && r.y <= a.y.max(0.0) as usize && r.x + r.w >= (b.x as usize).min(fw) && r.y + r.h >= (b.y as usize).min(fh)
+        };
+        if let Some((v, r)) = &self.tile_requested
+            && *v == self.edit_version
+            && covers(r)
+        {
+            return;
+        }
+        // Don't render tiles while a slider is being dragged; the preview updates first.
+        if self.pointer_down {
+            return;
+        }
+        self.tile_requested = Some((self.edit_version, region));
+        self.workers.tile(crate::workers::TileJob {
+            generation: self.generation(),
+            version: self.edit_version,
+            meta: cur.meta.clone(),
+            full: full.clone(),
+            adjustments: cur.adjustments.clone(),
+            region,
+            clip_warning: self.clip_warning,
+            before: self.show_before,
+        });
     }
 
     /// Paints one browser cell; returns the click modifiers if clicked, and whether it was double-clicked.

@@ -8,23 +8,27 @@ use std::thread;
 use cr_core::cache;
 use cr_core::catalog::Catalog;
 use cr_core::export::{self, ExportRecipe};
+use cr_core::geometry::Region;
 use cr_core::image::LinearImage;
 use cr_core::params::Adjustments;
-use cr_core::pipeline::{Histogram, Processor};
+use cr_core::pipeline::{Histogram, Processor, RenderOptions, StageCache};
 use cr_core::raw::{self, RawMeta};
 use cr_core::sidecar;
 use egui::ColorImage;
 
 /// Long edge of the interactive preview (before the half-size demosaic shortcut kicks in).
-pub const PREVIEW_EDGE: usize = 3000;
+pub const PREVIEW_EDGE: usize = 2048;
 pub const THUMB_EDGE: u32 = 256;
 
 pub enum Event {
     Loaded { generation: u64, result: Result<(Arc<RawMeta>, Arc<LinearImage>), String> },
     Rendered { generation: u64, image: ColorImage, thumb: Option<ColorImage>, histogram: Histogram, before: bool },
     Thumbnail { path: PathBuf, image: ColorImage },
+    FullLoaded { generation: u64, image: Arc<LinearImage> },
+    TileRendered { generation: u64, version: u64, region: Region, full_size: (usize, usize), image: ColorImage },
     ExportProgress { done: usize, total: usize, last: Result<PathBuf, String> },
     IndexProgress { done: usize, total: usize },
+    LensDbDownloaded(Result<PathBuf, String>),
     IndexDone { indexed: usize, failed: usize, import: bool },
 }
 
@@ -41,6 +45,20 @@ pub struct RenderJob {
     pub adjustments: Adjustments,
     pub clip_warning: bool,
     pub before: bool,
+    /// Render the whole frame (crop tool active).
+    pub ignore_crop: bool,
+}
+
+/// Full-resolution rendering of a region of the output (for zoomed-in viewing).
+pub struct TileJob {
+    pub generation: u64,
+    pub version: u64,
+    pub meta: Arc<RawMeta>,
+    pub full: Arc<LinearImage>,
+    pub adjustments: Adjustments,
+    pub region: Region,
+    pub clip_warning: bool,
+    pub before: bool,
 }
 
 pub struct ExportJob {
@@ -50,7 +68,11 @@ pub struct ExportJob {
 
 pub struct Workers {
     pub events: Receiver<Event>,
+    ev_tx: Sender<Event>,
+    ctx: egui::Context,
     load_tx: Sender<(u64, PathBuf)>,
+    full_tx: Sender<(u64, PathBuf)>,
+    tile_tx: Sender<TileJob>,
     render_tx: Sender<RenderJob>,
     thumb_tx: Sender<PathBuf>,
     export_tx: Sender<ExportJob>,
@@ -69,6 +91,7 @@ fn recv_latest<T>(rx: &Receiver<T>) -> Option<T> {
 impl Workers {
     pub fn spawn(ctx: egui::Context, catalog_path: PathBuf) -> Self {
         let (ev_tx, events) = channel();
+        let (ev_tx_keep, ctx_keep) = (ev_tx.clone(), ctx.clone());
 
         let (index_tx, index_rx) = channel::<IndexJob>();
         {
@@ -122,17 +145,65 @@ impl Workers {
             });
         }
 
+        let (full_tx, full_rx) = channel::<(u64, PathBuf)>();
+        {
+            let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
+            thread::spawn(move || {
+                while let Some((generation, path)) = recv_latest(&full_rx) {
+                    match raw::load_full(&path) {
+                        Ok((_, img)) => {
+                            let _ = ev_tx.send(Event::FullLoaded { generation, image: Arc::new(img) });
+                            ctx.request_repaint();
+                        }
+                        Err(e) => log::warn!("Vollauflösung nicht geladen: {e:#}"),
+                    }
+                }
+            });
+        }
+
+        let (tile_tx, tile_rx) = channel::<TileJob>();
+        {
+            let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
+            thread::spawn(move || {
+                let cache = StageCache::default();
+                while let Some(job) = recv_latest(&tile_rx) {
+                    let adj = if job.before {
+                        let mut a = Adjustments::default();
+                        a.keep_geometry_from(&job.adjustments);
+                        a
+                    } else {
+                        job.adjustments
+                    };
+                    let opts = RenderOptions { clip_warning: job.clip_warning, ignore_crop: false };
+                    let r = Processor::with_options(&job.meta, &adj, opts).render(&job.full, Some(job.region), Some(&cache));
+                    let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
+                    let _ = ev_tx.send(Event::TileRendered {
+                        generation: job.generation,
+                        version: job.version,
+                        region: job.region,
+                        full_size: r.full_size,
+                        image,
+                    });
+                    ctx.request_repaint();
+                }
+            });
+        }
+
         let (render_tx, render_rx) = channel::<RenderJob>();
         {
             let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
             thread::spawn(move || {
+                let cache = StageCache::default();
                 while let Some(job) = recv_latest(&render_rx) {
                     let adj = if job.before {
-                        Adjustments { rotation: job.adjustments.rotation, ..Default::default() }
+                        let mut a = Adjustments::default();
+                        a.keep_geometry_from(&job.adjustments);
+                        a
                     } else {
                         job.adjustments
                     };
-                    let r = Processor::new(&job.meta, &adj).render(&job.preview, job.clip_warning);
+                    let opts = RenderOptions { clip_warning: job.clip_warning, ignore_crop: job.ignore_crop };
+                    let r = Processor::with_options(&job.meta, &adj, opts).render(&job.preview, None, Some(&cache));
                     let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
                     let thumb = (!job.before)
                         .then(|| ::image::RgbaImage::from_raw(r.width as u32, r.height as u32, r.rgba))
@@ -180,11 +251,19 @@ impl Workers {
             });
         }
 
-        Self { events, load_tx, render_tx, thumb_tx, export_tx, index_tx }
+        Self { events, ev_tx: ev_tx_keep, ctx: ctx_keep, load_tx, full_tx, tile_tx, render_tx, thumb_tx, export_tx, index_tx }
     }
 
     pub fn load(&self, generation: u64, path: PathBuf) {
         let _ = self.load_tx.send((generation, path));
+    }
+
+    pub fn load_full(&self, generation: u64, path: PathBuf) {
+        let _ = self.full_tx.send((generation, path));
+    }
+
+    pub fn tile(&self, job: TileJob) {
+        let _ = self.tile_tx.send(job);
     }
 
     pub fn render(&self, job: RenderJob) {
@@ -197,6 +276,16 @@ impl Workers {
 
     pub fn export(&self, job: ExportJob) {
         let _ = self.export_tx.send(job);
+    }
+
+    /// Downloads the lensfun database in the background.
+    pub fn download_lens_db(&self) {
+        let (tx, ctx) = (self.ev_tx.clone(), self.ctx.clone());
+        thread::spawn(move || {
+            let r = cr_core::lensfun::download_database().map_err(|e| format!("{e:#}"));
+            let _ = tx.send(Event::LensDbDownloaded(r));
+            ctx.request_repaint();
+        });
     }
 
     pub fn index(&self, job: IndexJob) {
@@ -213,7 +302,7 @@ fn make_thumbnail(path: &std::path::Path) -> Option<ColorImage> {
     }
     let img = if sc.adjustments != Adjustments::default() {
         let (meta, preview) = raw::load_preview(path, THUMB_EDGE as usize * 2).ok()?;
-        let r = Processor::new(&meta, &sc.adjustments).render(&preview, false);
+        let r = Processor::new(&meta, &sc.adjustments).render(&preview, None, None);
         ::image::DynamicImage::ImageRgba8(::image::RgbaImage::from_raw(r.width as u32, r.height as u32, r.rgba)?)
     } else {
         raw::embedded_preview(path).ok()?

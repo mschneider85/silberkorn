@@ -3,9 +3,11 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use image::{ImageBuffer, Rgb, imageops::FilterType};
+use image::{ImageBuffer, ImageEncoder, Rgb, imageops::FilterType};
 use serde::{Deserialize, Serialize};
 
+use crate::color::OutputSpace;
+use crate::icc;
 use crate::params::Adjustments;
 use crate::pipeline::Processor;
 use crate::raw;
@@ -52,6 +54,7 @@ pub struct ExportRecipe {
     pub output_dir: PathBuf,
     /// Suffix appended to the file stem.
     pub suffix: String,
+    pub output_space: OutputSpace,
 }
 
 impl Default for ExportRecipe {
@@ -62,6 +65,7 @@ impl Default for ExportRecipe {
             long_edge: None,
             output_dir: PathBuf::from("Output"),
             suffix: String::new(),
+            output_space: OutputSpace::Srgb,
         }
     }
 }
@@ -81,7 +85,7 @@ impl ExportRecipe {
 /// Develops `image` at full resolution and writes it according to `recipe`.
 pub fn export(image: &Path, adj: &Adjustments, recipe: &ExportRecipe) -> Result<PathBuf> {
     let (meta, linear) = raw::load_full(image)?;
-    let out = Processor::new(&meta, adj).process_f32(&linear);
+    let out = Processor::new(&meta, adj).process(&linear, None, recipe.output_space);
     drop(linear);
 
     let mut buf: ImageBuffer<Rgb<f32>, Vec<f32>> =
@@ -103,20 +107,33 @@ pub fn export(image: &Path, adj: &Adjustments, recipe: &ExportRecipe) -> Result<
     }
     let (w, h) = buf.dimensions();
     let to_u8 = |v: &f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let profile = icc::profile_for(recipe.output_space);
+    let file = std::io::BufWriter::new(std::fs::File::create(&path)?);
     match recipe.format {
         ExportFormat::Jpeg => {
             let data: Vec<u8> = buf.as_raw().iter().map(to_u8).collect();
-            let file = std::io::BufWriter::new(std::fs::File::create(&path)?);
             let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(file, recipe.quality.clamp(1, 100));
-            enc.encode(&data, w, h, image::ExtendedColorType::Rgb8)?;
+            enc.set_icc_profile(profile).ok();
+            enc.write_image(&data, w, h, image::ExtendedColorType::Rgb8)?;
         }
-        ExportFormat::Png | ExportFormat::Tiff8 => {
+        ExportFormat::Png => {
             let data: Vec<u8> = buf.as_raw().iter().map(to_u8).collect();
-            image::RgbImage::from_raw(w, h, data).context("Puffergröße ungültig")?.save(&path)?;
+            let mut enc = image::codecs::png::PngEncoder::new(file);
+            enc.set_icc_profile(profile).ok();
+            enc.write_image(&data, w, h, image::ExtendedColorType::Rgb8)?;
+        }
+        ExportFormat::Tiff8 => {
+            let data: Vec<u8> = buf.as_raw().iter().map(to_u8).collect();
+            let mut enc = image::codecs::tiff::TiffEncoder::new(file);
+            enc.set_icc_profile(profile).ok();
+            enc.write_image(&data, w, h, image::ExtendedColorType::Rgb8)?;
         }
         ExportFormat::Tiff16 => {
             let data: Vec<u16> = buf.as_raw().iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).collect();
-            ImageBuffer::<Rgb<u16>, _>::from_raw(w, h, data).context("Puffergröße ungültig")?.save(&path)?;
+            let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_ne_bytes()).collect();
+            let mut enc = image::codecs::tiff::TiffEncoder::new(file);
+            enc.set_icc_profile(profile).ok();
+            enc.write_image(&bytes, w, h, image::ExtendedColorType::Rgb16)?;
         }
     }
     Ok(path)

@@ -20,7 +20,7 @@ fn main() -> anyhow::Result<()> {
         Err(_) => Adjustments::default(),
     };
     let t = Instant::now();
-    let r = Processor::new(&meta, &adj).render(&preview, false);
+    let r = Processor::new(&meta, &adj).render(&preview, None, None);
     println!("render {}x{} in {:?}", r.width, r.height, t.elapsed());
 
     let recipe = export::ExportRecipe {

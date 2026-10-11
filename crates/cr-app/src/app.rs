@@ -6,9 +6,9 @@ use std::sync::Arc;
 
 use cr_core::catalog::{self, Catalog, Filter, ImageRecord, Scope, SortKey};
 use cr_core::export::ExportRecipe;
-use cr_core::image::{LinearImage, Orientation};
+use cr_core::image::LinearImage;
 use cr_core::params::{Adjustments, WbMode, WhiteBalance};
-use cr_core::pipeline::Histogram;
+use cr_core::pipeline::{Histogram, Processor, RenderOptions};
 use cr_core::raw::RawMeta;
 use cr_core::sidecar::{self, ColorLabel, Sidecar};
 use cr_core::styles::Style;
@@ -21,19 +21,24 @@ use crate::workers::{Event, ExportJob, RenderJob, Workers};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
     Library,
+    Lens,
     Exposure,
     Color,
+    Details,
     Metadata,
     Styles,
     Output,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 6] = [Tab::Library, Tab::Exposure, Tab::Color, Tab::Metadata, Tab::Styles, Tab::Output];
+    pub const ALL: [Tab; 8] =
+        [Tab::Library, Tab::Lens, Tab::Exposure, Tab::Color, Tab::Details, Tab::Metadata, Tab::Styles, Tab::Output];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Library => "📚 Bibliothek",
+            Tab::Lens => "📐 Objektiv",
+            Tab::Details => "🔍 Details",
             Tab::Exposure => "☀ Belichtung",
             Tab::Color => "🎨 Farbe",
             Tab::Metadata => "ℹ Metadaten",
@@ -68,6 +73,8 @@ impl CurveChannel {
 pub struct Current {
     pub meta: Arc<RawMeta>,
     pub preview: Arc<LinearImage>,
+    /// Full-resolution camera image, loaded in the background for 100 % viewing.
+    pub full: Option<Arc<LinearImage>>,
     pub adjustments: Adjustments,
     /// Last state pushed to the undo stack / sidecar.
     pub committed: Adjustments,
@@ -75,6 +82,14 @@ pub struct Current {
     pub color_label: ColorLabel,
     pub keywords: Vec<String>,
     pub as_shot_temp_tint: (f32, f32),
+}
+
+/// A full-resolution rendering of part of the output, drawn over the preview when zoomed in.
+pub struct Tile {
+    pub texture: TextureHandle,
+    pub region: cr_core::geometry::Region,
+    pub version: u64,
+    pub full_size: (usize, usize),
 }
 
 /// Settings persisted between sessions.
@@ -101,6 +116,10 @@ pub struct App {
     pub lists: CatalogLists,
     pub library_ui: LibraryUi,
     pub styles: Vec<Style>,
+    /// Lensfun profiles, loaded on first use.
+    pub lens_db: Option<Arc<Vec<cr_core::lensfun::LensProfile>>>,
+    pub lens_db_downloading: bool,
+    pub lens_db_missing: bool,
 
     // browser
     pub scope: Scope,
@@ -128,7 +147,18 @@ pub struct App {
     pub histogram: Option<Histogram>,
     pub tab: Tab,
     pub curve_channel: CurveChannel,
+    /// Selected hue band in the color editor.
+    pub color_band: usize,
     pub picking_wb: bool,
+    /// Active crop tool state (the viewer shows the uncropped frame).
+    pub crop_tool: Option<crate::crop::CropTool>,
+    pub straighten_tool: Option<crate::crop::StraightenTool>,
+    pub tile: Option<Tile>,
+    /// Requested tile (version, region), to avoid resending identical jobs.
+    pub tile_requested: Option<(u64, cr_core::geometry::Region)>,
+    /// Incremented on every change that affects the rendering.
+    pub edit_version: u64,
+    pub pointer_down: bool,
     pub clip_warning: bool,
     pub show_before: bool,
     render_requested: bool,
@@ -195,6 +225,9 @@ impl App {
             lists: CatalogLists::default(),
             library_ui: LibraryUi::default(),
             styles: Vec::new(),
+            lens_db: None,
+            lens_db_downloading: false,
+            lens_db_missing: false,
             scope: Scope::All,
             filter: Filter::default(),
             sort: settings.sort,
@@ -217,7 +250,14 @@ impl App {
             histogram: None,
             tab: Tab::Exposure,
             curve_channel: CurveChannel::Rgb,
+            color_band: 0,
             picking_wb: false,
+            crop_tool: None,
+            straighten_tool: None,
+            tile: None,
+            tile_requested: None,
+            edit_version: 0,
+            pointer_down: false,
             clip_warning: false,
             show_before: false,
             render_requested: false,
@@ -261,6 +301,10 @@ impl App {
     }
 
     // ---------------------------------------------------------------- selection
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
 
     pub fn current_path(&self) -> Option<PathBuf> {
         self.current.as_ref().map(|c| c.meta.path.clone())
@@ -324,6 +368,7 @@ impl App {
 
     pub fn request_render(&mut self) {
         self.render_requested = true;
+        self.edit_version += 1;
     }
 
     /// Pushes finished edits to the undo stack and writes the sidecar.
@@ -421,23 +466,28 @@ impl App {
         self.workers.export(ExportJob { items, recipe: self.recipe.clone() });
     }
 
+    /// White balance from a neutral spot; `image_pos` is in displayed preview pixels.
     pub fn pick_white_balance(&mut self, image_pos: Vec2) {
         let Some(cur) = self.current.as_mut() else { return };
         let p = &cur.preview;
-        let rot = cur.adjustments.rotation % 4;
-        let o = Orientation::from_quarter_turns(rot);
-        let (dw, dh) = if o.swaps_dimensions() { (p.height, p.width) } else { (p.width, p.height) };
-        let x = (image_pos.x.max(0.0) as usize).min(dw - 1);
-        let y = (image_pos.y.max(0.0) as usize).min(dh - 1);
+        let opts = RenderOptions { ignore_crop: self.crop_tool.is_some(), ..Default::default() };
+        let geo = Processor::with_options(&cur.meta, &cur.adjustments, opts).geomap(p.width, p.height);
         let mut acc = [0.0f32; 3];
         let mut n = 0.0;
-        for yy in y.saturating_sub(3)..(y + 4).min(dh) {
-            for xx in x.saturating_sub(3)..(x + 4).min(dw) {
-                let (sx, sy) = o.source_coord(xx, yy, p.width, p.height);
-                let v = p.data[sy * p.width + sx];
+        for dy in -3..=3 {
+            for dx in -3..=3 {
+                let (sx, sy) = geo.source_point(image_pos.x + dx as f32, image_pos.y + dy as f32);
+                let (sx, sy) = (sx.round(), sy.round());
+                if sx < 0.0 || sy < 0.0 || sx >= p.width as f32 || sy >= p.height as f32 {
+                    continue;
+                }
+                let v = p.data[sy as usize * p.width + sx as usize];
                 acc = [acc[0] + v[0], acc[1] + v[1], acc[2] + v[2]];
                 n += 1.0;
             }
+        }
+        if n == 0.0 {
+            return;
         }
         let avg = acc.map(|v| v / n);
         if avg.iter().any(|v| *v <= 1e-5) || avg.iter().any(|v| *v >= 0.98) {
@@ -473,9 +523,15 @@ impl App {
                             // Rounded to slider precision so that displaying it never counts as an edit.
                             let (k, t) = meta.color.temp_tint_for_wb(meta.as_shot_wb);
                             let as_shot_temp_tint = (k.round(), (t * 10.0).round() / 10.0);
+                            self.workers.load_full(self.generation, meta.path.clone());
+                            self.tile = None;
+                            self.tile_requested = None;
+                            self.crop_tool = None;
+                            self.straighten_tool = None;
                             self.current = Some(Current {
                                 meta,
                                 preview,
+                                full: None,
                                 adjustments: sc.adjustments.clone(),
                                 committed: sc.adjustments,
                                 rating: sc.rating,
@@ -511,6 +567,30 @@ impl App {
                     }
                 }
                 Event::Thumbnail { path, image } => self.set_thumb(ctx, path, image),
+                Event::FullLoaded { generation, image } => {
+                    if generation == self.generation
+                        && let Some(cur) = &mut self.current
+                    {
+                        cur.full = Some(image);
+                    }
+                }
+                Event::TileRendered { generation, version, region, full_size, image } => {
+                    if generation != self.generation {
+                        continue;
+                    }
+                    match &mut self.tile {
+                        Some(t) => {
+                            t.texture.set(image, TextureOptions::LINEAR);
+                            t.region = region;
+                            t.version = version;
+                            t.full_size = full_size;
+                        }
+                        None => {
+                            let texture = ctx.load_texture("tile", image, TextureOptions::LINEAR);
+                            self.tile = Some(Tile { texture, region, version, full_size });
+                        }
+                    }
+                }
                 Event::ExportProgress { done, total, last } => {
                     self.export_progress = (done < total).then_some((done, total));
                     match last {
@@ -519,6 +599,17 @@ impl App {
                     }
                     if done == total {
                         self.status = format!("Verarbeitung abgeschlossen ({total})");
+                    }
+                }
+                Event::LensDbDownloaded(r) => {
+                    self.lens_db_downloading = false;
+                    self.lens_db = None;
+                    match r {
+                        Ok(dir) => {
+                            self.status = format!("Objektivdatenbank geladen ({})", dir.display());
+                            self.apply_lens_profile();
+                        }
+                        Err(e) => self.status = e,
                     }
                 }
                 Event::IndexProgress { done, total } => {
@@ -560,6 +651,7 @@ impl App {
                 adjustments: cur.adjustments.clone(),
                 clip_warning: self.clip_warning,
                 before: self.show_before,
+                ignore_crop: self.crop_tool.is_some(),
             });
         }
     }
@@ -632,11 +724,22 @@ impl App {
             self.picking_wb = !self.picking_wb;
         }
         if pressed(Key::Z, Modifiers::NONE) {
-            self.zoom = if self.zoom.is_some() { None } else { Some(1.0) };
-            self.pan = Vec2::ZERO;
+            self.toggle_zoom_100();
+        }
+        if pressed(Key::C, Modifiers::NONE) {
+            if self.crop_tool.is_some() {
+                self.finish_crop_tool();
+            } else {
+                self.start_crop_tool();
+            }
+        }
+        if pressed(Key::Enter, Modifiers::NONE) {
+            self.finish_crop_tool();
         }
         if pressed(Key::Escape, Modifiers::NONE) {
             self.picking_wb = false;
+            self.straighten_tool = None;
+            self.finish_crop_tool();
         }
     }
 
@@ -691,9 +794,20 @@ impl App {
                 self.clip_warning = !self.clip_warning;
                 self.request_render();
             }
-            if ui.selectable_label(self.zoom.is_none(), "⛶ Einpassen").on_hover_text("Einpassen / 100 % (Z)").clicked() {
+            if ui.selectable_label(self.zoom.is_none(), "⛶ Einpassen").on_hover_text("Einpassen").clicked() {
                 self.zoom = None;
                 self.pan = Vec2::ZERO;
+            }
+            if ui.button("1:1").on_hover_text("100 % (Z)").clicked() {
+                self.zoom = None;
+                self.toggle_zoom_100();
+            }
+            if ui.selectable_label(self.crop_tool.is_some(), "⛶ Zuschneiden").on_hover_text("Zuschnitt-Werkzeug (C)").clicked() {
+                if self.crop_tool.is_some() {
+                    self.finish_crop_tool();
+                } else {
+                    self.start_crop_tool();
+                }
             }
             ui.separator();
             let n = self.selected_paths().len();
@@ -709,11 +823,27 @@ impl App {
     }
 
     fn debug_screenshot(&mut self, ctx: &egui::Context) {
-        let Some((path, shown_at)) = &mut self.screenshot else { return };
+        let Some((_, shown_at)) = &mut self.screenshot else { return };
         let now = ctx.input(|i| i.time);
         if (self.texture.is_some() || self.grid_view) && shown_at.is_none() {
             *shown_at = Some(now);
+            // Optional tool states for screenshots.
+            if std::env::var_os("CAPTURE_ROOM_CROP").is_some() {
+                self.start_crop_tool();
+            }
         }
+        let wants_zoom = std::env::var_os("CAPTURE_ROOM_ZOOM").is_some();
+        if wants_zoom && self.zoom.is_none() && self.current.as_ref().is_some_and(|c| c.full.is_some()) {
+            self.toggle_zoom_100();
+            if let Some((_, Some(t))) = &mut self.screenshot {
+                *t = now;
+            }
+        }
+        if wants_zoom && self.zoom.is_none() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            return;
+        }
+        let Some((path, shown_at)) = &mut self.screenshot else { return };
         if let Some(t) = *shown_at {
             if now - t > 2.5 && now - t < 100.0 {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
@@ -747,6 +877,7 @@ fn setup_style(ctx: &egui::Context) {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.pointer_down = ctx.input(|i| i.pointer.any_down());
         self.handle_events(&ctx);
         self.shortcuts(&ctx);
 

@@ -37,6 +37,8 @@ pub struct CaptureInfo {
     pub aperture: Option<String>,
     pub focal_length: Option<String>,
     pub date: Option<String>,
+    pub focal_mm: Option<f32>,
+    pub fnumber: Option<f32>,
     pub width: usize,
     pub height: usize,
 }
@@ -110,6 +112,8 @@ fn build_meta(path: &Path, raw: &RawImage, md: Option<&RawMetadata>) -> Result<R
             if s >= 0.5 { format!("{s:.1} s") } else { format!("1/{:.0} s", 1.0 / s) }
         });
         info.aperture = ex.fnumber.filter(|r| r.d != 0).map(|r| format!("f/{:.1}", r.n as f64 / r.d as f64));
+        info.fnumber = ex.fnumber.filter(|r| r.d != 0).map(|r| r.n as f32 / r.d as f32);
+        info.focal_mm = ex.focal_length.filter(|r| r.d != 0).map(|r| r.n as f32 / r.d as f32);
         info.focal_length = ex.focal_length.filter(|r| r.d != 0).map(|r| format!("{:.0} mm", r.n as f64 / r.d as f64));
         info.date = ex.date_time_original.clone().or(ex.create_date.clone());
         info.lens = md
@@ -147,8 +151,7 @@ pub fn load_preview(path: &Path, max_edge: usize) -> Result<(RawMeta, LinearImag
         }
         _ => bail!("Dieses Sensorlayout wird noch nicht unterstützt"),
     };
-    let factor = (img.width.max(img.height) / max_edge.max(1)).max(1);
-    let img = img.box_downscale(factor).oriented(meta.orientation);
+    let img = img.fit_within(max_edge).oriented(meta.orientation);
     Ok((meta, img))
 }
 

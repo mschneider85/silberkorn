@@ -40,6 +40,68 @@ impl LinearImage {
         Self::new(ow, oh, out)
     }
 
+    /// Area-averaging downscale so that the long edge is at most `max_edge` (fractional factors).
+    pub fn fit_within(self, max_edge: usize) -> Self {
+        let long = self.width.max(self.height);
+        if long <= max_edge || max_edge == 0 {
+            return self;
+        }
+        // Integer pre-reduction keeps the fractional pass cheap.
+        let pre = long / max_edge;
+        let img = if pre >= 2 { self.box_downscale(pre) } else { self };
+        let k = max_edge as f32 / img.width.max(img.height) as f32;
+        let (ow, oh) = (((img.width as f32 * k).round() as usize).max(1), ((img.height as f32 * k).round() as usize).max(1));
+        img.resize_area(ow, oh)
+    }
+
+    /// Separable area-averaging resample to `ow` x `oh` (downscaling only).
+    pub fn resize_area(&self, ow: usize, oh: usize) -> Self {
+        // Weights for one axis: output i covers source interval [i*s, (i+1)*s).
+        fn taps(src: usize, dst: usize) -> Vec<Vec<(usize, f32)>> {
+            let s = src as f32 / dst as f32;
+            (0..dst)
+                .map(|i| {
+                    let (a, b) = (i as f32 * s, (i + 1) as f32 * s);
+                    let mut t = Vec::new();
+                    let mut x = a.floor() as usize;
+                    while (x as f32) < b && x < src {
+                        let w = (b.min(x as f32 + 1.0) - a.max(x as f32)).max(0.0);
+                        if w > 0.0 {
+                            t.push((x, w / s));
+                        }
+                        x += 1;
+                    }
+                    t
+                })
+                .collect()
+        }
+        let (tx, ty) = (taps(self.width, ow), taps(self.height, oh));
+        // Horizontal pass.
+        let mut tmp = vec![[0.0f32; 3]; ow * self.height];
+        tmp.par_chunks_mut(ow).enumerate().for_each(|(y, line)| {
+            let row = &self.data[y * self.width..(y + 1) * self.width];
+            for (x, px) in line.iter_mut().enumerate() {
+                let mut acc = [0.0f32; 3];
+                for &(sx, w) in &tx[x] {
+                    let p = row[sx];
+                    acc = [acc[0] + p[0] * w, acc[1] + p[1] * w, acc[2] + p[2] * w];
+                }
+                *px = acc;
+            }
+        });
+        // Vertical pass.
+        let mut out = vec![[0.0f32; 3]; ow * oh];
+        out.par_chunks_mut(ow).enumerate().for_each(|(y, line)| {
+            for &(sy, w) in &ty[y] {
+                let row = &tmp[sy * ow..(sy + 1) * ow];
+                for (px, p) in line.iter_mut().zip(row) {
+                    *px = [px[0] + p[0] * w, px[1] + p[1] * w, px[2] + p[2] * w];
+                }
+            }
+        });
+        Self::new(ow, oh, out)
+    }
+
     pub fn oriented(self, o: Orientation) -> Self {
         let (w, h) = (self.width, self.height);
         let swap = o.swaps_dimensions();
@@ -175,6 +237,17 @@ mod tests {
     fn rotate270_inverts_rotate90() {
         let r = img().oriented(Orientation::Rotate90).oriented(Orientation::Rotate270);
         assert_eq!(r.data, img().data);
+    }
+
+    #[test]
+    fn resize_area_preserves_mean() {
+        let img = LinearImage::new(10, 7, (0..70).map(|i| [i as f32; 3]).collect());
+        let mean = |i: &LinearImage| i.data.iter().map(|p| p[0]).sum::<f32>() / i.data.len() as f32;
+        let r = img.resize_area(4, 3);
+        assert_eq!((r.width, r.height), (4, 3));
+        assert!((mean(&r) - mean(&img)).abs() < 1e-3);
+        let f = img.clone().fit_within(5);
+        assert_eq!(f.width.max(f.height), 5);
     }
 
     #[test]
