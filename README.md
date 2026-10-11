@@ -78,9 +78,88 @@ die Umgebung an; „Klonen“ kopiert 1:1. Quelle und Ziel lassen sich verschieb
 - **Luma Range** und **Farbbereich** (mit Pipette) verfeinern jede Maske.
 - **Style Brushes:** Pinsel-Presets (Aufhellen, Abdunkeln, Wärmer, Haut glätten, Dunst entfernen, …).
 
+### Vergleichen und Angleichen
+
+- **Vergleichsansicht:** Sind mehrere Bilder ausgewählt (Strg/Umschalt+Klick), zeigt der Viewer sie
+  nebeneinander (bis zu 12). Mausrad und Ziehen zoomen bzw. verschieben alle Bilder gemeinsam,
+  Doppelklick wechselt zwischen Einpassen und Vergrößerung. Beim Hineinzoomen wird der sichtbare
+  Ausschnitt jedes Bildes aus der vollen Auflösung nachgeladen. Ein Klick macht ein Bild zum
+  bearbeiteten (blau umrandet), ohne die Auswahl zu ändern. Abschalten: Ansicht → „Auswahl
+  nebeneinander vergleichen“.
+- **Referenzbild** (Umschalt+Enter oder Rechtsklick in der Vergleichsansicht): Es bleibt links neben
+  dem aktuellen Bild stehen, auch beim Durchblättern.
+- **An Referenz angleichen** (Menü „Bild“): Belichtung und/oder Weißabgleich der Auswahl werden an das
+  Referenzbild angepasst. Die Belichtung bringt die mittlere Helligkeit auf die der Referenz, der
+  Weißabgleich übernimmt deren Abweichung von einer neutralen Szene. Eine bewusst warme Referenz
+  macht die anderen Bilder also gleich warm, auch wenn sie bei anderem Licht entstanden sind.
+- **Fokusmaske** (K oder Ansicht → „Fokusmaske“): Scharfe Bereiche werden grün markiert, auch in der
+  Vergleichsansicht, um schnell das schärfste Bild einer Serie zu finden. Gemessen wird die Energie der
+  feinsten Details, die bei Unschärfe zuerst verschwinden; hineingezoomt in voller Auflösung. Die Empfindlichkeit lässt sich im Menü
+  „Ansicht“ einstellen.
+- **Hauttöne** (Tab „Farbe“): Mit der Pipette einen Hautton aufnehmen. „Gleichmäßigkeit“ zieht
+  Farbton, Sättigung und Helligkeit der ähnlichen Farben zu diesem Ton hin (Flecken, Rötungen),
+  „Hautton verändern“ verschiebt den ganzen Bereich.
+
 Weitere Funktionen: **Dunst entfernen** (Dark-Channel-Prior, global und pro Ebene), **Speed Edit**
-(Taste halten + Mausrad), **geteilte Vorher/Nachher-Ansicht** und **mehrere Ausgaberezepte**, die
-in einem Durchgang verarbeitet werden (das RAW wird pro Bild nur einmal entwickelt).
+(Taste halten + Mausrad), **Vorher/Nachher** geteilt mit verschiebbarem Trenner (U) oder nebeneinander
+mit gemeinsamem Zoom und Ausschnitt (Umschalt+U), und **mehrere Ausgaberezepte**, die in einem Durchgang
+verarbeitet werden (das RAW wird pro Bild nur einmal entwickelt).
+
+### Automatisch geraderichten
+
+Silberkorn sucht gerade Kanten im Bild (Linienerkennung nach dem
+LSD-Prinzip) und bestimmt Drehung und Keystone so, dass sie waagerecht bzw. senkrecht stehen.
+Bewertet wird jede Lösung über die echte Geometrie-Kette, einschließlich Objektivkorrektur.
+
+- **Auto** (Umschalt+A, Bild → „Automatisch geraderichten“): Drehung und stürzende Linien.
+- **Nur Drehung:** Horizont und Kanten waagerecht, Keystone bleibt unverändert.
+- **Voll:** zusätzlich horizontaler Keystone, etwa für eine schräg fotografierte Fassade.
+
+Waagerechte zählen bis 8° Abweichung, Senkrechte bis 15°; deutlich schräge Kanten wie Dächer
+oder Wege bleiben unberücksichtigt. Keystone wird nur gesetzt, wenn mehrere passende Kanten über
+das Bild verteilt sind. Die Buttons stehen im Tab „Objektiv“ unter „Keystone“; das Ergebnis ist ein
+Rückgängig-Schritt und lässt sich mit den Reglern nachjustieren.
+
+### Lupe
+
+Maustaste auf dem eingepassten Bild gedrückt halten: Ein Ausschnitt unter dem Cursor erscheint in
+100 % (ein Bildpixel pro Bildschirmpixel). Gezeigt werden die
+Kacheln in voller Auflösung, solange sie noch berechnet werden die vergrößerte Vorschau.
+
+### Verlauf und Schnappschüsse
+
+Der Tab **„Verlauf“** listet alle Bearbeitungsschritte des Bildes, benannt nach dem, was sich
+geändert hat („Belichtung 0,8“, „Keystone, Geraderichten“). Ein Klick springt zu diesem Stand,
+spätere Schritte bleiben erreichbar, bis eine neue Änderung sie verwirft. Der Verlauf gilt, solange
+das Bild geöffnet ist.
+
+**Schnappschüsse** sichern einen Stand unter einem Namen, dauerhaft im Sidecar (je Bild bzw.
+Variante). Klick wendet ihn an (ein Rückgängig-Schritt), Doppelklick benennt um.
+
+### Umbenennen
+
+**Bild → „Umbenennen …“** (Strg+Umschalt+R) benennt die ausgewählten Dateien nach einer Vorlage um,
+mit Vorschau. Platzhalter: `{Name}`, `{Zähler}` (`{Zähler:3}` dreistellig, Startwert wählbar),
+`{Datum}`, `{Zeit}`, `{Jahr}`, `{Monat}`, `{Tag}`, `{Kamera}`, `{Objektiv}`, `{Session}`,
+`{Variante}`. Sidecar, Varianten, Schnappschüsse, Katalogeinträge und Vorschaubilder wandern mit;
+ist ein Name vergeben, wird „-2“ usw. angehängt. Dieselben Platzhalter gibt es im Ausgaberezept
+als **Dateiname** der verarbeiteten Bilder (der Zähler zählt dort die Bilder eines Durchgangs).
+
+### Hilfslinien und Overlay
+
+- **Hilfslinien** (O wechselt, oder Ansicht → „Hilfslinien“): Drittel, goldener Schnitt, Raster mit
+  annähernd quadratischen Feldern, Diagonalen.
+- **Overlay** (Umschalt+O, Ansicht → „Overlay wählen …“): ein eigenes Layout-PNG, z. B. Titelseite
+  oder Beschnittzugabe, wird eingepasst über das Bild gelegt; Deckkraft im Menü einstellbar.
+
+### Wasserzeichen und Metadaten (Ausgaberezept)
+
+- **Wasserzeichen:** Text (weiß oder schwarz) oder Logo (PNG mit Transparenz), in neun Positionen,
+  Größe und Randabstand in % der kurzen Bildkante, Deckkraft einstellbar. Die Proof-Ansicht (P)
+  zeigt es so, wie es geschrieben wird.
+- **Metadaten:** JPEG und PNG erhalten EXIF mit Kamera, Objektiv, Belichtung und Aufnahmedatum
+  (abschaltbar) sowie Fotograf und Copyright. GPS-Daten werden nie übernommen. TIFF-Dateien
+  erhalten keine Metadaten.
 
 ### Objektivprofile
 
@@ -89,6 +168,22 @@ Lensfun-XML-Dateien werden aus `~/.local/share/silberkorn/lensfun`, `~/.local/sh
 (Quelle: lensfun auf GitHub, Lizenz CC BY-SA 3.0; sie wird nicht mit Silberkorn ausgeliefert).
 
 Einstellungen werden nicht-destruktiv als `<Bild>.sk.json` neben dem RAW gespeichert.
+
+### Varianten
+
+Ein RAW kann mehrere Bearbeitungen
+haben, z. B. Farbe und Schwarzweiß. **F2** legt eine neue Variante mit Standardeinstellungen an,
+**F3** klont die aktuelle; beides auch im Menü „Bild“ und per Rechtsklick auf ein Vorschaubild.
+Varianten erscheinen im Browser als eigene Bilder („IMG_0001.ARW (2)“) mit eigener Bewertung,
+eigenem Label und eigenen Keywords, lassen sich vergleichen, in Alben legen und verarbeiten
+(Ausgabe als `IMG_0001-v2.jpg`).
+
+Gespeichert werden sie im Sidecar der RAW-Datei (Feld `variants`). Beim Verschieben oder Löschen
+der Datei wandern sie also mit. Intern heißt eine Variante wie die Datei mit angehängtem `#2`, `#3` …
+Die erste Variante gehört zur Datei selbst. Weitere lassen sich über „Variante löschen“ (mit Rückfrage)
+wieder entfernen; Strg+Entf auf ausgewählten weiteren Varianten tut dasselbe, statt die ganze Datei in
+den Papierkorb zu legen. Ein beschädigtes Sidecar wird vor dem Überschreiben als `.sk.json.bak`
+gesichert.
 
 ## Bibliothek
 
@@ -128,6 +223,12 @@ Hochzeit Müller/
   Nur Favoriten außerhalb des Session-Ordners bleiben absolute Pfade.
 - **Vorschaubilder** einer Session liegen in `Silberkorn/Cache/Thumbnails` im Session-Ordner
   und wandern mit; Bilder außerhalb von Sessions nutzen den Cache unter `~/.cache/silberkorn`.
+  Ebenso die bildschirmgroßen **Vorschauen** des Viewers (`Silberkorn/Cache/Previews` bzw.
+  `~/.cache/silberkorn/previews`): Ein schon einmal angesehenes Bild erscheint beim Durchblättern
+  sofort, die Nachbarbilder werden im Hintergrund vorbereitet. Fehlende Vorschauen eines Ordners
+  oder einer Session entstehen im Hintergrund, sobald die App eine Weile nichts zu tun hat
+  (Fortschritt rechts in der Statusleiste); die Thumbnails zeigen dann ebenfalls die eigene
+  Entwicklung statt des Kamera-JPEGs.
 
 Alben, Smart-Alben, Keywords und Suche funktionieren in einer Session genauso wie im Katalog,
 beziehen sich aber nur auf die Bilder der Session.
@@ -176,10 +277,24 @@ Daten aus der Zeit als „Capture Room“ werden übernommen: Ordner `capture-ro
 | H / S | Reparieren / Klonen · Entf: Punkt löschen |
 | M | Maske anzeigen · [ / ]: Pinselgröße · mittlere Maustaste: verschieben |
 | J | Magic Brush |
-| U | geteilte Vorher/Nachher-Ansicht |
+| U / Umschalt+U | Vorher/Nachher geteilt / nebeneinander |
+| O / Umschalt+O | Hilfslinien wechseln / eigenes Overlay |
+| Umschalt+A | automatisch geraderichten |
+| Strg+Umschalt+R | Auswahl umbenennen |
+| Maustaste halten | Lupe (100 %) im eingepassten Bild |
+| Umschalt+Enter | Referenzbild festlegen / entfernen |
+| K | Fokusmaske |
+| F2 / F3 | neue Variante / Variante klonen |
 | Q / A / D / F / V / T + Mausrad | Speed Edit: Belichtung / Kontrast / Sättigung / Lichter / Tiefen / Temperatur (auf der aktiven Ebene, sonst global) |
 
 Doppelklick auf einen Reglernamen setzt den Regler zurück.
+
+## Bildnachweis
+
+Startbildschirm: Ansel Adams, *The Tetons and the Snake River* (1942), Grand-Teton-Nationalpark.
+Als Werk eines Angestellten der US-Bundesregierung gemeinfrei
+([Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Adams_The_Tetons_and_the_Snake_River.jpg),
+Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verkleinert.
 
 ## Roadmap
 
@@ -188,3 +303,8 @@ Doppelklick auf einen Reglernamen setzt den Regler zurück.
 - **Phase 3 (fertig):** Zuschnitt/Geraderichten/Keystone, Schärfen, Rauschreduzierung, Objektivkorrektur (manuell + Lensfun), Color Editor, Color Balance, Schwarzweiß, Klarheit/Struktur, lokales HDR, Körnung/Vignette, Auto-Anpassungen, echtes 100 % (Kachel-Rendering), Highlight-Rekonstruktion, Ausgabe-Farbräume mit ICC
 - **Phase 4 (fertig):** Ebenen und Masken (Pinsel, Radierer, linearer/radialer Verlauf, Deckkraft), Reparieren/Klonen
 - **Phase 5 (fertig):** Luma Range, Farbbereichsmasken, Style Brushes, KI-Motivmaske (ONNX), Himmelmaske, Magic Brush, Dunst entfernen, Speed Edit, Vergleichsansicht, mehrere Ausgaberezepte
+- **Phase 6 (fertig):** Mehrfachansicht mit Referenzbild und synchronem Zoom, Angleichen von Belichtung/Weißabgleich an eine Referenz, Hauttöne vereinheitlichen
+- **Phase 7 (fertig):** Varianten (virtuelle Kopien), Fokusmaske
+- **Phase 8 (fertig):** Vorher/Nachher nebeneinander, Wasserzeichen (Text/Logo), EXIF und Copyright im Export, Hilfslinien und Layout-Overlay
+- **Phase 9 (fertig):** automatisches Geraderichten (Drehung, vertikaler/horizontaler Keystone)
+- **Phase 10 (fertig):** Lupe, Verlauf und Schnappschüsse, Umbenennen mit Platzhaltern (auch im Ausgaberezept)

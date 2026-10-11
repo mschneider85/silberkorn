@@ -43,6 +43,9 @@ pub struct GeoMap {
     ca: [f32; 3],
     vig: [f32; 3],
     identity_lens: bool,
+    /// Every output pixel is exactly one source pixel (only quarter turns, flips and a crop
+    /// on whole pixels): resampling is a plain copy.
+    pixel_exact: bool,
     pub out_w: usize,
     pub out_h: usize,
 }
@@ -75,6 +78,16 @@ impl GeoMap {
         let vig = [vig[0] - v, vig[1], vig[2]];
         let identity_lens = k1 == 0.0 && ptlens.is_none() && poly5.is_none() && ca == [1.0; 3];
 
+        // Tolerance for float noise (0.4 * 10.0 is not exactly 4 in f32).
+        let whole = |v: f32| (v - v.round()).abs() < 1e-3;
+        let pixel_exact = theta == 0.0
+            && geom.keystone_v == 0.0
+            && geom.keystone_h == 0.0
+            && identity_lens
+            && vig == [0.0; 3]
+            && whole(crop.x * frame_w)
+            && whole(crop.y * frame_h);
+
         let out_w = ((crop.w * frame_w).round() as usize).max(1);
         let out_h = ((crop.h * frame_h).round() as usize).max(1);
         Self {
@@ -100,6 +113,7 @@ impl GeoMap {
             ca,
             vig,
             identity_lens,
+            pixel_exact,
             out_w,
             out_h,
         }
@@ -205,6 +219,20 @@ impl GeoMap {
     /// Resamples `src` (camera space) into the output region.
     pub fn resample(&self, src: &LinearImage, region: Region) -> LinearImage {
         let mut out = vec![[0.0f32; 3]; region.w * region.h];
+        if self.pixel_exact {
+            let (cx, cy) = (self.src_w / 2.0 - 0.5, self.src_h / 2.0 - 0.5);
+            out.par_chunks_mut(region.w).enumerate().for_each(|(ry, line)| {
+                let oy = (region.y + ry) as f32 + 0.5;
+                for (rx, px) in line.iter_mut().enumerate() {
+                    let (x, y) = self.to_source_centered((region.x + rx) as f32 + 0.5, oy);
+                    let (sx, sy) = ((x + cx).round(), (y + cy).round());
+                    if sx >= 0.0 && sy >= 0.0 && (sx as usize) < src.width && (sy as usize) < src.height {
+                        *px = src.data[sy as usize * src.width + sx as usize];
+                    }
+                }
+            });
+            return LinearImage::new(region.w, region.h, out);
+        }
         out.par_chunks_mut(region.w).enumerate().for_each(|(ry, line)| {
             let oy = (region.y + ry) as f32 + 0.5;
             for (rx, px) in line.iter_mut().enumerate() {
@@ -262,6 +290,32 @@ fn bilinear(img: &LinearImage, x: f32, y: f32) -> [f32; 3] {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn pixel_exact_resampling_matches_bilinear() {
+        // Crop offsets on whole pixels in both orientations (10 x 5 and 5 x 10).
+        let src = LinearImage::new(10, 5, (0..50).map(|i| [i as f32, (i * 3 % 11) as f32, 1.0 / (i + 1) as f32]).collect());
+        for turns in 0..4 {
+            for (flip_h, flip_v) in [(false, false), (true, false), (false, true)] {
+                let geom = Geometry {
+                    flip_h,
+                    flip_v,
+                    crop: CropRect { x: 0.4, y: 0.2, w: 0.6, h: 0.6 },
+                    ..Default::default()
+                };
+                let map = GeoMap::new(&geom, &LensCorrection::default(), turns, 10, 5, false);
+                assert!(map.pixel_exact, "Drehung {turns}");
+                let region = Region { x: 0, y: 0, w: map.out_w, h: map.out_h };
+                let fast = map.resample(&src, region);
+                let slow = GeoMap { pixel_exact: false, ..map.clone() }.resample(&src, region);
+                let max_diff = fast.data.iter().zip(&slow.data).flat_map(|(a, b)| (0..3).map(move |c| (a[c] - b[c]).abs())).fold(0.0, f32::max);
+                assert!(max_diff < 0.05, "Drehung {turns}, Spiegelung {flip_h}/{flip_v}: {max_diff}");
+            }
+        }
+        let tilted = Geometry { straighten: 1.0, ..Default::default() };
+        assert!(!GeoMap::new(&tilted, &LensCorrection::default(), 0, 10, 5, false).pixel_exact);
+    }
+
     use super::*;
 
     fn gradient(w: usize, h: usize) -> LinearImage {

@@ -32,6 +32,28 @@ pub struct StraightenTool {
     line: Option<(Pos2, Pos2)>,
 }
 
+impl App {
+    /// Straighten angle and keystone from the image's straight edges.
+    pub fn auto_upright(&mut self, mode: sk_core::upright::UprightMode) {
+        let Some(cur) = &self.current else { return };
+        let segments = sk_core::upright::detect_segments(&cur.preview);
+        let adj = &cur.adjustments;
+        let src = (cur.preview.width, cur.preview.height);
+        let Some(g) = sk_core::upright::solve(&segments, &adj.geometry, &adj.lens, adj.rotation, src, mode) else {
+            self.status = "Automatisch geraderichten: keine geraden Kanten gefunden".into();
+            return;
+        };
+        let keystone = if g.keystone_v != 0.0 || g.keystone_h != 0.0 {
+            format!(", Keystone {:.0} / {:.0}", g.keystone_v, g.keystone_h)
+        } else {
+            String::new()
+        };
+        self.status = format!("Automatisch geraderichten: {:.1}°{keystone}", g.straighten).replace('.', ",");
+        self.edit(|a| a.geometry = g);
+        self.commit_and_save();
+    }
+}
+
 /// Rotation (degrees) that makes a line with direction `d` (screen coordinates) axis aligned.
 pub fn straighten_delta(d: Vec2) -> f32 {
     let a = d.y.atan2(d.x).to_degrees();

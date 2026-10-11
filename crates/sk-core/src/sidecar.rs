@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::params::Adjustments;
@@ -68,9 +68,63 @@ pub struct Sidecar {
     pub color_label: ColorLabel,
     pub keywords: Vec<String>,
     pub adjustments: Adjustments,
+    /// Further variants of the image (see `variant`), only in the raw file's sidecar.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub variants: Vec<Variant>,
+    /// Saved states of the adjustments (snapshots).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub snapshots: Vec<Snapshot>,
 }
 
+/// A named state of the adjustments.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Snapshot {
+    pub name: String,
+    pub adjustments: Adjustments,
+}
+
+/// Settings of a further variant (number `id` ≥ 2).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Variant {
+    pub id: u32,
+    pub rating: u8,
+    pub color_label: ColorLabel,
+    pub keywords: Vec<String>,
+    pub adjustments: Adjustments,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub snapshots: Vec<Snapshot>,
+}
+
+impl Variant {
+    fn to_sidecar(&self) -> Sidecar {
+        Sidecar {
+            version: 1,
+            rating: self.rating,
+            color_label: self.color_label,
+            keywords: self.keywords.clone(),
+            adjustments: self.adjustments.clone(),
+            variants: Vec::new(),
+            snapshots: self.snapshots.clone(),
+        }
+    }
+
+    fn from_sidecar(id: u32, sc: &Sidecar) -> Self {
+        Variant {
+            id,
+            rating: sc.rating,
+            color_label: sc.color_label,
+            keywords: sc.keywords.clone(),
+            adjustments: sc.adjustments.clone(),
+            snapshots: sc.snapshots.clone(),
+        }
+    }
+}
+
+/// Sidecar file of an image; variants share the one of their raw file.
 pub fn sidecar_path(image: &Path) -> PathBuf {
+    let image = &crate::variant::file_of(image);
     let mut name = image.file_name().unwrap_or_default().to_os_string();
     name.push(".sk.json");
     image.with_file_name(name)
@@ -78,6 +132,7 @@ pub fn sidecar_path(image: &Path) -> PathBuf {
 
 /// Sidecar name used before the rename to Silberkorn.
 fn legacy_sidecar_path(image: &Path) -> PathBuf {
+    let image = &crate::variant::file_of(image);
     let mut name = image.file_name().unwrap_or_default().to_os_string();
     name.push(".crs.json");
     image.with_file_name(name)
@@ -88,15 +143,105 @@ pub fn sidecar_files_for(image: &Path) -> [PathBuf; 2] {
     [sidecar_path(image), legacy_sidecar_path(image)]
 }
 
+/// Settings of an image or variant. The raw file's sidecar also lists its further variants.
 pub fn load(image: &Path) -> Sidecar {
-    std::fs::read_to_string(sidecar_path(image))
-        .or_else(|_| std::fs::read_to_string(legacy_sidecar_path(image)))
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    let file = load_file(image);
+    match crate::variant::number(image) {
+        1 => file,
+        n => file.variants.iter().find(|v| v.id == n).map(Variant::to_sidecar).unwrap_or_default(),
+    }
 }
 
+fn load_file(image: &Path) -> Sidecar {
+    read_file(image).ok().flatten().unwrap_or_default()
+}
+
+/// The sidecar file of an image: `None` if there is none, an error if it can't be read.
+fn read_file(image: &Path) -> Result<Option<Sidecar>> {
+    for path in sidecar_files_for(image) {
+        match std::fs::read_to_string(&path) {
+            Ok(text) => return Ok(Some(serde_json::from_str(&text).with_context(|| format!("{} ist beschädigt", path.display()))?)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e).with_context(|| format!("{} kann nicht gelesen werden", path.display())),
+        }
+    }
+    Ok(None)
+}
+
+/// The sidecar file before changing it. One that can't be parsed is kept as `.bak` (it may hold
+/// the settings of all variants) instead of being overwritten without notice.
+fn load_for_update(image: &Path) -> Result<Sidecar> {
+    match read_file(image) {
+        Ok(sc) => Ok(sc.unwrap_or_default()),
+        Err(e) if e.chain().any(|c| c.is::<serde_json::Error>()) => {
+            let _ = e;
+            for path in sidecar_files_for(image).into_iter().filter(|p| p.exists()) {
+                let mut backup = path.clone().into_os_string();
+                backup.push(".bak");
+                std::fs::rename(&path, &backup).with_context(|| format!("{} kann nicht gesichert werden", path.display()))?;
+            }
+            Ok(Sidecar::default())
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// Stores the settings of an image or variant. The list of further variants and the snapshots
+/// are kept as they are (they change only through [`add_variant`], [`remove_variant`] and
+/// [`set_snapshots`]).
 pub fn save(image: &Path, sidecar: &Sidecar) -> Result<()> {
+    let mut file = load_for_update(image)?;
+    match crate::variant::number(image) {
+        1 => {
+            file = Sidecar {
+                variants: std::mem::take(&mut file.variants),
+                snapshots: std::mem::take(&mut file.snapshots),
+                ..sidecar.clone()
+            }
+        }
+        n => match file.variants.iter_mut().find(|v| v.id == n) {
+            Some(v) => *v = Variant { snapshots: std::mem::take(&mut v.snapshots), ..Variant::from_sidecar(n, sidecar) },
+            None => file.variants.push(Variant { snapshots: Vec::new(), ..Variant::from_sidecar(n, sidecar) }),
+        },
+    }
+    write_file(image, &file)
+}
+
+/// Replaces the snapshots of an image or variant.
+pub fn set_snapshots(image: &Path, snapshots: Vec<Snapshot>) -> Result<()> {
+    let mut file = load_for_update(image)?;
+    match crate::variant::number(image) {
+        1 => file.snapshots = snapshots,
+        n => match file.variants.iter_mut().find(|v| v.id == n) {
+            Some(v) => v.snapshots = snapshots,
+            None => anyhow::bail!("Variante {n} gibt es nicht"),
+        },
+    }
+    write_file(image, &file)
+}
+
+/// Adds a variant with these settings to an image; returns its path.
+pub fn add_variant(image: &Path, settings: &Sidecar) -> Result<PathBuf> {
+    let raw = crate::variant::file_of(image);
+    let mut file = load_for_update(&raw)?;
+    let id = file.variants.iter().map(|v| v.id).max().unwrap_or(1).max(1) + 1;
+    file.variants.push(Variant::from_sidecar(id, settings));
+    write_file(&raw, &file)?;
+    Ok(crate::variant::path_for(&raw, id))
+}
+
+/// Removes a further variant (not the raw file's own settings).
+pub fn remove_variant(variant: &Path) -> Result<()> {
+    let n = crate::variant::number(variant);
+    if n < 2 {
+        anyhow::bail!("Die erste Variante gehört zur Datei selbst");
+    }
+    let mut file = load_for_update(variant)?;
+    file.variants.retain(|v| v.id != n);
+    write_file(variant, &file)
+}
+
+fn write_file(image: &Path, sidecar: &Sidecar) -> Result<()> {
     let path = sidecar_path(image);
     let legacy = legacy_sidecar_path(image);
     if legacy.exists() {
@@ -136,6 +281,60 @@ mod tests {
     }
 
     #[test]
+    fn snapshots_survive_ordinary_saves() {
+        let dir = std::env::temp_dir().join(format!("sk-snapshot-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("s.ARW");
+        save(&img, &Sidecar { rating: 1, ..Default::default() }).unwrap();
+        let v2 = add_variant(&img, &Sidecar::default()).unwrap();
+        let snap = |name: &str, ev: f32| Snapshot { name: name.into(), adjustments: Adjustments { exposure: ev, ..Default::default() } };
+        set_snapshots(&img, vec![snap("Farbe", 0.5)]).unwrap();
+        set_snapshots(&v2, vec![snap("SW", -0.3)]).unwrap();
+        // Rating or adjustments saved the usual way (snapshots empty there) keep them.
+        save(&img, &Sidecar { rating: 4, ..Default::default() }).unwrap();
+        save(&v2, &Sidecar { rating: 2, ..Default::default() }).unwrap();
+        assert_eq!(load(&img).snapshots, vec![snap("Farbe", 0.5)]);
+        assert_eq!(load(&v2).snapshots, vec![snap("SW", -0.3)]);
+        assert_eq!((load(&img).rating, load(&v2).rating), (4, 2));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn variants_live_in_the_raw_sidecar() {
+        let dir = std::env::temp_dir().join(format!("sk-variant-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("c.ARW");
+        save(&img, &Sidecar { rating: 2, ..Default::default() }).unwrap();
+        let mut bw = Sidecar { rating: 5, ..Default::default() };
+        bw.adjustments.black_white.enabled = true;
+        let v2 = add_variant(&img, &bw).unwrap();
+        assert_eq!(crate::variant::number(&v2), 2);
+        assert_eq!(sidecar_path(&v2), sidecar_path(&img));
+        let v3 = add_variant(&v2, &Sidecar::default()).unwrap();
+        assert_eq!(crate::variant::number(&v3), 3);
+        assert_eq!(crate::variant::of_file(&img), vec![img.clone(), v2.clone(), v3.clone()]);
+        // Each variant has its own settings ...
+        assert_eq!(load(&v2).rating, 5);
+        assert!(load(&v2).adjustments.black_white.enabled);
+        assert_eq!(load(&img).rating, 2);
+        // ... and saving one keeps the others, also saving the file's own settings without the list.
+        save(&v2, &Sidecar { rating: 1, ..Default::default() }).unwrap();
+        save(&img, &Sidecar { rating: 4, ..Default::default() }).unwrap();
+        assert_eq!(load(&v2).rating, 1);
+        assert_eq!(load(&img).rating, 4);
+        assert_eq!(load(&img).variants.len(), 2);
+        // Default settings of the file don't remove the sidecar while variants exist.
+        save(&img, &Sidecar::default()).unwrap();
+        assert!(sidecar_path(&img).exists());
+        remove_variant(&v2).unwrap();
+        assert!(remove_variant(&img).is_err());
+        assert_eq!(crate::variant::of_file(&img), vec![img.clone(), v3.clone()]);
+        // A new variant never reuses a number still in use.
+        assert_eq!(crate::variant::number(&add_variant(&img, &Sidecar::default()).unwrap()), 4);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn reads_and_replaces_legacy_sidecar() {
         let dir = std::env::temp_dir().join(format!("sk-legacy-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -147,6 +346,32 @@ mod tests {
         save(&img, &sc).unwrap();
         assert!(!legacy_sidecar_path(&img).exists());
         assert_eq!(load(&img).rating, 5);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn damaged_sidecar_is_kept_as_backup() {
+        let dir = std::env::temp_dir().join(format!("sk-damaged-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("d.ARW");
+        std::fs::write(sidecar_path(&img), "{ \"variants\": [ kaputt").unwrap();
+        save(&img, &Sidecar { rating: 3, ..Default::default() }).unwrap();
+        assert_eq!(load(&img).rating, 3);
+        let backup = dir.join("d.ARW.sk.json.bak");
+        assert!(std::fs::read_to_string(backup).unwrap().contains("kaputt"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn damaged_sidecar_is_kept_as_backup() {
+        let dir = std::env::temp_dir().join(format!("sk-damaged-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("d.ARW");
+        std::fs::write(sidecar_path(&img), "{ \"variants\": [ kaputt").unwrap();
+        save(&img, &Sidecar { rating: 3, ..Default::default() }).unwrap();
+        assert_eq!(load(&img).rating, 3);
+        let backup = dir.join("d.ARW.sk.json.bak");
+        assert!(std::fs::read_to_string(backup).unwrap().contains("kaputt"));
         std::fs::remove_dir_all(dir).ok();
     }
 }

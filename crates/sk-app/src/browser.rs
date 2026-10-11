@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use egui::{Color32, Modifiers, Pos2, Rect, Sense, Ui, Vec2, pos2, vec2};
 
 use crate::app::App;
+use crate::workers::TILE;
 use crate::{theme, widgets};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -26,13 +27,42 @@ pub const SPEED_KEYS: [(egui::Key, SpeedParam); 6] = [
     (egui::Key::T, SpeedParam::Temperature),
 ];
 
+/// "850 KB", "3,4 MB"
+fn file_size(bytes: usize) -> String {
+    if bytes < 1024 * 1024 {
+        format!("{} KB", bytes.div_ceil(1024))
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0)).replace('.', ",")
+    }
+}
+
+/// Pixel budget of a view draft while dragging a control (about that of the whole-image draft).
+const DRAFT_PIXELS: usize = 700_000;
+
 impl App {
     pub fn viewer(&mut self, ui: &mut Ui) {
         let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, theme::VIEWER);
+        painter.rect_filled(rect, 0.0, if self.fullscreen { Color32::from_gray(10) } else { theme::VIEWER });
 
+        // Several selected images and/or the reference side by side.
+        let cells = self.compare_cells();
+        if !cells.is_empty() {
+            self.compare_view(ui, rect, &cells);
+            return;
+        }
+
+        // While the selected image loads: its thumbnail, cached preview or camera JPEG, no tools.
+        if (self.texture.is_none() || self.loading.is_some())
+            && let Some(ph) = &self.placeholder
+        {
+            let size = ph.size_vec2();
+            let fit = ((rect.width() - 20.0) / size.x).min((rect.height() - 20.0) / size.y).max(0.01);
+            let r = Rect::from_center_size(rect.center(), size * fit);
+            painter.image(ph.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            return;
+        }
         let Some(tex) = &self.texture else {
             let msg = if let Some(e) = &self.load_error {
                 format!("Fehler: {e}")
@@ -46,10 +76,27 @@ impl App {
             painter.text(rect.center(), egui::Align2::CENTER_CENTER, msg, egui::FontId::proportional(16.0), Color32::from_gray(170));
             return;
         };
-        let size = tex.size_vec2();
+        // Before | after side by side: the single view runs in the right half, the left one
+        // shows the before rendering at the same zoom and position.
+        let side = (self.split_view && self.split_side).then(|| {
+            let mid = rect.center().x;
+            (Rect::from_min_max(rect.min, pos2(mid - 2.0, rect.bottom())), Rect::from_min_max(pos2(mid + 2.0, rect.top()), rect.max))
+        });
+        let (rect, painter) = match side {
+            Some((_, right)) => (right, ui.painter_at(right)),
+            None => (rect, painter),
+        };
+        // Drafts are smaller textures drawn at the size of the full rendering.
+        let size = self.view_size.unwrap_or(tex.size_vec2());
         let tex_id = tex.id();
         let tools_active = self.crop_tool.is_some() || self.straighten_tool.is_some() || self.local_tool.is_some();
-        let margin = if self.crop_tool.is_some() { 40.0 } else { 20.0 };
+        let margin = if self.crop_tool.is_some() {
+            40.0
+        } else if self.fullscreen {
+            0.0
+        } else {
+            20.0
+        };
         let fit = ((rect.width() - margin) / size.x).min((rect.height() - margin) / size.y).max(0.01);
         let scale = self.zoom.unwrap_or(fit);
 
@@ -80,6 +127,8 @@ impl App {
             if scroll != 0.0 {
                 let new_scale = (scale * (1.0 + scroll * 0.0015)).clamp(fit.min(0.05), 16.0);
                 if let Some(cursor) = response.hover_pos() {
+                    // Over the before half: the same spot of the image.
+                    let cursor = side.filter(|(l, _)| l.contains(cursor)).map_or(cursor, |(l, r)| cursor + (r.center() - l.center()));
                     let center = rect.center() + self.pan;
                     let rel = (cursor - center) / scale;
                     self.pan = cursor - rect.center() - rel * new_scale;
@@ -87,35 +136,90 @@ impl App {
                 self.zoom = Some(new_scale);
             }
         }
-        if (response.dragged() && !self.picking_wb && !tools_active && !self.split_dragging) || response.dragged_by(egui::PointerButton::Middle) {
+        if (response.dragged() && !self.picking_wb && !self.picking_skin && !tools_active && !self.split_dragging) || response.dragged_by(egui::PointerButton::Middle) {
             self.pan += response.drag_delta();
         }
         let scale = self.zoom.unwrap_or(fit);
         if self.zoom.is_none() {
             self.pan = Vec2::ZERO;
         }
+        // On whole physical pixels, so that 100 % maps each image pixel to exactly one screen pixel.
+        let ppp = self.pixels_per_point;
         let img_rect = Rect::from_center_size(rect.center() + self.pan, size * scale);
-        painter.image(tex_id, img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        let img_rect = img_rect.translate((img_rect.min.to_vec2() * ppp).round() / ppp - img_rect.min.to_vec2());
+        // Proof view: the exported image instead of the preview, once it is ready.
+        let proof_key = self.proof_key();
+        let proof = self.proof.as_ref().filter(|p| self.proof_view && p.version == self.edit_version && Some(p.key) == proof_key);
+        let shown = proof.map_or(tex_id, |p| p.texture.id());
+        painter.image(shown, img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        let proof_ready = proof.is_some();
 
-        // Full-resolution tile when the preview would be magnified.
-        self.update_tile(rect, img_rect, scale);
-        if let Some(tile) = &self.tile
-            && tile.version == self.edit_version
+        // Full-resolution tiles where the preview would be magnified on screen.
+        let magnified = scale * ppp > 1.0;
+        self.view_magnified = magnified
             && self.crop_tool.is_none()
             && self.straighten_tool.is_none()
-        {
-            let k = tile.full_size.0 as f32 / size.x;
-            let r = tile.region;
-            let tr = Rect::from_min_size(
-                img_rect.min + vec2(r.x as f32, r.y as f32) / k * scale,
-                vec2(r.w as f32, r.h as f32) / k * scale,
-            );
-            painter.image(tile.texture.id(), tr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            && self.current.as_ref().is_some_and(|c| c.full.is_some());
+        if magnified {
+            self.want_full_now();
+        }
+        self.update_tiles(rect, img_rect, scale, magnified);
+        let full_uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        self.ensure_focus_of_current();
+        let preview_mask = self.current_path().filter(|_| !proof_ready).and_then(|path| self.focus_overlay(ui.ctx(), &path, size.x / size.y));
+        if let Some(mask) = preview_mask {
+            painter.image(mask, img_rect, full_uv, Color32::WHITE);
+        }
+        if magnified && !proof_ready && self.tiles.full_size.0 > 0 && self.crop_tool.is_none() && self.straighten_tool.is_none() {
+            let k = self.tiles.full_size.0 as f32 / size.x;
+            let (fw, fh) = (self.tiles.full_size.0 as f32, self.tiles.full_size.1 as f32);
+            // `None`: the view region.
+            let grid = self.tiles.textures.iter().filter(|_| self.tiles.version == self.edit_version).map(|(&(tx, ty), t)| {
+                let [w, h] = t.size();
+                (sk_core::geometry::Region { x: tx * TILE, y: ty * TILE, w, h }, t.id(), Some((tx, ty)))
+            });
+            // While dragging, the latest (draft) view rendering stands in for the current one.
+            let view = self.tiles.view.iter().filter(|v| v.version == self.edit_version || self.texture_draft).map(|v| (v.region, v.texture.id(), None));
+            let shown: Vec<_> = grid.chain(view).collect();
+            let (sensitivity, ctx) = (self.focus_sensitivity, ui.ctx().clone());
+            for (r, texture, index) in shown {
+                let (x, y, w, h) = (r.x as f32, r.y as f32, r.w as f32, r.h as f32);
+                let tr = Rect::from_min_size(img_rect.min + vec2(x, y) / k * scale, vec2(w, h) / k * scale);
+                if !tr.intersects(rect) {
+                    continue;
+                }
+                painter.image(texture, tr, full_uv, Color32::WHITE);
+                // The focus mask at full resolution, else the preview's part of it.
+                let own = match index {
+                    _ if !self.focus_mask => None,
+                    Some(i) => self.tiles.focus.get_mut(&i).map(|f| f.overlay(&ctx, &format!("focus tile{i:?}"), sensitivity)),
+                    None => self.tiles.view.as_mut().and_then(|v| v.focus.as_mut()).map(|f| f.overlay(&ctx, "focus view tile", sensitivity)),
+                };
+                if let Some(mask) = own {
+                    painter.image(mask, tr, full_uv, Color32::WHITE);
+                } else if let Some(mask) = preview_mask {
+                    let uv = Rect::from_min_size(pos2(x / fw, y / fh), vec2(w / fw, h / fh));
+                    painter.image(mask, tr, uv, Color32::WHITE);
+                }
+            }
         }
 
         // Split before/after view.
         let mut split_drag = false;
-        if self.split_view
+        if let Some((left, right)) = side {
+            if let Some(before) = &self.before_texture
+                && before.size_vec2() == size
+            {
+                ui.painter_at(left).image(before.id(), img_rect.translate(left.center() - right.center()), full_uv, Color32::WHITE);
+            }
+            for (text, half) in [("Vorher", left), ("Nachher", right)] {
+                let galley = painter.layout_no_wrap(text.into(), egui::FontId::proportional(12.0), Color32::WHITE);
+                let r = egui::Align2::LEFT_BOTTOM.anchor_size(pos2(half.left() + 14.0, half.bottom() - 14.0), galley.size());
+                let p = ui.painter_at(half);
+                p.rect_filled(r.expand(4.0), 3.0, Color32::from_black_alpha(160));
+                p.galley(r.min, galley, Color32::WHITE);
+            }
+        } else if self.split_view
             && let Some(before) = &self.before_texture
             && before.size_vec2() == size
         {
@@ -148,7 +252,35 @@ impl App {
             }
         }
 
-        if split_drag {
+        // Over the before image of the divider view as well.
+        // The crop and straighten tools draw their own guides.
+        if self.crop_tool.is_none() && self.straighten_tool.is_none() {
+            self.draw_guides(ui.ctx(), &painter, img_rect);
+        }
+
+        // Not in distraction-free full screen.
+        if self.show_navigator && !self.fullscreen && self.zoom.is_some() && !rect.contains_rect(img_rect) && !tools_active {
+            self.navigator(ui, rect, img_rect, tex_id);
+        }
+
+        // Side by side, the before half only zooms and pans: tools and pickers act on the
+        // after half (where a drag started, while it lasts).
+        let in_after = side.is_none_or(|(_, r)| ui.input(|i| i.pointer.press_origin()).or(response.hover_pos()).is_none_or(|p| r.contains(p)));
+        // Loupe: holding the mouse button on the fitted image shows it at 100 % under the cursor.
+        let loupe = self.zoom.is_none()
+            && !tools_active
+            && !self.picking_wb
+            && !self.picking_skin
+            && !split_drag
+            && in_after
+            && response.is_pointer_button_down_on()
+            && ui.input(|i| i.pointer.primary_down());
+        // Debug aid (screenshots): a loupe at a relative image position.
+        let forced = self.debug_loupe.map(|v| img_rect.min + v * img_rect.size());
+        if let Some(p) = forced.or_else(|| response.interact_pointer_pos().filter(|p| loupe && img_rect.contains(*p))) {
+            self.loupe(ui, rect, p, img_rect, scale, size, shown);
+        }
+        if split_drag || !in_after {
             // The divider takes the drag.
         } else if self.local_tool.is_some() {
             self.local_overlay(ui, &response, img_rect, scale);
@@ -164,13 +296,21 @@ impl App {
             {
                 self.pick_white_balance((pos - img_rect.min) / scale);
             }
+        } else if self.picking_skin {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            if response.clicked()
+                && let Some(pos) = response.interact_pointer_pos()
+                && img_rect.contains(pos)
+            {
+                self.pick_skin_tone((pos - img_rect.min) / scale);
+            }
         } else if response.double_clicked() {
             self.toggle_zoom_100();
         }
 
         // File name and zoom are shown in the status bar; the viewer only marks active modes.
         let full_w = self.full_output_width().unwrap_or(size.x);
-        self.zoom_pct = Some(scale * size.x / full_w.max(1.0) * 100.0);
+        self.zoom_pct = Some(scale * ppp * size.x / full_w.max(1.0) * 100.0);
         let mode = if let Some(msg) = &self.speed_message {
             Some(msg.trim().to_string())
         } else if self.crop_tool.is_some() {
@@ -179,6 +319,8 @@ impl App {
             Some("Geraderichten – Linie entlang des Horizonts ziehen".into())
         } else if self.picking_wb {
             Some("Weißabgleich – auf eine neutrale Fläche klicken".into())
+        } else if self.picking_skin {
+            Some("Hautton – auf eine typische Hautstelle klicken".into())
         } else if self.show_before {
             Some("Vorher".into())
         } else {
@@ -192,6 +334,79 @@ impl App {
         }
         if self.loading.is_some() {
             painter.text(rect.right_top() + vec2(-10.0, 8.0), egui::Align2::RIGHT_TOP, "Lade…", egui::FontId::proportional(13.0), Color32::from_gray(200));
+        }
+        if self.proof_view {
+            let text = match (&self.proof, self.recipes.get(self.selected_recipe)) {
+                (Some(p), Some(r)) if proof_ready => {
+                    let format = match r.format {
+                        sk_core::export::ExportFormat::Jpeg => format!("JPEG {}", r.quality),
+                        f => f.label().to_string(),
+                    };
+                    // The recipe's name only if it says more than the format.
+                    let name = if r.name.is_empty() || r.name.eq_ignore_ascii_case(r.format.label()) { String::new() } else { format!("{}  ·  ", r.name) };
+                    format!("PROOF  ·  {name}{format}  ·  {} × {} px  ·  {}  ·  {}", p.width, p.height, r.output_space.label(), file_size(p.file_size))
+                }
+                (_, Some(r)) => format!("PROOF  ·  {}  ·  wird berechnet …", r.name),
+                (_, None) => "PROOF  ·  kein Ausgabe-Rezept".into(),
+            };
+            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), Color32::WHITE);
+            let pos = rect.left_top() + vec2(14.0, 12.0);
+            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand2(vec2(8.0, 4.0)), 4.0, theme::ACCENT.gamma_multiply(0.85));
+            painter.galley(pos, galley, Color32::WHITE);
+        }
+        if let Some(until) = self.fullscreen_hint_until {
+            let left = until.saturating_duration_since(std::time::Instant::now()).as_secs_f32();
+            if left > 0.0 {
+                let alpha = left.min(0.6) / 0.6;
+                let galley = painter.layout_no_wrap("Vollbild  ·  Esc oder F11 beendet".into(), egui::FontId::proportional(13.0), Color32::WHITE.gamma_multiply(alpha));
+                let pos = pos2(rect.center().x - galley.size().x / 2.0, rect.top() + 16.0);
+                painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand2(vec2(12.0, 6.0)), 12.0, Color32::from_black_alpha((170.0 * alpha) as u8));
+                painter.galley(pos, galley, Color32::WHITE.gamma_multiply(alpha));
+                ui.ctx().request_repaint();
+            }
+        }
+    }
+
+    /// Minimap of the whole image in the corner of the viewer, with the visible part framed.
+    /// Clicking or dragging in it moves the view there.
+    fn navigator(&mut self, ui: &mut Ui, viewport: Rect, img_rect: Rect, texture: egui::TextureId) {
+        let aspect = img_rect.width() / img_rect.height();
+        let max = vec2(200.0, 140.0);
+        let size = if aspect > max.x / max.y { vec2(max.x, max.x / aspect) } else { vec2(max.y * aspect, max.y) };
+        let nav = Rect::from_min_size(viewport.right_bottom() - size - vec2(16.0, 16.0), size);
+        let painter = ui.painter_at(viewport);
+        painter.rect_filled(nav.expand(4.0), 5.0, Color32::from_black_alpha(200));
+        painter.image(texture, nav, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+
+        // The visible part, everything else dimmed.
+        let to_nav = |p: Pos2| nav.min + (p - img_rect.min) / img_rect.size() * nav.size();
+        let vis = viewport.intersect(img_rect);
+        let frame = Rect::from_min_max(to_nav(vis.min), to_nav(vis.max)).intersect(nav);
+        let dim = Color32::from_black_alpha(130);
+        for r in [
+            Rect::from_min_max(nav.min, pos2(nav.max.x, frame.min.y)),
+            Rect::from_min_max(pos2(nav.min.x, frame.max.y), nav.max),
+            Rect::from_min_max(pos2(nav.min.x, frame.min.y), pos2(frame.min.x, frame.max.y)),
+            Rect::from_min_max(pos2(frame.max.x, frame.min.y), pos2(nav.max.x, frame.max.y)),
+        ] {
+            if r.is_positive() {
+                painter.rect_filled(r, 0.0, dim);
+            }
+        }
+        painter.rect_stroke(frame, 0.0, egui::Stroke::new(1.5, Color32::WHITE), egui::StrokeKind::Inside);
+
+        let resp = ui.interact(nav.expand(4.0), ui.id().with("navigator"), Sense::click_and_drag());
+        if resp.hovered() || resp.dragged() {
+            ui.ctx().set_cursor_icon(if resp.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+        }
+        if (resp.clicked() || resp.dragged())
+            && let Some(p) = resp.interact_pointer_pos()
+        {
+            // Center the view on the chosen point.
+            let f = ((p - nav.min) / nav.size()).clamp(Vec2::ZERO, vec2(1.0, 1.0));
+            let target = img_rect.min + f * img_rect.size();
+            self.pan += viewport.center() - target;
+            ui.ctx().request_repaint();
         }
     }
 
@@ -234,6 +449,50 @@ impl App {
     }
 
     /// Width of the output at full sensor resolution (estimated from the sensor size until loaded).
+    /// The image at 100 % (one image pixel per screen pixel) in a square around `cursor`, from
+    /// the full-resolution tiles where they are ready, else from the magnified preview.
+    #[allow(clippy::too_many_arguments)]
+    fn loupe(&mut self, ui: &Ui, viewport: Rect, cursor: Pos2, img_rect: Rect, scale: f32, size: Vec2, preview: egui::TextureId) {
+        const SIDE: f32 = 260.0;
+        let Some(full_w) = self.full_output_width() else { return };
+        let ppp = self.pixels_per_point;
+        // Full-resolution pixels per preview pixel, and the full-resolution position under the cursor.
+        let k = full_w / size.x;
+        let at = (((cursor - img_rect.min) / scale) * k).round();
+        // Ask for the full resolution of this spot (also while the button is held).
+        self.want_full_now();
+        let spot = Rect::from_center_size(cursor, Vec2::splat(SIDE * ppp / k * scale));
+        self.update_tiles(spot, img_rect, scale, true);
+
+        let r = Rect::from_center_size(((cursor.to_vec2() * ppp).round() / ppp).to_pos2(), Vec2::splat(SIDE));
+        let painter = ui.painter_at(r.intersect(viewport));
+        painter.rect_filled(r, 0.0, theme::VIEWER);
+        let to_screen = |full: Vec2| r.center() + (full - at) / ppp;
+        let full_uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+        painter.image(preview, Rect::from_min_max(to_screen(Vec2::ZERO), to_screen(size * k)), full_uv, Color32::WHITE);
+        if self.tiles.version == self.edit_version && self.tiles.full_size.0 > 0 {
+            let grid = self.tiles.textures.iter().map(|(&(tx, ty), t)| {
+                let [w, h] = t.size();
+                (sk_core::geometry::Region { x: tx * TILE, y: ty * TILE, w, h }, t.id())
+            });
+            let view = self.tiles.view.iter().filter(|v| v.version == self.edit_version && v.level == 1).map(|v| (v.region, v.texture.id()));
+            for (reg, texture) in grid.chain(view) {
+                let min = to_screen(vec2(reg.x as f32, reg.y as f32));
+                let tr = Rect::from_min_size(min, vec2(reg.w as f32, reg.h as f32) / ppp);
+                if tr.intersects(r) {
+                    painter.image(texture, tr, full_uv, Color32::WHITE);
+                }
+            }
+        }
+        // Frame and scale.
+        let p = ui.painter_at(viewport);
+        p.rect_stroke(r, 4.0, egui::Stroke::new(2.0, Color32::from_gray(230)), egui::StrokeKind::Outside);
+        let label = p.layout_no_wrap("100 %".into(), egui::FontId::proportional(11.0), Color32::WHITE);
+        let lr = Rect::from_min_size(r.left_bottom() + vec2(6.0, -6.0 - label.size().y), label.size());
+        p.rect_filled(lr.expand(3.0), 3.0, Color32::from_black_alpha(160));
+        p.galley(lr.min, label, Color32::WHITE);
+    }
+
     fn full_output_width(&self) -> Option<f32> {
         let cur = self.current.as_ref()?;
         let opts = sk_core::pipeline::RenderOptions { ignore_crop: self.crop_tool.is_some(), ..Default::default() };
@@ -248,66 +507,111 @@ impl App {
         Some(p.output_size(w, h).0 as f32)
     }
 
-    /// Zoom to 100 % (one full-resolution pixel per screen pixel) or back to fit.
+    /// Zoom to 100 % (one full-resolution pixel per physical screen pixel) or back to fit.
     pub fn toggle_zoom_100(&mut self) {
         if self.zoom.is_some() {
             self.zoom = None;
-        } else if let (Some(full_w), Some(tex)) = (self.full_output_width(), &self.texture) {
-            self.zoom = Some(full_w / tex.size_vec2().x);
+        } else if let (Some(full_w), Some(size)) = (self.full_output_width(), self.image_size()) {
+            self.zoom = Some(full_w / size.x / self.pixels_per_point);
         }
         self.pan = Vec2::ZERO;
     }
 
-    /// Requests a full-resolution tile for the visible area when zoomed in.
-    pub(crate) fn update_tile(&mut self, viewport: Rect, img_rect: Rect, scale: f32) {
+    /// Requests the missing full-resolution renderings: when zoomed in, the exact visible
+    /// region (unless tiles already cover it), then the grid tiles nearest to the view
+    /// center; otherwise all tiles once editing pauses, so that zooming in later is instant.
+    pub(crate) fn update_tiles(&mut self, viewport: Rect, img_rect: Rect, scale: f32, zoomed: bool) {
         let Some(cur) = &self.current else { return };
         let Some(full) = &cur.full else { return };
-        if scale <= 1.05 || self.crop_tool.is_some() || self.straighten_tool.is_some() {
+        let Some(size) = self.image_size() else { return };
+        // A style preview has no full-resolution rendering (only while hovering).
+        if self.crop_tool.is_some() || self.straighten_tool.is_some() || (self.pointer_down && !zoomed) || self.style_preview.is_some() {
             return;
         }
-        let Some(tex) = &self.texture else { return };
+        // Not zoomed: the order doesn't depend on the view, one request per edit is enough.
+        let requested = self.tiles_requested.as_ref().is_some_and(|(v, ..)| *v == self.edit_version);
+        if !zoomed && (requested || self.edited_at.elapsed() < std::time::Duration::from_secs(1)) {
+            return;
+        }
         let p = sk_core::pipeline::Processor::new(&cur.meta, &cur.adjustments);
         let (fw, fh) = p.output_size(full.width, full.height);
-        let k = fw as f32 / tex.size_vec2().x;
+        let k = fw as f32 / size.x;
+        let to_full = |pt: Pos2| (((pt - img_rect.min) / scale) * k).to_pos2();
+        let center = to_full(viewport.center());
         let vis = viewport.intersect(img_rect);
-        if vis.width() <= 0.0 || vis.height() <= 0.0 {
+        let (a, b) = (to_full(vis.min), to_full(vis.max));
+        let current = self.tiles.version == self.edit_version;
+        let mut todo: Vec<(usize, usize)> = (0..fh.div_ceil(TILE))
+            .flat_map(|y| (0..fw.div_ceil(TILE)).map(move |x| (x, y)))
+            .filter(|t| !(current && self.tiles.textures.contains_key(t) && (!self.focus_mask || self.tiles.focus.contains_key(t))))
+            .collect();
+        if todo.is_empty() {
             return;
         }
-        let to_full = |pt: Pos2| ((pt - img_rect.min) / scale) * k;
-        let (a, b) = (to_full(vis.min), to_full(vis.max));
+        let tile_rect = |(x, y): (usize, usize)| Rect::from_min_size(pos2((x * TILE) as f32, (y * TILE) as f32), vec2(TILE as f32, TILE as f32));
+        let view = Rect::from_min_max(a, b);
+        let visible = |t: (usize, usize)| tile_rect(t).intersects(view);
+        todo.sort_by_key(|&t| (!(zoomed && visible(t)), tile_rect(t).center().distance_sq(center) as u64));
+        // The exact view region, unless the tiles or the previous view region cover it.
         let pad = 32.0;
-        let x0 = (a.x - pad).max(0.0) as usize;
-        let y0 = (a.y - pad).max(0.0) as usize;
-        let x1 = ((b.x + pad) as usize).min(fw);
-        let y1 = ((b.y + pad) as usize).min(fh);
+        let (x0, y0) = ((a.x - pad).max(0.0) as usize, (a.y - pad).max(0.0) as usize);
+        let (x1, y1) = (((b.x + pad) as usize).min(fw), ((b.y + pad) as usize).min(fh));
         if x1 <= x0 || y1 <= y0 {
             return;
         }
         let region = sk_core::geometry::Region { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
-        // Reuse the current tile if it already covers the visible area.
-        let covers = |r: &sk_core::geometry::Region| {
-            r.x <= a.x.max(0.0) as usize && r.y <= a.y.max(0.0) as usize && r.x + r.w >= (b.x as usize).min(fw) && r.y + r.h >= (b.y as usize).min(fh)
-        };
-        if let Some((v, r)) = &self.tile_requested
-            && *v == self.edit_version
-            && covers(r)
-        {
+        // Something was edited while the mouse is down (not just panning): no sharp rendering yet.
+        let sharp = self.tiles.version == self.edit_version || self.tiles.view.as_ref().is_some_and(|v| v.version == self.edit_version && v.level == 1);
+        if self.pointer_down && !sharp {
+            // Dragging a control: only the view, reduced to the pixel budget of the whole-image
+            // draft, so it keeps up like the draft but stays far sharper when zoomed in.
+            let level = ((region.w * region.h) as f32 / DRAFT_PIXELS as f32).sqrt().ceil().max(1.0) as usize;
+            let key = (self.edit_version, Some((region, level)), Vec::new());
+            if self.tiles_requested.as_ref() != Some(&key) {
+                self.tiles_requested = Some(key);
+                self.send_tiles(Some((region, level)), Vec::new());
+            }
             return;
         }
-        // Don't render tiles while a slider is being dragged; the preview updates first.
-        if self.pointer_down {
+        let covered_by_view = self.tiles.view.as_ref().is_some_and(|v| {
+            let r = v.region;
+            v.level == 1
+                && v.version == self.edit_version
+                && (!self.focus_mask || v.focus.is_some())
+                && r.x <= a.x.max(0.0) as usize
+                && r.y <= a.y.max(0.0) as usize
+                && r.x + r.w >= (b.x as usize).min(fw)
+                && r.y + r.h >= (b.y as usize).min(fh)
+        });
+        let view_region = (zoomed && !covered_by_view && todo.iter().any(|&t| visible(t))).then_some((region, 1));
+        let key = (self.edit_version, view_region, todo);
+        // Panning within the requested view region needs no new request.
+        let contains = |r: &sk_core::geometry::Region, n: &sk_core::geometry::Region| r.x <= n.x && r.y <= n.y && r.x + r.w >= n.x + n.w && r.y + r.h >= n.y + n.h;
+        if self.tiles_requested.as_ref().is_some_and(|(v, r, t)| {
+            *v == key.0 && *t == key.2 && (*r == key.1 || r.is_some_and(|(r, l)| l == 1 && key.1.is_some_and(|(n, _)| contains(&r, &n))))
+        }) {
             return;
         }
-        self.tile_requested = Some((self.edit_version, region));
-        self.workers.tile(crate::workers::TileJob {
+        let (_, view_region, todo) = key.clone();
+        self.tiles_requested = Some(key);
+        self.send_tiles(view_region, todo);
+    }
+
+    fn send_tiles(&self, view: Option<(sk_core::geometry::Region, usize)>, tiles: Vec<(usize, usize)>) {
+        let Some(cur) = &self.current else { return };
+        let Some(full) = &cur.full else { return };
+        self.workers.tiles(crate::workers::TileRequest {
             generation: self.generation(),
             version: self.edit_version,
             meta: cur.meta.clone(),
             full: full.clone(),
             adjustments: cur.adjustments.clone(),
-            region,
             clip_warning: self.clip_warning,
+            mask_overlay: self.mask_overlay(),
             before: self.show_before,
+            view,
+            tiles,
+            focus: self.focus_mask,
         });
     }
 
@@ -370,11 +674,20 @@ impl App {
         }
         let resp = resp.on_hover_text_at_pointer(tooltip);
         // Right-click acts on the selection; an unselected image becomes the selection first.
-        if resp.secondary_clicked() && !selected {
+        // It also becomes the image in the viewer, which the variant commands act on.
+        if resp.secondary_clicked() {
             let path = entry.path.clone();
-            self.select_path(&path, Modifiers::NONE);
+            if selected {
+                self.make_primary(&path);
+            } else {
+                self.select_path(&path, Modifiers::NONE);
+            }
         }
-        resp.context_menu(|ui| self.move_menu(ui));
+        resp.context_menu(|ui| {
+            self.variant_menu(ui);
+            ui.separator();
+            self.move_menu(ui);
+        });
         let mods = resp.clicked().then(|| ui.input(|i| i.modifiers));
         (mods, resp.double_clicked())
     }
@@ -384,6 +697,14 @@ impl App {
         let mut clicked: Option<(PathBuf, Modifiers)> = None;
         let primary = self.primary_path();
         let cell = vec2(150.0, ui.available_height().clamp(90.0, 260.0) - 8.0);
+        // The mouse wheel scrolls the strip sideways (egui only does that with Shift).
+        if ui.rect_contains_pointer(ui.available_rect_before_wrap()) {
+            ui.input_mut(|i| {
+                if i.smooth_scroll_delta.x == 0.0 {
+                    (i.smooth_scroll_delta.x, i.smooth_scroll_delta.y) = (i.smooth_scroll_delta.y, 0.0);
+                }
+            });
+        }
         egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
             ui.horizontal(|ui| {
                 for &i in &visible {

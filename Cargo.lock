@@ -4029,18 +4029,22 @@ dependencies = [
  "env_logger",
  "image",
  "log",
+ "raw-window-handle",
  "rfd",
  "serde",
  "serde_json",
  "sk-ai",
  "sk-core",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
 name = "sk-core"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "anyhow",
+ "epaint_default_fonts",
  "image",
  "rawler",
  "rayon",

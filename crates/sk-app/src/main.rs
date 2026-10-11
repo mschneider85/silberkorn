@@ -6,14 +6,22 @@ mod app;
 mod app_tests;
 mod browser;
 mod chrome;
+mod compare;
 mod crop;
 mod develop_tools;
+mod focus;
+mod guides;
+mod history;
 mod layers;
 mod library;
+mod rename;
 mod session;
+mod splash;
 mod theme;
 mod tools;
+mod variants;
 mod widgets;
+mod window_placement;
 mod workers;
 
 use std::path::PathBuf;
@@ -32,7 +40,11 @@ fn main() -> eframe::Result {
             viewport: egui::ViewportBuilder::default()
                 .with_title("Silberkorn")
                 .with_inner_size([1500.0, 950.0])
-                .with_min_inner_size([900.0, 600.0]),
+                .with_min_inner_size([900.0, 600.0])
+                // Maximized, with the size above when restored; debug screenshots keep that size.
+                .with_maximized(std::env::var_os("SILBERKORN_SCREENSHOT").is_none())
+                // The app draws its own title bar with the menus (see `chrome::title_bar`).
+                .with_decorations(false),
             ..Default::default()
         };
         eframe::run_native("Silberkorn", options, Box::new(move |cc| {
@@ -69,6 +81,7 @@ mod tests {
             include_str!("widgets.rs"),
             include_str!("chrome.rs"),
             include_str!("session.rs"),
+            include_str!("splash.rs"),
         ];
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);

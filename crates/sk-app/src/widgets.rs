@@ -63,6 +63,12 @@ pub fn slider_row(
         ui.spacing_mut().slider_width = (ui.available_width() - 62.0).max(60.0);
         let resp = ui.add(egui::Slider::new(value, range).fixed_decimals(decimals).clamping(egui::SliderClamping::Always));
         changed |= resp.changed();
+        // Double-click on the slider (or its label) resets it.
+        // (Sliders only sense drags, so the double-click is taken from the pointer.)
+        if resp.contains_pointer() && ui.input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary)) {
+            *value = default;
+            changed = true;
+        }
     });
     changed
 }
@@ -274,4 +280,50 @@ pub fn color_label_dot(ui: &mut Ui, label: sk_core::sidecar::ColorLabel, selecte
 
 pub fn small_button(ui: &mut Ui, text: &str, hover: &str) -> Response {
     ui.add(egui::Button::new(text).small()).on_hover_text(hover)
+}
+
+/// "1 Bild" / "n Bilder".
+pub fn image_count(n: usize) -> String {
+    if n == 1 { "1 Bild".to_string() } else { format!("{n} Bilder") }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One frame with a slider row; returns the slider's screen rect (via AccessKit).
+    fn frame(ctx: &egui::Context, value: &mut f32, events: Vec<egui::Event>) -> Option<egui::Rect> {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(400.0, 100.0))),
+            events,
+            ..Default::default()
+        };
+        ctx.enable_accesskit();
+        let mut out = ctx.run_ui(input, |ui| {
+            slider_row(ui, "Belichtung", value, -4.0..=4.0, 0.0, 2);
+        });
+        out.textures_delta.clear();
+        let update = out.platform_output.accesskit_update?;
+        update.nodes.iter().find(|(_, n)| n.role() == egui::accesskit::Role::Slider).and_then(|(_, n)| {
+            let b = n.bounds()?;
+            Some(egui::Rect::from_min_max(egui::pos2(b.x0 as f32, b.y0 as f32), egui::pos2(b.x1 as f32, b.y1 as f32)))
+        })
+    }
+
+    #[test]
+    fn double_click_on_slider_resets_it() {
+        let ctx = egui::Context::default();
+        let mut value = 1.5;
+        let slider = frame(&ctx, &mut value, vec![]).expect("Regler");
+        // Off-center: a single click there moves the value away from the default.
+        let pos = slider.lerp_inside(vec2(0.75, 0.5));
+        let click = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(&ctx, &mut value, vec![egui::Event::PointerMoved(pos)]);
+        for _ in 0..2 {
+            frame(&ctx, &mut value, vec![click(true)]);
+            frame(&ctx, &mut value, vec![click(false)]);
+        }
+        frame(&ctx, &mut value, vec![]);
+        assert_eq!(value, 0.0);
+    }
 }

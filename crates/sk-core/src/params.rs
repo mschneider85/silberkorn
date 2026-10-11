@@ -176,6 +176,7 @@ pub struct Adjustments {
     pub lens: LensCorrection,
     pub detail: Detail,
     pub color_editor: ColorEditor,
+    pub skin_tone: SkinTone,
     pub color_balance: ColorBalance,
     pub black_white: BlackWhite,
     /// Local adjustment layers (applied on top of the background adjustments).
@@ -548,6 +549,53 @@ impl ColorEditor {
     }
 }
 
+/// Skin tone: evens out colors around a target (usually picked from a face).
+/// Colors are in Oklab at the input of the color stage.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkinTone {
+    /// Target hue in degrees (Oklab), chroma and lightness.
+    pub hue: f32,
+    pub chroma: f32,
+    pub lightness: f32,
+    /// Half width of the affected hue range in degrees, 10..60.
+    pub range: f32,
+    /// Pull towards the target, 0..100.
+    pub hue_uniformity: f32,
+    pub saturation_uniformity: f32,
+    pub lightness_uniformity: f32,
+    /// Shifts of the whole range: hue in degrees -30..30, saturation and lightness -100..100.
+    pub hue_shift: f32,
+    pub saturation: f32,
+    pub lightness_shift: f32,
+}
+
+impl Default for SkinTone {
+    fn default() -> Self {
+        Self {
+            hue: 60.0,
+            chroma: 0.07,
+            lightness: 0.7,
+            range: 25.0,
+            hue_uniformity: 0.0,
+            saturation_uniformity: 0.0,
+            lightness_uniformity: 0.0,
+            hue_shift: 0.0,
+            saturation: 0.0,
+            lightness_shift: 0.0,
+        }
+    }
+}
+
+impl SkinTone {
+    /// Nothing is changed (the target and range alone have no effect).
+    pub fn is_neutral(&self) -> bool {
+        [self.hue_uniformity, self.saturation_uniformity, self.lightness_uniformity, self.hue_shift, self.saturation, self.lightness_shift]
+            .iter()
+            .all(|v| *v == 0.0)
+    }
+}
+
 /// A color wheel: hue in degrees (0..360) and amount (0..100), plus a lightness shift.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -604,6 +652,7 @@ impl Default for Adjustments {
             lens: LensCorrection::default(),
             detail: Detail::default(),
             color_editor: ColorEditor::default(),
+            skin_tone: SkinTone::default(),
             color_balance: ColorBalance::default(),
             black_white: BlackWhite::default(),
             layers: Vec::new(),

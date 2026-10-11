@@ -170,12 +170,30 @@ fn crop_full_resolution_and_tiles() {
     let viewport = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
     let scale = 3.0;
     let img_rect = egui::Rect::from_center_size(viewport.center(), tex * scale);
-    f.app.update_tile(viewport, img_rect, scale);
-    f.pump("Kachel", |a| a.tile.as_ref().is_some_and(|t| t.version == a.edit_version));
-    let tile = f.app.tile.as_ref().unwrap();
+    f.app.update_tiles(viewport, img_rect, scale, true);
+    // First the exact visible region, for a sharp view as fast as possible ...
+    f.pump("Ausschnitt", |a| a.tiles.view.as_ref().is_some_and(|v| v.version == a.edit_version && v.level == 1));
+    let region = f.app.tiles.view.as_ref().unwrap().region;
+    assert!(region.w > 300 && region.w < f.app.tiles.full_size.0, "{region:?}");
+    f.pump("Kachel", |a| !a.tiles.textures.is_empty());
+    let (fw, fh) = f.app.tiles.full_size;
     let full = f.app.current.as_ref().unwrap().full.as_ref().unwrap();
-    assert!(tile.full_size.0 > 2000 && tile.full_size.0 < full.width, "{:?}", tile.full_size);
-    assert!(tile.region.w > 300 && tile.region.w < tile.full_size.0);
+    assert!(fw > 2000 && fw < full.width, "{fw}");
+    // ... then the grid, starting with the tile under the view center ...
+    let center = (fw / 2 / crate::workers::TILE, fh / 2 / crate::workers::TILE);
+    assert!(f.app.tiles.textures.contains_key(&center), "{:?}", f.app.tiles.textures.keys().collect::<Vec<_>>());
+    // ... then the rest of the image, so panning needs no rendering.
+    let n = fw.div_ceil(crate::workers::TILE) * fh.div_ceil(crate::workers::TILE);
+    f.pump("alle Kacheln", |a| a.tiles.textures.len() == n);
+    let edge = f.app.tiles.textures[&(fw.div_ceil(crate::workers::TILE) - 1, 0)].size();
+    assert_eq!(edge[0], fw - (fw.div_ceil(crate::workers::TILE) - 1) * crate::workers::TILE, "Randkachel ist kleiner");
+
+    // An edit invalidates the tiles.
+    f.app.edit(|adj| adj.exposure = 0.5);
+    f.app.update_tiles(viewport, img_rect, scale, true);
+    f.pump("neuer Ausschnitt", |a| a.tiles.view.as_ref().is_some_and(|v| v.version == a.edit_version));
+    // Old tiles are no longer valid (they are not drawn; new ones replace them).
+    assert!(f.app.tiles.version != f.app.edit_version || f.app.tiles.textures.len() < n || n == 1);
 }
 
 /// Runs one UI frame of the viewer with the given input events.
@@ -314,6 +332,17 @@ fn phase5_speed_edit_ai_masks_split_and_recipes() {
     f.app.toggle_split();
     f.app.send_render();
     f.pump("Vergleich", |a| a.before_texture.is_some());
+    // U and Shift+U switch between divider and side by side without a new before rendering.
+    f.app.toggle_side_by_side();
+    assert!(f.app.split_view && f.app.split_side && f.app.before_texture.is_some());
+    f.app.toggle_split();
+    assert!(f.app.split_view && !f.app.split_side);
+    f.app.toggle_side_by_side();
+    f.app.toggle_side_by_side();
+    assert!(!f.app.split_view);
+    f.app.toggle_split();
+    f.app.send_render();
+    f.pump("Vergleich", |a| a.before_texture.is_some());
 
     // Two recipes -> two files per image.
     let out = f.dir.join("out5");
@@ -432,4 +461,815 @@ fn session_workflow() {
     f.app.open_folder(again.clone());
     assert!(!f.app.subdirs.contains(&f.app.session.as_ref().unwrap().root.join("Silberkorn")));
     assert!(f.app.subdirs.iter().any(|d| d.ends_with("Selects")));
+}
+
+/// Drives the title bar with synthetic input and reports the labels of all widgets
+/// (via AccessKit), so tests can see which menu is open.
+struct TitleBarDriver;
+
+impl TitleBarDriver {
+    fn frame(&mut self, f: &mut Fixture, events: Vec<egui::Event>) -> Vec<(String, egui::Rect)> {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1500.0, 950.0))),
+            events,
+            ..Default::default()
+        };
+        f.ctx.enable_accesskit();
+        let mut out = f.ctx.run_ui(input, |ui| {
+            egui::Panel::top("titlebar").exact_size(crate::chrome::TITLE_BAR_HEIGHT).show(ui, |ui| f.app.title_bar(ui));
+        });
+        out.textures_delta.clear();
+        let update = out.platform_output.accesskit_update.expect("AccessKit-Baum");
+        update
+            .nodes
+            .iter()
+            .filter_map(|(_, n)| {
+                let b = n.bounds()?;
+                Some((n.label()?.to_string(), egui::Rect::from_min_max(egui::pos2(b.x0 as f32, b.y0 as f32), egui::pos2(b.x1 as f32, b.y1 as f32))))
+            })
+            .collect()
+    }
+
+    fn move_to(&mut self, f: &mut Fixture, pos: egui::Pos2) -> Vec<(String, egui::Rect)> {
+        self.frame(f, vec![egui::Event::PointerMoved(pos)])
+    }
+
+    fn click(&mut self, f: &mut Fixture, pos: egui::Pos2) -> Vec<(String, egui::Rect)> {
+        self.move_to(f, pos);
+        let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        self.frame(f, vec![button(true)]);
+        self.frame(f, vec![button(false)]);
+        self.frame(f, vec![])
+    }
+
+    fn key(&mut self, f: &mut Fixture, key: egui::Key) -> Vec<(String, egui::Rect)> {
+        let ev = |pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Default::default() };
+        self.frame(f, vec![ev(true), ev(false)]);
+        self.frame(f, vec![])
+    }
+}
+
+fn widget(nodes: &[(String, egui::Rect)], label: &str) -> Option<egui::Rect> {
+    nodes.iter().find(|(l, _)| l.contains(label)).map(|(_, r)| *r)
+}
+
+#[test]
+fn menu_bar_behaves_like_native() {
+    let Some(mut f) = Fixture::new("menubar") else { return };
+    let mut d = TitleBarDriver;
+    let nodes = d.frame(&mut f, vec![]);
+    let title = |l: &str| widget(&nodes, l).unwrap_or_else(|| panic!("Menütitel {l} fehlt")).center();
+    let (datei, bild, ansicht) = (title("Datei"), title("Bild"), title("Ansicht"));
+
+    // Hovering alone opens nothing.
+    let nodes = d.move_to(&mut f, bild);
+    assert!(widget(&nodes, "Links drehen").is_none());
+
+    // A click opens the menu, hovering another title switches to it.
+    let nodes = d.click(&mut f, datei);
+    assert!(widget(&nodes, "Beenden").is_some(), "Datei-Menü sollte offen sein");
+    d.move_to(&mut f, bild);
+    let nodes = d.frame(&mut f, vec![]);
+    assert!(widget(&nodes, "Links drehen").is_some(), "Hover sollte zum Bild-Menü wechseln");
+    assert!(widget(&nodes, "Beenden").is_none());
+
+    // Arrow keys step to the neighbouring menu.
+    let nodes = d.key(&mut f, egui::Key::ArrowRight);
+    assert!(widget(&nodes, "Raster").is_some(), "Pfeil rechts sollte das Ansicht-Menü öffnen");
+
+    // A command runs and closes the menu.
+    let grid = f.app.grid_view;
+    let raster = widget(&nodes, "Raster").unwrap().center();
+    let nodes = d.click(&mut f, raster);
+    assert_ne!(f.app.grid_view, grid, "Raster sollte umgeschaltet sein");
+    assert!(widget(&nodes, "Raster").is_none(), "Ein Befehl schließt das Menü");
+
+    // A click on a disabled entry keeps the menu open (nothing to undo yet).
+    let nodes = d.click(&mut f, title("Bearbeiten"));
+    let undo = widget(&nodes, "Rückgängig").expect("Bearbeiten-Menü sollte offen sein").center();
+    let nodes = d.click(&mut f, undo);
+    assert!(widget(&nodes, "Rückgängig").is_some(), "Deaktivierter Eintrag darf das Menü nicht schließen");
+    d.key(&mut f, egui::Key::Escape);
+
+    // Clicking the open menu's title closes it again.
+    d.click(&mut f, ansicht);
+    let nodes = d.click(&mut f, ansicht);
+    assert!(widget(&nodes, "Raster").is_none(), "Zweiter Klick auf den Titel schließt das Menü");
+}
+
+#[test]
+fn stepping_shows_prefetched_images_instantly() {
+    let Some(mut f) = Fixture::new("prefetch") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let (a, b) = (f.photo("_DSC0009.ARW"), f.photo("_DSC0010.ARW"));
+    assert_eq!(f.app.current_path().as_ref(), Some(&a));
+
+    // The neighbour is loaded and rendered in the background ...
+    f.pump("Nachbar vorbereitet", |app| app.is_prepared(&b));
+    // ... so stepping shows it without loading.
+    f.app.step(1);
+    assert!(f.app.loading.is_none(), "kein Laden nötig");
+    assert_eq!(f.app.current_path().as_ref(), Some(&b));
+    assert!(f.app.texture.is_some(), "fertig gerendert");
+
+    // Going back is instant too: the previous image was kept with its rendering.
+    f.app.step(-1);
+    assert!(f.app.loading.is_none());
+    assert_eq!(f.app.current_path().as_ref(), Some(&a));
+    assert!(f.app.texture.is_some());
+
+    // Both previews are now in the disk cache, so even a cold start shows them at once.
+    let adj = sidecar::load(&a).adjustments;
+    f.pump("Vorschau im Cache", |_| sk_core::cache::has_preview(&b, &adj, None));
+}
+
+#[test]
+fn dragging_renders_drafts_then_full_resolution() {
+    let Some(mut f) = Fixture::new("draft") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    let full = f.app.texture.as_ref().unwrap().size();
+    assert_eq!(f.app.view_size, Some(egui::vec2(full[0] as f32, full[1] as f32)));
+
+    // While a slider is dragged: quarter of the pixels, shown at the same size.
+    f.app.pointer_down = true;
+    f.app.edit(|adj| adj.exposure = 0.7);
+    let v = f.app.edit_version;
+    f.pump("Entwurf", |a| a.texture.as_ref().is_some_and(|t| t.size()[0] <= full[0] / 2 + 1) && a.edit_version == v);
+    assert_eq!(f.app.image_size(), Some(egui::vec2(full[0] as f32, full[1] as f32)), "Koordinaten bleiben gleich");
+
+    // Released: full resolution again, without a further edit.
+    f.app.pointer_down = false;
+    f.pump("volle Auflösung", |a| a.texture.as_ref().is_some_and(|t| t.size() == full));
+    assert_eq!(f.app.edit_version, v);
+}
+
+#[test]
+fn previews_are_generated_in_the_background_when_idle() {
+    let Some(files) = samples() else { return };
+    let dir = std::env::temp_dir().join(format!("sk-app-test-proxies-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let paths: Vec<PathBuf> = files
+        .iter()
+        .map(|f| {
+            let target = dir.join(f.file_name().unwrap());
+            std::fs::copy(f, &target).unwrap();
+            target
+        })
+        .collect();
+    let adj = sidecar::load(&paths[0]).adjustments;
+    assert!(paths.iter().all(|p| !sk_core::cache::has_preview(p, &adj, None)));
+
+    let ctx = egui::Context::default();
+    let workers = crate::workers::Workers::spawn(ctx);
+    let start = Instant::now();
+    workers.proxies(paths.clone(), None);
+    let (mut thumbs, mut finished) = (0, false);
+    while !finished {
+        assert!(start.elapsed() < Duration::from_secs(60), "Zeitüberschreitung");
+        match workers.events.recv_timeout(Duration::from_millis(100)) {
+            Ok(crate::workers::Event::Thumbnail { .. }) => thumbs += 1,
+            Ok(crate::workers::Event::ProxyProgress(None)) => finished = true,
+            _ => {}
+        }
+    }
+    // Nothing starts before the app has been idle for a while.
+    assert!(start.elapsed() >= Duration::from_millis(1500));
+    assert!(paths.iter().all(|p| sk_core::cache::has_preview(p, &adj, None)));
+    assert_eq!(thumbs, paths.len(), "Thumbnails passen zur Entwicklung");
+
+    // A second pass finds everything done.
+    workers.proxies(paths.clone(), None);
+    let again = Instant::now();
+    while !matches!(workers.events.recv_timeout(Duration::from_secs(10)), Ok(crate::workers::Event::ProxyProgress(None))) {
+        assert!(again.elapsed() < Duration::from_secs(10));
+    }
+    for p in &paths {
+        sk_core::cache::remove(p, None);
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn zoom_100_is_one_image_pixel_per_screen_pixel_with_display_scaling() {
+    let Some(mut f) = Fixture::new("hidpi") else { return };
+    f.pump("Bild gerendert", |a| a.texture.is_some());
+    let size = f.app.image_size().unwrap();
+    let full_w = f.app.current.as_ref().unwrap().meta.info.width as f32;
+    for ppp in [1.0, 1.5, 2.0] {
+        f.app.pixels_per_point = ppp;
+        f.app.zoom = None;
+        f.app.toggle_zoom_100();
+        // Screen pixels per full-resolution pixel (sensor width ~ output width without crop).
+        let screen_px_per_image_px = f.app.zoom.unwrap() * ppp * size.x / full_w;
+        assert!((screen_px_per_image_px - 1.0).abs() < 0.02, "ppp {ppp}: {screen_px_per_image_px}");
+    }
+}
+
+#[test]
+fn zoomed_in_drafts_render_the_view_from_the_full_resolution() {
+    let Some(mut f) = Fixture::new("zoomdraft") else { return };
+    f.pump("Vollauflösung", |a| a.texture.is_some() && a.current.as_ref().is_some_and(|c| c.full.is_some()));
+    let size = f.app.image_size().unwrap();
+    let viewport = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1500.0, 900.0));
+    // 100 %: one full-resolution pixel per screen pixel.
+    let full_w = f.app.current.as_ref().unwrap().full.as_ref().unwrap().width as f32;
+    let scale = full_w / size.x;
+    let img_rect = egui::Rect::from_center_size(viewport.center(), size * scale);
+
+    // Dragging a slider while zoomed in: the view comes from the full resolution, reduced to
+    // the draft budget (far sharper than the 6x magnified whole-image draft).
+    f.app.pointer_down = true;
+    f.app.edit(|adj| adj.exposure = 0.4);
+    f.app.update_tiles(viewport, img_rect, scale, true);
+    f.pump("Ausschnitt-Entwurf", |a| a.tiles.view.as_ref().is_some_and(|v| v.version == a.edit_version));
+    let v = f.app.tiles.view.as_ref().unwrap();
+    let [w, h] = v.texture.size();
+    assert!(v.level >= 2 && v.level <= 3, "Stufe {}", v.level);
+    assert!(w * h <= 800_000, "{w}x{h}");
+    assert_eq!(w, v.region.w / v.level, "Textur = Ausschnitt / Stufe");
+    assert!(v.region.w >= 1500, "deckt die Ansicht ab: {:?}", v.region);
+
+    // Released: the view at full resolution.
+    f.app.pointer_down = false;
+    f.app.update_tiles(viewport, img_rect, scale, true);
+    f.pump("scharfer Ausschnitt", |a| a.tiles.view.as_ref().is_some_and(|v| v.level == 1 && v.version == a.edit_version));
+}
+
+#[test]
+fn navigator_moves_the_zoomed_view() {
+    let Some(mut f) = Fixture::new("navigator") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    let size = f.app.image_size().unwrap();
+    let scale = 2.0;
+    f.app.zoom = Some(scale);
+    viewer_frame(&mut f, vec![]);
+    // Bottom right of the 1200 x 800 viewer, 200 px wide for a 3:2 image.
+    let nav = egui::Rect::from_min_size(egui::pos2(1200.0 - 16.0 - 200.0, 800.0 - 16.0 - 200.0 / (size.x / size.y)), egui::vec2(200.0, 200.0 / (size.x / size.y)));
+    let target = nav.lerp_inside(egui::vec2(0.1, 0.2));
+    viewer_frame(&mut f, vec![egui::Event::PointerMoved(target)]);
+    viewer_frame(&mut f, vec![press(target, true)]);
+    viewer_frame(&mut f, vec![press(target, false)]);
+    // That point of the image is now in the middle of the viewer.
+    let expected = size * scale * (egui::vec2(0.5, 0.5) - egui::vec2(0.1, 0.2));
+    assert!((f.app.pan - expected).length() < 3.0, "{:?} vs {expected:?}", f.app.pan);
+
+    // Not in distraction-free full screen: the same click doesn't move the view.
+    f.app.fullscreen = true;
+    f.app.pan = egui::Vec2::ZERO;
+    viewer_frame(&mut f, vec![]);
+    viewer_frame(&mut f, vec![press(target, true)]);
+    viewer_frame(&mut f, vec![press(target, false)]);
+    assert_eq!(f.app.pan, egui::Vec2::ZERO);
+}
+
+#[test]
+fn hovering_a_film_look_previews_it_without_changing_the_image() {
+    let Some(mut f) = Fixture::new("looks") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    let a = f.photo("_DSC0009.ARW");
+    f.app.edit(|adj| adj.exposure = 0.5);
+    f.app.commit_and_save();
+    let before = f.app.current.as_ref().unwrap().adjustments.clone();
+
+    // Hover: the viewer renders the look, nothing is saved or cached.
+    let (velvia, _) = f.app.film_looks.iter().find(|(s, _)| s.name.contains("Velvia")).unwrap().clone();
+    let look = sk_core::styles::apply_look(&velvia, &before);
+    f.app.preview_style(look.clone());
+    let v = f.app.edit_version;
+    f.pump("Vorschau gerendert", |app| app.texture_version_for_test() == v);
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments, before);
+    assert_eq!(sidecar::load(&a).adjustments, before);
+    std::thread::sleep(Duration::from_millis(1200));
+    f.pump("Ereignisse", |_| true);
+    assert!(!sk_core::cache::has_preview(&a, &look, None), "Vorschau landet nicht im Cache");
+
+    // Apply: only the look changes, exposure is kept.
+    f.app.style_preview = None;
+    f.app.set_adjustments_on(std::slice::from_ref(&a), |adj| sk_core::styles::apply_look(&velvia, adj));
+    f.app.commit_and_save(); // (the app does this once the mouse is released)
+    let saved = sidecar::load(&a).adjustments;
+    assert_eq!(saved.exposure, 0.5);
+    assert_eq!(saved.saturation, velvia.adjustments.saturation);
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments, saved);
+}
+
+#[test]
+fn proof_shows_the_image_as_the_recipe_writes_it() {
+    let Some(mut f) = Fixture::new("proof") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    f.app.recipes = vec![sk_core::export::ExportRecipe { long_edge: Some(1200), quality: 70, ..Default::default() }];
+    f.app.selected_recipe = 0;
+    f.app.proof_view = true;
+    let proof_ready = |f: &mut Fixture, what: &str| {
+        let start = Instant::now();
+        loop {
+            f.app.update_proof(&f.ctx.clone());
+            f.app.handle_events(&f.ctx.clone());
+            f.app.send_render();
+            if f.app.proof.as_ref().is_some_and(|p| p.version == f.app.edit_version) {
+                break;
+            }
+            assert!(start.elapsed() < Duration::from_secs(90), "Zeitüberschreitung: {what}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    };
+    proof_ready(&mut f, "Proof");
+    let p = f.app.proof.as_ref().unwrap();
+    assert_eq!(p.width.max(p.height), 1200, "Größe aus dem Rezept");
+    assert!(p.file_size > 20_000 && p.file_size < 2_000_000, "Dateigröße {}", p.file_size);
+    assert_eq!(p.texture.size(), [p.width, p.height]);
+    let (size, key) = (p.file_size, p.key);
+
+    // An edit or another recipe makes a new proof.
+    f.app.edit(|adj| adj.exposure = 1.0);
+    proof_ready(&mut f, "Proof nach Bearbeitung");
+    assert_ne!(f.app.proof.as_ref().unwrap().file_size, size);
+    f.app.recipes[0].quality = 95;
+    assert_ne!(f.app.proof_key(), Some(key));
+    f.app.edit(|adj| adj.exposure = 1.0); // (unchanged value, but a new edit version)
+    proof_ready(&mut f, "Proof mit anderer Qualität");
+    assert!(f.app.proof.as_ref().unwrap().file_size > size, "Qualität 95 > 70");
+}
+
+#[test]
+fn fullscreen_toggles_and_esc_leaves_it_unless_a_tool_is_active() {
+    let Some(mut f) = Fixture::new("fullscreen") else { return };
+    let key = |k: egui::Key| vec![egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }];
+    use egui::ViewportCommand as Cmd;
+    // Runs one frame (the window maximized or not) and returns the window commands.
+    let frame_in = |f: &mut Fixture, events: Vec<egui::Event>, maximized: bool| {
+        let mut input = egui::RawInput { events, ..Default::default() };
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().maximized = Some(maximized);
+        let app = &mut f.app;
+        let mut out = f.ctx.run_ui(input, |ui| app.shortcuts(ui.ctx()));
+        out.textures_delta.clear();
+        out.viewport_output.values().flat_map(|v| v.commands.clone()).collect::<Vec<Cmd>>()
+    };
+    let frame = |f: &mut Fixture, events: Vec<egui::Event>| frame_in(f, events, false);
+
+    // From a maximized window: leave maximized before full screen (else Windows keeps the
+    // taskbar area free: black band at the bottom), drop the shadow, and restore afterwards.
+    let cmds = frame_in(&mut f, key(egui::Key::F11), true);
+    let pos = |c: &Cmd| cmds.iter().position(|x| x == c);
+    assert!(pos(&Cmd::Maximized(false)).unwrap() < pos(&Cmd::Fullscreen(true)).unwrap(), "{cmds:?}");
+    assert!(pos(&Cmd::Fullscreen(true)).unwrap() < pos(&Cmd::Decorations(false)).unwrap(), "{cmds:?}");
+    assert!(f.app.fullscreen);
+    let cmds = frame(&mut f, key(egui::Key::F11));
+    assert_eq!(cmds, vec![Cmd::Fullscreen(false), Cmd::Decorations(false), Cmd::Maximized(true)]);
+    assert!(!f.app.fullscreen);
+
+    assert!(frame(&mut f, key(egui::Key::F11)).contains(&Cmd::Fullscreen(true)), "Fenster wird auf Vollbild geschaltet");
+    assert!(f.app.fullscreen);
+    // With the crop tool active, Esc only ends the tool.
+    f.app.crop_tool = Some(Default::default());
+    frame(&mut f, key(egui::Key::Escape));
+    assert!(f.app.fullscreen && f.app.crop_tool.is_none());
+    frame(&mut f, key(egui::Key::Escape));
+    assert!(!f.app.fullscreen);
+}
+
+#[test]
+fn fullscreen_switch_shows_black_until_the_window_has_settled() {
+    let Some(mut f) = Fixture::new("switch") else { return };
+    // One frame at this window size and state; returns whether the switch is still running.
+    let frame = |f: &mut Fixture, size: egui::Vec2, fullscreen: bool| {
+        let mut input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().fullscreen = Some(fullscreen);
+        let app = &mut f.app;
+        let mut switching = false;
+        let mut out = f.ctx.run_ui(input, |ui| switching = app.screen_switching(ui.ctx()));
+        out.textures_delta.clear();
+        switching
+    };
+    let (window, monitor) = (egui::vec2(1600.0, 860.0), egui::vec2(1600.0, 900.0));
+    frame(&mut f, window, false);
+    let ctx = f.ctx.clone();
+    ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, window)), ..Default::default() }, |ui| f.app.toggle_fullscreen(ui.ctx()))
+        .textures_delta
+        .clear();
+
+    // The window manager hasn't done anything yet: still the old size, keep waiting.
+    for _ in 0..4 {
+        assert!(frame(&mut f, window, true));
+    }
+    // An in-between size (leaving maximized), then full screen: settled after it stays put.
+    assert!(frame(&mut f, egui::vec2(1200.0, 700.0), true));
+    assert!(frame(&mut f, monitor, true));
+    assert!(frame(&mut f, monitor, true));
+    assert!(!frame(&mut f, monitor, true), "angekommen");
+    assert!(f.app.fade_in_from.is_some(), "Bild wird eingeblendet");
+}
+
+#[test]
+fn compare_view_and_matching() {
+    let Some(mut f) = Fixture::new("compare") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    f.pump("Indexiert", |a| a.entries.len() == 2);
+    let a = f.photo("_DSC0009.ARW");
+    let b = f.photo("_DSC0010.ARW");
+    assert!(f.app.compare_cells().is_empty(), "ein Bild: Einzelansicht");
+
+    // Ctrl+click adds the second image: both side by side, the first stays the one being edited.
+    f.app.select_path(&b, egui::Modifiers::COMMAND);
+    assert_eq!(f.app.compare_cells(), vec![a.clone(), b.clone()]);
+    assert_eq!(f.app.current_path().as_ref(), Some(&a));
+    let cells = f.app.compare_cells();
+    f.app.request_compare_images(&cells);
+    f.pump("Vergleichsbild", |app| app.compare_textures.contains_key(&b));
+    // Turned off: back to the single view.
+    f.app.multi_view = false;
+    assert!(f.app.compare_cells().is_empty());
+    f.app.multi_view = true;
+
+    // The first image, brightened, becomes the reference; it stays next to the second.
+    f.app.edit(|adj| adj.exposure = 1.0);
+    f.app.commit_and_save();
+    f.pump("neu gerendert", |app| app.texture_version_for_test() == app.edit_version && !app.texture_draft);
+    f.app.toggle_reference();
+    assert_eq!(f.app.compare_ref.as_ref(), Some(&a));
+    f.app.select_path(&b, egui::Modifiers::NONE);
+    f.pump("zweites Bild", |app| app.current_path().as_ref() == Some(&b) && app.texture.is_some());
+    assert_eq!(f.app.compare_cells(), vec![a.clone(), b.clone()]);
+    // Leaving the edited image keeps its new rendering for the compare view.
+    assert!(f.app.compare_textures.contains_key(&a));
+
+    // Matching changes exposure and white balance of the current image, as one undo step.
+    assert!(f.app.can_match());
+    f.app.match_selection(sk_core::auto::MatchWhat { exposure: true, white_balance: true });
+    f.pump("angeglichen", |app| app.match_progress.is_none());
+    let adj = f.app.current.as_ref().unwrap().adjustments.clone();
+    assert!(adj.exposure > 0.3, "Belichtung {}", adj.exposure);
+    assert_eq!(adj.white_balance.mode, sk_core::params::WbMode::Custom);
+    f.app.commit_and_save();
+    assert_eq!(sidecar::load(&b).adjustments.exposure, adj.exposure);
+    f.app.undo();
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.exposure, 0.0);
+
+    // Shift+Enter on the reference unpins it.
+    f.app.select_path(&a, egui::Modifiers::NONE);
+    f.app.toggle_reference();
+    assert_eq!(f.app.compare_ref, None);
+}
+
+#[test]
+fn skin_tone_pipette_sets_target() {
+    let Some(mut f) = Fixture::new("skin") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let size = f.app.image_size().unwrap();
+    f.app.picking_skin = true;
+    let before = f.app.current.as_ref().unwrap().adjustments.skin_tone;
+    f.app.pick_skin_tone(size / 2.0);
+    let st = f.app.current.as_ref().unwrap().adjustments.skin_tone;
+    // Either a target was taken (and the pipette ends), or the spot was too grey.
+    if f.app.status.starts_with("Hautton: Farbton") {
+        assert!(!f.app.picking_skin);
+        assert!(st.hue != before.hue || st.chroma != before.chroma);
+        assert!((0.0..360.0).contains(&st.hue) && st.chroma > 0.0);
+    } else {
+        assert_eq!(st, before);
+    }
+}
+
+#[test]
+fn variants_workflow() {
+    let Some(mut f) = Fixture::new("variants") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    f.pump("Indexiert", |a| a.lists.total == 2);
+    let a = f.photo("_DSC0009.ARW");
+    f.app.edit(|adj| adj.exposure = 0.7);
+    f.app.set_rating(3);
+    f.app.commit_and_save();
+
+    // A clone takes the settings; it is shown and listed right after its file.
+    f.app.new_variant(true);
+    let v2 = sk_core::variant::path_for(&a, 2);
+    assert_eq!(f.app.primary_path().as_ref(), Some(&v2));
+    let names: Vec<String> = f.app.visible.iter().map(|&i| f.app.entries[i].name.clone()).collect();
+    assert_eq!(names, ["_DSC0009.ARW", "_DSC0009.ARW (2)", "_DSC0010.ARW"]);
+    f.pump("Variante geladen", |app| app.current.is_some() && app.texture.is_some());
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.exposure, 0.7);
+    assert_eq!(f.app.current.as_ref().unwrap().rating, 3);
+
+    // Editing the variant leaves the file's own settings alone.
+    f.app.edit(|adj| adj.black_white.enabled = true);
+    f.app.set_rating(5);
+    f.app.commit_and_save();
+    assert!(sidecar::load(&v2).adjustments.black_white.enabled);
+    assert!(!sidecar::load(&a).adjustments.black_white.enabled);
+    assert_eq!(sidecar::load(&a).rating, 3);
+    assert_eq!(f.app.lists.total, 3, "Variante im Katalog");
+
+    // A new variant starts from default settings.
+    f.app.new_variant(false);
+    let v3 = sk_core::variant::path_for(&a, 3);
+    f.pump("neue Variante geladen", |app| app.current_path().as_ref() == Some(&v3));
+    assert_eq!(f.app.current.as_ref().map(|c| c.adjustments.exposure), Some(0.0));
+
+    // Export names variants apart.
+    let recipe = sk_core::export::ExportRecipe::default();
+    let names = |p: &PathBuf| recipe.output_path(&sk_core::naming::NameFields { image: p, capture: None, counter: 1, session: "" });
+    assert_ne!(names(&a), names(&v2));
+
+    // Deleting asks first, then removes only that variant and shows the file.
+    f.app.request_delete_variant();
+    assert_eq!(f.app.confirm_delete_variant, Some(vec![v3.clone()]));
+    f.app.delete_variants(std::slice::from_ref(&v3));
+    assert_eq!(f.app.primary_path().as_ref(), Some(&a));
+    assert_eq!(sk_core::variant::of_file(&a), vec![a.clone(), v2.clone()]);
+    assert_eq!(f.app.lists.total, 3);
+    // The file's first variant can't be deleted that way.
+    f.pump("Datei geladen", |app| app.current_path().as_ref() == Some(&a));
+    f.app.request_delete_variant();
+    assert!(f.app.confirm_delete_variant.is_none());
+
+    // Moving the file takes its variants along.
+    let dest = f.dir.join("moved");
+    f.app.select_path(&v2, egui::Modifiers::NONE);
+    f.app.move_selection_to(&dest);
+    let moved = dest.canonicalize().unwrap().join("_DSC0009.ARW");
+    assert!(moved.exists());
+    assert!(sidecar::load(&sk_core::variant::path_for(&moved, 2)).adjustments.black_white.enabled);
+}
+
+#[test]
+fn focus_mask_marks_sharp_areas() {
+    let Some(mut f) = Fixture::new("focus") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let a = f.photo("_DSC0009.ARW");
+    f.app.toggle_focus_mask();
+    // The viewer asks for a rendering whose sharpness then gets analysed.
+    f.app.ensure_focus_of_current();
+    f.pump("Fokusmaske berechnet", |app| app.focus_maps.contains_key(&a));
+    let map = &f.app.focus_maps[&a];
+    let size = f.app.image_size().unwrap();
+    assert!(((map.size[0] as f32 / map.size[1] as f32) - size.x / size.y).abs() < 0.01);
+    // Some, but not all of a real photo is in focus; more sensitivity marks more.
+    let share = |s: f32| {
+        let t = sk_core::focus::threshold(s);
+        map.sharpness.iter().filter(|v| **v >= t).count() as f32 / map.sharpness.len() as f32
+    };
+    let (low, mid, high) = (share(0.0), share(50.0), share(100.0));
+    assert!(mid > 0.001 && mid < 0.8, "{mid}");
+    assert!(low <= mid && mid <= high);
+    let id = f.app.focus_overlay(&f.ctx.clone(), &a, size.x / size.y);
+    assert!(id.is_some());
+    // A crop changes the framing: the old mask no longer fits.
+    assert!(f.app.focus_overlay(&f.ctx.clone(), &a, size.x / size.y * 0.5).is_none());
+}
+
+#[test]
+fn focus_maps_of_images_out_of_view_are_dropped() {
+    let Some(mut f) = Fixture::new("prune") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let shown = f.photo("_DSC0009.ARW");
+    f.app.focus_received(shown.clone(), None, [1, 1], std::sync::Arc::new(vec![0]));
+    for i in 0..100 {
+        f.app.focus_received(f.dir.join(format!("weg{i}.ARW")), None, [1, 1], std::sync::Arc::new(vec![0]));
+    }
+    f.app.prune_view_caches();
+    assert!(f.app.focus_maps.len() < 30, "{}", f.app.focus_maps.len());
+    assert!(f.app.focus_maps.contains_key(&shown));
+}
+
+/// One frame of the compare view on a 1600x1000 screen.
+fn compare_frame(f: &mut Fixture, cells: &[PathBuf]) {
+    let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 1000.0))), ..Default::default() };
+    let ctx = f.ctx.clone();
+    let out = ctx.run_ui(input, |ui| {
+        let rect = ui.max_rect();
+        f.app.compare_view(ui, rect, cells);
+    });
+    let mut delta = out.textures_delta;
+    delta.clear();
+}
+
+#[test]
+fn compare_zoom_shows_full_resolution() {
+    let Some(mut f) = Fixture::new("compare-detail") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    f.pump("Indexiert", |a| a.entries.len() == 2);
+    let (a, b) = (f.photo("_DSC0009.ARW"), f.photo("_DSC0010.ARW"));
+    f.app.select_path(&b, egui::Modifiers::COMMAND);
+    let cells = f.app.compare_cells();
+    assert_eq!(cells.len(), 2);
+    f.app.toggle_focus_mask();
+    // Fitted: the previews are enough.
+    compare_frame(&mut f, &cells);
+    assert!(f.app.details_requested.is_empty());
+    // Zoomed far in: the visible parts come from the full resolution, with their focus mask.
+    f.app.compare_zoom = 12.0;
+    f.app.compare_center = egui::vec2(0.4, 0.5);
+    let start = Instant::now();
+    while !cells.iter().all(|p| f.app.compare_details.contains_key(p)) {
+        assert!(start.elapsed() < Duration::from_secs(60), "Zeitüberschreitung: Details");
+        f.app.handle_events(&f.ctx);
+        compare_frame(&mut f, &cells);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    for p in [&a, &b] {
+        let d = &f.app.compare_details[p];
+        assert!(d.full_res, "{}", p.display());
+        assert!(d.width > 5000.0, "Breite {}", d.width);
+        assert!(d.uv.contains(egui::pos2(0.4, 0.5)), "{:?}", d.uv);
+        assert!(d.uv.width() < 0.5);
+        assert!(d.focus.is_some());
+    }
+    // An edit of the image being edited makes its part outdated: rendered again.
+    f.app.edit(|adj| adj.exposure = 0.5);
+    compare_frame(&mut f, &cells);
+    let v = f.app.edit_version;
+    f.pump("Detail neu", |app| app.compare_details[&a].version == Some(v));
+}
+
+#[test]
+fn focus_mask_at_full_resolution_when_zoomed_in() {
+    let Some(mut f) = Fixture::new("focus-tiles") else { return };
+    f.pump("Vollauflösung", |a| a.texture.is_some() && a.current.as_ref().is_some_and(|c| c.full.is_some()));
+    f.app.pixels_per_point = 1.0;
+    f.app.toggle_zoom_100();
+    // Zoomed in without the mask: plain tiles.
+    let start = Instant::now();
+    while f.app.tiles.view.is_none() && f.app.tiles.textures.is_empty() {
+        assert!(start.elapsed() < Duration::from_secs(60), "Zeitüberschreitung: Kacheln");
+        viewer_frame(&mut f, vec![]);
+        f.app.handle_events(&f.ctx);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(f.app.tiles.focus.is_empty() && f.app.tiles.view.as_ref().is_none_or(|v| v.focus.is_none()));
+    // With the mask, the visible part is rendered again and analysed at full resolution.
+    f.app.toggle_focus_mask();
+    let start = Instant::now();
+    while !(f.app.tiles.view.as_ref().is_some_and(|v| v.focus.is_some()) || !f.app.tiles.focus.is_empty()) {
+        assert!(start.elapsed() < Duration::from_secs(60), "Zeitüberschreitung: Fokus der Kacheln");
+        viewer_frame(&mut f, vec![]);
+        f.app.handle_events(&f.ctx);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let map = f.app.tiles.view.as_ref().and_then(|v| v.focus.as_ref()).or_else(|| f.app.tiles.focus.values().next()).unwrap();
+    assert!(map.size[0] >= 512, "{:?}", map.size);
+    viewer_frame(&mut f, vec![]);
+}
+
+#[test]
+fn focus_mask_follows_edits_made_while_it_was_off() {
+    let Some(mut f) = Fixture::new("focus-stale") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let a = f.photo("_DSC0009.ARW");
+    f.app.toggle_focus_mask();
+    f.app.ensure_focus_of_current();
+    f.pump("Fokusmaske", |app| app.focus_map_current(&a));
+    // Off, edited (e.g. rotated), on again: the old mask doesn't fit and isn't shown ...
+    f.app.toggle_focus_mask();
+    f.app.edit(|adj| adj.exposure = 0.7);
+    f.pump("neu gerendert", |app| app.texture_version_shown() == app.edit_version && !app.texture_draft);
+    f.app.toggle_focus_mask();
+    assert!(!f.app.focus_map_current(&a));
+    // ... until it is computed again for the shown rendering.
+    f.app.ensure_focus_of_current();
+    f.pump("Fokusmaske neu", |app| app.focus_map_current(&a));
+    assert_eq!(f.app.focus_maps[&a].version, Some(f.app.texture_version_shown()));
+}
+
+#[test]
+fn changed_settings_drop_images_kept_in_memory() {
+    let Some(mut f) = Fixture::new("prepared") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    f.pump("Indexiert", |a| a.entries.len() == 2);
+    let (a, b) = (f.photo("_DSC0009.ARW"), f.photo("_DSC0010.ARW"));
+    f.app.select_path(&b, egui::Modifiers::NONE);
+    f.pump("zweites Bild", |app| app.current_path().as_ref() == Some(&b) && app.texture.is_some());
+    assert!(f.app.prepared_texture(&a).is_some());
+    // E.g. matched to a reference: the kept rendering is outdated.
+    f.app.set_adjustments_on(std::slice::from_ref(&a), |adj| sk_core::params::Adjustments { exposure: 1.0, ..adj.clone() });
+    assert!(f.app.prepared_texture(&a).is_none());
+    assert!(!f.app.compare_textures.contains_key(&a));
+}
+
+#[test]
+fn trashing_variants_deletes_only_them() {
+    let Some(mut f) = Fixture::new("trash-variant") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let a = f.photo("_DSC0009.ARW");
+    f.app.new_variant(true);
+    let v2 = sk_core::variant::path_for(&a, 2);
+    assert_eq!(f.app.primary_path().as_ref(), Some(&v2));
+    f.app.trash_selection();
+    assert_eq!(f.app.confirm_delete_variant, Some(vec![v2.clone()]));
+    f.app.delete_variants(&[v2]);
+    assert!(a.exists());
+    assert_eq!(sk_core::variant::of_file(&a), vec![a.clone()]);
+}
+
+#[test]
+fn auto_upright_sets_geometry_as_one_undo_step() {
+    let Some(mut f) = Fixture::new("upright") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let undo = f.app.undo.len();
+    f.app.auto_upright(sk_core::upright::UprightMode::Vertical);
+    assert!(f.app.status.starts_with("Automatisch geraderichten"), "{}", f.app.status);
+    let g = f.app.current.as_ref().unwrap().adjustments.geometry.clone();
+    assert!(g.straighten.abs() <= 15.0 && g.keystone_h == 0.0);
+    if g != Default::default() {
+        assert_eq!(f.app.undo.len(), undo + 1);
+        f.app.undo();
+        assert_eq!(f.app.current.as_ref().unwrap().adjustments.geometry, Default::default());
+    }
+}
+
+#[test]
+fn batch_rename_keeps_settings_variants_and_selection() {
+    let Some(mut f) = Fixture::new("rename") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let a = f.photo("_DSC0009.ARW");
+    f.app.select_path(&a, egui::Modifiers::NONE);
+    f.pump("A geladen", |app| app.current_path().as_ref() == Some(&a) && app.loading.is_none());
+    f.app.edit(|adj| adj.exposure = 0.8);
+    f.app.new_variant(true);
+    let v2 = sk_core::variant::path_for(&a, 2);
+    f.pump("Variante", |app| app.current_path().as_ref() == Some(&v2) && app.loading.is_none());
+
+    f.app.select_all();
+    f.app.open_rename();
+    let files = f.app.rename.as_ref().map(|d| d.template.clone());
+    assert_eq!(files.as_deref(), Some("{Name}"));
+    let all: Vec<PathBuf> = sk_core::variant::files_of(&f.app.selected_paths());
+    let (n, error) = f.app.rename_files(&all, "Test_{Zähler:2}", 1);
+    assert_eq!((n, error), (2, None));
+    let new = f.dir.join("photos").join("Test_01.ARW").canonicalize().unwrap();
+    assert!(!a.exists() && new.exists());
+    assert_eq!(sidecar::load(&new).adjustments.exposure, 0.8, "Einstellungen wandern mit");
+    assert_eq!(sidecar::load(&sk_core::variant::path_for(&new, 2)).adjustments.exposure, 0.8, "Variante auch");
+    // The image being edited stays open under its new name.
+    let v2_new = sk_core::variant::path_for(&new, 2);
+    assert_eq!(f.app.primary_path(), Some(v2_new.clone()));
+    f.pump("neu geladen", |app| app.current_path().as_ref() == Some(&v2_new));
+    assert!(f.app.entries.iter().any(|e| e.path == new) && !f.app.entries.iter().any(|e| e.path == a));
+}
+
+#[test]
+fn history_jumps_and_snapshots_persist() {
+    let Some(mut f) = Fixture::new("history") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let path = f.app.current_path().unwrap();
+    for ev in [0.5, 1.0, 1.5] {
+        f.app.edit(|a| a.exposure = ev);
+        f.app.commit_and_save();
+    }
+    let (steps, now) = f.app.history_steps().unwrap();
+    assert_eq!((steps.len(), now), (4, 3));
+    assert_eq!(sk_core::history::describe(steps[1], steps[2]), "Belichtung 1");
+
+    // Back to the first edit, then forward again.
+    f.app.jump_history(1);
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.exposure, 0.5);
+    assert_eq!(f.app.history_steps().unwrap().0.len(), 4, "spätere Schritte bleiben erreichbar");
+    f.app.jump_history(3);
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.exposure, 1.5);
+
+    // A snapshot lives in the sidecar and survives ordinary saving.
+    f.app.add_snapshot(Some("Hell".into()));
+    f.app.edit(|a| a.contrast = 30.0);
+    f.app.commit_and_save();
+    let sc = sidecar::load(&path);
+    assert_eq!(sc.snapshots.len(), 1);
+    assert_eq!((sc.snapshots[0].name.as_str(), sc.snapshots[0].adjustments.exposure, sc.snapshots[0].adjustments.contrast), ("Hell", 1.5, 0.0));
+    assert_eq!(sc.adjustments.contrast, 30.0);
+}
+
+#[test]
+fn showing_a_mask_renders_preview_and_tiles_again() {
+    let Some(mut f) = Fixture::new("mask-tiles") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    f.app.edit(|a| a.layers.push(sk_core::params::Layer::default()));
+    f.app.active_layer = Some(0);
+    f.app.send_render();
+    let v = f.app.edit_version;
+    // M: everything rendered so far (also the full-resolution tiles) lacks the tint.
+    f.app.show_mask = true;
+    f.app.send_render();
+    assert!(f.app.edit_version > v, "Maske an: neu rendern");
+    let v = f.app.edit_version;
+    f.app.send_render();
+    assert_eq!(f.app.edit_version, v, "nur einmal");
+    f.app.show_mask = false;
+    f.app.send_render();
+    assert!(f.app.edit_version > v, "Maske aus: neu rendern");
+}
+
+#[test]
+fn last_selected_image_is_selected_again_after_starting() {
+    let Some(mut f) = Fixture::new("restore") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let (a, b) = (f.photo("_DSC0009.ARW"), f.photo("_DSC0010.ARW"));
+    assert_eq!(f.app.primary_path(), Some(a.clone()), "ohne Vorgabe das erste");
+    // As if started with `last_image` = b in the settings.
+    f.app.restore_image = Some(b.clone());
+    let folder = f.dir.join("photos").canonicalize().unwrap();
+    f.app.close_current();
+    f.app.open_folder(folder.clone());
+    assert_eq!(f.app.primary_path(), Some(b.clone()));
+    f.pump("B geladen", |app| app.current_path().as_ref() == Some(&b));
+    // Only once: opening the folder later starts with the current image as usual.
+    assert!(f.app.restore_image.is_none());
 }

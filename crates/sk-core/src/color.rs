@@ -348,7 +348,7 @@ impl Oklab {
     /// Linear working RGB -> (L, a, b).
     #[inline]
     pub fn from_linear(&self, rgb: [f32; 3]) -> [f32; 3] {
-        let lms = mat_vec(&self.to_lms, rgb).map(|v| v.cbrt());
+        let lms = mat_vec(&self.to_lms, rgb).map(fast_cbrt);
         [
             0.210_454_255_3 * lms[0] + 0.793_617_785 * lms[1] - 0.004_072_046_8 * lms[2],
             1.977_998_495_1 * lms[0] - 2.428_592_205 * lms[1] + 0.450_593_709_9 * lms[2],
@@ -366,8 +366,37 @@ impl Oklab {
     }
 }
 
+/// Cube root to full `f32` precision, several times faster than `f32::cbrt` (libm):
+/// a bit-level estimate refined by two Halley steps (cubic convergence).
+#[inline]
+pub fn fast_cbrt(x: f32) -> f32 {
+    let a = x.abs();
+    if a == 0.0 || !a.is_finite() {
+        return x;
+    }
+    // Dividing the exponent by three gives an estimate within a few percent.
+    let mut y = f32::from_bits(a.to_bits() / 3 + 0x2a51_4067);
+    for _ in 0..2 {
+        let y3 = y * y * y;
+        y *= (y3 + 2.0 * a) / (2.0 * y3 + a);
+    }
+    y.copysign(x)
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn fast_cbrt_is_accurate() {
+        for i in -2000..=2000 {
+            let x = (i as f32 / 100.0).exp2() * if i % 2 == 0 { 1.0 } else { -1.0 };
+            let (fast, exact) = (fast_cbrt(x), x.cbrt());
+            assert!((fast - exact).abs() <= exact.abs() * 2e-7, "{x}: {fast} vs {exact}");
+        }
+        assert_eq!(fast_cbrt(0.0), 0.0);
+        assert!((fast_cbrt(27.0) - 3.0).abs() < 1e-6);
+    }
+
     use super::*;
 
     // Sony ILCE-7M3 D65 matrix (Adobe DNG converter values).

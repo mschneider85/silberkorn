@@ -7,6 +7,7 @@ use egui::{Button, Color32, Modifiers, RichText, Ui, vec2};
 use sk_core::cache;
 use sk_core::catalog::{self, Catalog, Scope};
 use sk_core::session::{self, Session, SessionFolder};
+use sk_core::variant;
 
 use crate::app::App;
 use crate::theme::{self, icon};
@@ -53,6 +54,9 @@ fn default_location(near: &Path) -> PathBuf {
 pub enum PendingAction {
     MoveTo(PathBuf),
     MoveToDialog,
+    NewVariant { clone: bool },
+    DeleteVariant,
+    Trash,
 }
 
 pub fn folder_icon(f: SessionFolder) -> &'static str {
@@ -158,16 +162,18 @@ impl App {
 
     /// Moves the selected images (with their sidecars) into `dest`; the database follows them.
     pub fn move_selection_to(&mut self, dest: &Path) {
-        let paths: Vec<PathBuf> = self.selected_paths().into_iter().filter(|p| p.parent() != Some(dest)).collect();
+        // Files move with all their variants.
+        let paths: Vec<PathBuf> = variant::files_of(&self.selected_paths()).into_iter().filter(|p| p.parent() != Some(dest)).collect();
         if paths.is_empty() {
             return;
         }
+        let moving = |p: &PathBuf| paths.contains(&variant::file_of(p));
         // Afterwards show the next remaining image, like after deleting in a file browser.
         let order: Vec<PathBuf> = self.visible.iter().map(|&i| self.entries[i].path.clone()).collect();
-        let next = order.iter().rposition(|p| paths.contains(p)).and_then(|last| {
-            order[last + 1..].iter().chain(order[..last].iter().rev()).find(|p| !paths.contains(p)).cloned()
+        let next = order.iter().rposition(moving).and_then(|last| {
+            order[last + 1..].iter().chain(order[..last].iter().rev()).find(|p| !moving(p)).cloned()
         });
-        if self.primary_path().is_some_and(|p| paths.contains(&p)) {
+        if self.primary_path().is_some_and(|p| moving(&p)) {
             self.close_current();
         } else {
             self.commit_and_save();
@@ -178,18 +184,8 @@ impl App {
             match session::move_image(p, dest) {
                 Ok(new) => {
                     moved += 1;
-                    if root.as_ref().is_some_and(|r| new.starts_with(r)) {
-                        cache::rename(p, &new, root.as_deref());
-                    }
-                    if let Some(c) = &self.catalog {
-                        let _ = c.rename_path(p, &new);
-                    }
-                    if let Some(t) = self.thumbs.remove(p) {
-                        self.thumbs.insert(new.clone(), t);
-                        self.thumb_requested.insert(new);
-                    }
-                    self.thumb_requested.remove(p);
-                    self.selection.remove(p);
+                    let keep_cache = root.as_ref().is_some_and(|r| new.starts_with(r));
+                    self.file_relocated(p, &new, keep_cache);
                 }
                 Err(e) => error = Some(format!("{e:#}")),
             }
@@ -210,6 +206,40 @@ impl App {
             None if moved == 1 => format!("1 Bild nach „{target}“ verschoben"),
             None => format!("{moved} Bilder nach „{target}“ verschoben"),
         };
+    }
+
+    /// Catalog, caches and in-memory state follow a file (with its variants) that was moved
+    /// or renamed. `keep_cache`: its cached previews move along (same cache).
+    pub(crate) fn file_relocated(&mut self, old_file: &Path, new_file: &Path, keep_cache: bool) {
+        let root = self.session.as_ref().map(|s| s.root.clone());
+        if let Some(c) = &self.catalog {
+            let _ = c.rename_path(old_file, new_file);
+        }
+        for new in variant::of_file(new_file) {
+            let old = variant::path_for(old_file, variant::number(&new));
+            if keep_cache {
+                cache::rename(&old, &new, root.as_deref());
+            }
+            if let Some(t) = self.thumbs.remove(&old) {
+                self.thumbs.insert(new.clone(), t);
+                self.thumb_requested.insert(new);
+            }
+            self.thumb_requested.remove(&old);
+            self.selection.remove(&old);
+            self.compare_textures.remove(&old);
+            self.compare_details.remove(&old);
+        }
+    }
+
+    /// "In Papierkorb verschieben": files go to the session trash with all their variants; a
+    /// selection of further variants only deletes those variants (after asking).
+    pub fn trash_selection(&mut self) {
+        let selected = self.selected_paths();
+        if !selected.is_empty() && selected.iter().all(|p| variant::number(p) > 1) {
+            self.request_delete_variant();
+        } else {
+            self.move_to_session_folder(SessionFolder::Trash);
+        }
     }
 
     pub fn move_to_session_folder(&mut self, f: SessionFolder) {
@@ -240,15 +270,18 @@ impl App {
         }
         let (mut n, mut error) = (0, None);
         for f in catalog::scan_folder(&trash, true) {
+            let variants = variant::of_file(&f);
             match session::delete_image(&f) {
                 Ok(()) => {
                     n += 1;
-                    cache::remove(&f, Some(&root));
                     if let Some(c) = &self.catalog {
                         let _ = c.remove_path(&f);
                     }
-                    self.thumbs.remove(&f);
-                    self.selection.remove(&f);
+                    for v in variants {
+                        cache::remove(&v, Some(&root));
+                        self.thumbs.remove(&v);
+                        self.selection.remove(&v);
+                    }
                 }
                 Err(e) => error = Some(format!("{e:#}")),
             }
@@ -270,6 +303,9 @@ impl App {
         match self.pending.take() {
             Some(PendingAction::MoveTo(dest)) => self.move_selection_to(&dest),
             Some(PendingAction::MoveToDialog) => self.move_to_folder_dialog(),
+            Some(PendingAction::NewVariant { clone }) => self.new_variant(clone),
+            Some(PendingAction::DeleteVariant) => self.request_delete_variant(),
+            Some(PendingAction::Trash) => self.trash_selection(),
             None => {}
         }
     }
@@ -282,7 +318,6 @@ impl App {
         ui.add_enabled_ui(n > 0, |ui| {
             if let Some(s) = &self.session {
                 let selects = s.folder(SessionFolder::Selects);
-                let trash = s.folder(SessionFolder::Trash);
                 if ui.add(Button::new(format!("{}  Nach Auswahl verschieben", icon::CHECK_CIRCLE)).shortcut_text("Strg+J")).clicked() {
                     self.pending = Some(PendingAction::MoveTo(selects));
                 }
@@ -306,7 +341,7 @@ impl App {
                     }
                 });
                 if ui.add(Button::new(format!("{}  In Papierkorb verschieben", icon::TRASH)).shortcut_text("Strg+Entf")).clicked() {
-                    self.pending = Some(PendingAction::MoveTo(trash));
+                    self.pending = Some(PendingAction::Trash);
                 }
             } else if ui.button(format!("{}  Verschieben nach …", icon::ARROW_BEND_UP_RIGHT)).clicked() {
                 self.pending = Some(PendingAction::MoveToDialog);

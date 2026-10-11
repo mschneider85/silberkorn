@@ -44,13 +44,20 @@ pub fn box_blur(p: &Plane, r: usize) -> Plane {
     if r == 0 || p.w == 0 || p.h == 0 {
         return p.clone();
     }
-    let (w, h) = (p.w, p.h);
+    let mut data = p.data.clone();
+    let mut tmp = vec![0.0f32; data.len()];
+    box_blur_in_place(&mut data, &mut tmp, p.w, p.h, r);
+    Plane::new(p.w, p.h, data)
+}
+
+/// Box blur of `data` in place; `tmp` is scratch space of the same size. (The source is
+/// only read by the horizontal pass, so the vertical pass can write over it.)
+fn box_blur_in_place(data: &mut [f32], tmp: &mut [f32], w: usize, h: usize, r: usize) {
     // Horizontal pass.
-    let mut tmp = vec![0.0f32; w * h];
-    tmp.par_chunks_mut(w).zip(p.data.par_chunks(w)).for_each(|(out, row)| box_line(row, out, r));
+    tmp.par_chunks_mut(w).zip(data.par_chunks(w)).for_each(|(out, row)| box_line(row, out, r));
+    let tmp = &*tmp;
     // Vertical pass: running sums over rows, on column stripes (cache friendly).
-    let mut out = vec![0.0f32; w * h];
-    let ptr = SyncPtr(out.as_mut_ptr());
+    let ptr = SyncPtr(data.as_mut_ptr());
     const STRIPE: usize = 256;
     let norm = 1.0 / (2 * r + 1) as f32;
     (0..w.div_ceil(STRIPE)).into_par_iter().for_each(|s| {
@@ -75,7 +82,6 @@ pub fn box_blur(p: &Plane, r: usize) -> Plane {
             }
         }
     });
-    Plane::new(w, h, out)
 }
 
 /// 1-D running mean with clamped edges.
@@ -98,7 +104,16 @@ pub fn gaussian_blur(p: &Plane, sigma: f32) -> Plane {
     }
     // Box radius for three passes approximating the given sigma.
     let r = (((12.0 * sigma * sigma / 3.0 + 1.0).sqrt() - 1.0) / 2.0).round().max(1.0) as usize;
-    box_blur(&box_blur(&box_blur(p, r), r), r)
+    if p.w == 0 || p.h == 0 {
+        return p.clone();
+    }
+    // Three passes over two buffers (instead of two fresh allocations per pass).
+    let mut data = p.data.clone();
+    let mut tmp = vec![0.0f32; data.len()];
+    for _ in 0..3 {
+        box_blur_in_place(&mut data, &mut tmp, p.w, p.h, r);
+    }
+    Plane::new(p.w, p.h, data)
 }
 
 /// Self-guided filter (He et al.): edge-preserving smoothing of `p` with radius `r`

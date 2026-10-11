@@ -34,6 +34,8 @@ pub struct CaptureInfo {
     pub lens: Option<String>,
     pub iso: Option<u32>,
     pub exposure_time: Option<String>,
+    /// Exposure time in seconds as the camera stored it (numerator, denominator).
+    pub exposure_rational: Option<(u32, u32)>,
     pub aperture: Option<String>,
     pub focal_length: Option<String>,
     pub date: Option<String>,
@@ -63,9 +65,11 @@ fn decode(path: &Path) -> Result<Decoded> {
     decode_ext(path, false)
 }
 
-/// `dummy` skips decoding the pixel data (metadata only).
+/// `dummy` skips decoding the pixel data (metadata only). `path` may be a variant (see
+/// `variant`): the file is read, the metadata keeps the variant's path.
 fn decode_ext(path: &Path, dummy: bool) -> Result<Decoded> {
-    let source = RawSource::new(path).with_context(|| format!("Kann {} nicht öffnen", path.display()))?;
+    let file = crate::variant::file_of(path);
+    let source = RawSource::new(&file).with_context(|| format!("Kann {} nicht öffnen", file.display()))?;
     let decoder: Box<dyn Decoder> = rawler::get_decoder(&source).map_err(|e| anyhow!("Unbekanntes RAW-Format: {e}"))?;
     let params = RawDecodeParams::default();
     let raw = decoder.raw_image(&source, &params, dummy).map_err(|e| anyhow!("RAW-Dekodierung fehlgeschlagen: {e}"))?;
@@ -111,6 +115,7 @@ fn build_meta(path: &Path, raw: &RawImage, md: Option<&RawMetadata>) -> Result<R
             let s = r.n as f64 / r.d as f64;
             if s >= 0.5 { format!("{s:.1} s") } else { format!("1/{:.0} s", 1.0 / s) }
         });
+        info.exposure_rational = ex.exposure_time.filter(|r| r.d != 0 && r.n != 0).map(|r| (r.n, r.d));
         info.aperture = ex.fnumber.filter(|r| r.d != 0).map(|r| format!("f/{:.1}", r.n as f64 / r.d as f64));
         info.fnumber = ex.fnumber.filter(|r| r.d != 0).map(|r| r.n as f32 / r.d as f32);
         info.focal_mm = ex.focal_length.filter(|r| r.d != 0).map(|r| r.n as f32 / r.d as f32);
@@ -222,7 +227,7 @@ fn superpixel(raw: &RawImage, cfa: &rawler::CFA) -> Result<LinearImage> {
 
 /// Embedded JPEG preview (fast thumbnails), already oriented.
 pub fn embedded_preview(path: &Path) -> Result<::image::DynamicImage> {
-    let source = RawSource::new(path)?;
+    let source = RawSource::new(&crate::variant::file_of(path))?;
     let decoder = rawler::get_decoder(&source).map_err(|e| anyhow!("{e}"))?;
     let params = RawDecodeParams::default();
     let img = decoder

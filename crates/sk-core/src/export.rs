@@ -4,13 +4,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use image::{ImageBuffer, ImageEncoder, Rgb, imageops::FilterType};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-use crate::color::OutputSpace;
+use crate::color::{OutputSpace, Trc, mat_inv, mat_mul, mat_vec};
 use crate::icc;
 use crate::params::Adjustments;
 use crate::pipeline::Processor;
-use crate::raw;
+use crate::naming::NameFields;
+use crate::raw::{self, CaptureInfo};
+use crate::watermark::Watermark;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ExportFormat {
@@ -55,9 +58,16 @@ pub struct ExportRecipe {
     pub long_edge: Option<u32>,
     /// Output folder; relative paths are resolved against the image's folder.
     pub output_dir: PathBuf,
+    /// File name with placeholders (see `naming`); empty: the image's name.
+    pub name_template: String,
     /// Suffix appended to the file stem.
     pub suffix: String,
     pub output_space: OutputSpace,
+    pub watermark: Watermark,
+    /// Camera, lens, exposure and capture date in the file's EXIF (JPEG, PNG). GPS is never written.
+    pub capture_metadata: bool,
+    pub artist: String,
+    pub copyright: String,
 }
 
 impl Default for ExportRecipe {
@@ -69,31 +79,45 @@ impl Default for ExportRecipe {
             quality: 90,
             long_edge: None,
             output_dir: PathBuf::from("Output"),
+            name_template: String::new(),
             suffix: String::new(),
             output_space: OutputSpace::Srgb,
+            watermark: Watermark::default(),
+            capture_metadata: true,
+            artist: String::new(),
+            copyright: String::new(),
         }
     }
 }
 
 impl ExportRecipe {
-    pub fn output_path(&self, image: &Path) -> PathBuf {
+    pub fn output_path(&self, f: &NameFields) -> PathBuf {
+        let image = f.image;
         let dir = if self.output_dir.is_absolute() {
             self.output_dir.clone()
         } else {
             image.parent().unwrap_or(Path::new(".")).join(&self.output_dir)
         };
-        let stem = image.file_stem().unwrap_or_default().to_string_lossy();
-        dir.join(format!("{stem}{}.{}", self.suffix, self.format.extension()))
+        let (file, n) = crate::variant::split(image);
+        let stem = if self.name_template.trim().is_empty() {
+            file.file_stem().unwrap_or_default().to_string_lossy().to_string()
+        } else {
+            crate::naming::expand(&self.name_template, f)
+        };
+        // Further variants get their number, so that they don't overwrite each other.
+        let variant = if n > 1 && !self.name_template.to_lowercase().contains("{variante}") { format!("-v{n}") } else { String::new() };
+        dir.join(format!("{stem}{variant}{}.{}", self.suffix, self.format.extension()))
     }
 }
 
 /// Develops `image` at full resolution and writes it according to `recipe`.
 pub fn export(image: &Path, adj: &Adjustments, recipe: &ExportRecipe) -> Result<PathBuf> {
-    export_many(image, adj, std::slice::from_ref(recipe)).remove(0)
+    export_many(image, adj, std::slice::from_ref(recipe), 1, "").remove(0)
 }
 
-/// Develops `image` once and writes one file per recipe.
-pub fn export_many(image: &Path, adj: &Adjustments, recipes: &[ExportRecipe]) -> Vec<Result<PathBuf>> {
+/// Develops `image` once and writes one file per recipe. `counter` and `session` are for
+/// recipes' name templates.
+pub fn export_many(image: &Path, adj: &Adjustments, recipes: &[ExportRecipe], counter: u32, session: &str) -> Vec<Result<PathBuf>> {
     let (meta, linear) = match raw::load_full(image) {
         Ok(v) => v,
         Err(e) => {
@@ -111,13 +135,25 @@ pub fn export_many(image: &Path, adj: &Adjustments, recipes: &[ExportRecipe]) ->
                 cache.push((recipe.output_space, processor.process(&linear, None, recipe.output_space)));
             }
             let out = &cache.iter().find(|(s, _)| *s == recipe.output_space).unwrap().1;
-            write_output(image, out, recipe)
+            let fields = NameFields { image, capture: Some(&meta.info), counter, session };
+            write_output(&fields, out, recipe)
         })
         .collect()
 }
 
-fn write_output(image: &Path, out: &crate::image::LinearImage, recipe: &ExportRecipe) -> Result<PathBuf> {
+fn write_output(f: &NameFields, out: &crate::image::LinearImage, recipe: &ExportRecipe) -> Result<PathBuf> {
+    let info = f.capture.cloned().unwrap_or_default();
+    let bytes = encode(&resized(out, recipe)?, recipe, &info)?;
+    let path = recipe.output_path(f);
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).with_context(|| format!("Kann Ordner {} nicht anlegen", dir.display()))?;
+    }
+    std::fs::write(&path, bytes)?;
+    Ok(path)
+}
 
+/// The processed image (output space, encoded 0..1) at the recipe's size, with its watermark.
+fn resized(out: &crate::image::LinearImage, recipe: &ExportRecipe) -> Result<ImageBuffer<Rgb<f32>, Vec<f32>>> {
     let mut buf: ImageBuffer<Rgb<f32>, Vec<f32>> =
         ImageBuffer::from_raw(out.width as u32, out.height as u32, out.data.iter().flatten().copied().collect())
             .context("Puffergröße ungültig")?;
@@ -130,43 +166,91 @@ fn write_output(image: &Path, out: &crate::image::LinearImage, recipe: &ExportRe
             buf = image::imageops::resize(&buf, nw, nh, FilterType::Lanczos3);
         }
     }
+    recipe.watermark.apply(&mut buf, recipe.output_space)?;
+    Ok(buf)
+}
 
-    let path = recipe.output_path(image);
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).with_context(|| format!("Kann Ordner {} nicht anlegen", dir.display()))?;
-    }
+fn to_u8(v: &f32) -> u8 {
+    (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+}
+
+/// The file contents for the recipe's format, with its color profile and metadata.
+fn encode(buf: &ImageBuffer<Rgb<f32>, Vec<f32>>, recipe: &ExportRecipe, info: &CaptureInfo) -> Result<Vec<u8>> {
     let (w, h) = buf.dimensions();
-    let to_u8 = |v: &f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
     let profile = icc::profile_for(recipe.output_space);
-    let file = std::io::BufWriter::new(std::fs::File::create(&path)?);
+    let exif = crate::exif::build(&crate::exif::ExifFields {
+        capture: recipe.capture_metadata.then_some(info),
+        artist: &recipe.artist,
+        copyright: &recipe.copyright,
+    });
+    let mut file = std::io::Cursor::new(Vec::new());
     match recipe.format {
         ExportFormat::Jpeg => {
             let data: Vec<u8> = buf.as_raw().iter().map(to_u8).collect();
-            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(file, recipe.quality.clamp(1, 100));
+            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, recipe.quality.clamp(1, 100));
             enc.set_icc_profile(profile).ok();
+            enc.set_exif_metadata(exif).ok();
             enc.write_image(&data, w, h, image::ExtendedColorType::Rgb8)?;
         }
         ExportFormat::Png => {
             let data: Vec<u8> = buf.as_raw().iter().map(to_u8).collect();
-            let mut enc = image::codecs::png::PngEncoder::new(file);
+            let mut enc = image::codecs::png::PngEncoder::new(&mut file);
             enc.set_icc_profile(profile).ok();
+            enc.set_exif_metadata(exif).ok();
             enc.write_image(&data, w, h, image::ExtendedColorType::Rgb8)?;
         }
         ExportFormat::Tiff8 => {
             let data: Vec<u8> = buf.as_raw().iter().map(to_u8).collect();
-            let mut enc = image::codecs::tiff::TiffEncoder::new(file);
+            let mut enc = image::codecs::tiff::TiffEncoder::new(&mut file);
             enc.set_icc_profile(profile).ok();
             enc.write_image(&data, w, h, image::ExtendedColorType::Rgb8)?;
         }
         ExportFormat::Tiff16 => {
             let data: Vec<u16> = buf.as_raw().iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).collect();
             let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_ne_bytes()).collect();
-            let mut enc = image::codecs::tiff::TiffEncoder::new(file);
+            let mut enc = image::codecs::tiff::TiffEncoder::new(&mut file);
             enc.set_icc_profile(profile).ok();
             enc.write_image(&bytes, w, h, image::ExtendedColorType::Rgb16)?;
         }
     }
-    Ok(path)
+    Ok(file.into_inner())
+}
+
+/// What a recipe produces, for proofing.
+pub struct Proof {
+    pub width: usize,
+    pub height: usize,
+    /// The stored pixels (JPEG decoded again, with its artifacts), converted from the
+    /// recipe's color space to sRGB for display: 8-bit RGBA.
+    pub rgba: Vec<u8>,
+    /// Size of the file the recipe writes, in bytes.
+    pub file_size: usize,
+}
+
+/// Proof of a full-resolution processing in the recipe's color space
+/// (`Processor::process(.., recipe.output_space)`): exactly the export path, without the file.
+pub fn proof(processed: &crate::image::LinearImage, recipe: &ExportRecipe, info: &CaptureInfo) -> Result<Proof> {
+    let buf = resized(processed, recipe)?;
+    let bytes = encode(&buf, recipe, info)?;
+    let (w, h) = buf.dimensions();
+    let stored: Vec<f32> = match recipe.format {
+        ExportFormat::Jpeg => image::load_from_memory(&bytes)?.to_rgb8().into_raw().into_iter().map(|v| v as f32 / 255.0).collect(),
+        ExportFormat::Tiff16 => buf.as_raw().iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0).round() / 65535.0).collect(),
+        _ => buf.as_raw().iter().map(|v| to_u8(v) as f32 / 255.0).collect(),
+    };
+    // Output space -> sRGB (both relative to D50 in our matrices), clipping what sRGB can't show.
+    let srgb_from_xyz = mat_inv(&OutputSpace::Srgb.to_xyz_d50()).context("sRGB-Matrix")?;
+    let to_srgb = mat_mul(&srgb_from_xyz, &recipe.output_space.to_xyz_d50());
+    let trc = recipe.output_space.trc();
+    let rgba = stored
+        .par_chunks(3)
+        .flat_map_iter(|c| {
+            let lin = mat_vec(&to_srgb, [trc.decode(c[0]), trc.decode(c[1]), trc.decode(c[2])]);
+            let [r, g, b] = lin.map(|v| to_u8(&Trc::Srgb.encode(v.clamp(0.0, 1.0))));
+            [r, g, b, 255]
+        })
+        .collect();
+    Ok(Proof { width: w as usize, height: h as usize, rgba, file_size: bytes.len() })
 }
 
 #[cfg(test)]
@@ -192,13 +276,31 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let res = export_many(&sample, &Adjustments::default(), &recipes);
+        let res = export_many(&sample, &Adjustments::default(), &recipes, 1, "");
         let paths: Vec<PathBuf> = res.into_iter().map(|r| r.unwrap()).collect();
         let jpg = image::open(&paths[0]).unwrap();
         assert_eq!(jpg.width(), 400);
+        // EXIF with the capture data, no GPS.
+        let bytes = std::fs::read(&paths[0]).unwrap();
+        let has = |needle: &[u8]| bytes.windows(needle.len()).any(|w| w == needle);
+        assert!(has(b"Exif\0\0II*\0") && has(b"Silberkorn"));
         let tif = image::open(&paths[1]).unwrap();
         assert_eq!(tif.width(), 300);
         assert!(matches!(tif, image::DynamicImage::ImageRgb16(_)));
+
+        // The proof matches the written files: size, dimensions and (for sRGB) the pixels.
+        let (meta, linear) = raw::load_full(&sample).unwrap();
+        let processor = Processor::new(&meta, &Adjustments::default());
+        let srgb = processor.process(&linear, None, OutputSpace::Srgb);
+        let p = proof(&srgb, &recipes[0], &meta.info).unwrap();
+        assert_eq!((p.width, p.height), (jpg.width() as usize, jpg.height() as usize));
+        assert_eq!(p.file_size as u64, std::fs::metadata(&paths[0]).unwrap().len());
+        let jpg = jpg.to_rgb8();
+        let max_diff = p.rgba.chunks(4).zip(jpg.pixels()).flat_map(|(a, b)| (0..3).map(move |c| (a[c] as i32 - b[c] as i32).abs())).max().unwrap();
+        assert!(max_diff <= 1, "Proof = Datei: {max_diff}");
+        let adobe = processor.process(&linear, None, OutputSpace::AdobeRgb);
+        let p = proof(&adobe, &recipes[1], &meta.info).unwrap();
+        assert_eq!(p.file_size as u64, std::fs::metadata(&paths[1]).unwrap().len());
         std::fs::remove_dir_all(dir).ok();
     }
 }

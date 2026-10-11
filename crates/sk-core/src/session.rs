@@ -28,6 +28,11 @@ pub fn thumbnail_dir(root: &Path) -> PathBuf {
     root.join(APP_FOLDER).join("Cache").join("Thumbnails")
 }
 
+/// Screen-sized viewer previews of the session's images.
+pub fn preview_dir(root: &Path) -> PathBuf {
+    root.join(APP_FOLDER).join("Cache").join("Previews")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionFolder {
     Capture,
@@ -185,13 +190,38 @@ pub fn move_image(image: &Path, dest: &Path) -> Result<PathBuf> {
     }
     std::fs::create_dir_all(dest)?;
     let target = free_target(dest, image.file_name().context("kein Dateiname")?);
+    relocate(image, &target)?;
+    Ok(target)
+}
+
+/// Renames an image and its sidecar within its folder to `stem` plus the old extension.
+/// Returns the new path (`stem-2` … if the name is taken).
+pub fn rename_image(image: &Path, stem: &str) -> Result<PathBuf> {
+    let dir = image.parent().context("kein Ordner")?;
+    let ext = image.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    let name = format!("{stem}{ext}");
+    if image.file_name() == Some(std::ffi::OsStr::new(&name)) {
+        return Ok(image.to_path_buf());
+    }
+    let target = free_target(dir, std::ffi::OsStr::new(&name));
+    relocate(image, &target)?;
+    Ok(target)
+}
+
+/// Moves the image file and its sidecars to `target`, all or nothing.
+fn relocate(image: &Path, target: &Path) -> Result<()> {
+    let target = target.to_path_buf();
     move_file(image, &target)?;
     for (from, to) in sidecar::sidecar_files_for(image).into_iter().zip(sidecar::sidecar_files_for(&target)) {
-        if from.exists() {
-            move_file(&from, &to)?;
+        if from.exists()
+            && let Err(e) = move_file(&from, &to)
+        {
+            // Without its sidecar (settings, variants) the image must not move: put it back.
+            let _ = move_file(&target, image);
+            return Err(e);
         }
     }
-    Ok(target)
+    Ok(())
 }
 
 /// Copies an image and its sidecar into `dest`. Returns the new path.
@@ -227,6 +257,23 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn rename_takes_the_sidecar_along_and_avoids_clashes() {
+        let dir = temp("rename");
+        let (a, b) = (dir.join("a.ARW"), dir.join("b.ARW"));
+        for p in [&a, &b] {
+            std::fs::write(p, b"raw").unwrap();
+        }
+        std::fs::write(sidecar::sidecar_path(&a), b"{}").unwrap();
+        let new = rename_image(&a, "Hochzeit_001").unwrap();
+        assert_eq!(new, dir.join("Hochzeit_001.ARW"));
+        assert!(!a.exists() && sidecar::sidecar_path(&new).exists());
+        // Taken name: a number is appended; the same name: nothing happens.
+        assert_eq!(rename_image(&b, "Hochzeit_001").unwrap(), dir.join("Hochzeit_001-2.ARW"));
+        assert_eq!(rename_image(&new, "Hochzeit_001").unwrap(), new);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

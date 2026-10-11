@@ -129,7 +129,7 @@ fn now() -> i64 {
 }
 
 fn file_stamp(path: &Path) -> (i64, i64) {
-    std::fs::metadata(path)
+    std::fs::metadata(crate::variant::file_of(path))
         .map(|m| {
             let mtime = m.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs() as i64);
             (mtime, m.len() as i64)
@@ -286,9 +286,17 @@ impl Catalog {
         let path = &meta.path;
         let (mtime, size) = file_stamp(path);
         let folder = self.folder_key(path);
-        let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = crate::variant::display_name(path);
         let info = &meta.info;
         let camera = format!("{} {}", info.make, info.model).trim().to_string();
+        // A variant belongs to the import of its file.
+        let import_id = match crate::variant::split(path) {
+            (file, n) if n > 1 && import_id == 0 => self
+                .conn
+                .query_row("SELECT import_id FROM images WHERE path = ?1", [self.key(&file)], |r| r.get(0))
+                .unwrap_or(0),
+            _ => import_id,
+        };
         // Keep the original import id when re-indexing a changed file.
         let id: i64 = self.conn.query_row(
             "INSERT INTO images (path, folder, name, capture_date, camera, lens, iso, rating, color_label, file_mtime, file_size, import_id)
@@ -349,7 +357,10 @@ impl Catalog {
             .collect::<rusqlite::Result<_>>()?;
         let mut n = 0;
         for (id, p) in paths {
-            if !self.resolve(&p).exists() {
+            let path = self.resolve(&p);
+            let (file, variant) = crate::variant::split(&path);
+            let gone = !file.exists() || (variant > 1 && !crate::variant::of_file(&file).contains(&path));
+            if gone {
                 self.conn.execute("DELETE FROM images WHERE id = ?1", [id])?;
                 n += 1;
             }
@@ -357,10 +368,32 @@ impl Catalog {
         Ok(n)
     }
 
-    /// Follows a file that was moved or renamed; album memberships and keywords are kept.
+    /// Follows a file that was moved or renamed, with its variants; album memberships and
+    /// keywords are kept.
     pub fn rename_path(&self, from: &Path, to: &Path) -> Result<()> {
+        if crate::variant::number(from) == 1 {
+            for (old, _) in self.variant_rows(from)? {
+                let n = crate::variant::number(&old);
+                self.rename_one(&old, &crate::variant::path_for(to, n))?;
+            }
+        }
+        self.rename_one(from, to)
+    }
+
+    /// Stored further variants of a file: (path, id).
+    fn variant_rows(&self, file: &Path) -> Result<Vec<(PathBuf, i64)>> {
+        let prefix = format!("{}#", self.key(file));
+        let rows = self
+            .conn
+            .prepare("SELECT path, id FROM images WHERE substr(path, 1, length(?1)) = ?1")?
+            .query_map([&prefix], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows.into_iter().map(|(p, id)| (self.resolve(&p), id)).filter(|(p, _)| crate::variant::number(p) > 1).collect())
+    }
+
+    fn rename_one(&self, from: &Path, to: &Path) -> Result<()> {
         let (from, to_key) = (self.key(from), self.key(to));
-        let name = to.file_name().unwrap_or_default().to_string_lossy().to_string();
+        let name = crate::variant::display_name(to);
         // A stale entry at the destination would violate the unique path.
         self.conn.execute("DELETE FROM images WHERE path = ?1 AND path <> ?2", params![to_key, from])?;
         self.conn.execute(
@@ -370,7 +403,13 @@ impl Catalog {
         Ok(())
     }
 
+    /// Removes an image; for a raw file also its variants.
     pub fn remove_path(&self, path: &Path) -> Result<()> {
+        if crate::variant::number(path) == 1 {
+            for (_, id) in self.variant_rows(path)? {
+                self.conn.execute("DELETE FROM images WHERE id = ?1", [id])?;
+            }
+        }
         self.conn.execute("DELETE FROM images WHERE path = ?1", [self.key(path)])?;
         Ok(())
     }
@@ -671,6 +710,25 @@ mod tests {
     }
 
     #[test]
+    fn variants_follow_their_file() {
+        let c = catalog();
+        let v = crate::variant::path_for(Path::new("/p/a/a.ARW"), 2);
+        c.upsert(&meta(v.to_str().unwrap(), "2024:01:01 10:00:00", "50mm"), &Sidecar::default(), 0).unwrap();
+        let album = c.create_album("A", None).unwrap();
+        c.add_to_album(album, std::slice::from_ref(&v)).unwrap();
+        let names = |c: &Catalog| c.query(&Scope::All, &Filter::default(), SortKey::Name, false).unwrap().into_iter().map(|r| r.name).collect::<Vec<_>>();
+        assert!(names(&c).contains(&"a.ARW (2)".to_string()));
+        // Moving the file moves the variant, album membership included.
+        c.rename_path(Path::new("/p/a/a.ARW"), Path::new("/p/sel/a.ARW")).unwrap();
+        let moved = c.query(&Scope::Album(album), &Filter::default(), SortKey::Name, false).unwrap();
+        assert_eq!(moved.len(), 1);
+        assert_eq!(moved[0].path, Path::new("/p/sel/a.ARW#2"));
+        // Removing the file removes its variants; a variant alone can be removed too.
+        c.remove_path(Path::new("/p/sel/a.ARW")).unwrap();
+        assert!(!names(&c).iter().any(|n| n.starts_with("a.ARW")));
+    }
+
+    #[test]
     fn index_real_sample() {
         let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/_DSC0009.ARW");
         if !sample.exists() {
@@ -777,5 +835,9 @@ mod tests {
         let r = c.query(&Scope::All, &f, SortKey::Name, false).unwrap();
         assert_eq!(r[0].rating, 1);
         assert_eq!(c.query(&Scope::LastImport, &Filter::default(), SortKey::Name, false).unwrap().len(), 3);
+        // A variant made later belongs to the import of its file.
+        let v = crate::variant::path_for(Path::new("/p/a/a.ARW"), 2);
+        c.upsert(&meta(v.to_str().unwrap(), "2024:01:01 10:00:00", "50mm"), &Sidecar::default(), 0).unwrap();
+        assert_eq!(c.query(&Scope::LastImport, &Filter::default(), SortKey::Name, false).unwrap().len(), 4);
     }
 }

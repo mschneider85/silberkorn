@@ -37,7 +37,7 @@ fn record_from_sidecar(path: PathBuf) -> ImageRecord {
     let sc = sidecar::load(&path);
     ImageRecord {
         id: 0,
-        name: path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+        name: sk_core::variant::display_name(&path),
         path,
         capture_date: None,
         camera: None,
@@ -116,7 +116,9 @@ impl App {
         self.commit_and_save();
         self.scope = scope;
         self.reload_entries();
-        let first = self.visible.first().copied();
+        // After starting: the image that was selected last time, if it is shown here.
+        let restore = self.restore_image.take().and_then(|p| self.index_of(&p)).filter(|i| self.visible.contains(i));
+        let first = restore.or_else(|| self.visible.first().copied());
         let keep = self.current_path().is_some_and(|p| self.index_of(&p).is_some_and(|i| self.visible.contains(&i)));
         if !keep {
             self.close_current();
@@ -141,8 +143,8 @@ impl App {
             .filter(|s| !folder.starts_with(&s.root))
             .map(|s| s.folder(sk_core::session::SessionFolder::Capture));
         self.status = match &copy_to {
-            Some(_) => format!("Kopiere {} Bilder in die Session…", paths.len()),
-            None => format!("Importiere {} Bilder…", paths.len()),
+            Some(_) => format!("Kopiere {} in die Session…", crate::widgets::image_count(paths.len())),
+            None => format!("Importiere {}…", crate::widgets::image_count(paths.len())),
         };
         self.workers.index(IndexJob { catalog: self.catalog_path(), paths, import: true, copy_to });
     }
@@ -160,7 +162,7 @@ impl App {
                     .into_iter()
                     .map(|r| (r.path.clone(), r))
                     .collect();
-                catalog::scan_folder(path, false)
+                sk_core::variant::expand(catalog::scan_folder(path, false))
                     .into_iter()
                     .map(|p| indexed.get(&p).cloned().unwrap_or_else(|| record_from_sidecar(p)))
                     .collect()
@@ -176,6 +178,7 @@ impl App {
         self.selection.retain(|p| self.entries.iter().any(|e| &e.path == p));
         self.refilter();
         self.refresh_catalog_lists();
+        self.request_proxies();
     }
 
     pub fn resort(&mut self) {
@@ -284,6 +287,11 @@ impl App {
                 sc.adjustments = f(&sc.adjustments);
                 let _ = sidecar::save(path, &sc);
                 self.thumb_requested.remove(path);
+                self.compare_textures.remove(path);
+                self.compare_requested.remove(path);
+                self.focus_maps.remove(path);
+                self.compare_details.remove(path);
+                self.forget_prepared(path);
             }
         }
     }
@@ -543,16 +551,33 @@ impl App {
     }
 
     pub fn styles_tab(&mut self, ui: &mut Ui) {
-        let mut apply: Option<Style> = None;
+        // (style, look only), see `styles::apply_look`.
+        let mut apply: Option<(Style, bool)> = None;
         let mut delete: Option<String> = None;
-        section(ui, "Stile", None, |ui| {
+        let mut hovered: Option<(Style, bool)> = None;
+        let current = self.current.as_ref().map(|c| c.adjustments.clone());
+        ui.label(RichText::new("Zeiger auf einen Stil: Vorschau im Bild. „Anwenden“ übernimmt ihn für die Auswahl.").color(Color32::from_gray(150)).small());
+        section(ui, "Filmsimulationen", None, |ui| {
+            for (style, description) in &self.film_looks {
+                let row = ui.horizontal(|ui| {
+                    if ui.button("Anwenden").on_hover_text("Auf Auswahl anwenden").clicked() {
+                        apply = Some((style.clone(), true));
+                    }
+                    ui.label(&style.name).on_hover_text(format!("{description}\n\nNachempfunden, keine offizielle Simulation. Belichtung, Weißabgleich und Korrekturen des Bildes bleiben erhalten."));
+                });
+                if ui.rect_contains_pointer(row.response.rect) {
+                    hovered = Some((style.clone(), true));
+                }
+            }
+        });
+        section(ui, "Eigene Stile", None, |ui| {
             if self.styles.is_empty() {
                 ui.label(RichText::new("Noch keine Stile gespeichert.").color(Color32::from_gray(150)));
             }
             for style in &self.styles {
-                ui.horizontal(|ui| {
+                let row = ui.horizontal(|ui| {
                     if ui.button("Anwenden").on_hover_text("Auf Auswahl anwenden").clicked() {
-                        apply = Some(style.clone());
+                        apply = Some((style.clone(), false));
                     }
                     ui.label(&style.name);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -561,8 +586,16 @@ impl App {
                         }
                     });
                 });
+                if ui.rect_contains_pointer(row.response.rect) {
+                    hovered = Some((style.clone(), false));
+                }
             }
         });
+        if let (Some((style, look)), Some(current)) = (hovered, current)
+            && apply.is_none()
+        {
+            self.preview_style(if look { styles::apply_look(&style, &current) } else { styles::apply(&style, &current) });
+        }
         section(ui, "Neuer Stil", None, |ui| {
             ui.add(egui::TextEdit::singleline(&mut self.library_ui.new_style).hint_text("Name des Stils"));
             let name = self.library_ui.new_style.trim().to_string();
@@ -578,10 +611,10 @@ impl App {
                 self.reload_styles();
             }
         });
-        if let Some(style) = apply {
+        if let Some((style, look)) = apply {
             let paths = self.selected_paths();
-            self.set_adjustments_on(&paths, |a| styles::apply(&style, a));
-            self.status = format!("Stil „{}“ auf {} Bild(er) angewendet", style.name, paths.len());
+            self.set_adjustments_on(&paths, |a| if look { styles::apply_look(&style, a) } else { styles::apply(&style, a) });
+            self.status = format!("Stil „{}“ auf {} angewendet", style.name, crate::widgets::image_count(paths.len()));
         }
         if let Some(name) = delete {
             let _ = styles::delete_in(&styles::styles_dir(), &name);

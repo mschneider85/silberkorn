@@ -1,6 +1,7 @@
 //! Tool tabs: Library, Exposure, Color, Metadata, Output.
 
 use sk_core::export::ExportFormat;
+use sk_core::watermark::{Anchor, WatermarkKind};
 use sk_core::params::{BaseCurve, Curve, Levels, WbMode, WhiteBalance};
 use sk_core::sidecar::ColorLabel;
 use egui::{Color32, RichText, Ui};
@@ -16,6 +17,7 @@ impl App {
             Tab::Details => self.details_tab(ui),
             Tab::Layers => self.layers_tab(ui),
             Tab::Styles => self.styles_tab(ui),
+            Tab::History => self.history_tab(ui),
             Tab::Exposure => self.exposure_tab(ui),
             Tab::Color => self.color_tab(ui),
             Tab::Metadata => self.metadata_tab(ui),
@@ -257,7 +259,7 @@ impl App {
                     ui.label(v.unwrap_or_else(|| "–".into()));
                     ui.end_row();
                 };
-                row("Datei", cur.meta.path.file_name().map(|n| n.to_string_lossy().to_string()));
+                row("Datei", Some(sk_core::variant::display_name(&cur.meta.path)));
                 row("Ordner", cur.meta.path.parent().map(|n| n.display().to_string()));
                 row("Kamera", Some(format!("{} {}", info.make, info.model)));
                 row("Objektiv", info.lens.clone());
@@ -341,9 +343,82 @@ impl App {
             });
             ui.label(RichText::new("Relativ zum Bildordner, z. B. „Output“").small().color(Color32::from_gray(140)));
             ui.horizontal(|ui| {
+                ui.label("Dateiname");
+                ui.add(egui::TextEdit::singleline(&mut r.name_template).hint_text("{Name}"));
+            });
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for (token, help) in sk_core::naming::TOKENS {
+                    if ui.small_button(RichText::new(token).small()).on_hover_text(help).clicked() {
+                        r.name_template.push_str(token);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
                 ui.label("Suffix");
                 ui.text_edit_singleline(&mut r.suffix);
             });
+        });
+        section(ui, "Wasserzeichen", None, |ui| {
+            let wm = &mut r.watermark;
+            ui.checkbox(&mut wm.enabled, "Wasserzeichen einfügen");
+            if !wm.enabled {
+                return;
+            }
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut wm.kind, WatermarkKind::Text, "Text");
+                ui.selectable_value(&mut wm.kind, WatermarkKind::Image, "Logo");
+            });
+            match wm.kind {
+                WatermarkKind::Text => {
+                    ui.text_edit_singleline(&mut wm.text);
+                    ui.horizontal(|ui| {
+                        ui.selectable_value(&mut wm.dark, false, "Weiß");
+                        ui.selectable_value(&mut wm.dark, true, "Schwarz");
+                    });
+                }
+                WatermarkKind::Image => {
+                    ui.horizontal(|ui| {
+                        if ui.button("Logo wählen …").clicked()
+                            && let Some(f) = rfd::FileDialog::new().set_title("Logo für das Wasserzeichen").add_filter("Bilder", &["png", "jpg", "jpeg", "tif", "tiff"]).pick_file()
+                        {
+                            wm.image = f;
+                        }
+                        let name = wm.image.file_name().map_or("kein Logo".into(), |n| n.to_string_lossy().to_string());
+                        ui.label(RichText::new(name).small().color(Color32::from_gray(160)));
+                    });
+                    ui.label(RichText::new("PNG mit Transparenz empfohlen").small().color(Color32::from_gray(140)));
+                }
+            }
+            egui::ComboBox::from_label("Position").selected_text(wm.anchor.label()).show_ui(ui, |ui| {
+                for a in Anchor::ALL {
+                    ui.selectable_value(&mut wm.anchor, a, a.label());
+                }
+            });
+            ui.add(egui::Slider::new(&mut wm.size, 1.0..=30.0).text("Größe").suffix(" %").fixed_decimals(1));
+            ui.add(egui::Slider::new(&mut wm.margin, 0.0..=20.0).text("Abstand").suffix(" %").fixed_decimals(1));
+            let mut opacity = wm.opacity * 100.0;
+            if ui.add(egui::Slider::new(&mut opacity, 5.0..=100.0).text("Deckkraft").suffix(" %").fixed_decimals(0)).changed() {
+                wm.opacity = opacity / 100.0;
+            }
+            ui.label(RichText::new("Größe und Abstand in % der kurzen Bildkante. Vorschau mit P (Proof).").small().color(Color32::from_gray(140)));
+        });
+        section(ui, "Metadaten", None, |ui| {
+            ui.checkbox(&mut r.capture_metadata, "Aufnahmedaten übernehmen").on_hover_text("Kamera, Objektiv, Belichtung und Aufnahmedatum");
+            ui.horizontal(|ui| {
+                ui.label("Fotograf");
+                ui.text_edit_singleline(&mut r.artist);
+            });
+            ui.horizontal(|ui| {
+                ui.label("Copyright");
+                ui.text_edit_singleline(&mut r.copyright);
+            });
+            let note = if r.format == ExportFormat::Jpeg || r.format == ExportFormat::Png {
+                "GPS-Daten werden nie übernommen."
+            } else {
+                "TIFF-Dateien erhalten keine Metadaten."
+            };
+            ui.label(RichText::new(note).small().color(Color32::from_gray(140)));
         });
         section(ui, "Verarbeiten", None, |ui| {
             let n = self.selected_paths().len();

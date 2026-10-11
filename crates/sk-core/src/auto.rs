@@ -1,4 +1,5 @@
-//! Automatic adjustments: white balance (grey world), exposure and levels.
+//! Automatic adjustments: white balance (grey world), exposure and levels, and matching
+//! images to a reference.
 
 use crate::image::LinearImage;
 use crate::params::{Adjustments, Levels, WbMode, WhiteBalance};
@@ -7,6 +8,14 @@ use crate::raw::RawMeta;
 
 /// Grey-world white balance on unclipped, not too dark camera values.
 pub fn auto_white_balance(meta: &RawMeta, preview: &LinearImage) -> WhiteBalance {
+    match grey_world(meta, preview) {
+        Some((kelvin, tint)) => WhiteBalance { mode: WbMode::Custom, kelvin: kelvin.round(), tint: (tint * 10.0).round() / 10.0 },
+        None => WhiteBalance::default(),
+    }
+}
+
+/// Kelvin and tint that make the scene's average neutral, if enough pixels are usable.
+fn grey_world(meta: &RawMeta, preview: &LinearImage) -> Option<(f32, f32)> {
     let mut acc = [0.0f64; 3];
     let mut n = 0usize;
     for p in preview.data.iter().step_by(3) {
@@ -19,31 +28,36 @@ pub fn auto_white_balance(meta: &RawMeta, preview: &LinearImage) -> WhiteBalance
         }
     }
     if n < 100 {
-        return WhiteBalance::default();
+        return None;
     }
     let wb = [(acc[1] / acc[0]) as f32, 1.0, (acc[1] / acc[2]) as f32];
-    let (kelvin, tint) = meta.color.temp_tint_for_wb(wb);
-    WhiteBalance { mode: WbMode::Custom, kelvin: kelvin.round(), tint: (tint * 10.0).round() / 10.0 }
+    Some(meta.color.temp_tint_for_wb(wb))
 }
 
-/// Exposure (EV) that brings the scene's log-average luminance to a pleasant level,
-/// limited so that the brightest 0.5 % do not end up far beyond the highlight shoulder.
-pub fn auto_exposure(meta: &RawMeta, adj: &Adjustments, preview: &LinearImage) -> f32 {
-    let wb = match adj.white_balance.mode {
+/// Luminance of every `step`-th pixel in linear working space, with the image's white balance
+/// (not its exposure).
+fn luminances(meta: &RawMeta, wb: &WhiteBalance, preview: &LinearImage, step: usize) -> Vec<f32> {
+    let wb = match wb.mode {
         WbMode::AsShot => meta.as_shot_wb,
-        WbMode::Custom => meta.color.wb_for_temp_tint(adj.white_balance.kelvin, adj.white_balance.tint),
+        WbMode::Custom => meta.color.wb_for_temp_tint(wb.kelvin, wb.tint),
     };
     let m = &meta.color.cam_to_working;
-    let mut lum: Vec<f32> = preview
+    preview
         .data
         .iter()
-        .step_by(2)
+        .step_by(step)
         .map(|p| {
             let b = [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]];
             let w = crate::color::mat_vec(m, b);
             (0.2627 * w[0] + 0.678 * w[1] + 0.0593 * w[2]).max(1e-5)
         })
-        .collect();
+        .collect()
+}
+
+/// Exposure (EV) that brings the scene's log-average luminance to a pleasant level,
+/// limited so that the brightest 0.5 % do not end up far beyond the highlight shoulder.
+pub fn auto_exposure(meta: &RawMeta, adj: &Adjustments, preview: &LinearImage) -> f32 {
+    let mut lum = luminances(meta, &adj.white_balance, preview, 2);
     if lum.is_empty() {
         return 0.0;
     }
@@ -56,6 +70,67 @@ pub fn auto_exposure(meta: &RawMeta, adj: &Adjustments, preview: &LinearImage) -
     let max_ev = (4.0f32 / p995.max(1e-4)).log2();
     ev = ev.min(max_ev.max(-1.0));
     (ev.clamp(-3.0, 3.0) * 20.0).round() / 20.0
+}
+
+/// Brightness and color cast of a developed scene, for matching other images to it
+///.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SceneStats {
+    /// Log2 of the log-average luminance, with white balance and exposure.
+    pub log_lum: f32,
+    /// White balance that would make the scene's average neutral (kelvin, tint).
+    pub grey_world: Option<(f32, f32)>,
+    /// White balance the image is developed with (kelvin, tint).
+    pub wb: (f32, f32),
+}
+
+pub fn scene_stats(meta: &RawMeta, adj: &Adjustments, preview: &LinearImage) -> SceneStats {
+    SceneStats {
+        log_lum: log_average(meta, &adj.white_balance, preview) + adj.exposure,
+        grey_world: grey_world(meta, preview),
+        wb: match adj.white_balance.mode {
+            WbMode::AsShot => meta.color.temp_tint_for_wb(meta.as_shot_wb),
+            WbMode::Custom => (adj.white_balance.kelvin, adj.white_balance.tint),
+        },
+    }
+}
+
+fn log_average(meta: &RawMeta, wb: &WhiteBalance, preview: &LinearImage) -> f32 {
+    let lum = luminances(meta, wb, preview, 3);
+    if lum.is_empty() {
+        return 0.0;
+    }
+    lum.iter().map(|v| v.log2()).sum::<f32>() / lum.len() as f32
+}
+
+/// What to match to the reference.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MatchWhat {
+    pub exposure: bool,
+    pub white_balance: bool,
+}
+
+/// `adj` with exposure and/or white balance changed so that the image looks like the reference.
+///
+/// White balance keeps the reference's offset from a neutral (grey-world) scene, so a deliberately
+/// warm reference makes the other images equally warm, whatever light they were shot in. Exposure
+/// brings the average brightness to that of the reference.
+pub fn match_to(reference: &SceneStats, meta: &RawMeta, adj: &Adjustments, preview: &LinearImage, what: MatchWhat) -> Adjustments {
+    let mut out = adj.clone();
+    if what.white_balance
+        && let (Some(ref_grey), Some(grey)) = (reference.grey_world, grey_world(meta, preview))
+    {
+        let mired = |k: f32| 1e6 / k;
+        let target = mired(grey.0) + mired(reference.wb.0) - mired(ref_grey.0);
+        let kelvin = (1e6 / target.max(1e6 / 15000.0)).clamp(2000.0, 15000.0);
+        let tint = (grey.1 + reference.wb.1 - ref_grey.1).clamp(-150.0, 150.0);
+        out.white_balance = WhiteBalance { mode: WbMode::Custom, kelvin: kelvin.round(), tint: (tint * 10.0).round() / 10.0 };
+    }
+    if what.exposure {
+        let ev = reference.log_lum - log_average(meta, &out.white_balance, preview);
+        out.exposure = (ev.clamp(-4.0, 4.0) * 100.0).round() / 100.0;
+    }
+    out
 }
 
 /// Levels from the displayed histogram: clip 0.05 % at both ends.
@@ -123,6 +198,36 @@ mod tests {
         let wb = auto_white_balance(&m, &img);
         let mult = m.color.wb_for_temp_tint(wb.kelvin, wb.tint);
         assert!((mult[0] / mult[1] - 0.5).abs() < 0.08, "{mult:?}");
+    }
+
+    #[test]
+    fn matching_brings_exposure_and_cast_to_the_reference() {
+        let m = meta();
+        // Reference: a neutral scene, developed warm and 0.5 EV brighter.
+        let reference_img = LinearImage::new(40, 40, (0..1600).map(|i| [0.1 + (i % 40) as f32 / 200.0; 3]).collect());
+        let reference_adj = Adjustments {
+            exposure: 0.5,
+            white_balance: WhiteBalance { mode: WbMode::Custom, kelvin: 5000.0, tint: 5.0 },
+            ..Default::default()
+        };
+        let reference = scene_stats(&m, &reference_adj, &reference_img);
+        let (ref_k, ref_t) = reference.grey_world.unwrap();
+        // The same scene, a stop darker and under reddish light.
+        let img = LinearImage::new(40, 40, reference_img.data.iter().map(|p| [p[0], p[1] * 0.5, p[2] * 0.5]).collect());
+        let both = MatchWhat { exposure: true, white_balance: true };
+        let out = match_to(&reference, &m, &Adjustments::default(), &img, both);
+        // Same offset from neutral as the reference.
+        let (k, t) = grey_world(&m, &img).unwrap();
+        let offset = |a: f32, b: f32| 1e6 / a - 1e6 / b;
+        assert!((offset(out.white_balance.kelvin, k) - offset(5000.0, ref_k)).abs() < 3.0, "{out:?}");
+        assert!(((out.white_balance.tint - t) - (5.0 - ref_t)).abs() < 0.2);
+        // Same average brightness afterwards.
+        let matched = scene_stats(&m, &out, &img);
+        assert!((matched.log_lum - reference.log_lum).abs() < 0.02, "{} vs {}", matched.log_lum, reference.log_lum);
+        // Only exposure: the white balance stays.
+        let out = match_to(&reference, &m, &Adjustments::default(), &img, MatchWhat { exposure: true, white_balance: false });
+        assert_eq!(out.white_balance, WhiteBalance::default());
+        assert!(out.exposure > 0.5);
     }
 
     #[test]

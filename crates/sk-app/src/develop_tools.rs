@@ -1,7 +1,7 @@
 //! Tool tabs for geometry/lens, details and the advanced color tools.
 
 use sk_core::auto;
-use sk_core::params::{AspectRatio, ColorWheel, CropRect, Detail, HUE_BANDS, HslBand, LensCorrection};
+use sk_core::params::{AspectRatio, ColorWheel, CropRect, Detail, HUE_BANDS, HslBand, LensCorrection, SkinTone};
 use egui::{Color32, RichText, Ui};
 
 use crate::app::App;
@@ -11,6 +11,15 @@ use crate::widgets::{section, slider_row};
 fn band_color(hue: f32) -> Color32 {
     let c = egui::ecolor::Hsva::new(((hue - 25.0 + 360.0) % 360.0 + 5.0) / 360.0, 0.75, 0.9, 1.0);
     c.into()
+}
+
+/// Display color of the skin tone target (Oklab in the working space).
+fn skin_color(st: &SkinTone) -> Color32 {
+    use sk_core::color::{Oklab, OutputSpace, mat_vec, srgb_encode};
+    let hr = st.hue.to_radians();
+    let linear = Oklab::default().to_linear([st.lightness, st.chroma * hr.cos(), st.chroma * hr.sin()]);
+    let [r, g, b] = mat_vec(&OutputSpace::Srgb.from_working(), linear).map(|v| (srgb_encode(v.clamp(0.0, 1.0)) * 255.0).round() as u8);
+    Color32::from_rgb(r, g, b)
 }
 
 /// Hue slider with a colored swatch; returns true when changed.
@@ -40,6 +49,7 @@ impl App {
         let mut finish_crop = false;
         let mut apply_aspect = false;
         let mut toggle_straighten = false;
+        let mut upright = None;
         let crop_active = self.crop_tool.is_some();
         let straighten_active = self.straighten_tool.is_some();
         let Some(cur) = self.current.as_mut() else { return };
@@ -110,6 +120,19 @@ impl App {
 
         let mut reset_key = false;
         section(ui, "Keystone (Perspektive)", Some(&mut || reset_key = true), |ui| {
+            use sk_core::upright::UprightMode;
+            ui.horizontal(|ui| {
+                ui.label("Automatisch");
+                for (mode, label, tip) in [
+                    (UprightMode::Vertical, "Auto", "Drehung und stürzende Linien (Umschalt+A)"),
+                    (UprightMode::Level, "Nur Drehung", "Horizont und Kanten waagerecht, ohne Keystone"),
+                    (UprightMode::Full, "Voll", "Drehung, vertikaler und horizontaler Keystone"),
+                ] {
+                    if ui.button(label).on_hover_text(tip).clicked() {
+                        upright = Some(mode);
+                    }
+                }
+            });
             let g = &mut adj.geometry;
             changed |= slider_row(ui, "Vertikal", &mut g.keystone_v, -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Horizontal", &mut g.keystone_h, -100.0..=100.0, 0.0, 0);
@@ -179,6 +202,9 @@ impl App {
             if self.crop_tool.is_none() {
                 self.request_render();
             }
+        }
+        if let Some(mode) = upright {
+            self.auto_upright(mode);
         }
         if toggle_straighten {
             self.straighten_tool = if straighten_active { None } else { Some(Default::default()) };
@@ -260,6 +286,8 @@ impl App {
     /// Color editor, color balance and black & white (appended to the color tab).
     pub fn color_advanced(&mut self, ui: &mut Ui) {
         let band = &mut self.color_band;
+        let picking_skin = &mut self.picking_skin;
+        let picking_wb = &mut self.picking_wb;
         let Some(cur) = self.current.as_mut() else { return };
         let adj = &mut cur.adjustments;
         let mut changed = false;
@@ -282,6 +310,36 @@ impl App {
         });
         if reset_ed {
             adj.color_editor = Default::default();
+            changed = true;
+        }
+
+        let mut reset_skin = false;
+        section(ui, "Hauttöne", Some(&mut || reset_skin = true), |ui| {
+            let st = &mut adj.skin_tone;
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 3.0, skin_color(st));
+                ui.painter().rect_stroke(rect, 3.0, egui::Stroke::new(1.0, Color32::from_gray(90)), egui::StrokeKind::Inside);
+                let pipette = format!("{}  Hautton aufnehmen", crate::theme::icon::EYEDROPPER);
+                if ui.selectable_label(*picking_skin, pipette).on_hover_text("Auf eine typische Hautstelle im Bild klicken").clicked() {
+                    *picking_skin = !*picking_skin;
+                    *picking_wb = false;
+                }
+            });
+            changed |= slider_row(ui, "Bereich", &mut st.range, 10.0..=60.0, SkinTone::default().range, 0);
+            ui.label(RichText::new("Gleichmäßigkeit").strong());
+            changed |= slider_row(ui, "Farbton", &mut st.hue_uniformity, 0.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Sättigung", &mut st.saturation_uniformity, 0.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Helligkeit", &mut st.lightness_uniformity, 0.0..=100.0, 0.0, 0);
+            ui.label(RichText::new("Hautton verändern").strong());
+            changed |= slider_row(ui, "Farbton", &mut st.hue_shift, -30.0..=30.0, 0.0, 1);
+            changed |= slider_row(ui, "Sättigung", &mut st.saturation, -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Helligkeit", &mut st.lightness_shift, -100.0..=100.0, 0.0, 0);
+        });
+        if reset_skin {
+            // The picked target stays.
+            let st = adj.skin_tone;
+            adj.skin_tone = SkinTone { hue: st.hue, chroma: st.chroma, lightness: st.lightness, ..Default::default() };
             changed = true;
         }
 

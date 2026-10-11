@@ -20,6 +20,14 @@ impl LinearImage {
         if factor <= 1 {
             return self;
         }
+        self.box_downscaled(factor)
+    }
+
+    /// Like [`Self::box_downscale`], but leaves `self` alone (no copy of a large source needed).
+    pub fn box_downscaled(&self, factor: usize) -> Self {
+        if factor <= 1 {
+            return self.clone();
+        }
         let (ow, oh) = (self.width / factor, self.height / factor);
         let inv = 1.0 / (factor * factor) as f32;
         let mut out = vec![[0.0f32; 3]; ow * oh];

@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use sk_core::catalog::{self, Catalog, Filter, ImageRecord, Scope, SortKey};
 use sk_core::export::ExportRecipe;
@@ -30,12 +31,23 @@ pub enum Tab {
     Layers,
     Metadata,
     Styles,
+    History,
     Output,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 9] =
-        [Tab::Library, Tab::Lens, Tab::Exposure, Tab::Color, Tab::Details, Tab::Layers, Tab::Metadata, Tab::Styles, Tab::Output];
+    pub const ALL: [Tab; 10] = [
+        Tab::Library,
+        Tab::Lens,
+        Tab::Exposure,
+        Tab::Color,
+        Tab::Details,
+        Tab::Layers,
+        Tab::Metadata,
+        Tab::Styles,
+        Tab::History,
+        Tab::Output,
+    ];
 
     pub fn title(self) -> &'static str {
         match self {
@@ -47,6 +59,7 @@ impl Tab {
             Tab::Layers => "Ebenen & Retusche",
             Tab::Metadata => "Metadaten",
             Tab::Styles => "Stile",
+            Tab::History => "Verlauf",
             Tab::Output => "Ausgabe",
         }
     }
@@ -62,6 +75,7 @@ impl Tab {
             Tab::Layers => icon::STACK,
             Tab::Metadata => icon::INFO,
             Tab::Styles => icon::SPARKLE,
+            Tab::History => icon::CLOCK_COUNTER_CLOCKWISE,
             Tab::Output => icon::EXPORT,
         }
     }
@@ -101,14 +115,88 @@ pub struct Current {
     pub color_label: ColorLabel,
     pub keywords: Vec<String>,
     pub as_shot_temp_tint: (f32, f32),
+    pub snapshots: Vec<sk_core::sidecar::Snapshot>,
 }
 
-/// A full-resolution rendering of part of the output, drawn over the preview when zoomed in.
-pub struct Tile {
-    pub texture: TextureHandle,
-    pub region: sk_core::geometry::Region,
+/// An image that can be shown without loading: recently viewed or prefetched (see `App::prepared`).
+struct Ready {
+    meta: Arc<RawMeta>,
+    preview: Arc<LinearImage>,
+    adjustments: Adjustments,
+    /// Rendering with `adjustments`, if still valid.
+    rendered: Option<(TextureHandle, Histogram)>,
+}
+
+/// Edit version, view region with its reduction, and grid tiles (in order) of a tile request.
+pub(crate) type TileKey = (u64, Option<(sk_core::geometry::Region, usize)>, Vec<(usize, usize)>);
+
+/// A window that was maximized before full screen.
+enum Restore {
+    /// Maximize again via egui (it was un-maximized the ordinary way).
+    Maximize,
+    /// Windows: maximize again in one step, with this normal rect.
+    Placement(crate::window_placement::NormalRect),
+}
+
+/// A full screen switch in progress (see `App::screen_transition`).
+pub(crate) struct ScreenTransition {
+    started: Instant,
+    /// Window size when the switch was requested; the new size must differ from it.
+    initial: egui::Rect,
+    /// Screen rect of the last frame and for how many frames it hasn't changed.
+    last: Option<egui::Rect>,
+    stable_frames: u32,
+}
+
+/// The window counts as settled after this many frames without a size change ...
+const SETTLED_FRAMES: u32 = 2;
+/// ... or after this time at the latest.
+const TRANSITION_MAX: Duration = Duration::from_millis(600);
+/// Fade-in of the image after the switch.
+const FADE_IN: Duration = Duration::from_millis(150);
+
+/// A finished proof of the current image (see `App::proof_view`).
+pub struct ProofView {
     pub version: u64,
+    pub key: u64,
+    pub texture: TextureHandle,
+    /// Size of the exported image and its file.
+    pub width: usize,
+    pub height: usize,
+    pub file_size: usize,
+}
+
+/// How many recently viewed or prefetched images are kept in memory.
+const READY_MAX: usize = 6;
+/// The full resolution is only decoded once the user stays on an image this long (or zooms in),
+/// so that stepping through images isn't slowed down by it.
+const FULL_DELAY: Duration = Duration::from_millis(400);
+
+/// Full-resolution rendering of the current image in a grid of `workers::TILE`-sized tiles,
+/// drawn over the preview when zoomed in. Kept until the next edit, so zooming and panning
+/// don't render anything again.
+#[derive(Default)]
+pub struct Tiles {
+    /// Edit version the grid tiles were rendered for.
+    pub version: u64,
+    /// Output size at full resolution.
     pub full_size: (usize, usize),
+    pub textures: HashMap<(usize, usize), TextureHandle>,
+    /// Focus mask of the grid tiles (when it was on while they were rendered).
+    pub focus: HashMap<(usize, usize), crate::focus::FocusMap>,
+    /// The visible region, rendered first when zooming in and while dragging a control
+    /// (drawn over the grid).
+    pub view: Option<ViewTile>,
+}
+
+pub struct ViewTile {
+    /// In full-resolution output pixels.
+    pub region: sk_core::geometry::Region,
+    /// The texture has 1/`level` of the region's size (drafts while dragging).
+    pub level: usize,
+    pub version: u64,
+    pub texture: TextureHandle,
+    pub focus: Option<crate::focus::FocusMap>,
 }
 
 /// Settings persisted between sessions.
@@ -124,6 +212,15 @@ struct Settings {
     recipes: Vec<ExportRecipe>,
     sort: SortKey,
     sort_desc: bool,
+    /// The navigator (minimap) is on by default.
+    hide_navigator: bool,
+    focus_sensitivity: Option<f32>,
+    guides: crate::guides::Guides,
+    overlay_file: Option<PathBuf>,
+    overlay_opacity: Option<f32>,
+    rename_template: String,
+    /// The image selected when the app was closed.
+    last_image: Option<PathBuf>,
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -145,6 +242,12 @@ pub struct App {
     pub lists: CatalogLists,
     pub library_ui: LibraryUi,
     pub styles: Vec<Style>,
+    /// Built-in film looks with descriptions (see `styles::film_simulations`).
+    pub film_looks: Vec<(Style, &'static str)>,
+    /// Shown instead of the real adjustments while the pointer is over a style.
+    pub(crate) style_preview: Option<Adjustments>,
+    /// A style row is hovered this frame (otherwise the preview ends).
+    pub(crate) style_hovered: bool,
     /// Lensfun profiles, loaded on first use.
     pub lens_db: Option<Arc<Vec<sk_core::lensfun::LensProfile>>>,
     pub lens_db_downloading: bool,
@@ -168,6 +271,8 @@ pub struct App {
     pub thumb_requested: HashSet<PathBuf>,
     pub grid_view: bool,
     pub index_progress: Option<(usize, usize)>,
+    /// Background generation of viewer previews.
+    pub proxy_progress: Option<(usize, usize)>,
 
     // viewer / editing
     pub current: Option<Current>,
@@ -175,12 +280,34 @@ pub struct App {
     pub load_error: Option<String>,
     generation: u64,
     pub texture: Option<TextureHandle>,
+    /// Edit version of the rendering in `texture`.
+    texture_version: u64,
+    /// `texture` is a half-resolution draft (made while dragging a control).
+    pub(crate) texture_draft: bool,
+    /// Size of the full (non-draft) rendering: the coordinate system of the viewer, also
+    /// while a smaller draft texture is shown.
+    pub view_size: Option<Vec2>,
+    /// The viewer shows the image magnified (full-resolution renderings cover the screen).
+    pub(crate) view_magnified: bool,
+    /// Shown while the selected image is loading or rendering: its thumbnail, then its
+    /// cached preview or camera JPEG.
+    pub placeholder: Option<TextureHandle>,
+    /// Recently viewed and prefetched images, most recent last.
+    prepared: Vec<Ready>,
+    /// Generation for which neighbours have been prefetched.
+    prefetched_for: u64,
+    /// Direction of the last step through the images (for prefetching).
+    step_dir: isize,
+    /// When to start decoding the full resolution of the current image.
+    full_due: Option<Instant>,
     pub histogram: Option<Histogram>,
     pub tab: Tab,
     pub curve_channel: CurveChannel,
     /// Selected hue band in the color editor.
     pub color_band: usize,
     pub picking_wb: bool,
+    /// The skin tone pipette is active (color tab).
+    pub picking_skin: bool,
     /// Active crop tool state (the viewer shows the uncropped frame).
     pub crop_tool: Option<crate::crop::CropTool>,
     pub straighten_tool: Option<crate::crop::StraightenTool>,
@@ -191,7 +318,11 @@ pub struct App {
     pub spot_size: f32,
     pub selected_spot: Option<usize>,
     pub show_mask: bool,
+    /// Mask overlay of the latest render request (see `send_render`).
+    rendered_mask_overlay: Option<usize>,
     pub split_view: bool,
+    /// Before and after next to each other instead of the divider.
+    pub split_side: bool,
     /// Divider position (0..1 of the image width).
     pub split_pos: f32,
     pub split_dragging: bool,
@@ -204,9 +335,11 @@ pub struct App {
     pub ai_busy: bool,
     pub model_missing: bool,
     pub model_downloading: bool,
-    pub tile: Option<Tile>,
-    /// Requested tile (version, region), to avoid resending identical jobs.
-    pub tile_requested: Option<(u64, sk_core::geometry::Region)>,
+    pub tiles: Tiles,
+    /// Last tile request, to avoid resending identical requests.
+    pub(crate) tiles_requested: Option<TileKey>,
+    /// Time of the last change to the rendering; tiles outside the view wait until editing pauses.
+    pub(crate) edited_at: Instant,
     /// Incremented on every change that affects the rendering.
     pub edit_version: u64,
     pub pointer_down: bool,
@@ -223,6 +356,44 @@ pub struct App {
     pub pan: Vec2,
     pub scroll_to_primary: bool,
 
+    // compare view (see `compare.rs`)
+    /// Pinned reference image, shown next to the current one; also the source for matching.
+    pub compare_ref: Option<PathBuf>,
+    /// Several selected images are shown side by side.
+    pub multi_view: bool,
+    /// Renderings of the other images in the compare view.
+    pub(crate) compare_textures: HashMap<PathBuf, TextureHandle>,
+    pub(crate) compare_requested: HashSet<PathBuf>,
+    /// Zoomed-in parts of the compare images at a higher resolution, and what was asked for.
+    pub(crate) compare_details: HashMap<PathBuf, crate::compare::CompareDetail>,
+    pub(crate) details_requested: Vec<crate::compare::DetailWant>,
+    /// Zoom of all compare cells relative to fitting (1 = fit) ...
+    pub compare_zoom: f32,
+    /// ... and the image point (0..1) at the center of the cells.
+    pub compare_center: Vec2,
+    /// Images still being matched to the reference: (done, total).
+    pub match_progress: Option<(usize, usize)>,
+    /// Sharp areas are marked in green (focus mask).
+    pub focus_mask: bool,
+    /// 0..100: higher marks more.
+    pub focus_sensitivity: f32,
+    pub(crate) focus_maps: HashMap<PathBuf, crate::focus::FocusMap>,
+    /// Images whose focus mask is being computed.
+    pub(crate) focus_pending: HashSet<PathBuf>,
+    /// Generation for which a rendering was requested to compute the focus mask.
+    pub(crate) focus_render_for: Option<(u64, u64)>,
+    /// Variant waiting for confirmation of its deletion.
+    pub confirm_delete_variant: Option<Vec<PathBuf>>,
+    pub rename: Option<crate::rename::RenameDialog>,
+    /// Image to select once its folder or session is shown after starting (the last one).
+    pub(crate) restore_image: Option<PathBuf>,
+    /// Snapshot being renamed in the history tab, with the text typed so far.
+    pub snapshot_rename: Option<(usize, String)>,
+    /// `SILBERKORN_LOUPE=x,y`: loupe shown at this relative position (screenshots).
+    pub debug_loupe: Option<Vec2>,
+    /// Last template of the rename dialog.
+    pub rename_template: String,
+
     // output
     pub recipes: Vec<ExportRecipe>,
     pub selected_recipe: usize,
@@ -231,11 +402,39 @@ pub struct App {
 
     pub status: String,
     pub show_filmstrip: bool,
+    /// Minimap of the whole image while zoomed in.
+    pub show_navigator: bool,
+    pub guides: crate::guides::Guides,
+    pub overlay: crate::guides::Overlay,
+    /// Distraction-free full screen: only the image.
+    pub fullscreen: bool,
+    /// The "Esc / F11" hint in full screen is shown until then.
+    pub(crate) fullscreen_hint_until: Option<Instant>,
+    /// How to bring back a window that was maximized before full screen.
+    restore: Option<Restore>,
+    /// Windows: maximize again once winit has left full screen (see `window_placement`).
+    pending_maximize: Option<crate::window_placement::NormalRect>,
+    /// Native handle of the app window (Windows), for `window_placement`.
+    native_window: Option<isize>,
+    /// The window manager's animations are off for a full screen switch (back on afterwards).
+    animations_off: bool,
+    /// Switching full screen: the window passes through several sizes, so only black is shown
+    /// until it has settled; then the image fades in from this time.
+    pub(crate) screen_transition: Option<ScreenTransition>,
+    pub(crate) fade_in_from: Option<Instant>,
+    /// Shows the image as the selected export recipe writes it.
+    pub proof_view: bool,
+    pub(crate) proof: Option<ProofView>,
+    /// (generation, edit version, recipe key) of the last proof request.
+    proof_requested: Option<(u64, u64, u64)>,
     pub show_shortcuts: bool,
-    pub show_about: bool,
-    window_title: String,
+    /// Start screen (also the "about" dialog).
+    pub splash: Option<crate::splash::Splash>,
+    pub(crate) window_title: String,
     /// Zoom of the viewer relative to the full sensor resolution, for the status bar.
     pub zoom_pct: Option<f32>,
+    /// Physical pixels per UI point (Windows display scaling), for true 100 % viewing.
+    pub(crate) pixels_per_point: f32,
     /// Debug aid: `SILBERKORN_SCREENSHOT=<file.png>` saves a screenshot once the first image is shown, then quits.
     screenshot: Option<(PathBuf, Option<f64>)>,
 }
@@ -293,6 +492,9 @@ impl App {
             lists: CatalogLists::default(),
             library_ui: LibraryUi::default(),
             styles: Vec::new(),
+            film_looks: sk_core::styles::film_simulations(),
+            style_preview: None,
+            style_hovered: false,
             lens_db: None,
             lens_db_downloading: false,
             lens_db_missing: false,
@@ -300,6 +502,9 @@ impl App {
             filter: Filter::default(),
             sort: settings.sort,
             sort_desc: settings.sort_desc,
+            show_navigator: !settings.hide_navigator,
+            guides: settings.guides,
+            overlay: crate::guides::Overlay::new(settings.overlay_file.clone(), settings.overlay_opacity),
             folder: PathBuf::new(),
             catalog_folder: folder.clone(),
             folder_input: String::new(),
@@ -311,16 +516,27 @@ impl App {
             thumb_requested: HashSet::new(),
             grid_view: false,
             index_progress: None,
+            proxy_progress: None,
             current: None,
             loading: None,
             load_error: None,
             generation: 0,
             texture: None,
+            texture_version: 0,
+            texture_draft: false,
+            view_size: None,
+            view_magnified: false,
+            placeholder: None,
+            prepared: Vec::new(),
+            prefetched_for: 0,
+            step_dir: 1,
+            full_due: None,
             histogram: None,
             tab: Tab::Exposure,
             curve_channel: CurveChannel::Rgb,
             color_band: 0,
             picking_wb: false,
+            picking_skin: false,
             crop_tool: None,
             straighten_tool: None,
             local_tool: None,
@@ -330,7 +546,9 @@ impl App {
             spot_size: 25.0,
             selected_spot: None,
             show_mask: false,
+            rendered_mask_overlay: None,
             split_view: false,
+            split_side: false,
             split_pos: 0.5,
             split_dragging: false,
             speed_message: None,
@@ -341,8 +559,9 @@ impl App {
             ai_busy: false,
             model_missing: false,
             model_downloading: false,
-            tile: None,
-            tile_requested: None,
+            tiles: Tiles::default(),
+            tiles_requested: None,
+            edited_at: Instant::now(),
             edit_version: 0,
             pointer_down: false,
             clip_warning: false,
@@ -352,15 +571,51 @@ impl App {
             redo: Vec::new(),
             clipboard: None,
             show_filmstrip: true,
+            fullscreen: false,
+            fullscreen_hint_until: None,
+            restore: None,
+            pending_maximize: None,
+            native_window: None,
+            animations_off: false,
+            screen_transition: None,
+            fade_in_from: None,
+            proof_view: false,
+            proof: None,
+            proof_requested: None,
             show_shortcuts: false,
-            show_about: false,
+            // Debug screenshots should show the app, not the start screen.
+            splash: std::env::var_os("SILBERKORN_SCREENSHOT").is_none().then(crate::splash::Splash::startup),
             window_title: "Silberkorn".into(),
             zoom_pct: None,
+            pixels_per_point: 1.0,
             sidecar_dirty: false,
             keyword_input: String::new(),
             zoom: None,
             pan: Vec2::ZERO,
             scroll_to_primary: false,
+            compare_ref: None,
+            multi_view: true,
+            compare_textures: HashMap::new(),
+            compare_requested: HashSet::new(),
+            compare_details: HashMap::new(),
+            details_requested: Vec::new(),
+            compare_zoom: 1.0,
+            compare_center: Vec2::splat(0.5),
+            match_progress: None,
+            confirm_delete_variant: None,
+            rename: None,
+            restore_image: settings.last_image.clone(),
+            snapshot_rename: None,
+            debug_loupe: std::env::var("SILBERKORN_LOUPE").ok().and_then(|v| {
+                let (x, y) = v.split_once(',')?;
+                Some(Vec2::new(x.parse().ok()?, y.parse().ok()?))
+            }),
+            rename_template: settings.rename_template.clone(),
+            focus_mask: false,
+            focus_sensitivity: settings.focus_sensitivity.unwrap_or(50.0).clamp(0.0, 100.0),
+            focus_maps: HashMap::new(),
+            focus_pending: HashSet::new(),
+            focus_render_for: None,
             recipes: if !settings.recipes.is_empty() {
                 settings.recipes
             } else {
@@ -388,7 +643,7 @@ impl App {
         app.grid_view = std::env::var_os("SILBERKORN_GRID").is_some();
         match std::env::var("SILBERKORN_DIALOG").as_deref() {
             Ok("shortcuts") => app.show_shortcuts = true,
-            Ok("about") => app.show_about = true,
+            Ok("about") => app.splash = Some(crate::splash::Splash::about()),
             _ => {}
         }
         app
@@ -409,6 +664,13 @@ impl App {
             recipes: self.recipes.clone(),
             sort: self.sort,
             sort_desc: self.sort_desc,
+            hide_navigator: !self.show_navigator,
+            focus_sensitivity: Some(self.focus_sensitivity),
+            guides: self.guides,
+            overlay_file: self.overlay.file.clone(),
+            overlay_opacity: Some(self.overlay.opacity),
+            rename_template: self.rename_template.clone(),
+            last_image: self.primary_path().or_else(|| self.restore_image.clone()),
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -420,8 +682,24 @@ impl App {
 
     // ---------------------------------------------------------------- selection
 
+    /// U: the divider view on or off (from side by side it switches to the divider).
     pub fn toggle_split(&mut self) {
-        self.split_view = !self.split_view;
+        self.set_split((!self.split_view || self.split_side).then_some(false));
+    }
+
+    /// Umschalt+U: before and after side by side on or off.
+    pub fn toggle_side_by_side(&mut self) {
+        self.set_split((!self.split_view || !self.split_side).then_some(true));
+    }
+
+    /// `None`: off, `Some(side)`: divider or side by side.
+    fn set_split(&mut self, mode: Option<bool>) {
+        self.split_side = mode.unwrap_or(self.split_side);
+        if self.split_view == mode.is_some() {
+            return;
+        }
+        self.split_view = mode.is_some();
+        self.split_dragging = false;
         self.show_before = false;
         self.before_key = None;
         self.request_render();
@@ -431,6 +709,11 @@ impl App {
     pub fn mask_overlay(&self) -> Option<usize> {
         let drawing = self.local_tool.is_some_and(|t| t.is_mask_tool()) && self.pointer_down;
         if self.show_mask || drawing { self.active_layer } else { None }
+    }
+
+    /// Size of the shown image in the viewer's coordinates (preview pixels).
+    pub fn image_size(&self) -> Option<Vec2> {
+        self.view_size.or_else(|| self.texture.as_ref().map(|t| t.size_vec2()))
     }
 
     pub fn generation(&self) -> u64 {
@@ -451,8 +734,358 @@ impl App {
         self.current = None;
         self.loading = None;
         self.texture = None;
+        self.placeholder = None;
         self.histogram = None;
+        // Paths may have changed (moved images, other folder).
+        self.prepared.clear();
+        self.workers.cancel_tiles();
+        self.full_due = None;
         self.generation += 1;
+    }
+
+    /// Creates missing viewer previews in the background, starting at the current image.
+    pub(crate) fn request_proxies(&self) {
+        let order: Vec<PathBuf> = self.visible.iter().map(|&i| self.entries[i].path.clone()).collect();
+        let start = self.primary_path().and_then(|p| order.iter().position(|q| *q == p)).unwrap_or(0);
+        let mut paths = order[start..].to_vec();
+        paths.extend_from_slice(&order[..start]);
+        self.workers.proxies(paths, self.session_root());
+    }
+
+    fn session_root(&self) -> Option<PathBuf> {
+        self.session.as_ref().map(|s| s.root.clone())
+    }
+
+    /// Keeps the current image in memory (with its rendering, if up to date), so that coming
+    /// back to it is instant.
+    fn stash_current(&mut self) {
+        let Some(cur) = self.current.take() else { return };
+        let plain = self.texture_version == self.edit_version
+            && !self.texture_draft
+            && self.style_preview.is_none()
+            && !self.clip_warning
+            && !self.show_before
+            && self.crop_tool.is_none()
+            && self.mask_overlay().is_none();
+        let texture = self.texture.take();
+        let rendered = texture.filter(|_| plain).zip(self.histogram.clone());
+        // Its focus mask stays only if it belongs to this rendering.
+        if self.focus_maps.get(&cur.meta.path).is_some_and(|m| !plain || m.version != Some(self.texture_version)) {
+            self.focus_maps.remove(&cur.meta.path);
+        }
+        // The compare view shows this image as it is now.
+        if self.compare_details.get(&cur.meta.path).is_some_and(|d| d.version != Some(self.edit_version)) {
+            self.compare_details.remove(&cur.meta.path);
+        }
+        match &rendered {
+            Some((t, _)) => {
+                self.compare_textures.insert(cur.meta.path.clone(), t.clone());
+            }
+            None => {
+                self.compare_textures.remove(&cur.meta.path);
+                self.compare_requested.remove(&cur.meta.path);
+            }
+        }
+        self.remember(Ready { meta: cur.meta, preview: cur.preview, adjustments: cur.committed, rendered });
+    }
+
+    /// Drops compare renderings and focus maps of images that are neither shown nor kept in
+    /// memory, so that browsing through many images doesn't pile up textures.
+    pub(crate) fn prune_view_caches(&mut self) {
+        const LIMIT: usize = crate::compare::MAX_CELLS + READY_MAX + 4;
+        if self.compare_textures.len() <= LIMIT && self.focus_maps.len() <= LIMIT && self.compare_details.len() <= LIMIT {
+            return;
+        }
+        let mut keep: HashSet<PathBuf> = self.prepared.iter().map(|r| r.meta.path.clone()).collect();
+        keep.extend(self.compare_ref.iter().cloned());
+        keep.extend(self.primary_path());
+        keep.extend(self.selected_paths().into_iter().take(crate::compare::MAX_CELLS));
+        self.compare_textures.retain(|p, _| keep.contains(p));
+        self.focus_maps.retain(|p, _| keep.contains(p));
+        self.compare_details.retain(|p, _| keep.contains(p));
+    }
+
+    fn remember(&mut self, ready: Ready) {
+        self.prepared.retain(|r| r.meta.path != ready.meta.path);
+        self.prepared.push(ready);
+        if self.prepared.len() > READY_MAX {
+            self.prepared.remove(0);
+        }
+    }
+
+    /// Shows a loaded image. `rendered` is used if it was made with the saved adjustments.
+    fn install(&mut self, meta: Arc<RawMeta>, preview: Arc<LinearImage>, rendered: Option<(Adjustments, TextureHandle, Histogram)>) {
+        let sc = sidecar::load(&meta.path);
+        // Rounded to slider precision so that displaying it never counts as an edit.
+        let (k, t) = meta.color.temp_tint_for_wb(meta.as_shot_wb);
+        let as_shot_temp_tint = (k.round(), (t * 10.0).round() / 10.0);
+        let rendered = rendered.filter(|(adj, ..)| *adj == sc.adjustments);
+        self.loading = None;
+        self.full_due = Some(Instant::now() + FULL_DELAY);
+        self.tiles = Tiles::default();
+        self.tiles_requested = None;
+        self.workers.cancel_tiles();
+        self.proof = None;
+        self.proof_requested = None;
+        self.crop_tool = None;
+        self.straighten_tool = None;
+        self.active_layer = None;
+        self.selected_spot = None;
+        self.before_texture = None;
+        self.before_key = None;
+        self.local_drag = Default::default();
+        self.snapshot_rename = None;
+        self.current = Some(Current {
+            meta,
+            preview,
+            full: None,
+            adjustments: sc.adjustments.clone(),
+            committed: sc.adjustments,
+            rating: sc.rating,
+            color_label: sc.color_label,
+            keywords: sc.keywords,
+            snapshots: sc.snapshots,
+            as_shot_temp_tint,
+        });
+        self.undo.clear();
+        self.redo.clear();
+        self.zoom = None;
+        self.pan = Vec2::ZERO;
+        match rendered {
+            Some((_, texture, histogram)) if !self.clip_warning && !self.show_before && !self.split_view => {
+                self.view_size = Some(texture.size_vec2());
+                self.texture_draft = false;
+                self.texture = Some(texture);
+                self.texture_version = self.edit_version;
+                self.histogram = Some(histogram);
+                self.placeholder = None;
+                self.prefetch_neighbours();
+            }
+            other => {
+                // Keep something on screen until the new rendering arrives.
+                if let Some((_, texture, _)) = other {
+                    self.placeholder = Some(texture);
+                }
+                self.texture = None;
+                self.view_size = None;
+                self.request_render();
+            }
+        }
+    }
+
+    /// Loads and renders the images next to the current one in the background, in the
+    /// direction the user is moving.
+    fn prefetch_neighbours(&mut self) {
+        if self.prefetched_for == self.generation {
+            return;
+        }
+        self.prefetched_for = self.generation;
+        let Some(path) = self.current_path() else { return };
+        let Some(pos) = self.visible.iter().position(|&i| self.entries[i].path == path) else { return };
+        let d = if self.step_dir < 0 { -1 } else { 1 };
+        let paths: Vec<PathBuf> = [d, 2 * d, -d]
+            .into_iter()
+            .filter_map(|off| self.visible.get(pos.checked_add_signed(off)?))
+            .map(|&i| self.entries[i].path.clone())
+            .filter(|p| !self.prepared.iter().any(|r| r.meta.path == *p && r.rendered.is_some()))
+            .collect();
+        self.workers.prefetch(paths, self.session_root());
+    }
+
+    /// Starts decoding the full resolution once its time has come (see [`FULL_DELAY`]).
+    fn load_full_when_due(&mut self, ctx: &egui::Context) {
+        let Some(due) = self.full_due else { return };
+        let now = Instant::now();
+        if now < due {
+            ctx.request_repaint_after(due - now);
+            return;
+        }
+        self.full_due = None;
+        if let Some(cur) = &self.current {
+            self.workers.load_full(self.generation, cur.meta.path.clone());
+        }
+    }
+
+    /// Rendering of a recently viewed or prefetched image, if still valid.
+    /// Edit version of the rendering on screen.
+    pub(crate) fn texture_version_shown(&self) -> u64 {
+        self.texture_version
+    }
+
+    /// Forgets an image kept in memory (its settings were changed elsewhere).
+    pub(crate) fn forget_prepared(&mut self, path: &std::path::Path) {
+        self.prepared.retain(|r| r.meta.path != path);
+    }
+
+    pub(crate) fn prepared_texture(&self, path: &std::path::Path) -> Option<&TextureHandle> {
+        self.prepared.iter().find(|r| r.meta.path == path).and_then(|r| r.rendered.as_ref()).map(|(t, _)| t)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn texture_version_for_test(&self) -> u64 {
+        self.texture_version
+    }
+
+    /// Is this image in memory, ready to be shown with its rendering?
+    #[cfg(test)]
+    pub(crate) fn is_prepared(&self, path: &std::path::Path) -> bool {
+        self.prepared.iter().any(|r| r.meta.path == path && r.rendered.is_some())
+    }
+
+    pub fn toggle_fullscreen(&mut self, ctx: &egui::Context) {
+        use egui::ViewportCommand as Cmd;
+        self.fullscreen = !self.fullscreen;
+        // On Windows a window that is still maximized keeps its client area to the work area
+        // (screen minus taskbar), which left a black band at the bottom: leave maximized first,
+        // where possible straight to the monitor size (no visible detour via the normal size).
+        // `Decorations(false)` makes egui-winit drop the drop shadow of the undecorated window in
+        // full screen (its 1 px frame offset) and restore it afterwards.
+        if self.fullscreen {
+            self.restore = None;
+            if ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
+                self.window_animations(false);
+                self.restore = Some(match self.native_window.and_then(crate::window_placement::leave_maximized_to_monitor) {
+                    Some(normal) => Restore::Placement(normal),
+                    None => {
+                        ctx.send_viewport_cmd(Cmd::Maximized(false));
+                        Restore::Maximize
+                    }
+                });
+            }
+            ctx.send_viewport_cmd(Cmd::Fullscreen(true));
+            ctx.send_viewport_cmd(Cmd::Decorations(false));
+        } else {
+            ctx.send_viewport_cmd(Cmd::Fullscreen(false));
+            ctx.send_viewport_cmd(Cmd::Decorations(false));
+            match self.restore.take() {
+                Some(Restore::Maximize) => ctx.send_viewport_cmd(Cmd::Maximized(true)),
+                Some(Restore::Placement(normal)) => self.pending_maximize = Some(normal),
+                None => {}
+            }
+        }
+        self.fullscreen_hint_until = self.fullscreen.then(|| Instant::now() + Duration::from_millis(2500));
+        let initial = ctx.input(|i| i.viewport_rect());
+        self.screen_transition = Some(ScreenTransition { started: Instant::now(), initial, last: None, stable_frames: 0 });
+        self.fade_in_from = None;
+    }
+
+    /// Windows: maximizes again once winit has left full screen (doing it earlier would be
+    /// undone by winit restoring the window from full screen).
+    fn finish_leaving_fullscreen(&mut self, ctx: &egui::Context) {
+        let Some(normal) = self.pending_maximize else { return };
+        if ctx.input(|i| i.viewport().fullscreen.unwrap_or(false)) {
+            return;
+        }
+        self.pending_maximize = None;
+        if let Some(hwnd) = self.native_window {
+            // Without the maximize animation (a zoom from the full screen size).
+            self.window_animations(false);
+            crate::window_placement::maximize_again(hwnd, normal);
+        }
+    }
+
+    fn window_animations(&mut self, enabled: bool) {
+        if let Some(hwnd) = self.native_window {
+            crate::window_placement::set_animations(hwnd, enabled);
+            self.animations_off = !enabled;
+        }
+    }
+
+    /// Animations back on once a full screen switch has completely settled.
+    fn restore_window_animations(&mut self) {
+        if self.animations_off && self.screen_transition.is_none() && self.pending_maximize.is_none() {
+            self.window_animations(true);
+        }
+    }
+
+    /// While the window switches to or from full screen: true until it has settled (the
+    /// window manager reports the new state, the size has changed and then stays the same for
+    /// a few frames).
+    pub(crate) fn screen_switching(&mut self, ctx: &egui::Context) -> bool {
+        let Some(t) = &mut self.screen_transition else { return false };
+        let (reported, rect) = ctx.input(|i| (i.viewport().fullscreen.unwrap_or(false), i.viewport_rect()));
+        if t.last == Some(rect) {
+            t.stable_frames += 1;
+        } else {
+            (t.last, t.stable_frames) = (Some(rect), 0);
+        }
+        let settled = reported == self.fullscreen && rect != t.initial && t.stable_frames >= SETTLED_FRAMES;
+        if settled || t.started.elapsed() > TRANSITION_MAX {
+            self.screen_transition = None;
+            self.fade_in_from = Some(Instant::now());
+            return false;
+        }
+        ctx.request_repaint();
+        true
+    }
+
+    /// Fades the freshly laid out window in from black after a full screen switch.
+    fn fade_in(&mut self, ctx: &egui::Context) {
+        let Some(from) = self.fade_in_from else { return };
+        let t = from.elapsed().as_secs_f32() / FADE_IN.as_secs_f32();
+        if t >= 1.0 {
+            self.fade_in_from = None;
+            return;
+        }
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new("fade in"));
+        ctx.layer_painter(layer).rect_filled(ctx.content_rect(), 0.0, egui::Color32::from_black_alpha(((1.0 - t) * 255.0) as u8));
+        ctx.request_repaint();
+    }
+
+    pub fn toggle_proof(&mut self) {
+        self.proof_view = !self.proof_view;
+    }
+
+    /// Identifies the settings of the selected recipe (a changed recipe needs a new proof).
+    pub(crate) fn proof_key(&self) -> Option<u64> {
+        let recipe = self.recipes.get(self.selected_recipe)?;
+        // A logo replaced under the same name changes the proof as well.
+        let stamp = recipe.watermark.file_stamp();
+        Some(sk_core::cache::fnv1a(format!("{}|{stamp:?}", serde_json::to_string(recipe).ok()?).as_bytes()))
+    }
+
+    /// Requests a proof of the current state when the proof view is on.
+    pub(crate) fn update_proof(&mut self, ctx: &egui::Context) {
+        if !self.proof_view || self.pointer_down || self.style_preview.is_some() {
+            return;
+        }
+        let Some(cur) = &self.current else { return };
+        let Some(full) = cur.full.clone() else {
+            self.want_full_now();
+            return;
+        };
+        let (Some(key), Some(recipe)) = (self.proof_key(), self.recipes.get(self.selected_recipe)) else { return };
+        let want = (self.generation, self.edit_version, key);
+        if self.proof_requested == Some(want) {
+            return;
+        }
+        self.proof_requested = Some(want);
+        self.workers.proof(crate::workers::ProofJob {
+            generation: self.generation,
+            version: self.edit_version,
+            key,
+            meta: cur.meta.clone(),
+            full,
+            adjustments: cur.adjustments.clone(),
+            recipe: recipe.clone(),
+            max_texture_side: ctx.input(|i| i.max_texture_side),
+        });
+    }
+
+    /// Shows the current image with these adjustments while a style is hovered.
+    pub(crate) fn preview_style(&mut self, adjustments: Adjustments) {
+        self.style_hovered = true;
+        if self.style_preview.as_ref() != Some(&adjustments) {
+            self.style_preview = Some(adjustments);
+            self.request_render();
+        }
+    }
+
+    /// Requests the full resolution right away (the user zooms in).
+    pub(crate) fn want_full_now(&mut self) {
+        if let Some(due) = &mut self.full_due {
+            *due = Instant::now();
+        }
     }
 
     pub fn select_path(&mut self, path: &PathBuf, mods: Modifiers) {
@@ -473,13 +1106,35 @@ impl App {
             return;
         }
         self.selection = HashSet::from([path.clone()]);
+        self.make_primary(path);
+    }
+
+    /// Shows this image in the viewer (for editing) without changing the selection.
+    pub fn make_primary(&mut self, path: &PathBuf) {
         if self.primary_path().as_ref() != Some(path) {
+            self.workers.touch();
             self.commit_and_save();
+            self.stash_current();
+            self.workers.cancel_tiles();
             self.generation += 1;
-            self.loading = Some(path.clone());
             self.load_error = None;
             self.picking_wb = false;
-            self.workers.load(self.generation, path.clone());
+            self.picking_skin = false;
+            self.full_due = None;
+            match self.prepared.iter().position(|r| r.meta.path == *path).map(|i| self.prepared.remove(i)) {
+                Some(r) => {
+                    let rendered = r.rendered.map(|(t, h)| (r.adjustments, t, h));
+                    self.install(r.meta, r.preview, rendered);
+                }
+                None => {
+                    // Show the thumbnail right away, then the cached preview, then the real thing.
+                    self.placeholder = self.thumbs.get(path).cloned();
+                    self.texture = None;
+                    self.loading = Some(path.clone());
+                    self.workers.quick(self.generation, path.clone(), self.session_root());
+                    self.workers.load(self.generation, path.clone());
+                }
+            }
         }
     }
 
@@ -491,6 +1146,7 @@ impl App {
         let pos = self.visible.iter().position(|&i| Some(&self.entries[i].path) == primary.as_ref()).unwrap_or(0);
         let next = (pos as isize + delta).clamp(0, self.visible.len() as isize - 1) as usize;
         let path = self.entries[self.visible[next]].path.clone();
+        self.step_dir = delta.signum();
         self.scroll_to_primary = true;
         self.select_path(&path, Modifiers::NONE);
     }
@@ -500,6 +1156,7 @@ impl App {
     pub fn request_render(&mut self) {
         self.render_requested = true;
         self.edit_version += 1;
+        self.edited_at = Instant::now();
     }
 
     /// Pushes finished edits to the undo stack and writes the sidecar.
@@ -606,12 +1263,13 @@ impl App {
             self.export_progress = None;
             return;
         }
-        self.workers.export(ExportJob { items, recipes });
+        let session = self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+        self.workers.export(ExportJob { items, recipes, session });
     }
 
-    /// White balance from a neutral spot; `image_pos` is in displayed preview pixels.
-    pub fn pick_white_balance(&mut self, image_pos: Vec2) {
-        let Some(cur) = self.current.as_mut() else { return };
+    /// Average camera RGB of a 7x7 spot; `image_pos` is in displayed preview pixels.
+    fn sample_camera_rgb(&self, image_pos: Vec2) -> Option<[f32; 3]> {
+        let cur = self.current.as_ref()?;
         let p = &cur.preview;
         let opts = RenderOptions { ignore_crop: self.crop_tool.is_some(), ..Default::default() };
         let geo = Processor::with_options(&cur.meta, &cur.adjustments, opts).geomap(p.width, p.height);
@@ -629,10 +1287,13 @@ impl App {
                 n += 1.0;
             }
         }
-        if n == 0.0 {
-            return;
-        }
-        let avg = acc.map(|v| v / n);
+        (n > 0.0).then(|| acc.map(|v| v / n))
+    }
+
+    /// White balance from a neutral spot; `image_pos` is in displayed preview pixels.
+    pub fn pick_white_balance(&mut self, image_pos: Vec2) {
+        let Some(avg) = self.sample_camera_rgb(image_pos) else { return };
+        let Some(cur) = self.current.as_mut() else { return };
         if avg.iter().any(|v| *v <= 1e-5) || avg.iter().any(|v| *v >= 0.98) {
             self.status = "Pipette: Stelle ist zu dunkel oder ausgebrannt".into();
             return;
@@ -645,63 +1306,69 @@ impl App {
         self.request_render();
     }
 
+    /// Skin tone target from a spot of skin; `image_pos` is in displayed preview pixels.
+    pub fn pick_skin_tone(&mut self, image_pos: Vec2) {
+        let Some(avg) = self.sample_camera_rgb(image_pos) else { return };
+        let Some(cur) = self.current.as_mut() else { return };
+        // Where the color adjustments see it, before the skin tone tool itself.
+        let mut adj = cur.adjustments.clone();
+        adj.skin_tone = Default::default();
+        let [l, a, b] = Processor::new(&cur.meta, &adj).color_input(avg);
+        let chroma = (a * a + b * b).sqrt();
+        if chroma < 0.01 {
+            self.status = "Hautton: Stelle ist zu farblos".into();
+            return;
+        }
+        let st = &mut cur.adjustments.skin_tone;
+        st.hue = (b.atan2(a).to_degrees().rem_euclid(360.0) * 10.0).round() / 10.0;
+        st.chroma = (chroma * 1000.0).round() / 1000.0;
+        st.lightness = (l * 1000.0).round() / 1000.0;
+        self.status = format!("Hautton: Farbton {:.0}°", st.hue);
+        self.picking_skin = false;
+        self.request_render();
+    }
+
     // ---------------------------------------------------------------- events
 
     pub(crate) fn handle_events(&mut self, ctx: &egui::Context) {
+        self.load_full_when_due(ctx);
+        // The rendered preview must fit into a single GPU texture.
+        let max_side = ctx.input(|i| i.max_texture_side).max(512);
+        let fit_texture = |preview: Arc<LinearImage>| {
+            let long = preview.width.max(preview.height);
+            if long > max_side { Arc::new((*preview).clone().box_downscale(long.div_ceil(max_side))) } else { preview }
+        };
         while let Ok(ev) = self.workers.events.try_recv() {
             match ev {
-                Event::Loaded { generation, result } if generation == self.generation => {
-                    self.loading = None;
-                    match result {
-                        Ok((meta, preview)) => {
-                            // The rendered preview must fit into a single GPU texture.
-                            let max_side = ctx.input(|i| i.max_texture_side).max(512);
-                            let long = preview.width.max(preview.height);
-                            let preview = if long > max_side {
-                                Arc::new((*preview).clone().box_downscale(long.div_ceil(max_side)))
-                            } else {
-                                preview
-                            };
-                            let sc = sidecar::load(&meta.path);
-                            // Rounded to slider precision so that displaying it never counts as an edit.
-                            let (k, t) = meta.color.temp_tint_for_wb(meta.as_shot_wb);
-                            let as_shot_temp_tint = (k.round(), (t * 10.0).round() / 10.0);
-                            self.workers.load_full(self.generation, meta.path.clone());
-                            self.tile = None;
-                            self.tile_requested = None;
-                            self.crop_tool = None;
-                            self.straighten_tool = None;
-                            self.active_layer = None;
-                            self.selected_spot = None;
-                            self.before_texture = None;
-                            self.before_key = None;
-                            self.local_drag = Default::default();
-                            self.current = Some(Current {
-                                meta,
-                                preview,
-                                full: None,
-                                adjustments: sc.adjustments.clone(),
-                                committed: sc.adjustments,
-                                rating: sc.rating,
-                                color_label: sc.color_label,
-                                keywords: sc.keywords,
-                                as_shot_temp_tint,
-                            });
-                            self.undo.clear();
-                            self.redo.clear();
-                            self.zoom = None;
-                            self.pan = Vec2::ZERO;
-                            self.request_render();
-                        }
-                        Err(e) => {
-                            self.current = None;
-                            self.texture = None;
-                            self.load_error = Some(e);
-                        }
+                // `loading` is unset if a prefetched copy was shown in the meantime.
+                Event::Loaded { generation, result } if generation == self.generation && self.loading.is_some() => match result {
+                    Ok((meta, preview)) => self.install(meta, fit_texture(preview), None),
+                    Err(e) => {
+                        self.loading = None;
+                        self.current = None;
+                        self.texture = None;
+                        self.placeholder = None;
+                        self.load_error = Some(e);
+                    }
+                },
+                Event::Loaded { .. } => {}
+                Event::Quick { generation, image } => {
+                    if generation == self.generation && self.texture.is_none() {
+                        self.placeholder = Some(ctx.load_texture("quick", image, TextureOptions::LINEAR));
                     }
                 }
-                Event::Loaded { .. } => {}
-                Event::Rendered { generation, image, thumb, histogram, before } => {
+                Event::Prepared(p) => {
+                    let p = *p;
+                    let too_big = p.preview.width.max(p.preview.height) > max_side;
+                    let preview = fit_texture(p.preview);
+                    let rendered = (!too_big).then(|| (ctx.load_texture("prepared", p.image, TextureOptions::LINEAR), p.histogram));
+                    if self.loading.as_ref() == Some(&p.meta.path) {
+                        self.install(p.meta, preview, rendered.map(|(t, h)| (p.adjustments, t, h)));
+                    } else if self.current_path().as_ref() != Some(&p.meta.path) {
+                        self.remember(Ready { meta: p.meta, preview, adjustments: p.adjustments, rendered });
+                    }
+                }
+                Event::Rendered { generation, version, draft, image, thumb, histogram, before } => {
                     if generation != self.generation {
                         continue;
                     }
@@ -715,16 +1382,51 @@ impl App {
                     if before != self.show_before {
                         continue;
                     }
+                    let [image_w, image_h] = image.size;
+                    // Also with the clip warning or a mask overlay: they hardly change the sharpness,
+                    // and the framing (crop, rotation) must be current.
+                    if !draft
+                        && !before
+                        && let Some(path) = self.current_path()
+                    {
+                        self.request_focus(&path, &image, Some(version));
+                    }
                     match &mut self.texture {
                         Some(t) => t.set(image, TextureOptions::LINEAR),
                         None => self.texture = Some(ctx.load_texture("viewer", image, TextureOptions::LINEAR)),
                     }
+                    self.texture_version = version;
+                    self.texture_draft = draft;
+                    let size = Vec2::new(image_w as f32, image_h as f32);
+                    let draft_fits = self.view_size.is_some_and(|v| (v.x / v.y - size.x / size.y).abs() < 0.01);
+                    if !draft {
+                        self.view_size = Some(size);
+                    } else if !draft_fits {
+                        // Unknown size of the full rendering: estimate it from the preview.
+                        let k = self.current.as_ref().map_or(2.0, |c| c.preview.width as f32 / size.x).round().max(1.0);
+                        self.view_size = Some(size * k);
+                    }
+                    self.placeholder = None;
                     self.histogram = Some(histogram);
+                    self.prefetch_neighbours();
                     if let (Some(thumb), Some(path)) = (thumb, self.current_path()) {
                         self.set_thumb(ctx, path, thumb);
                     }
                 }
                 Event::Thumbnail { path, image } => self.set_thumb(ctx, path, image),
+                Event::ProxyProgress(p) => self.proxy_progress = p,
+                Event::Proof { generation, version, key, result } => {
+                    if generation != self.generation {
+                        continue;
+                    }
+                    match result {
+                        Ok(p) => {
+                            let texture = ctx.load_texture("proof", p.image, TextureOptions::LINEAR);
+                            self.proof = Some(ProofView { version, key, texture, width: p.width, height: p.height, file_size: p.file_size });
+                        }
+                        Err(e) => self.status = format!("Proof fehlgeschlagen: {e}"),
+                    }
+                }
                 Event::FullLoaded { generation, image } => {
                     if generation == self.generation
                         && let Some(cur) = &mut self.current
@@ -732,21 +1434,49 @@ impl App {
                         cur.full = Some(image);
                     }
                 }
-                Event::TileRendered { generation, version, region, full_size, image } => {
+                Event::TileRendered { generation, version, index, region, level, full_size, image, focus } => {
                     if generation != self.generation {
                         continue;
                     }
-                    match &mut self.tile {
-                        Some(t) => {
-                            t.texture.set(image, TextureOptions::LINEAR);
-                            t.region = region;
-                            t.version = version;
-                            t.full_size = full_size;
+                    if level == 1 || self.tiles.full_size == (0, 0) {
+                        self.tiles.full_size = full_size;
+                    }
+                    match index {
+                        Some(index) => {
+                            if version != self.edit_version {
+                                continue;
+                            }
+                            if self.tiles.version != version {
+                                self.tiles.version = version;
+                                self.tiles.textures.clear();
+                                self.tiles.focus.clear();
+                            }
+                            match focus {
+                                Some(f) => {
+                                    self.tiles.focus.insert(index, crate::focus::FocusMap::new(image.size, f));
+                                }
+                                None => {
+                                    self.tiles.focus.remove(&index);
+                                }
+                            }
+                            let texture = ctx.load_texture(format!("tile{index:?}"), image, TextureOptions::LINEAR);
+                            self.tiles.textures.insert(index, texture);
                         }
-                        None => {
-                            let texture = ctx.load_texture("tile", image, TextureOptions::LINEAR);
-                            self.tile = Some(Tile { texture, region, version, full_size });
-                        }
+                        // The newest view rendering is shown even if the next edit is already on its
+                        // way: while dragging, versions change faster than they can be rendered.
+                        None => match &mut self.tiles.view {
+                            Some(v) if v.version > version => {}
+                            Some(v) => {
+                                v.focus = focus.map(|f| crate::focus::FocusMap::new(image.size, f));
+                                v.texture.set(image, TextureOptions::LINEAR);
+                                (v.region, v.level, v.version) = (region, level, version);
+                            }
+                            None => {
+                                let focus = focus.map(|f| crate::focus::FocusMap::new(image.size, f));
+                                let texture = ctx.load_texture("view tile", image, TextureOptions::LINEAR);
+                                self.tiles.view = Some(ViewTile { region, level, version, texture, focus });
+                            }
+                        },
                     }
                 }
                 Event::ExportProgress { done, total, last } => {
@@ -802,6 +1532,24 @@ impl App {
                         Err(e) => self.status = e,
                     }
                 }
+                Event::CompareImage { path, image } => {
+                    // The current image is shown from its live rendering.
+                    if self.compare_requested.remove(&path) && self.current_path().as_ref() != Some(&path) {
+                        self.request_focus(&path, &image, None);
+                        match self.compare_textures.get_mut(&path) {
+                            Some(t) => t.set(image, TextureOptions::LINEAR),
+                            None => {
+                                let t = ctx.load_texture(format!("compare:{}", path.display()), image, TextureOptions::LINEAR);
+                                self.compare_textures.insert(path, t);
+                            }
+                        }
+                    }
+                }
+                Event::CompareDetail { path, version, uv, width, full_res, image, focus } => {
+                    self.detail_received(ctx, path, version, uv, width, full_res, image, focus);
+                }
+                Event::Matched { path, result } => self.matched(path, result),
+                Event::Focus { path, version, size, sharpness } => self.focus_received(path, version, size, sharpness),
                 Event::IndexProgress { done, total } => {
                     self.index_progress = (done < total).then_some((done, total));
                 }
@@ -811,7 +1559,7 @@ impl App {
                         continue;
                     }
                     if import {
-                        self.status = format!("Import: {indexed} Bilder{}", if failed > 0 { format!(", {failed} Fehler") } else { String::new() });
+                        self.status = format!("Import: {}{}", crate::widgets::image_count(indexed), if failed > 0 { format!(", {failed} Fehler") } else { String::new() });
                         self.open_scope(Scope::LastImport);
                     } else if indexed > 0 || failed > 0 {
                         self.reload_entries();
@@ -832,6 +1580,18 @@ impl App {
     }
 
     pub(crate) fn send_render(&mut self) {
+        // The mask overlay comes and goes (M, or while painting a mask): preview and tiles
+        // must be rendered again with or without it.
+        let overlay = self.mask_overlay();
+        if overlay != self.rendered_mask_overlay {
+            self.rendered_mask_overlay = overlay;
+            self.request_render();
+        }
+        // A draft was shown while dragging: render at full resolution once released.
+        if self.texture_draft && !self.pointer_down && !self.render_requested {
+            self.texture_draft = false;
+            self.render_requested = true;
+        }
         if !self.render_requested {
             return;
         }
@@ -846,6 +1606,7 @@ impl App {
                 self.before_key = Some(key);
                 self.workers.render_before(RenderJob {
                     generation: self.generation,
+                    version: self.edit_version,
                     meta: cur.meta.clone(),
                     preview: cur.preview.clone(),
                     adjustments: cur.adjustments.clone(),
@@ -853,15 +1614,25 @@ impl App {
                     before: true,
                     ignore_crop: false,
                     mask_overlay: None,
+                    cache_as: None,
+                    draft: 1,
                 });
             }
         }
         if let Some(cur) = &self.current {
             self.workers.render(RenderJob {
                 generation: self.generation,
+                version: self.edit_version,
+                // A style preview is shown, but never cached.
+                adjustments: self.style_preview.clone().unwrap_or_else(|| cur.adjustments.clone()),
+                draft: match (self.pointer_down, self.view_magnified) {
+                    (false, _) => 1,
+                    (true, false) => 2,
+                    (true, true) => 4,
+                },
+                cache_as: (!self.pointer_down && self.style_preview.is_none()).then(|| (cur.meta.path.clone(), self.session_root())),
                 meta: cur.meta.clone(),
                 preview: cur.preview.clone(),
-                adjustments: cur.adjustments.clone(),
                 clip_warning: self.clip_warning,
                 before: self.show_before,
                 ignore_crop: self.crop_tool.is_some(),
@@ -870,8 +1641,9 @@ impl App {
         }
     }
 
-    fn shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() {
+    pub(crate) fn shortcuts(&mut self, ctx: &egui::Context) {
+        // While a menu is open the keyboard belongs to it, as in native applications.
+        if ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) {
             return;
         }
         let pressed = |k: Key, m: Modifiers| ctx.input_mut(|i| i.consume_key(m, k));
@@ -903,7 +1675,13 @@ impl App {
             self.move_to_session_folder(sk_core::session::SessionFolder::Selects);
         }
         if pressed(Key::Delete, Modifiers::COMMAND) || pressed(Key::Backspace, Modifiers::COMMAND) {
-            self.move_to_session_folder(sk_core::session::SessionFolder::Trash);
+            self.trash_selection();
+        }
+        if pressed(Key::F2, Modifiers::NONE) {
+            self.new_variant(false);
+        }
+        if pressed(Key::F3, Modifiers::NONE) {
+            self.new_variant(true);
         }
         if pressed(Key::F1, Modifiers::NONE) {
             self.show_shortcuts = !self.show_shortcuts;
@@ -955,6 +1733,23 @@ impl App {
                 self.set_local_tool(t);
             }
         }
+        // First: `consume_key` with no modifiers also matches Shift.
+        if pressed(Key::R, Modifiers::COMMAND | Modifiers::SHIFT) {
+            self.open_rename();
+        }
+        if pressed(Key::A, Modifiers::SHIFT) {
+            self.auto_upright(sk_core::upright::UprightMode::Vertical);
+        }
+        if pressed(Key::O, Modifiers::SHIFT) {
+            self.toggle_overlay();
+        }
+        if pressed(Key::O, Modifiers::NONE) {
+            self.guides = self.guides.next();
+            self.save_settings();
+        }
+        if pressed(Key::U, Modifiers::SHIFT) {
+            self.toggle_side_by_side();
+        }
         if pressed(Key::U, Modifiers::NONE) {
             self.toggle_split();
         }
@@ -980,12 +1775,14 @@ impl App {
         if pressed(Key::G, Modifiers::NONE) {
             self.grid_view = !self.grid_view;
         }
+        if pressed(Key::K, Modifiers::NONE) {
+            self.toggle_focus_mask();
+        }
         if pressed(Key::E, Modifiers::NONE) {
             self.toggle_clip_warning();
         }
         if pressed(Key::Y, Modifiers::NONE) {
-            self.show_before = !self.show_before;
-            self.request_render();
+            self.toggle_before();
         }
         if pressed(Key::W, Modifiers::NONE) {
             self.picking_wb = !self.picking_wb;
@@ -996,11 +1793,27 @@ impl App {
         if pressed(Key::C, Modifiers::NONE) {
             self.toggle_crop();
         }
+        // Before plain Enter, which would also match with Shift held.
+        if pressed(Key::Enter, Modifiers::SHIFT) {
+            self.toggle_reference();
+        }
         if pressed(Key::Enter, Modifiers::NONE) {
             self.finish_crop_tool();
         }
+        if pressed(Key::F11, Modifiers::NONE) || pressed(Key::F, Modifiers::COMMAND | Modifiers::SHIFT) {
+            self.toggle_fullscreen(ctx);
+        }
+        if pressed(Key::P, Modifiers::NONE) {
+            self.toggle_proof();
+        }
         if pressed(Key::Escape, Modifiers::NONE) {
+            // Esc first ends a tool; with none active it leaves full screen.
+            let tool_active = self.picking_wb || self.picking_skin || self.local_tool.is_some() || self.straighten_tool.is_some() || self.crop_tool.is_some();
+            if !tool_active && self.fullscreen {
+                self.toggle_fullscreen(ctx);
+            }
             self.picking_wb = false;
+            self.picking_skin = false;
             self.local_tool = None;
             self.straighten_tool = None;
             self.finish_crop_tool();
@@ -1008,6 +1821,25 @@ impl App {
     }
 
     // ---------------------------------------------------------------- layout
+
+    /// End of every frame (also in full screen): pending actions, saving and rendering.
+    fn finish_frame(&mut self, ctx: &egui::Context) {
+        self.splash_ui(ctx);
+        self.run_pending();
+        // The pointer left the styles: back to the real adjustments.
+        if !self.style_hovered && self.style_preview.take().is_some() {
+            self.request_render();
+        }
+
+        // Commit edits once the user lets go of the mouse (one undo step per gesture).
+        if !ctx.input(|i| i.pointer.any_down()) {
+            self.commit_and_save();
+        }
+        self.send_render();
+        self.update_proof(ctx);
+        self.fade_in(ctx);
+        self.debug_screenshot(ctx);
+    }
 
     fn debug_screenshot(&mut self, ctx: &egui::Context) {
         let Some((_, shown_at)) = &mut self.screenshot else { return };
@@ -1023,9 +1855,65 @@ impl App {
                 self.show_mask = std::env::var_os("SILBERKORN_MASK").is_some();
                 self.request_render();
             }
+            if std::env::var_os("SILBERKORN_FOCUS").is_some() {
+                self.toggle_focus_mask();
+            }
+            if std::env::var_os("SILBERKORN_VIEW100").is_some() {
+                self.toggle_zoom_100();
+            }
+            if std::env::var_os("SILBERKORN_COMPARE").is_some() {
+                self.select_all();
+                self.toggle_reference();
+                if std::env::var_os("SILBERKORN_ZOOM").is_some() {
+                    (self.compare_zoom, self.compare_center) = (8.0, egui::vec2(0.45, 0.35));
+                }
+            }
             if std::env::var_os("SILBERKORN_SPLIT").is_some() {
                 self.toggle_split();
             }
+            if std::env::var_os("SILBERKORN_SIDE").is_some() {
+                self.toggle_side_by_side();
+            }
+            if let Ok(template) = std::env::var("SILBERKORN_RENAME") {
+                self.select_all();
+                self.open_rename();
+                if let Some(d) = &mut self.rename {
+                    d.template = template;
+                }
+            }
+            if std::env::var_os("SILBERKORN_UPRIGHT").is_some() {
+                self.auto_upright(sk_core::upright::UprightMode::Vertical);
+            }
+            if std::env::var_os("SILBERKORN_GUIDES").is_some() {
+                self.guides = crate::guides::Guides::Thirds;
+            }
+            if let Some(f) = std::env::var_os("SILBERKORN_OVERLAY") {
+                (self.overlay.file, self.overlay.shown) = (Some(f.into()), true);
+            }
+            if let Some(text) = std::env::var("SILBERKORN_WATERMARK").ok()
+                && let Some(r) = self.recipes.get_mut(self.selected_recipe)
+            {
+                r.watermark = sk_core::watermark::Watermark { enabled: true, text, size: 6.0, opacity: 0.8, ..Default::default() };
+            }
+            self.proof_view |= std::env::var_os("SILBERKORN_PROOF").is_some();
+            // Layout only (the window itself stays as it is).
+            self.fullscreen |= std::env::var_os("SILBERKORN_FULLSCREEN").is_some();
+        }
+        // Wait for the sharp view region when zoomed in.
+        if std::env::var_os("SILBERKORN_VIEW100").is_some() && !self.tiles.view.as_ref().is_some_and(|v| v.version == self.edit_version && v.level == 1) {
+            if let Some((_, Some(t))) = &mut self.screenshot {
+                *t = now;
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            return;
+        }
+        // Wait for the proof (it needs the full resolution).
+        if self.proof_view && !self.proof.as_ref().is_some_and(|p| p.version == self.edit_version) {
+            if let Some((_, Some(t))) = &mut self.screenshot {
+                *t = now;
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            return;
         }
         let wants_zoom = std::env::var_os("SILBERKORN_ZOOM").is_some();
         if wants_zoom && self.zoom.is_none() && self.current.as_ref().is_some_and(|c| c.full.is_some()) {
@@ -1079,13 +1967,24 @@ fn merge_ai(old: Option<sk_core::params::AiMask>, new: sk_ai::MaskImage) -> sk_c
 }
 
 impl eframe::App for App {
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        self.native_window = crate::window_placement::native_handle(frame);
+        self.finish_leaving_fullscreen(&ctx);
+        self.restore_window_animations();
+        self.pixels_per_point = ctx.pixels_per_point();
+        // Background previews wait while the user is doing something.
+        let input = ctx.input(|i| i.pointer.any_down() || i.events.iter().any(|e| !matches!(e, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_))));
+        if input || self.loading.is_some() || self.render_requested {
+            self.workers.touch();
+        }
         self.pointer_down = ctx.input(|i| i.pointer.any_down());
         if !crate::browser::SPEED_KEYS.iter().any(|(k, _)| ctx.input(|i| i.key_down(*k))) {
             self.speed_message = None;
         }
         self.handle_events(&ctx);
+        self.prune_view_caches();
+        self.style_hovered = false;
         self.shortcuts(&ctx);
         let title = self.session.as_ref().map_or_else(|| "Silberkorn".to_string(), |s| format!("{} – Silberkorn", s.name));
         if title != self.window_title {
@@ -1095,7 +1994,26 @@ impl eframe::App for App {
 
         use crate::chrome::bar_margin;
         use crate::theme::{self, chrome_frame};
-        egui::Panel::top("menu").frame(chrome_frame(egui::Margin::symmetric(6, 2))).show_separator_line(false).show(ui, |ui| self.menu_bar(ui));
+        // Full screen switch in progress: black only, no image at the in-between window sizes.
+        if self.screen_switching(&ctx) {
+            ui.painter().rect_filled(ctx.content_rect(), 0.0, egui::Color32::BLACK);
+            return;
+        }
+        if self.fullscreen {
+            // Distraction-free: only the image.
+            egui::CentralPanel::no_frame().show(ui, |ui| self.viewer(ui));
+            self.dialogs(&ctx);
+            self.session_dialogs(&ctx);
+            self.variant_dialogs(&ctx);
+            self.finish_frame(&ctx);
+            return;
+        }
+        egui::Panel::top("titlebar")
+            .frame(chrome_frame(egui::Margin::ZERO))
+            .exact_size(crate::chrome::TITLE_BAR_HEIGHT)
+            .resizable(false)
+            .show_separator_line(false)
+            .show(ui, |ui| self.title_bar(ui));
         egui::Panel::top("toolbar").frame(chrome_frame(bar_margin())).show(ui, |ui| self.toolbar(ui));
         egui::Panel::bottom("status").frame(chrome_frame(egui::Margin::symmetric(10, 3))).show(ui, |ui| self.status_bar(ui));
         egui::Panel::left("tabrail").frame(chrome_frame(egui::Margin::symmetric(2, 2))).resizable(false).exact_size(46.0).show(ui, |ui| self.tab_rail(ui));
@@ -1114,16 +2032,11 @@ impl eframe::App for App {
                 .show(ui, |ui| self.filmstrip(ui));
         }
         egui::CentralPanel::no_frame().show(ui, |ui| if self.grid_view { self.grid(ui) } else { self.viewer(ui) });
+        crate::chrome::resize_edges(ui);
         self.dialogs(&ctx);
         self.session_dialogs(&ctx);
-        self.run_pending();
-
-        // Commit edits once the user lets go of the mouse (one undo step per gesture).
-        if !ctx.input(|i| i.pointer.any_down()) {
-            self.commit_and_save();
-        }
-        self.send_render();
-        self.debug_screenshot(&ctx);
+        self.variant_dialogs(&ctx);
+        self.finish_frame(&ctx);
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
