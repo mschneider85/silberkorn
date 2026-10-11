@@ -42,6 +42,13 @@ const DRAFT_PIXELS: usize = 700_000;
 impl App {
     pub fn viewer(&mut self, ui: &mut Ui) {
         let rect = ui.available_rect_before_wrap();
+        self.viewer_content(ui);
+        // What the user waits for here (mask, removal, matching).
+        self.activity_overlay(ui, rect);
+    }
+
+    fn viewer_content(&mut self, ui: &mut Ui) {
+        let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 0.0, if self.fullscreen { Color32::from_gray(10) } else { theme::VIEWER });

@@ -1,6 +1,7 @@
 //! Silberkorn: a raw developer and image manager.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod activity;
 mod app;
 #[cfg(test)]
 mod app_tests;
@@ -12,6 +13,7 @@ mod culling;
 mod denoise;
 mod develop_tools;
 mod focus;
+mod gpu;
 mod guides;
 mod history;
 mod jobs;

@@ -76,7 +76,18 @@ impl App {
                 ui.label("Stärke");
                 ui.add(egui::Slider::new(&mut self.denoise_strength, 0.0..=100.0).fixed_decimals(0));
             });
-            ui.label(RichText::new("Die Berechnung läuft im Hintergrund auf allen Prozessorkernen und dauert je Bild einige Minuten.").small().color(Color32::from_gray(150)));
+            let on_gpu = sk_ai::runtime::gpu_enabled() && sk_ai::runtime::gpu_installed();
+            let where_ = if on_gpu {
+                "Die Berechnung läuft im Hintergrund auf der Grafikkarte (meist unter einer Minute je Bild)."
+            } else {
+                "Die Berechnung läuft im Hintergrund auf dem Prozessor und dauert je Bild einige Minuten."
+            };
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(where_).small().color(Color32::from_gray(150)));
+                if !on_gpu && sk_ai::runtime::gpu_supported() && ui.small_button("KI-Beschleunigung …").clicked() {
+                    self.show_gpu_dialog = true;
+                }
+            });
             if !available {
                 ui.add_space(8.0);
                 match downloading {

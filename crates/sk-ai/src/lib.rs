@@ -10,13 +10,13 @@ pub mod denoise;
 pub mod faces;
 pub mod inpaint;
 pub mod models;
+pub mod runtime;
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use sk_core::color::{Oklab, srgb_encode};
 use sk_core::detail::{Plane, guided_filter};
-use tract_onnx::prelude::*;
 
 /// Masks are produced in this resolution (long edge).
 pub const MASK_EDGE: usize = 768;
@@ -108,18 +108,12 @@ pub fn download_model() -> Result<PathBuf> {
 const NET: usize = 320;
 
 pub struct SubjectModel {
-    plan: Arc<TypedRunnableModel>,
+    net: runtime::Net,
 }
 
 impl SubjectModel {
     pub fn load(path: &Path) -> Result<Self> {
-        let plan = tract_onnx::onnx()
-            .model_for_path(path)
-            .with_context(|| format!("Modell {} nicht lesbar", path.display()))?
-            .with_input_fact(0, f32::fact([1, 3, NET, NET]).into())?
-            .into_optimized()?
-            .into_runnable()?;
-        Ok(Self { plan })
+        Ok(Self { net: runtime::Net::load(path, &[runtime::Input::F32([1, 3, NET, NET])])? })
     }
 
     /// Salient-object probability map at the network resolution (320 x 320).
@@ -150,11 +144,10 @@ impl SubjectModel {
                 }
             }
         }
-        let tensor = Tensor::from_shape(&[1, 3, NET, NET], &input)?;
-        let out = self.plan.run(tvec!(tensor.into()))?;
-        let view = out[0].to_plain_array_view::<f32>()?;
-        let data: Vec<f32> = view.iter().copied().collect();
-        anyhow::ensure!(data.len() == NET * NET, "Unerwartete Modellausgabe {:?}", view.shape());
+        let out = self.net.run(&[runtime::Data::F32(&input)])?;
+        let o = out.into_iter().next().context("Keine Modellausgabe")?;
+        anyhow::ensure!(o.data.len() == NET * NET, "Unerwartete Modellausgabe {:?}", o.shape);
+        let data = o.data;
         let (mi, ma) = data.iter().fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(*v), b.max(*v)));
         let range = (ma - mi).max(1e-6);
         Ok(Plane::new(NET, NET, data.into_iter().map(|v| (v - mi) / range).collect()))

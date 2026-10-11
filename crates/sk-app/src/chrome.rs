@@ -278,6 +278,10 @@ impl App {
         if item(ui, icon::CHECK_SQUARE, "Alle auswählen", "Strg+A", !self.visible.is_empty()) {
             self.select_all();
         }
+        ui.separator();
+        if item(ui, icon::LIGHTNING, "KI-Beschleunigung …", "", true) {
+            self.show_gpu_dialog = true;
+        }
     }
 
     fn image_menu(&mut self, ui: &mut Ui) {
@@ -641,10 +645,9 @@ impl App {
                 let sel = if n > 1 { format!("  ·  {n} ausgewählt") } else { String::new() };
                 let count = image_count(self.visible.len());
                 ui.label(dim(format!("{}  ·  {count}{sel}", scope_label(&self.scope, &self.lists, self.session.as_ref()))));
-                if let Some((label, p)) = self.job_status() {
-                    ui.add(egui::ProgressBar::new(p).desired_width(120.0).desired_height(12.0)).on_hover_text(label);
-                } else if let Some((done, total)) = self.export_progress.or(self.index_progress) {
-                    ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(120.0).desired_height(12.0));
+                if !self.activities().is_empty() {
+                    ui.separator();
+                    self.activity_status(ui);
                 } else if let Some((done, total)) = self.proxy_progress {
                     ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(80.0).desired_height(8.0))
                         .on_hover_text(format!("Vorschauen werden im Hintergrund erstellt ({done} von {total})"));
@@ -657,6 +660,7 @@ impl App {
 
     pub fn dialogs(&mut self, ctx: &egui::Context) {
         self.rename_dialog(ctx);
+        self.gpu_dialog(ctx);
         if self.show_shortcuts {
             let mut open = true;
             egui::Window::new(format!("{}  Tastenkürzel", icon::KEYBOARD))

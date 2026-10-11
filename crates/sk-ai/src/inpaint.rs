@@ -11,25 +11,19 @@ use sk_core::detail::{Plane, gaussian_blur};
 use sk_core::image::LinearImage;
 use sk_core::mask::{Patch, rasterize_strokes_in};
 use sk_core::params::{BrushStroke, Removal};
-use tract_onnx::prelude::*;
+use std::sync::Arc;
 
 /// Network size.
 pub const NET: usize = 512;
 
 pub struct Inpainter {
-    plan: Arc<TypedRunnableModel>,
+    net: crate::runtime::Net,
 }
 
 impl Inpainter {
     pub fn load(path: &std::path::Path) -> Result<Self> {
-        let plan = tract_onnx::onnx()
-            .model_for_path(path)
-            .with_context(|| format!("Modell {} nicht lesbar", path.display()))?
-            .with_input_fact(0, u8::fact([1, 3, NET, NET]).into())?
-            .with_input_fact(1, u8::fact([1, 1, NET, NET]).into())?
-            .into_optimized()?
-            .into_runnable()?;
-        Ok(Self { plan })
+        use crate::runtime::{Input, Net};
+        Ok(Self { net: Net::load(path, &[Input::U8([1, 3, NET, NET]), Input::U8([1, 1, NET, NET])])? })
     }
 
     /// Fills the holes (`hole[i]` true) of an 8-bit RGB image of NET x NET pixels.
@@ -43,15 +37,13 @@ impl Inpainter {
         }
         // 0 marks what is to be filled.
         let mask: Vec<u8> = hole.iter().map(|h| if *h { 0 } else { 255 }).collect();
-        let out = self.plan.run(tvec!(
-            Tensor::from_shape(&[1, 3, NET, NET], &img)?.into(),
-            Tensor::from_shape(&[1, 1, NET, NET], &mask)?.into()
-        ))?;
-        let o = out[0].cast_to::<u8>()?;
-        let v = o.to_plain_array_view::<u8>()?;
-        let d = v.as_slice().context("Unerwartete Modellausgabe")?;
-        anyhow::ensure!(d.len() == 3 * n, "Unerwartete Modellausgabe {:?}", v.shape());
-        Ok((0..n).map(|i| [d[i], d[n + i], d[2 * n + i]]).collect())
+        use crate::runtime::Data;
+        let out = self.net.run(&[Data::U8(&img), Data::U8(&mask)])?;
+        let o = out.first().context("Keine Modellausgabe")?;
+        let d = &o.data;
+        anyhow::ensure!(d.len() == 3 * n, "Unerwartete Modellausgabe {:?}", o.shape);
+        let px = |v: f32| v.round().clamp(0.0, 255.0) as u8;
+        Ok((0..n).map(|i| [px(d[i]), px(d[n + i]), px(d[2 * n + i])]).collect())
     }
 }
 
@@ -102,7 +94,7 @@ struct Work {
 
 /// Removes what the strokes mark from the image (camera RGB at full resolution, oriented).
 /// `wb`: white balance multipliers used to show the network a natural image.
-pub fn make_removal(full: &LinearImage, wb: [f32; 3], strokes: &[BrushStroke], model: &Inpainter) -> Result<Removal> {
+pub fn make_removal(full: &LinearImage, wb: [f32; 3], strokes: &[BrushStroke], model: &Inpainter, progress: &dyn Fn(f32)) -> Result<Removal> {
     let (fw, fh) = (full.width as f32, full.height as f32);
     let aspect = fw / fh;
     let long = fw.max(fh);
@@ -154,7 +146,7 @@ pub fn make_removal(full: &LinearImage, wb: [f32; 3], strokes: &[BrushStroke], m
     let norm = [rect[0] / fw, rect[1] / fh, rect[2] / fw, rect[3] / fh];
     let cover = rasterize_strokes_in(strokes, norm, w, h, aspect);
     let mut work = Work { rect, w, h, rgb, cover };
-    fill_windows(&mut work, model)?;
+    fill_windows(&mut work, model, progress)?;
     let mut removal = finish(work, full, wb)?;
     removal.strokes = strokes.to_vec();
     Ok(removal)
@@ -162,7 +154,7 @@ pub fn make_removal(full: &LinearImage, wb: [f32; 3], strokes: &[BrushStroke], m
 
 /// Fills the marked area window by window (each NET x NET, with the surroundings and what
 /// earlier windows filled as context).
-fn fill_windows(work: &mut Work, model: &Inpainter) -> Result<()> {
+fn fill_windows(work: &mut Work, model: &Inpainter, progress: &dyn Fn(f32)) -> Result<()> {
     let (w, h) = (work.w, work.h);
     let hole0: Vec<bool> = work.cover.iter().map(|c| *c > 0.05).collect();
     let hole = dilate(&hole0, w, h, 4);
@@ -198,7 +190,9 @@ fn fill_windows(work: &mut Work, model: &Inpainter) -> Result<()> {
         }
     }
     let mut done = vec![false; w * h];
-    for (cx, cy) in centers {
+    let total = centers.len();
+    for (k, (cx, cy)) in centers.into_iter().enumerate() {
+        progress(0.1 + 0.85 * k as f32 / total as f32);
         // Window origin (may extend beyond the area: those pixels are mirrored inside).
         let ox = cx as i64 - NET as i64 / 2;
         let oy = cy as i64 - NET as i64 / 2;
@@ -291,7 +285,7 @@ mod tests {
         }
         let img = LinearImage::new(w, h, data);
         let stroke = BrushStroke { points: vec![[0.5, 0.5]], radius: 30.0 / 1200.0, hardness: 0.8, flow: 1.0, erase: false };
-        let r = make_removal(&img, [1.0, 1.0, 1.0], &[stroke], &model).unwrap();
+        let r = make_removal(&img, [1.0, 1.0, 1.0], &[stroke], &model, &|_| {}).unwrap();
         let p = Patch::decode(&r.patch, r.scale).unwrap();
         // The patch covers the blob and is bright there.
         let c = p.rgba[(p.h / 2) * p.w + p.w / 2];

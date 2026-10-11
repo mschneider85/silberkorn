@@ -1353,7 +1353,7 @@ fn hdr_merge_job_creates_and_selects_dng() {
     let files = dialog.files.clone();
     let opts = f.app.hdr_options;
     f.app.start_job("HDR zusammenfügen", Box::new(move |p| Ok(vec![sk_core::hdr::merge_files(&files, &opts, p)?])));
-    assert!(f.app.job_status().is_some());
+    assert!(f.app.activities().iter().any(|a| a.label == "HDR zusammenfügen" && a.progress.is_some() && !a.in_viewer));
     f.pump("HDR fertig", |a| a.jobs.is_empty());
     let dng = f.dir.join("photos/_DSC0009-HDR.dng");
     assert!(dng.exists(), "{}", f.app.status);
@@ -1373,6 +1373,8 @@ fn remove_tool_fills_the_painted_area() {
     f.app.remove_strokes = vec![sk_core::params::BrushStroke { points: vec![[0.4, 0.5], [0.45, 0.52]], radius: 0.01, hardness: 0.7, flow: 1.0, erase: false }];
     f.app.request_removal();
     assert!(f.app.inpaint_busy);
+    // Shown in the viewer and the status bar while it runs.
+    assert!(f.app.activities().iter().any(|a| a.label == "Entfernen" && a.in_viewer));
     f.pump("Entfernt", |a| !a.inpaint_busy);
     let cur = f.app.current.as_ref().unwrap();
     assert_eq!(cur.adjustments.removals.len(), 1, "{}", f.app.status);

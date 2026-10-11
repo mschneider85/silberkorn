@@ -69,6 +69,8 @@ pub enum Event {
     /// Sharpness map of a displayed image for the focus mask.
     /// `version`: edit version of the rendering of the image being edited (`None` for others).
     Focus { path: PathBuf, version: Option<u64>, size: [usize; 2], sharpness: Arc<Vec<u8>> },
+    /// Progress (0..1) of a generative removal.
+    RemovalProgress { generation: u64, progress: f32 },
     /// Result of a generative removal (see `remove.rs`).
     Removal { generation: u64, result: Result<sk_core::params::Removal, String> },
     /// Progress (0..1) of a background job (see `jobs.rs`).
@@ -464,7 +466,7 @@ impl Workers {
         {
             let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
             thread::spawn(move || {
-                let mut model: Option<sk_ai::SubjectModel> = None;
+                let mut model: Option<(sk_ai::SubjectModel, u64)> = None;
                 while let Ok(job) = ai_rx.recv() {
                     // Guide: the image in source orientation, only white balance and exposure applied.
                     let guide_adj = Adjustments {
@@ -479,11 +481,12 @@ impl Workers {
                         AiKind::Sky => Ok(sk_ai::sky_mask(&guide)),
                         AiKind::Magic { seed, tolerance } => Ok(sk_ai::magic_mask(&guide, seed, tolerance)),
                         AiKind::Subject => {
-                            if model.is_none() {
-                                model = sk_ai::SubjectModel::load(&sk_ai::default_model_path()).map_err(|e| log::warn!("{e:#}")).ok();
+                            let generation = sk_ai::runtime::config_generation();
+                            if model.as_ref().is_none_or(|(_, g)| *g != generation) {
+                                model = sk_ai::SubjectModel::load(&sk_ai::default_model_path()).map_err(|e| log::warn!("{e:#}")).ok().map(|m| (m, generation));
                             }
                             match &model {
-                                Some(m) => m.subject_mask(&guide).map_err(|e| format!("{e:#}")),
+                                Some((m, _)) => m.subject_mask(&guide).map_err(|e| format!("{e:#}")),
                                 None => Err("MODEL_MISSING".into()),
                             }
                         }
@@ -819,10 +822,14 @@ impl Workers {
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
             thread::spawn(move || {
-                let mut model: Option<sk_ai::inpaint::Inpainter> = None;
+                let mut model: Option<(sk_ai::inpaint::Inpainter, u64)> = None;
                 while let Ok(job) = inpaint_rx.recv() {
                     activity.touch();
-                    let result = crate::remove::compute(&job, &mut model);
+                    let progress = |p: f32| {
+                        let _ = ev_tx.send(Event::RemovalProgress { generation: job.generation, progress: p });
+                        ctx.request_repaint();
+                    };
+                    let result = crate::remove::compute(&job, &mut model, &progress);
                     let _ = ev_tx.send(Event::Removal { generation: job.generation, result });
                     ctx.request_repaint();
                 }

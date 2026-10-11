@@ -90,11 +90,4 @@ impl App {
             self.scroll_to_primary = true;
         }
     }
-
-    /// The job shown in the status bar: its label and progress.
-    pub fn job_status(&self) -> Option<(String, f32)> {
-        let j = self.jobs.first()?;
-        let more = if self.jobs.len() > 1 { format!(" (+{})", self.jobs.len() - 1) } else { String::new() };
-        Some((format!("{}{more}", j.label), j.progress))
-    }
 }

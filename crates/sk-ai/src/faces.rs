@@ -1,10 +1,9 @@
 //! Faces and culling: face detection (YuNet), face embeddings for recognizing people (SFace),
 //! closed eyes (open-closed-eye-0001) and image sharpness.
 
-use std::path::Path;
 
 use anyhow::{Context, Result};
-use tract_onnx::prelude::*;
+use crate::runtime::{Data, Input, Net};
 
 use crate::models;
 
@@ -70,22 +69,14 @@ impl Image<'_> {
 type Detection = ([f32; 4], [[f32; 2]; 5], f32);
 
 pub struct FaceModels {
-    det: Arc<TypedRunnableModel>,
-    rec: Arc<TypedRunnableModel>,
-    eye: Arc<TypedRunnableModel>,
+    det: Net,
+    rec: Net,
+    eye: Net,
 }
 
 /// The models face analysis needs.
 pub const NEEDED: [&models::ModelInfo; 3] = [&models::FACE_DETECT, &models::FACE_EMBED, &models::EYE_STATE];
 
-fn plan(path: &Path, shape: [usize; 4]) -> Result<Arc<TypedRunnableModel>> {
-    tract_onnx::onnx()
-        .model_for_path(path)
-        .with_context(|| format!("Modell {} nicht lesbar", path.display()))?
-        .with_input_fact(0, f32::fact(shape).into())?
-        .into_optimized()?
-        .into_runnable()
-}
 
 #[inline]
 fn sigmoid_free(v: f32) -> f32 {
@@ -145,9 +136,9 @@ pub fn sharpness(img: &Image, rect: [f32; 4], n: usize) -> f32 {
 impl FaceModels {
     pub fn load() -> Result<Self> {
         Ok(Self {
-            det: plan(&models::path(&models::FACE_DETECT), [1, 3, DET, DET])?,
-            rec: plan(&models::path(&models::FACE_EMBED), [1, 3, FACE, FACE])?,
-            eye: plan(&models::path(&models::EYE_STATE), [1, 3, EYE, EYE])?,
+            det: Net::load(&models::path(&models::FACE_DETECT), &[Input::F32([1, 3, DET, DET])])?,
+            rec: Net::load(&models::path(&models::FACE_EMBED), &[Input::F32([1, 3, FACE, FACE])])?,
+            eye: Net::load(&models::path(&models::EYE_STATE), &[Input::F32([1, 3, EYE, EYE])])?,
         })
     }
 
@@ -167,8 +158,9 @@ impl FaceModels {
                 }
             }
         }
-        let out = self.det.run(tvec!(Tensor::from_shape(&[1, 3, DET, DET], &input)?.into()))?;
-        let view = |i: usize| -> Result<Vec<f32>> { Ok(out[i].to_plain_array_view::<f32>()?.iter().copied().collect()) };
+        let out = self.det.run(&[Data::F32(&input)])?;
+        anyhow::ensure!(out.len() >= 12, "Unerwartete Modellausgabe");
+        let view = |i: usize| -> Result<&[f32]> { Ok(&out[i].data) };
         let mut faces = Vec::new();
         for (si, stride) in [8usize, 16, 32].into_iter().enumerate() {
             let (cls, obj, bbox, kps) = (view(si)?, view(3 + si)?, view(6 + si)?, view(9 + si)?);
@@ -214,8 +206,8 @@ impl FaceModels {
                 }
             }
         }
-        let out = self.rec.run(tvec!(Tensor::from_shape(&[1, 3, FACE, FACE], &input)?.into()))?;
-        let v: Vec<f32> = out[0].to_plain_array_view::<f32>()?.iter().copied().collect();
+        let out = self.rec.run(&[Data::F32(&input)])?;
+        let v = &out.first().context("Keine Modellausgabe")?.data;
         let norm = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
         Ok(v.iter().map(|x| x / norm).collect())
     }
@@ -236,8 +228,8 @@ impl FaceModels {
                 }
             }
         }
-        let out = self.eye.run(tvec!(Tensor::from_shape(&[1, 3, EYE, EYE], &input)?.into()))?;
-        let v: Vec<f32> = out[0].to_plain_array_view::<f32>()?.iter().copied().collect();
+        let out = self.eye.run(&[Data::F32(&input)])?;
+        let v = &out.first().context("Keine Modellausgabe")?.data;
         anyhow::ensure!(v.len() >= 2, "Unerwartete Modellausgabe");
         // [closed, open], as the OpenVINO gaze demo reads it (`open = v[0] < v[1]`).
         Ok(v[0] / (v[0] + v[1]).max(1e-9))

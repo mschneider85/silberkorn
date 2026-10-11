@@ -9,14 +9,13 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use sk_core::color::{srgb_decode, srgb_encode};
 use sk_core::image::LinearImage;
-use tract_onnx::prelude::*;
 
 /// Network input size and overlap between neighbouring tiles.
 const TILE: usize = 256;
 const OVERLAP: usize = 16;
 
 pub struct Denoiser {
-    plan: Arc<TypedRunnableModel>,
+    net: crate::runtime::Net,
 }
 
 /// Tile origins along one axis: `0, step, …` with the last tile ending at the border.
@@ -47,13 +46,7 @@ fn ramp(i: usize, at_start: bool, at_end: bool) -> f32 {
 
 impl Denoiser {
     pub fn load(path: &Path) -> Result<Self> {
-        let plan = tract_onnx::onnx()
-            .model_for_path(path)
-            .with_context(|| format!("Modell {} nicht lesbar", path.display()))?
-            .with_input_fact(0, f32::fact([1, 3, TILE, TILE]).into())?
-            .into_optimized()?
-            .into_runnable()?;
-        Ok(Self { plan })
+        Ok(Self { net: crate::runtime::Net::load(path, &[crate::runtime::Input::F32([1, 3, TILE, TILE])])? })
     }
 
     fn run_tile(&self, tile: &[[f32; 3]]) -> Result<Vec<[f32; 3]>> {
@@ -64,10 +57,10 @@ impl Denoiser {
                 input[c * n + i] = p[c];
             }
         }
-        let out = self.plan.run(tvec!(Tensor::from_shape(&[1, 3, TILE, TILE], &input)?.into()))?;
-        let v = out[0].to_plain_array_view::<f32>()?;
-        let d = v.as_slice().context("Unerwartete Modellausgabe")?;
-        anyhow::ensure!(d.len() == 3 * n, "Unerwartete Modellausgabe {:?}", v.shape());
+        let out = self.net.run(&[crate::runtime::Data::F32(&input)])?;
+        let o = out.first().context("Keine Modellausgabe")?;
+        let d = &o.data;
+        anyhow::ensure!(d.len() == 3 * n, "Unerwartete Modellausgabe {:?}", o.shape);
         Ok((0..n).map(|i| [d[i], d[n + i], d[2 * n + i]].map(|x| x.clamp(0.0, 1.0))).collect())
     }
 
@@ -79,9 +72,9 @@ impl Denoiser {
         let mut acc = vec![[0.0f32; 3]; w * h];
         let mut wsum = vec![0.0f32; w * h];
         for (yi, &ty) in ys.iter().enumerate() {
-            let row: Vec<(usize, Vec<[f32; 3]>)> = xs
-                .par_iter()
-                .map(|&tx| {
+            // With ONNX Runtime one tile after the other (it uses the card or all cores itself),
+            // with tract a tile per core.
+            let tile_of = |&tx: &usize| -> Result<(usize, Vec<[f32; 3]>)> {
                     // Mirrored at the border if the image is smaller than a tile.
                     let tile: Vec<[f32; 3]> = (0..TILE * TILE)
                         .map(|i| {
@@ -94,8 +87,9 @@ impl Denoiser {
                     let out = self.run_tile(&tile);
                     done.fetch_add(1, Ordering::Relaxed);
                     out.map(|o| (tx, o))
-                })
-                .collect::<Result<_>>()?;
+                };
+            let row: Vec<(usize, Vec<[f32; 3]>)> =
+                if self.net.prefers_serial() { xs.iter().map(tile_of).collect::<Result<_>>()? } else { xs.par_iter().map(tile_of).collect::<Result<_>>()? };
             for (xi, (tx, out)) in row.into_iter().enumerate() {
                 for j in 0..TILE {
                     let y = ty + j;

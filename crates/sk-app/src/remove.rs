@@ -73,6 +73,7 @@ impl App {
             WbMode::Custom => cur.meta.color.wb_for_temp_tint(cur.adjustments.white_balance.kelvin, cur.adjustments.white_balance.tint),
         };
         self.inpaint_busy = true;
+        self.removal_progress = 0.0;
         self.status = "Entfernen …".into();
         self.workers.inpaint(InpaintJob {
             generation: self.generation(),
@@ -157,13 +158,15 @@ impl App {
 }
 
 /// Removal computed in the background (see `Workers::inpaint`).
-pub fn compute(job: &InpaintJob, model: &mut Option<sk_ai::inpaint::Inpainter>) -> Result<sk_core::params::Removal, String> {
-    if model.is_none() {
-        *model = Some(sk_ai::inpaint::Inpainter::load(&models::path(&models::INPAINT)).map_err(|e| format!("{e:#}"))?);
+pub fn compute(job: &InpaintJob, model: &mut Option<(sk_ai::inpaint::Inpainter, u64)>, progress: &dyn Fn(f32)) -> Result<sk_core::params::Removal, String> {
+    let generation = sk_ai::runtime::config_generation();
+    if model.as_ref().is_none_or(|(_, g)| *g != generation) {
+        *model = Some((sk_ai::inpaint::Inpainter::load(&models::path(&models::INPAINT)).map_err(|e| format!("{e:#}"))?, generation));
     }
     let full = match &job.full {
         Some(f) => f.clone(),
         None => Arc::new(sk_core::raw::load_full(&job.path).map_err(|e| format!("{e:#}"))?.1),
     };
-    sk_ai::inpaint::make_removal(&full, job.wb, &job.strokes, model.as_ref().expect("loaded")).map_err(|e| format!("{e:#}"))
+    progress(0.05);
+    sk_ai::inpaint::make_removal(&full, job.wb, &job.strokes, &model.as_ref().expect("loaded").0, progress).map_err(|e| format!("{e:#}"))
 }

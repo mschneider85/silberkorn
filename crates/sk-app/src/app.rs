@@ -228,6 +228,8 @@ struct Settings {
     hdr_options: sk_core::hdr::HdrOptions,
     pano_options: sk_core::panorama::PanoramaOptions,
     denoise_strength: Option<f32>,
+    /// AI on the graphics card (if available).
+    ai_gpu: Option<bool>,
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -347,6 +349,8 @@ pub struct App {
     /// Strokes of the remove tool not yet filled (or being filled).
     pub remove_strokes: Vec<sk_core::params::BrushStroke>,
     pub inpaint_busy: bool,
+    pub removal_progress: f32,
+    pub show_gpu_dialog: bool,
     pub ai_busy: bool,
     pub model_missing: bool,
     pub model_downloading: bool,
@@ -502,6 +506,7 @@ impl App {
             .unwrap_or_default();
         // Without an explicit folder, reopen the session that was open last time.
         sk_core::xmp::set_write_enabled(settings.write_xmp && opts.persist_settings);
+        sk_ai::runtime::set_gpu_enabled(settings.ai_gpu.unwrap_or(true));
         let session = opts.session.or_else(|| settings.last_session.clone().filter(|p| p.exists() && opts.start_folder.is_none()));
         let folder = opts
             .start_folder
@@ -594,6 +599,8 @@ impl App {
             magic_tolerance: 0.3,
             remove_strokes: Vec::new(),
             inpaint_busy: false,
+            removal_progress: 0.0,
+            show_gpu_dialog: false,
             ai_busy: false,
             model_missing: false,
             model_downloading: false,
@@ -696,6 +703,7 @@ impl App {
         match std::env::var("SILBERKORN_DIALOG").as_deref() {
             Ok("shortcuts") => app.show_shortcuts = true,
             Ok("about") => app.splash = Some(crate::splash::Splash::about()),
+            Ok("gpu") => app.show_gpu_dialog = true,
             _ => {}
         }
         app
@@ -729,6 +737,7 @@ impl App {
             hdr_options: self.hdr_options,
             pano_options: self.pano_options,
             denoise_strength: Some(self.denoise_strength),
+            ai_gpu: Some(sk_ai::runtime::gpu_enabled()),
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -1627,6 +1636,11 @@ impl App {
                 }
                 Event::JobProgress { id, progress } => self.job_progress(id, progress),
                 Event::Removal { generation, result } => self.removal_done(generation, result),
+                Event::RemovalProgress { generation, progress } => {
+                    if generation == self.generation {
+                        self.removal_progress = progress;
+                    }
+                }
                 Event::JobDone { id, label, result } => self.job_done(id, label, result),
             }
         }
@@ -1982,6 +1996,10 @@ impl App {
                 r.watermark = sk_core::watermark::Watermark { enabled: true, text, size: 6.0, opacity: 0.8, ..Default::default() };
             }
             self.proof_view |= std::env::var_os("SILBERKORN_PROOF").is_some();
+            // Shows the activity display (as during a removal).
+            if std::env::var_os("SILBERKORN_BUSY").is_some() {
+                (self.inpaint_busy, self.removal_progress) = (true, 0.4);
+            }
             if std::env::var_os("SILBERKORN_DENOISE").is_some() {
                 self.open_denoise();
             }

@@ -82,7 +82,19 @@ die Umgebung an; „Klonen“ kopiert 1:1. Quelle und Ziel lassen sich verschieb
 
 Die neuronalen Netze werden nicht mitgeliefert, sondern beim ersten Gebrauch auf Wunsch nach
 `~/.local/share/silberkorn/models/` geladen (`SILBERKORN_MODELS=<ordner>` überschreibt den Ort).
-Sie laufen mit tract auf der CPU.
+
+**KI-Beschleunigung** (Bearbeiten → „KI-Beschleunigung …“, Windows): Die Netze rechnen dann über
+ONNX Runtime mit DirectML auf der Grafikkarte (jede DirectX-12-Karte). ONNX Runtime wird nicht
+gelinkt, sondern zur Laufzeit geladen: Auf Wunsch lädt Silberkorn `onnxruntime.dll` (1.24.4) und
+`DirectML.dll` (1.15.4) aus Microsofts NuGet-Paketen nach `%LOCALAPPDATA%\silberkorn\gpu`, und zwar
+per Teil-Download nur diese beiden Dateien (etwa 28 MB statt über 200 MB). Die EXE bleibt eine
+einzelne Datei, der Cross-Build aus WSL funktioniert weiter. Steht DirectML nicht zur Verfügung,
+rechnet ONNX Runtime auf dem Prozessor (etwa doppelt so schnell wie ohne); ohne ONNX Runtime oder
+bei Fehlern übernimmt tract. Zum Testen auf anderen Systemen: `SILBERKORN_ORT=<libonnxruntime.so>`.
+
+Alles, was länger dauert (KI, Zusammenfügen, Verarbeiten, Indexieren, Downloads), zeigt die
+Statusleiste mit Fortschritt an; worauf man im Viewer wartet (Maske, Entfernen, Angleichen),
+erscheint zusätzlich oben im Bild.
 
 - **Entrauschen (KI)** (Bild-Menü): NAFNet (Breite 32, megvii-research, MIT), trainiert auf echtem
   Kamerarauschen (SIDD), 117 MB. Die demosaicten RAW-Daten werden weißabgeglichen, auf normale

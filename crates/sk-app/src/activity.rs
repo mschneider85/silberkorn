@@ -1,0 +1,113 @@
+//! What the app is busy with: everything that runs longer than a moment, shown in the status
+//! bar (spinner, label, progress where known) and, when the user waits for it in the viewer,
+//! in the viewer too.
+
+use egui::{Color32, Rect, RichText, Ui, pos2, vec2};
+
+use crate::app::App;
+
+/// A running activity.
+pub struct Activity {
+    pub label: String,
+    /// 0..1 if known.
+    pub progress: Option<f32>,
+    /// The user waits for it in the viewer (shown there too).
+    pub in_viewer: bool,
+}
+
+impl App {
+    pub fn activities(&self) -> Vec<Activity> {
+        let mut v = Vec::new();
+        if self.inpaint_busy {
+            v.push(Activity { label: "Entfernen".into(), progress: Some(self.removal_progress), in_viewer: true });
+        }
+        if self.ai_busy {
+            v.push(Activity { label: "Maske wird berechnet".into(), progress: None, in_viewer: true });
+        }
+        if let Some((done, total)) = self.match_progress {
+            v.push(Activity { label: "An Referenz angleichen".into(), progress: Some(done as f32 / total.max(1) as f32), in_viewer: true });
+        }
+        for j in &self.jobs {
+            v.push(Activity { label: j.label.clone(), progress: Some(j.progress), in_viewer: false });
+        }
+        if let Some((done, total)) = self.export_progress {
+            v.push(Activity { label: format!("Verarbeiten {done} / {total}"), progress: Some(done as f32 / total.max(1) as f32), in_viewer: false });
+        }
+        if let Some((done, total)) = self.index_progress {
+            v.push(Activity { label: format!("Indexieren {done} / {total}"), progress: Some(done as f32 / total.max(1) as f32), in_viewer: false });
+        }
+        if self.model_downloading {
+            v.push(Activity { label: "KI-Modell wird geladen".into(), progress: None, in_viewer: false });
+        }
+        if self.lens_db_downloading {
+            v.push(Activity { label: "Objektivprofile werden geladen".into(), progress: None, in_viewer: false });
+        }
+        v
+    }
+
+    /// Status bar: the first activity with a spinner (and its progress), the others in the tooltip.
+    pub(crate) fn activity_status(&self, ui: &mut Ui) {
+        let all = self.activities();
+        let Some(first) = all.first() else { return };
+        // The status bar's right part is laid out from right to left: last item first.
+        let resp = ui
+            .horizontal(|ui| {
+                if let Some(p) = first.progress {
+                    ui.label(RichText::new(format!("{:.0} %", p * 100.0)).size(11.0).color(crate::theme::TEXT_DIM));
+                    ui.add(egui::ProgressBar::new(p).desired_width(110.0).desired_height(10.0));
+                }
+                let more = if all.len() > 1 { format!("  (+{})", all.len() - 1) } else { String::new() };
+                ui.label(RichText::new(format!("{}{more}", first.label)).size(12.0).color(crate::theme::TEXT));
+                spinner(ui, 14.0);
+            })
+            .response;
+        let text: Vec<String> =
+            all.iter().map(|a| match a.progress { Some(p) => format!("{} – {:.0} %", a.label, p * 100.0), None => a.label.clone() }).collect();
+        resp.on_hover_text(text.join("\n"));
+    }
+
+    /// Viewer: a small panel at the top for what the user waits for there.
+    pub(crate) fn activity_overlay(&self, ui: &Ui, rect: Rect) {
+        let Some(a) = self.activities().into_iter().find(|a| a.in_viewer) else { return };
+        let text = match a.progress {
+            Some(p) => format!("{} …  {:.0} %", a.label, p * 100.0),
+            None => format!("{} …", a.label),
+        };
+        let painter = ui.painter_at(rect);
+        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(13.0), Color32::WHITE);
+        let spinner = 14.0;
+        let w = spinner + 8.0 + galley.size().x;
+        let top = pos2(rect.center().x - w / 2.0, rect.top() + 14.0);
+        let bar_h = if a.progress.is_some() { 4.0 } else { 0.0 };
+        let bg = Rect::from_min_size(top, vec2(w, galley.size().y.max(spinner) + bar_h)).expand2(vec2(12.0, 6.0));
+        painter.rect_filled(bg, 8.0, Color32::from_black_alpha(185));
+        let c = top + vec2(spinner / 2.0, galley.size().y.max(spinner) / 2.0);
+        paint_arc(ui, &painter, c, spinner);
+        painter.galley(top + vec2(spinner + 8.0, (spinner - galley.size().y).max(0.0) / 2.0), galley.clone(), Color32::WHITE);
+        if let Some(p) = a.progress {
+            let y = bg.bottom() - 6.0;
+            let track = Rect::from_min_max(pos2(bg.left() + 10.0, y - 2.0), pos2(bg.right() - 10.0, y));
+            painter.rect_filled(track, 1.0, Color32::from_white_alpha(40));
+            painter.rect_filled(Rect::from_min_max(track.min, pos2(track.left() + track.width() * p.clamp(0.0, 1.0), track.bottom())), 1.0, crate::theme::ACCENT);
+        }
+        ui.ctx().request_repaint();
+    }
+}
+
+/// A rotating arc ("busy"), centered at `c`.
+fn paint_arc(ui: &Ui, painter: &egui::Painter, c: egui::Pos2, size: f32) {
+    let t = ui.input(|i| i.time) as f32;
+    let pts: Vec<egui::Pos2> = (0..=16)
+        .map(|k| {
+            let a = t * 6.0 + k as f32 / 16.0 * 4.5;
+            c + vec2(a.cos(), a.sin()) * (size / 2.0 - 1.0)
+        })
+        .collect();
+    painter.add(egui::Shape::line(pts, egui::Stroke::new(2.0, crate::theme::ACCENT)));
+    ui.ctx().request_repaint();
+}
+
+fn spinner(ui: &mut Ui, size: f32) {
+    let (rect, _) = ui.allocate_exact_size(vec2(size, size), egui::Sense::hover());
+    paint_arc(ui, &ui.painter().clone(), rect.center(), size);
+}
