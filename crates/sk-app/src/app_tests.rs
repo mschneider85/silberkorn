@@ -1340,3 +1340,23 @@ fn stacks_collapse_and_expand() {
     f.app.auto_stack_by_time(3600.0);
     assert_eq!(f.app.visible.len(), 1, "{}", f.app.status);
 }
+
+#[test]
+fn hdr_merge_job_creates_and_selects_dng() {
+    let Some(mut f) = Fixture::new("hdr") else { return };
+    f.pump("Indexiert", |a| a.lists.total == 2);
+    f.app.select_all();
+    f.app.open_merge(crate::merge::MergeKind::Hdr);
+    let dialog = f.app.merge_dialog.take().expect("Dialog");
+    assert_eq!(dialog.files.len(), 2);
+    let files = dialog.files.clone();
+    let opts = f.app.hdr_options;
+    f.app.start_job("HDR zusammenfügen", Box::new(move |p| Ok(vec![sk_core::hdr::merge_files(&files, &opts, p)?])));
+    assert!(f.app.job_status().is_some());
+    f.pump("HDR fertig", |a| a.jobs.is_empty());
+    let dng = f.dir.join("photos/_DSC0009-HDR.dng");
+    assert!(dng.exists(), "{}", f.app.status);
+    f.pump("DNG ausgewählt", |a| a.current_path().is_some_and(|p| p.ends_with("_DSC0009-HDR.dng")) && a.texture.is_some());
+    assert!(f.app.current.as_ref().unwrap().meta.hdr);
+    f.pump("Indexiert", |a| a.lists.total == 3);
+}

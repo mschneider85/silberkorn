@@ -225,6 +225,8 @@ struct Settings {
     write_xmp: bool,
     viewer_window: crate::viewer_window::ViewerWindow,
     softproof: sk_core::softproof::ProofSettings,
+    hdr_options: sk_core::hdr::HdrOptions,
+    pano_options: sk_core::panorama::PanoramaOptions,
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -453,6 +455,13 @@ pub struct App {
     /// The viewer window was moved or resized at this time (saved once it rests).
     pub(crate) viewer_window_moved: Option<Instant>,
     pub softproof: crate::softproof::SoftProofState,
+    /// Background jobs creating files (see `jobs.rs`).
+    pub jobs: Vec<crate::jobs::RunningJob>,
+    /// A created file to select once it is listed.
+    pub(crate) select_when_listed: Option<PathBuf>,
+    pub merge_dialog: Option<crate::merge::MergeDialog>,
+    pub hdr_options: sk_core::hdr::HdrOptions,
+    pub pano_options: sk_core::panorama::PanoramaOptions,
 }
 
 /// Startup options (separate from `eframe` so that tests can construct the app).
@@ -653,6 +662,11 @@ impl App {
             viewer_window_shown: false,
             viewer_window_moved: None,
             softproof: crate::softproof::SoftProofState { settings: settings.softproof.clone(), ..Default::default() },
+            jobs: Vec::new(),
+            select_when_listed: None,
+            merge_dialog: None,
+            hdr_options: settings.hdr_options,
+            pano_options: settings.pano_options,
         };
         app.reload_styles();
         match session {
@@ -701,6 +715,8 @@ impl App {
             write_xmp: sk_core::xmp::write_enabled(),
             viewer_window: self.viewer_window,
             softproof: self.softproof.settings.clone(),
+            hdr_options: self.hdr_options,
+            pano_options: self.pano_options,
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -1595,7 +1611,10 @@ impl App {
                     } else if indexed > 0 || failed > 0 {
                         self.reload_entries();
                     }
+                    self.select_created();
                 }
+                Event::JobProgress { id, progress } => self.job_progress(id, progress),
+                Event::JobDone { id, label, result } => self.job_done(id, label, result),
             }
         }
     }
@@ -2064,6 +2083,7 @@ impl eframe::App for App {
             self.session_dialogs(&ctx);
             self.variant_dialogs(&ctx);
             self.stack_dialogs(&ctx);
+            self.merge_dialogs(&ctx);
             self.finish_frame(&ctx);
             return;
         }
@@ -2098,6 +2118,7 @@ impl eframe::App for App {
         self.session_dialogs(&ctx);
         self.variant_dialogs(&ctx);
         self.stack_dialogs(&ctx);
+        self.merge_dialogs(&ctx);
         self.finish_frame(&ctx);
     }
 

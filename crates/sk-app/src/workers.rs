@@ -69,6 +69,10 @@ pub enum Event {
     /// Sharpness map of a displayed image for the focus mask.
     /// `version`: edit version of the rendering of the image being edited (`None` for others).
     Focus { path: PathBuf, version: Option<u64>, size: [usize; 2], sharpness: Arc<Vec<u8>> },
+    /// Progress (0..1) of a background job (see `jobs.rs`).
+    JobProgress { id: u64, progress: f32 },
+    /// A background job finished: the files it created, or why it failed.
+    JobDone { id: u64, label: String, result: Result<Vec<PathBuf>, String> },
     /// `catalog` identifies the database, so that results for a closed session can be ignored.
     IndexDone { catalog: PathBuf, indexed: usize, failed: usize, import: bool },
 }
@@ -840,6 +844,14 @@ impl Workers {
             match_tx,
             activity,
         }
+    }
+
+    pub fn event_sender(&self) -> Sender<Event> {
+        self.ev_tx.clone()
+    }
+
+    pub fn context(&self) -> egui::Context {
+        self.ctx.clone()
     }
 
     pub fn proof(&self, job: ProofJob) {

@@ -105,6 +105,28 @@ Weitere Funktionen: **Dunst entfernen** (Dark-Channel-Prior, global und pro Eben
 mit gemeinsamem Zoom und Ausschnitt (Umschalt+U), und **mehrere Ausgaberezepte**, die in einem Durchgang
 verarbeitet werden (das RAW wird pro Bild nur einmal entwickelt).
 
+### HDR und Panorama zusammenfügen
+
+**Bild → Zusammenfügen** (mindestens zwei Bilder ausgewählt) erzeugt ein neues
+**lineares DNG** neben den Originalen (`…-HDR.dng`, `…-Pano.dng`): demosaicte Kameradaten als
+16-Bit-Gleitkomma, verlustfrei komprimiert. Weißabgleich, Farbe und Tonwerte bleiben daher voll
+bearbeitbar, und auch Lightroom und Capture One öffnen die Datei. Beides läuft im Hintergrund
+(Fortschritt in der Statusleiste); das Ergebnis wird danach ausgewählt.
+
+- **HDR:** Die Belichtungsunterschiede werden aus den Bilddaten gemessen (EXIF als Rückfall),
+  aus der Hand fotografierte Reihen per Median-Threshold-Bitmaps ausgerichtet. Pro Pixel zählt
+  jede Belichtung nach Belichtungsgüte und -zeit, übersteuerte Werte gar nicht. **Geister
+  entfernen** (Aus/Niedrig/Mittel/Hoch) nimmt bewegte Motive aus der mittleren Belichtung. Lichter
+  über dem Weißpunkt bleiben erhalten und lassen sich mit „Lichter“ und „Weiß“ zurückholen.
+- **Panorama:** Harris-Ecken mit normierten Bildausschnitten, Zuordnung zwischen allen Paaren,
+  RANSAC-Homographien, Brennweite aus den Homographien, Rotationen über einen Spannbaum und
+  Bündelausgleich (Levenberg-Marquardt), Horizontausgleich. Projektion **sphärisch**,
+  **zylindrisch** oder **perspektivisch**; Helligkeitsausgleich, weiche Übergänge im linearen Licht,
+  auf Wunsch automatischer Beschnitt auf das größte Rechteck ohne leere Ränder. Die
+  Objektivkorrektur der Einzelbilder (aus ihrem Sidecar) wird vorher angewendet.
+
+Kommandozeile: `cargo run --release -p sk-core --example merge -- hdr|pano <raw>...`
+
 ### Automatisch geraderichten
 
 Silberkorn sucht gerade Kanten im Bild (Linienerkennung nach dem
@@ -367,4 +389,4 @@ Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verklei
 - **Phase 8 (fertig):** Vorher/Nachher nebeneinander, Wasserzeichen (Text/Logo), EXIF und Copyright im Export, Hilfslinien und Layout-Overlay
 - **Phase 9 (fertig):** automatisches Geraderichten (Drehung, vertikaler/horizontaler Keystone)
 - **Phase 10 (fertig):** Lupe, Verlauf und Schnappschüsse, Umbenennen mit Platzhaltern (auch im Ausgaberezept)
-- **Phase 11:** XMP-Austausch, Stapel, Viewer auf dem Zweitmonitor, Softproof
+- **Phase 11:** XMP-Austausch, Stapel, Viewer auf dem Zweitmonitor, Softproof, HDR und Panorama

@@ -10,6 +10,8 @@ pub mod exif;
 pub mod export;
 pub mod focus;
 pub mod geometry;
+pub mod hdr;
+pub mod panorama;
 pub mod history;
 pub mod icc;
 pub mod lensfun;

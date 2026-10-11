@@ -344,6 +344,7 @@ impl App {
         ui.separator();
         self.variant_menu(ui);
         self.stack_menu(ui);
+        self.merge_menu(ui);
         ui.separator();
         let ref_text = if self.compare_ref.is_some() && self.compare_ref == self.primary_path() { "Referenzbild entfernen" } else { "Als Referenzbild festlegen" };
         if item(ui, icon::PUSH_PIN, ref_text, "Umschalt+Enter", has) {
@@ -636,7 +637,9 @@ impl App {
                 let sel = if n > 1 { format!("  ·  {n} ausgewählt") } else { String::new() };
                 let count = image_count(self.visible.len());
                 ui.label(dim(format!("{}  ·  {count}{sel}", scope_label(&self.scope, &self.lists, self.session.as_ref()))));
-                if let Some((done, total)) = self.export_progress.or(self.index_progress) {
+                if let Some((label, p)) = self.job_status() {
+                    ui.add(egui::ProgressBar::new(p).desired_width(120.0).desired_height(12.0)).on_hover_text(label);
+                } else if let Some((done, total)) = self.export_progress.or(self.index_progress) {
                     ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(120.0).desired_height(12.0));
                 } else if let Some((done, total)) = self.proxy_progress {
                     ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(80.0).desired_height(8.0))
