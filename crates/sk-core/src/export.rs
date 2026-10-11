@@ -179,7 +179,7 @@ mod tests {
         if !sample.exists() {
             return;
         }
-        let dir = std::env::temp_dir().join(format!("cr-export-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("sk-export-{}", std::process::id()));
         let recipes = vec![
             ExportRecipe { output_dir: dir.clone(), long_edge: Some(400), ..Default::default() },
             ExportRecipe {

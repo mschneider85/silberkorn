@@ -12,6 +12,20 @@ Der erste Build dauert einige Minuten (u. a. wegen der ONNX-Inferenz-Bibliothek 
 Ohne Pfad wird der zuletzt geöffnete Ordner verwendet. Falls wgpu (Vulkan) nicht startet,
 fällt die App automatisch auf OpenGL zurück; erzwingen mit `SILBERKORN_RENDERER=glow`.
 
+### Windows
+
+Aus WSL/Linux für Windows bauen (einmalig `rustup target add x86_64-pc-windows-gnu` und mingw-w64,
+z. B. `sudo apt install gcc-mingw-w64-x86-64`):
+
+```bash
+cargo build --release -p sk-app --target x86_64-pc-windows-gnu
+```
+
+Ergebnis: `target/x86_64-pc-windows-gnu/release/silberkorn.exe` – eine einzelne Datei ohne
+zusätzliche DLLs. Unter Windows nativ geht auch `cargo build --release -p sk-app` mit der MSVC-Toolchain.
+Einstellungen und Stile liegen dann in `%APPDATA%\silberkorn`, Katalog, Modelle, Lensfun-Profile und
+Thumbnails in `%LOCALAPPDATA%\silberkorn`.
+
 Kommandozeilen-Entwicklung (ohne GUI):
 
 ```bash

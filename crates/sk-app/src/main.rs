@@ -1,4 +1,5 @@
 //! Silberkorn: a raw developer and image manager.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod app;
 #[cfg(test)]

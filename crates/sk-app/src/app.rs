@@ -107,10 +107,7 @@ struct Settings {
 }
 
 fn settings_path() -> Option<PathBuf> {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(sk_core::paths::app_dir(&base).join("settings.json"))
+    Some(sk_core::paths::config_dir().join("settings.json"))
 }
 
 pub struct App {

@@ -116,11 +116,7 @@ pub struct Catalog {
 }
 
 pub fn default_catalog_path() -> PathBuf {
-    let base = std::env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
-        .unwrap_or_else(|| PathBuf::from("."));
-    crate::paths::app_dir(&base).join("catalog.sqlite")
+    crate::paths::data_dir().join("catalog.sqlite")
 }
 
 fn now() -> i64 {

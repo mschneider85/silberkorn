@@ -14,11 +14,7 @@ pub struct Style {
 }
 
 pub fn styles_dir() -> PathBuf {
-    let base = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-        .unwrap_or_else(|| PathBuf::from("."));
-    crate::paths::app_dir(&base).join("styles")
+    crate::paths::config_dir().join("styles")
 }
 
 fn file_name(name: &str) -> String {

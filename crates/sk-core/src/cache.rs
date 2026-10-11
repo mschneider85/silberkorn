@@ -5,11 +5,7 @@ use std::path::{Path, PathBuf};
 use crate::params::Adjustments;
 
 pub fn cache_dir() -> PathBuf {
-    let base = std::env::var_os("XDG_CACHE_HOME")
-        .map(PathBuf::from)
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
-        .unwrap_or_else(std::env::temp_dir);
-    crate::paths::app_dir(&base).join("thumbs")
+    crate::paths::cache_dir().join("thumbs")
 }
 
 /// FNV-1a, stable across builds (unlike `DefaultHasher`).

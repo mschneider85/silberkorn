@@ -1,4 +1,7 @@
 //! Per-user application folders, with a one-time move from the old "capture-room" name.
+//!
+//! Linux: `$XDG_CONFIG_HOME`, `$XDG_DATA_HOME`, `$XDG_CACHE_HOME` (default `~/.config`, `~/.local/share`, `~/.cache`).
+//! Windows: `%APPDATA%` for settings and styles, `%LOCALAPPDATA%` for catalog, models and thumbnails.
 
 use std::path::{Path, PathBuf};
 
@@ -16,6 +19,34 @@ pub fn app_dir(base: &Path) -> PathBuf {
         }
     }
     dir
+}
+
+fn env_dir(var: &str) -> Option<PathBuf> {
+    std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+fn home_join(rel: &str) -> Option<PathBuf> {
+    env_dir("HOME").map(|h| h.join(rel))
+}
+
+/// Settings and styles.
+pub fn config_dir() -> PathBuf {
+    let base = if cfg!(windows) { env_dir("APPDATA") } else { env_dir("XDG_CONFIG_HOME").or_else(|| home_join(".config")) };
+    app_dir(&base.unwrap_or_else(|| PathBuf::from(".")))
+}
+
+/// Catalog, downloaded models and lens profiles.
+pub fn data_dir() -> PathBuf {
+    let base = if cfg!(windows) { env_dir("LOCALAPPDATA") } else { env_dir("XDG_DATA_HOME").or_else(|| home_join(".local/share")) };
+    app_dir(&base.unwrap_or_else(|| PathBuf::from(".")))
+}
+
+/// Disposable data such as thumbnails.
+pub fn cache_dir() -> PathBuf {
+    if cfg!(windows) {
+        return data_dir().join("cache");
+    }
+    app_dir(&env_dir("XDG_CACHE_HOME").or_else(|| home_join(".cache")).unwrap_or_else(std::env::temp_dir))
 }
 
 #[cfg(test)]
