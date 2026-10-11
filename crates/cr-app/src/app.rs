@@ -1,18 +1,21 @@
-//! Application state, layout, viewer, filmstrip and keyboard shortcuts.
+//! Application state, editing (undo/redo, copy/apply), events, shortcuts and toolbar.
 
-use std::collections::BTreeSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use cr_core::catalog::{self, Catalog, Filter, ImageRecord, Scope, SortKey};
 use cr_core::export::ExportRecipe;
 use cr_core::image::{LinearImage, Orientation};
 use cr_core::params::{Adjustments, WbMode, WhiteBalance};
-use cr_core::raw::{self, RawMeta};
+use cr_core::pipeline::Histogram;
+use cr_core::raw::RawMeta;
 use cr_core::sidecar::{self, ColorLabel, Sidecar};
-use egui::{Color32, Key, Modifiers, Pos2, Rect, RichText, Sense, TextureHandle, TextureOptions, Ui, Vec2, pos2, vec2};
+use cr_core::styles::Style;
+use egui::{Color32, Key, Modifiers, RichText, TextureHandle, TextureOptions, Ui, Vec2, vec2};
 use serde::{Deserialize, Serialize};
 
-use crate::widgets;
+use crate::library::{CatalogLists, LibraryUi, scope_label};
 use crate::workers::{Event, ExportJob, RenderJob, Workers};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -21,11 +24,12 @@ pub enum Tab {
     Exposure,
     Color,
     Metadata,
+    Styles,
     Output,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 5] = [Tab::Library, Tab::Exposure, Tab::Color, Tab::Metadata, Tab::Output];
+    pub const ALL: [Tab; 6] = [Tab::Library, Tab::Exposure, Tab::Color, Tab::Metadata, Tab::Styles, Tab::Output];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -33,6 +37,7 @@ impl Tab {
             Tab::Exposure => "☀ Belichtung",
             Tab::Color => "🎨 Farbe",
             Tab::Metadata => "ℹ Metadaten",
+            Tab::Styles => "✨ Stile",
             Tab::Output => "💾 Ausgabe",
         }
     }
@@ -59,18 +64,8 @@ impl CurveChannel {
     }
 }
 
-pub struct Entry {
-    pub path: PathBuf,
-    pub name: String,
-    pub rating: u8,
-    pub color_label: ColorLabel,
-    pub thumb: Option<TextureHandle>,
-    pub thumb_requested: bool,
-}
-
 /// The image open in the viewer.
 pub struct Current {
-    pub index: usize,
     pub meta: Arc<RawMeta>,
     pub preview: Arc<LinearImage>,
     pub adjustments: Adjustments,
@@ -78,6 +73,7 @@ pub struct Current {
     pub committed: Adjustments,
     pub rating: u8,
     pub color_label: ColorLabel,
+    pub keywords: Vec<String>,
     pub as_shot_temp_tint: (f32, f32),
 }
 
@@ -87,6 +83,8 @@ pub struct Current {
 struct Settings {
     last_folder: Option<PathBuf>,
     recipe: ExportRecipe,
+    sort: SortKey,
+    sort_desc: bool,
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -97,60 +95,120 @@ fn settings_path() -> Option<PathBuf> {
 }
 
 pub struct App {
-    workers: Workers,
+    pub(crate) workers: Workers,
+    persist_settings: bool,
+    pub(crate) catalog: Option<Catalog>,
+    pub lists: CatalogLists,
+    pub library_ui: LibraryUi,
+    pub styles: Vec<Style>,
+
+    // browser
+    pub scope: Scope,
+    pub filter: Filter,
+    pub sort: SortKey,
+    pub sort_desc: bool,
     pub folder: PathBuf,
     pub folder_input: String,
     pub subdirs: Vec<PathBuf>,
-    pub entries: Vec<Entry>,
-    pub selection: BTreeSet<usize>,
+    pub entries: Vec<ImageRecord>,
+    /// Indices into `entries` that pass the filter, in display order.
+    pub visible: Vec<usize>,
+    pub selection: HashSet<PathBuf>,
+    pub thumbs: HashMap<PathBuf, TextureHandle>,
+    pub thumb_requested: HashSet<PathBuf>,
+    pub grid_view: bool,
+    pub index_progress: Option<(usize, usize)>,
+
+    // viewer / editing
     pub current: Option<Current>,
-    loading: Option<usize>,
-    load_error: Option<String>,
+    pub loading: Option<PathBuf>,
+    pub load_error: Option<String>,
     generation: u64,
-    texture: Option<TextureHandle>,
-    pub histogram: Option<cr_core::pipeline::Histogram>,
+    pub texture: Option<TextureHandle>,
+    pub histogram: Option<Histogram>,
     pub tab: Tab,
     pub curve_channel: CurveChannel,
     pub picking_wb: bool,
-    clip_warning: bool,
-    show_before: bool,
+    pub clip_warning: bool,
+    pub show_before: bool,
     render_requested: bool,
     undo: Vec<Adjustments>,
     redo: Vec<Adjustments>,
     clipboard: Option<Adjustments>,
     pub sidecar_dirty: bool,
+    pub keyword_input: String,
+    /// None = fit to window; otherwise screen pixels per preview pixel.
+    pub zoom: Option<f32>,
+    pub pan: Vec2,
+    pub scroll_to_primary: bool,
+
+    // output
     pub recipe: ExportRecipe,
     pub export_progress: Option<(usize, usize)>,
     pub export_log: Vec<String>,
-    pub filter_rating: u8,
-    pub filter_label: Option<ColorLabel>,
-    /// None = fit to window; otherwise screen pixels per preview pixel.
-    zoom: Option<f32>,
-    pan: Vec2,
-    scroll_to_primary: bool,
-    status: String,
+
+    pub status: String,
     /// Debug aid: `CAPTURE_ROOM_SCREENSHOT=<file.png>` saves a screenshot once the first image is shown, then quits.
     screenshot: Option<(PathBuf, Option<f64>)>,
 }
 
+/// Startup options (separate from `eframe` so that tests can construct the app).
+pub struct AppOptions {
+    pub start_folder: Option<PathBuf>,
+    pub catalog_path: PathBuf,
+    /// Read/write `settings.json` (disabled in tests).
+    pub persist_settings: bool,
+}
+
+impl Default for AppOptions {
+    fn default() -> Self {
+        Self {
+            start_folder: None,
+            catalog_path: std::env::var_os("CAPTURE_ROOM_CATALOG").map(PathBuf::from).unwrap_or_else(catalog::default_catalog_path),
+            persist_settings: true,
+        }
+    }
+}
+
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, start_folder: Option<PathBuf>) -> Self {
-        setup_style(&cc.egui_ctx);
+    pub fn new(ctx: &egui::Context, opts: AppOptions) -> Self {
+        setup_style(ctx);
         let settings: Settings = settings_path()
+            .filter(|_| opts.persist_settings)
             .and_then(|p| std::fs::read_to_string(p).ok())
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default();
-        let folder = start_folder
+        let folder = opts
+            .start_folder
             .or(settings.last_folder.filter(|p| p.is_dir()))
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("."));
+        let catalog_path = opts.catalog_path;
+        let (catalog, status) = match Catalog::open(&catalog_path) {
+            Ok(c) => (Some(c), String::new()),
+            Err(e) => (None, format!("Katalog nicht verfügbar: {e:#}")),
+        };
         let mut app = Self {
-            workers: Workers::spawn(cc.egui_ctx.clone()),
+            workers: Workers::spawn(ctx.clone(), catalog_path),
+            persist_settings: opts.persist_settings,
+            catalog,
+            lists: CatalogLists::default(),
+            library_ui: LibraryUi::default(),
+            styles: Vec::new(),
+            scope: Scope::All,
+            filter: Filter::default(),
+            sort: settings.sort,
+            sort_desc: settings.sort_desc,
             folder: PathBuf::new(),
             folder_input: String::new(),
             subdirs: Vec::new(),
             entries: Vec::new(),
-            selection: BTreeSet::new(),
+            visible: Vec::new(),
+            selection: HashSet::new(),
+            thumbs: HashMap::new(),
+            thumb_requested: HashSet::new(),
+            grid_view: false,
+            index_progress: None,
             current: None,
             loading: None,
             load_error: None,
@@ -167,27 +225,33 @@ impl App {
             redo: Vec::new(),
             clipboard: None,
             sidecar_dirty: false,
-            recipe: settings.recipe,
-            export_progress: None,
-            export_log: Vec::new(),
-            filter_rating: 0,
-            filter_label: None,
+            keyword_input: String::new(),
             zoom: None,
             pan: Vec2::ZERO,
             scroll_to_primary: false,
-            status: String::new(),
+            recipe: settings.recipe,
+            export_progress: None,
+            export_log: Vec::new(),
+            status,
             screenshot: std::env::var_os("CAPTURE_ROOM_SCREENSHOT").map(|p| (PathBuf::from(p), None)),
         };
+        app.reload_styles();
         app.open_folder(folder);
         if let Ok(tab) = std::env::var("CAPTURE_ROOM_TAB") {
             app.tab = Tab::ALL.into_iter().find(|t| t.label().to_lowercase().contains(&tab.to_lowercase())).unwrap_or(app.tab);
         }
+        app.grid_view = std::env::var_os("CAPTURE_ROOM_GRID").is_some();
         app
     }
 
-    fn save_settings(&self) {
-        let Some(path) = settings_path() else { return };
-        let s = Settings { last_folder: Some(self.folder.clone()), recipe: self.recipe.clone() };
+    pub fn save_settings(&self) {
+        let Some(path) = settings_path().filter(|_| self.persist_settings) else { return };
+        let s = Settings {
+            last_folder: Some(self.folder.clone()),
+            recipe: self.recipe.clone(),
+            sort: self.sort,
+            sort_desc: self.sort_desc,
+        };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -196,107 +260,64 @@ impl App {
         }
     }
 
-    // ---------------------------------------------------------------- library
+    // ---------------------------------------------------------------- selection
 
-    pub fn open_folder(&mut self, folder: PathBuf) {
+    pub fn current_path(&self) -> Option<PathBuf> {
+        self.current.as_ref().map(|c| c.meta.path.clone())
+    }
+
+    /// The image shown (or being loaded) in the viewer.
+    pub fn primary_path(&self) -> Option<PathBuf> {
+        self.loading.clone().or_else(|| self.current_path())
+    }
+
+    pub fn close_current(&mut self) {
         self.commit_and_save();
-        let folder = folder.canonicalize().unwrap_or(folder);
-        let Ok(read) = std::fs::read_dir(&folder) else {
-            self.status = format!("Ordner nicht lesbar: {}", folder.display());
-            return;
-        };
-        let mut files = Vec::new();
-        let mut dirs = Vec::new();
-        for entry in read.flatten() {
-            let path = entry.path();
-            let hidden = path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'));
-            if path.is_dir() && !hidden {
-                dirs.push(path);
-            } else if raw::is_raw_file(&path) {
-                files.push(path);
-            }
-        }
-        files.sort();
-        dirs.sort();
-        self.entries = files
-            .into_iter()
-            .map(|path| {
-                let sc = sidecar::load(&path);
-                Entry {
-                    name: path.file_name().unwrap_or_default().to_string_lossy().to_string(),
-                    path,
-                    rating: sc.rating,
-                    color_label: sc.color_label,
-                    thumb: None,
-                    thumb_requested: false,
-                }
-            })
-            .collect();
-        self.subdirs = dirs;
-        self.folder_input = folder.display().to_string();
-        self.folder = folder;
-        self.selection.clear();
         self.current = None;
+        self.loading = None;
         self.texture = None;
         self.histogram = None;
-        self.loading = None;
-        self.status = format!("{} RAW-Dateien", self.entries.len());
-        self.save_settings();
-        if let Some(&first) = self.visible_indices().first() {
-            self.select(first, Modifiers::NONE);
-        }
+        self.generation += 1;
     }
 
-    pub fn visible_indices(&self) -> Vec<usize> {
-        self.entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| e.rating >= self.filter_rating && self.filter_label.is_none_or(|l| e.color_label == l))
-            .map(|(i, _)| i)
-            .collect()
-    }
-
-    fn primary(&self) -> Option<usize> {
-        self.loading.or(self.current.as_ref().map(|c| c.index))
-    }
-
-    fn select(&mut self, index: usize, mods: Modifiers) {
+    pub fn select_path(&mut self, path: &PathBuf, mods: Modifiers) {
         if mods.command {
-            if !self.selection.insert(index) {
-                self.selection.remove(&index);
+            if !self.selection.remove(path) {
+                self.selection.insert(path.clone());
             }
             return;
         }
         if mods.shift
-            && let Some(anchor) = self.primary()
+            && let Some(anchor) = self.primary_path()
         {
-            let visible = self.visible_indices();
-            let (a, b) = (visible.iter().position(|&i| i == anchor), visible.iter().position(|&i| i == index));
-            if let (Some(a), Some(b)) = (a, b) {
-                self.selection.extend(visible[a.min(b)..=a.max(b)].iter().copied());
+            let order: Vec<&PathBuf> = self.visible.iter().map(|&i| &self.entries[i].path).collect();
+            if let (Some(a), Some(b)) = (order.iter().position(|p| **p == anchor), order.iter().position(|p| *p == path)) {
+                let range: Vec<PathBuf> = order[a.min(b)..=a.max(b)].iter().map(|p| (*p).clone()).collect();
+                self.selection.extend(range);
             }
             return;
         }
-        self.selection = BTreeSet::from([index]);
-        if self.primary() != Some(index) {
+        self.selection = HashSet::from([path.clone()]);
+        if self.primary_path().as_ref() != Some(path) {
             self.commit_and_save();
             self.generation += 1;
-            self.loading = Some(index);
+            self.loading = Some(path.clone());
             self.load_error = None;
             self.picking_wb = false;
-            self.workers.load(self.generation, self.entries[index].path.clone());
+            self.workers.load(self.generation, path.clone());
         }
     }
 
-    fn step(&mut self, delta: isize) {
-        let visible = self.visible_indices();
-        if visible.is_empty() {
+    pub fn step(&mut self, delta: isize) {
+        if self.visible.is_empty() {
             return;
         }
-        let pos = self.primary().and_then(|p| visible.iter().position(|&i| i == p)).unwrap_or(0);
-        let next = (pos as isize + delta).clamp(0, visible.len() as isize - 1) as usize;
+        let primary = self.primary_path();
+        let pos = self.visible.iter().position(|&i| Some(&self.entries[i].path) == primary.as_ref()).unwrap_or(0);
+        let next = (pos as isize + delta).clamp(0, self.visible.len() as isize - 1) as usize;
+        let path = self.entries[self.visible[next]].path.clone();
         self.scroll_to_primary = true;
-        self.select(visible[next], Modifiers::NONE);
+        self.select_path(&path, Modifiers::NONE);
     }
 
     // ---------------------------------------------------------------- editing
@@ -306,7 +327,7 @@ impl App {
     }
 
     /// Pushes finished edits to the undo stack and writes the sidecar.
-    fn commit_and_save(&mut self) {
+    pub fn commit_and_save(&mut self) {
         let Some(cur) = self.current.as_mut() else { return };
         if cur.adjustments != cur.committed {
             self.undo.push(std::mem::replace(&mut cur.committed, cur.adjustments.clone()));
@@ -318,15 +339,15 @@ impl App {
             let sc = Sidecar {
                 rating: cur.rating,
                 color_label: cur.color_label,
+                keywords: cur.keywords.clone(),
                 adjustments: cur.committed.clone(),
                 ..Default::default()
             };
             if let Err(e) = sidecar::save(&cur.meta.path, &sc) {
                 self.status = format!("Speichern fehlgeschlagen: {e:#}");
             }
-            if let Some(entry) = self.entries.get_mut(cur.index) {
-                entry.rating = cur.rating;
-                entry.color_label = cur.color_label;
+            if let Some(c) = &self.catalog {
+                let _ = c.sync_sidecar(&cur.meta.path, &sc);
             }
         }
     }
@@ -352,65 +373,40 @@ impl App {
         }
     }
 
-    fn edit(&mut self, f: impl FnOnce(&mut Adjustments)) {
+    pub fn edit(&mut self, f: impl FnOnce(&mut Adjustments)) {
         if let Some(cur) = self.current.as_mut() {
             f(&mut cur.adjustments);
             self.request_render();
         }
     }
 
-    fn set_rating(&mut self, rating: u8) {
-        if let Some(cur) = self.current.as_mut() {
-            cur.rating = rating;
-            self.sidecar_dirty = true;
-        }
-        // Apply to the rest of the selection as well.
-        let primary = self.primary();
-        for &i in &self.selection {
-            if Some(i) != primary {
-                let e = &mut self.entries[i];
-                e.rating = rating;
-                let mut sc = sidecar::load(&e.path);
-                sc.rating = rating;
-                let _ = sidecar::save(&e.path, &sc);
-            }
-        }
-    }
-
-    fn copy_adjustments(&mut self) {
+    pub(crate) fn copy_adjustments(&mut self) {
         if let Some(cur) = &self.current {
             self.clipboard = Some(cur.adjustments.clone());
             self.status = "Anpassungen kopiert".into();
         }
     }
 
-    fn paste_adjustments(&mut self) {
+    pub(crate) fn paste_adjustments(&mut self) {
         let Some(clip) = self.clipboard.clone() else { return };
-        let primary = self.current.as_ref().map(|c| c.index);
-        let targets: Vec<usize> = self.selection.iter().copied().collect();
-        for i in &targets {
-            if Some(*i) == primary {
-                self.edit(|a| *a = Adjustments { rotation: a.rotation, ..clip.clone() });
-            } else {
-                let path = self.entries[*i].path.clone();
-                let mut sc = sidecar::load(&path);
-                sc.adjustments = Adjustments { rotation: sc.adjustments.rotation, ..clip.clone() };
-                let _ = sidecar::save(&path, &sc);
-                self.entries[*i].thumb_requested = false;
-            }
-        }
+        let targets = self.selected_paths();
+        self.set_adjustments_on(&targets, |a| {
+            let mut n = clip.clone();
+            n.keep_geometry_from(a);
+            n
+        });
         self.status = format!("Anpassungen auf {} Bild(er) angewendet", targets.len());
     }
 
     pub fn export_selection(&mut self) {
         self.commit_and_save();
+        let current = self.current.as_ref().map(|c| (c.meta.path.clone(), c.committed.clone()));
         let items: Vec<(PathBuf, Adjustments)> = self
-            .selection
-            .iter()
-            .map(|&i| {
-                let path = self.entries[i].path.clone();
-                let adj = match &self.current {
-                    Some(c) if c.index == i => c.committed.clone(),
+            .selected_paths()
+            .into_iter()
+            .map(|path| {
+                let adj = match &current {
+                    Some((p, a)) if *p == path => a.clone(),
                     _ => sidecar::load(&path).adjustments,
                 };
                 (path, adj)
@@ -425,14 +421,14 @@ impl App {
         self.workers.export(ExportJob { items, recipe: self.recipe.clone() });
     }
 
-    fn pick_white_balance(&mut self, image_pos: Vec2) {
+    pub fn pick_white_balance(&mut self, image_pos: Vec2) {
         let Some(cur) = self.current.as_mut() else { return };
         let p = &cur.preview;
         let rot = cur.adjustments.rotation % 4;
         let o = Orientation::from_quarter_turns(rot);
         let (dw, dh) = if o.swaps_dimensions() { (p.height, p.width) } else { (p.width, p.height) };
-        let x = (image_pos.x as usize).min(dw - 1);
-        let y = (image_pos.y as usize).min(dh - 1);
+        let x = (image_pos.x.max(0.0) as usize).min(dw - 1);
+        let y = (image_pos.y.max(0.0) as usize).min(dh - 1);
         let mut acc = [0.0f32; 3];
         let mut n = 0.0;
         for yy in y.saturating_sub(3)..(y + 4).min(dh) {
@@ -458,25 +454,33 @@ impl App {
 
     // ---------------------------------------------------------------- events
 
-    fn handle_events(&mut self, ctx: &egui::Context) {
+    pub(crate) fn handle_events(&mut self, ctx: &egui::Context) {
         while let Ok(ev) = self.workers.events.try_recv() {
             match ev {
                 Event::Loaded { generation, result } if generation == self.generation => {
-                    let index = self.loading.take().unwrap_or(0);
+                    self.loading = None;
                     match result {
                         Ok((meta, preview)) => {
+                            // The rendered preview must fit into a single GPU texture.
+                            let max_side = ctx.input(|i| i.max_texture_side).max(512);
+                            let long = preview.width.max(preview.height);
+                            let preview = if long > max_side {
+                                Arc::new((*preview).clone().box_downscale(long.div_ceil(max_side)))
+                            } else {
+                                preview
+                            };
                             let sc = sidecar::load(&meta.path);
                             // Rounded to slider precision so that displaying it never counts as an edit.
                             let (k, t) = meta.color.temp_tint_for_wb(meta.as_shot_wb);
                             let as_shot_temp_tint = (k.round(), (t * 10.0).round() / 10.0);
                             self.current = Some(Current {
-                                index,
                                 meta,
                                 preview,
                                 adjustments: sc.adjustments.clone(),
                                 committed: sc.adjustments,
                                 rating: sc.rating,
                                 color_label: sc.color_label,
+                                keywords: sc.keywords,
                                 as_shot_temp_tint,
                             });
                             self.undo.clear();
@@ -502,17 +506,11 @@ impl App {
                         None => self.texture = Some(ctx.load_texture("viewer", image, TextureOptions::LINEAR)),
                     }
                     self.histogram = Some(histogram);
-                    if let (Some(thumb), Some(cur)) = (thumb, &self.current)
-                        && let Some(entry) = self.entries.get_mut(cur.index)
-                    {
-                        set_thumb(ctx, entry, thumb);
+                    if let (Some(thumb), Some(path)) = (thumb, self.current_path()) {
+                        self.set_thumb(ctx, path, thumb);
                     }
                 }
-                Event::Thumbnail { path, image } => {
-                    if let Some(entry) = self.entries.iter_mut().find(|e| e.path == path) {
-                        set_thumb(ctx, entry, image);
-                    }
-                }
+                Event::Thumbnail { path, image } => self.set_thumb(ctx, path, image),
                 Event::ExportProgress { done, total, last } => {
                     self.export_progress = (done < total).then_some((done, total));
                     match last {
@@ -523,11 +521,33 @@ impl App {
                         self.status = format!("Verarbeitung abgeschlossen ({total})");
                     }
                 }
+                Event::IndexProgress { done, total } => {
+                    self.index_progress = (done < total).then_some((done, total));
+                }
+                Event::IndexDone { indexed, failed, import } => {
+                    self.index_progress = None;
+                    if import {
+                        self.status = format!("Import: {indexed} Bilder{}", if failed > 0 { format!(", {failed} Fehler") } else { String::new() });
+                        self.open_scope(Scope::LastImport);
+                    } else if indexed > 0 || failed > 0 {
+                        self.reload_entries();
+                    }
+                }
             }
         }
     }
 
-    fn send_render(&mut self) {
+    fn set_thumb(&mut self, ctx: &egui::Context, path: PathBuf, image: egui::ColorImage) {
+        match self.thumbs.get_mut(&path) {
+            Some(t) => t.set(image, TextureOptions::LINEAR),
+            None => {
+                let tex = ctx.load_texture(format!("thumb:{}", path.display()), image, TextureOptions::LINEAR);
+                self.thumbs.insert(path, tex);
+            }
+        }
+    }
+
+    pub(crate) fn send_render(&mut self) {
         if !self.render_requested {
             return;
         }
@@ -565,7 +585,10 @@ impl App {
             self.export_selection();
         }
         if pressed(Key::A, Modifiers::COMMAND) {
-            self.selection = self.visible_indices().into_iter().collect();
+            self.selection = self.visible.iter().map(|&i| self.entries[i].path.clone()).collect();
+        }
+        if pressed(Key::F, Modifiers::COMMAND) {
+            self.tab = Tab::Library;
         }
         if pressed(Key::OpenBracket, Modifiers::COMMAND) {
             self.edit(|a| a.rotation = (a.rotation + 3) % 4);
@@ -583,6 +606,19 @@ impl App {
             if pressed(k, Modifiers::NONE) {
                 self.set_rating(r);
             }
+        }
+        for (k, l) in [
+            (Key::Num6, ColorLabel::Red),
+            (Key::Num7, ColorLabel::Yellow),
+            (Key::Num8, ColorLabel::Green),
+            (Key::Num9, ColorLabel::Blue),
+        ] {
+            if pressed(k, Modifiers::NONE) {
+                self.set_color_label(l);
+            }
+        }
+        if pressed(Key::G, Modifiers::NONE) {
+            self.grid_view = !self.grid_view;
         }
         if pressed(Key::E, Modifiers::NONE) {
             self.clip_warning = !self.clip_warning;
@@ -611,10 +647,8 @@ impl App {
             ui.label(RichText::new("Capture Room").strong().size(15.0));
             ui.separator();
             let has = self.current.is_some();
-            if ui.add_enabled(!self.undo.is_empty() || self.current.as_ref().is_some_and(|c| c.adjustments != c.committed), egui::Button::new("↩"))
-                .on_hover_text("Rückgängig (Strg+Z)")
-                .clicked()
-            {
+            let can_undo = !self.undo.is_empty() || self.current.as_ref().is_some_and(|c| c.adjustments != c.committed);
+            if ui.add_enabled(can_undo, egui::Button::new("↩")).on_hover_text("Rückgängig (Strg+Z)").clicked() {
                 self.undo();
             }
             if ui.add_enabled(!self.redo.is_empty(), egui::Button::new("↪")).on_hover_text("Wiederholen (Strg+Y)").clicked() {
@@ -632,17 +666,24 @@ impl App {
                 self.copy_adjustments();
             }
             if ui
-                .add_enabled(self.clipboard.is_some() && !self.selection.is_empty(), egui::Button::new("📥 Anwenden"))
+                .add_enabled(self.clipboard.is_some(), egui::Button::new("📥 Anwenden"))
                 .on_hover_text("Auf Auswahl anwenden (Strg+Umschalt+V)")
                 .clicked()
             {
                 self.paste_adjustments();
             }
             if ui.add_enabled(has, egui::Button::new("↺ Zurücksetzen")).on_hover_text("Alle Anpassungen zurücksetzen").clicked() {
-                self.edit(|a| *a = Adjustments { rotation: a.rotation, ..Default::default() });
+                self.edit(|a| {
+                    let mut n = Adjustments::default();
+                    n.keep_geometry_from(a);
+                    *a = n;
+                });
             }
             ui.separator();
-            if ui.selectable_label(self.show_before, "◐ Vorher").on_hover_text("Vorher/Nachher (Y)").clicked() {
+            if ui.selectable_label(self.grid_view, "⊞ Raster").on_hover_text("Raster / Viewer (G)").clicked() {
+                self.grid_view = !self.grid_view;
+            }
+            if ui.selectable_label(self.show_before, "◑ Vorher").on_hover_text("Vorher/Nachher (Y)").clicked() {
                 self.show_before = !self.show_before;
                 self.request_render();
             }
@@ -655,159 +696,22 @@ impl App {
                 self.pan = Vec2::ZERO;
             }
             ui.separator();
-            if ui.add_enabled(!self.selection.is_empty(), egui::Button::new("⚙ Verarbeiten")).on_hover_text("Auswahl exportieren (Strg+D)").clicked() {
+            let n = self.selected_paths().len();
+            if ui.add_enabled(n > 0, egui::Button::new("⚙ Verarbeiten")).on_hover_text("Auswahl exportieren (Strg+D)").clicked() {
                 self.export_selection();
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(RichText::new(&self.status).color(Color32::from_gray(160)));
+                ui.separator();
+                ui.label(RichText::new(format!("{} · {} Bilder", scope_label(&self.scope, &self.lists), self.visible.len())).color(Color32::from_gray(190)));
             });
         });
     }
 
-    fn viewer(&mut self, ui: &mut Ui) {
-        let rect = ui.available_rect_before_wrap();
-        let response = ui.allocate_rect(rect, Sense::click_and_drag());
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, Color32::from_gray(38));
-
-        let Some(tex) = &self.texture else {
-            let msg = if let Some(e) = &self.load_error {
-                format!("Fehler: {e}")
-            } else if self.loading.is_some() {
-                "Lade…".into()
-            } else if self.entries.is_empty() {
-                "Keine RAW-Dateien in diesem Ordner.\nIm Tab „Bibliothek“ einen Ordner öffnen.".into()
-            } else {
-                String::new()
-            };
-            painter.text(rect.center(), egui::Align2::CENTER_CENTER, msg, egui::FontId::proportional(16.0), Color32::from_gray(170));
-            return;
-        };
-        let size = tex.size_vec2();
-        let fit = ((rect.width() - 20.0) / size.x).min((rect.height() - 20.0) / size.y).max(0.01);
-        let scale = self.zoom.unwrap_or(fit);
-
-        // Mouse wheel zoom around the cursor.
-        if response.hovered() {
-            let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-            if scroll != 0.0 {
-                let new_scale = (scale * (1.0 + scroll * 0.0015)).clamp(fit.min(0.05), 8.0);
-                if let Some(cursor) = response.hover_pos() {
-                    let center = rect.center() + self.pan;
-                    let rel = (cursor - center) / scale;
-                    self.pan = cursor - rect.center() - rel * new_scale;
-                }
-                self.zoom = Some(new_scale);
-            }
-        }
-        if response.dragged() && !self.picking_wb {
-            self.pan += response.drag_delta();
-        }
-        let scale = self.zoom.unwrap_or(fit);
-        if self.zoom.is_none() {
-            self.pan = Vec2::ZERO;
-        }
-        let img_rect = Rect::from_center_size(rect.center() + self.pan, size * scale);
-        painter.image(tex.id(), img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-
-        if self.picking_wb {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-            if response.clicked()
-                && let Some(pos) = response.interact_pointer_pos()
-                && img_rect.contains(pos)
-            {
-                self.pick_white_balance((pos - img_rect.min) / scale);
-            }
-        } else if response.double_clicked() {
-            self.zoom = if self.zoom.is_some() { None } else { Some(1.0) };
-            self.pan = Vec2::ZERO;
-        }
-
-        // Overlay: file name, zoom, before marker.
-        if let Some(cur) = &self.current {
-            let full_w = if (cur.adjustments.rotation % 2) == 1 { cur.meta.info.height } else { cur.meta.info.width } as f32;
-            // Zoom relative to the full sensor resolution.
-            let pct = scale * size.x / full_w.max(1.0) * 100.0;
-            let text = format!(
-                "{}   {pct:.0} %{}",
-                cur.meta.path.file_name().unwrap_or_default().to_string_lossy(),
-                if self.show_before { "   VORHER" } else { "" }
-            );
-            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(13.0), Color32::from_gray(220));
-            let pos = rect.left_top() + vec2(10.0, 8.0);
-            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand(4.0), 3.0, Color32::from_black_alpha(160));
-            painter.galley(pos, galley, Color32::from_gray(220));
-        }
-        if self.loading.is_some() {
-            painter.text(rect.right_top() + vec2(-10.0, 8.0), egui::Align2::RIGHT_TOP, "Lade…", egui::FontId::proportional(13.0), Color32::from_gray(200));
-        }
-    }
-
-    fn filmstrip(&mut self, ui: &mut Ui) {
-        let visible = self.visible_indices();
-        let mut clicked: Option<(usize, Modifiers)> = None;
-        let primary = self.primary();
-        let cell = vec2(150.0, ui.available_height().clamp(90.0, 260.0) - 8.0);
-        egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                for &i in &visible {
-                    let (rect, resp) = ui.allocate_exact_size(cell, Sense::click());
-                    if !ui.is_rect_visible(rect) {
-                        continue;
-                    }
-                    let entry = &mut self.entries[i];
-                    if !entry.thumb_requested {
-                        entry.thumb_requested = true;
-                        self.workers.thumbnail(entry.path.clone());
-                    }
-                    let selected = self.selection.contains(&i);
-                    let painter = ui.painter_at(rect);
-                    let bg = if Some(i) == primary {
-                        Color32::from_gray(85)
-                    } else if selected {
-                        Color32::from_gray(62)
-                    } else if resp.hovered() {
-                        Color32::from_gray(50)
-                    } else {
-                        Color32::from_gray(32)
-                    };
-                    painter.rect_filled(rect, 3.0, bg);
-                    let img_area = Rect::from_min_max(rect.min + vec2(5.0, 5.0), rect.max - vec2(5.0, 20.0));
-                    if let Some(t) = &entry.thumb {
-                        let s = t.size_vec2();
-                        let k = (img_area.width() / s.x).min(img_area.height() / s.y);
-                        let r = Rect::from_center_size(img_area.center(), s * k);
-                        painter.image(t.id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
-                    }
-                    painter.text(
-                        pos2(rect.center().x, rect.bottom() - 10.0),
-                        egui::Align2::CENTER_CENTER,
-                        &entry.name,
-                        egui::FontId::proportional(11.0),
-                        Color32::from_gray(190),
-                    );
-                    widgets::paint_badges(ui, img_area, entry.rating, entry.color_label.rgb());
-                    if resp.clicked() {
-                        clicked = Some((i, ui.input(|inp| inp.modifiers)));
-                    }
-                    if Some(i) == primary && self.scroll_to_primary {
-                        resp.scroll_to_me(Some(egui::Align::Center));
-                    }
-                }
-            });
-        });
-        self.scroll_to_primary = false;
-        if let Some((i, m)) = clicked {
-            self.select(i, m);
-        }
-    }
-}
-
-impl App {
     fn debug_screenshot(&mut self, ctx: &egui::Context) {
         let Some((path, shown_at)) = &mut self.screenshot else { return };
         let now = ctx.input(|i| i.time);
-        if self.texture.is_some() && shown_at.is_none() {
+        if (self.texture.is_some() || self.grid_view) && shown_at.is_none() {
             *shown_at = Some(now);
         }
         if let Some(t) = *shown_at {
@@ -824,19 +728,11 @@ impl App {
             })
         });
         if let Some(img) = shot {
-            let buf = ::image::RgbaImage::from_raw(img.size[0] as u32, img.size[1] as u32, img.as_raw().to_vec());
-            if let Some(buf) = buf {
+            if let Some(buf) = ::image::RgbaImage::from_raw(img.size[0] as u32, img.size[1] as u32, img.as_raw().to_vec()) {
                 let _ = buf.save(&*path);
             }
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
-    }
-}
-
-fn set_thumb(ctx: &egui::Context, entry: &mut Entry, image: egui::ColorImage) {
-    match &mut entry.thumb {
-        Some(t) => t.set(image, TextureOptions::LINEAR),
-        None => entry.thumb = Some(ctx.load_texture(format!("thumb:{}", entry.path.display()), image, TextureOptions::LINEAR)),
     }
 }
 
@@ -855,9 +751,11 @@ impl eframe::App for App {
         self.shortcuts(&ctx);
 
         egui::Panel::top("toolbar").show(ui, |ui| self.toolbar(ui));
-        egui::Panel::left("tools").resizable(true).default_size(330.0).min_size(260.0).show(ui, |ui| self.tools_ui(ui));
-        egui::Panel::bottom("filmstrip").resizable(true).default_size(150.0).min_size(100.0).show(ui, |ui| self.filmstrip(ui));
-        egui::CentralPanel::no_frame().show(ui, |ui| self.viewer(ui));
+        egui::Panel::left("tools").resizable(true).default_size(340.0).min_size(260.0).show(ui, |ui| self.tools_ui(ui));
+        if !self.grid_view {
+            egui::Panel::bottom("filmstrip").resizable(true).default_size(150.0).min_size(100.0).show(ui, |ui| self.filmstrip(ui));
+        }
+        egui::CentralPanel::no_frame().show(ui, |ui| if self.grid_view { self.grid(ui) } else { self.viewer(ui) });
 
         // Commit edits once the user lets go of the mouse (one undo step per gesture).
         if !ctx.input(|i| i.pointer.any_down()) {

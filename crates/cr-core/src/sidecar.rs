@@ -66,6 +66,7 @@ pub struct Sidecar {
     /// 0..5 stars
     pub rating: u8,
     pub color_label: ColorLabel,
+    pub keywords: Vec<String>,
     pub adjustments: Adjustments,
 }
 

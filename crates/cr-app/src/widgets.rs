@@ -2,7 +2,25 @@
 
 use cr_core::params::Curve;
 use cr_core::pipeline::Histogram;
-use egui::{Color32, Pos2, Rect, Response, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
+use egui::{Color32, Pos2, Rect, Response, RichText, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
+
+/// Collapsible tool section with an optional reset button in the header.
+pub fn section(ui: &mut Ui, title: &str, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
+    let id = ui.make_persistent_id(title);
+    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
+        .show_header(ui, |ui| {
+            ui.label(RichText::new(title).strong());
+            if let Some(reset) = reset {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if small_button(ui, "↺", "Werkzeug zurücksetzen").clicked() {
+                        reset();
+                    }
+                });
+            }
+        })
+        .body(body);
+    ui.add_space(4.0);
+}
 
 /// A labeled slider that resets to `default` on double-click of the label.
 /// Returns true when the value changed.

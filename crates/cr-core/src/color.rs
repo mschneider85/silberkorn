@@ -210,9 +210,9 @@ mod tests {
     fn inverse_roundtrip() {
         let inv = mat_inv(&SRGB_TO_XYZ).unwrap();
         let id = mat_mul(&inv, &SRGB_TO_XYZ);
-        for i in 0..3 {
-            for j in 0..3 {
-                assert!((id[i][j] - if i == j { 1.0 } else { 0.0 }).abs() < 1e-4);
+        for (i, row) in id.iter().enumerate() {
+            for (j, v) in row.iter().enumerate() {
+                assert!((v - if i == j { 1.0 } else { 0.0 }).abs() < 1e-4);
             }
         }
     }

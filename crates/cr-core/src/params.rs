@@ -195,6 +195,14 @@ impl Default for Adjustments {
     }
 }
 
+impl Adjustments {
+    /// Copies the geometric settings (rotation, crop, ...) from `other`.
+    /// Used when pasting adjustments or applying styles, which should not change framing.
+    pub fn keep_geometry_from(&mut self, other: &Adjustments) {
+        self.rotation = other.rotation;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

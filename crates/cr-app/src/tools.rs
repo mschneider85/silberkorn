@@ -6,24 +6,7 @@ use cr_core::sidecar::ColorLabel;
 use egui::{Color32, RichText, Ui};
 
 use crate::app::{App, CurveChannel, Tab};
-use crate::widgets::{self, slider_row};
-
-fn section(ui: &mut Ui, title: &str, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
-    let id = ui.make_persistent_id(title);
-    egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
-        .show_header(ui, |ui| {
-            ui.label(RichText::new(title).strong());
-            if let Some(reset) = reset {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if widgets::small_button(ui, "↺", "Werkzeug zurücksetzen").clicked() {
-                        reset();
-                    }
-                });
-            }
-        })
-        .body(body);
-    ui.add_space(4.0);
-}
+use crate::widgets::{self, section, slider_row};
 
 impl App {
     pub fn tools_ui(&mut self, ui: &mut Ui) {
@@ -35,58 +18,11 @@ impl App {
         ui.separator();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.tab {
             Tab::Library => self.library_tab(ui),
+            Tab::Styles => self.styles_tab(ui),
             Tab::Exposure => self.exposure_tab(ui),
             Tab::Color => self.color_tab(ui),
             Tab::Metadata => self.metadata_tab(ui),
             Tab::Output => self.output_tab(ui),
-        });
-    }
-
-    fn library_tab(&mut self, ui: &mut Ui) {
-        section(ui, "Ordner", None, |ui| {
-            ui.horizontal(|ui| {
-                let resp = ui.add(egui::TextEdit::singleline(&mut self.folder_input).desired_width(ui.available_width() - 40.0));
-                if (resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) || ui.button("Öffnen").clicked() {
-                    self.open_folder(self.folder_input.clone().into());
-                }
-            });
-            if let Some(parent) = self.folder.parent().map(|p| p.to_path_buf())
-                && ui.button("⬆ Übergeordneter Ordner").clicked()
-            {
-                self.open_folder(parent);
-            }
-            let mut open = None;
-            egui::ScrollArea::vertical().id_salt("subdirs").max_height(260.0).show(ui, |ui| {
-                for dir in &self.subdirs {
-                    let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                    if ui.selectable_label(false, format!("📁 {name}")).clicked() {
-                        open = Some(dir.clone());
-                    }
-                }
-            });
-            if let Some(dir) = open {
-                self.open_folder(dir);
-            }
-        });
-
-        section(ui, "Filter", None, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Mindestens");
-                let mut r = self.filter_rating;
-                if widgets::stars(ui, &mut r, 16.0) {
-                    self.filter_rating = r;
-                }
-            });
-            egui::ComboBox::from_label("Farb-Label")
-                .selected_text(self.filter_label.map_or("Alle", |l| l.label()))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut self.filter_label, None, "Alle");
-                    for l in ColorLabel::ALL {
-                        ui.selectable_value(&mut self.filter_label, Some(l), l.label());
-                    }
-                });
-            let visible = self.visible_indices().len();
-            ui.label(format!("{visible} von {} Bildern", self.entries.len()));
         });
     }
 
@@ -248,22 +184,72 @@ impl App {
     }
 
     fn metadata_tab(&mut self, ui: &mut Ui) {
-        let Some(cur) = self.current.as_mut() else {
+        let Some(cur) = self.current.as_ref() else {
             ui.label("Kein Bild ausgewählt.");
             return;
         };
-        let mut sidecar_changed = false;
-        section(ui, "Bewertung", None, |ui| {
-            sidecar_changed |= widgets::stars(ui, &mut cur.rating, 22.0);
+        let n_sel = self.selected_paths().len();
+        let (mut rating, current_label, keywords) = (cur.rating, cur.color_label, cur.keywords.clone());
+        let mut new_rating = None;
+        let mut new_label = None;
+        let mut remove_kw = None;
+        let mut add_kw = None;
+        let title = if n_sel > 1 { format!("Bewertung ({n_sel} Bilder)") } else { "Bewertung".to_string() };
+        section(ui, &title, None, |ui| {
+            if widgets::stars(ui, &mut rating, 22.0) {
+                new_rating = Some(rating);
+            }
             ui.horizontal_wrapped(|ui| {
                 for l in ColorLabel::ALL {
-                    if widgets::color_label_dot(ui, l, cur.color_label == l).clicked() {
-                        cur.color_label = l;
-                        sidecar_changed = true;
+                    if widgets::color_label_dot(ui, l, current_label == l).clicked() {
+                        new_label = Some(l);
                     }
                 }
             });
         });
+        section(ui, "Keywords", None, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for k in &keywords {
+                    if ui.add(egui::Button::new(format!("{k}  ✖")).small()).on_hover_text("Entfernen").clicked() {
+                        remove_kw = Some(k.clone());
+                    }
+                }
+                if keywords.is_empty() {
+                    ui.label(RichText::new("Keine Keywords").color(Color32::from_gray(140)));
+                }
+            });
+            let resp = ui.add(egui::TextEdit::singleline(&mut self.keyword_input).hint_text("Keyword hinzufügen (Enter)"));
+            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                add_kw = Some(self.keyword_input.clone());
+                resp.request_focus();
+            }
+            // Suggestions from the catalog.
+            let typed = self.keyword_input.trim().to_lowercase();
+            if !typed.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    for (k, _) in self.lists.keywords.iter().filter(|(k, _)| k.to_lowercase().starts_with(&typed)).take(8) {
+                        if ui.small_button(k).clicked() {
+                            add_kw = Some(k.clone());
+                        }
+                    }
+                });
+            }
+        });
+        if let Some(r) = new_rating {
+            self.set_rating(r);
+        }
+        if let Some(l) = new_label {
+            self.set_color_label(l);
+        }
+        if let Some(k) = remove_kw {
+            self.remove_keyword(&k);
+        }
+        if let Some(k) = add_kw {
+            self.add_keyword(&k);
+            self.keyword_input.clear();
+        }
+
+        let Some(cur) = self.current.as_ref() else { return };
         let info = &cur.meta.info;
         section(ui, "Aufnahme", None, |ui| {
             egui::Grid::new("meta").num_columns(2).striped(true).show(ui, |ui| {
@@ -273,6 +259,7 @@ impl App {
                     ui.end_row();
                 };
                 row("Datei", cur.meta.path.file_name().map(|n| n.to_string_lossy().to_string()));
+                row("Ordner", cur.meta.path.parent().map(|n| n.display().to_string()));
                 row("Kamera", Some(format!("{} {}", info.make, info.model)));
                 row("Objektiv", info.lens.clone());
                 row("Brennweite", info.focal_length.clone());
@@ -283,9 +270,6 @@ impl App {
                 row("Sensor", Some(format!("{} × {}", info.width, info.height)));
             });
         });
-        if sidecar_changed {
-            self.sidecar_dirty = true;
-        }
     }
 
     fn output_tab(&mut self, ui: &mut Ui) {
@@ -322,7 +306,7 @@ impl App {
             });
         });
         section(ui, "Verarbeiten", None, |ui| {
-            let n = self.selection.len();
+            let n = self.selected_paths().len();
             if ui.add_enabled(n > 0, egui::Button::new(format!("Ausgewählte verarbeiten ({n})"))).clicked() {
                 self.export_selection();
             }

@@ -58,10 +58,15 @@ struct Decoded {
 }
 
 fn decode(path: &Path) -> Result<Decoded> {
+    decode_ext(path, false)
+}
+
+/// `dummy` skips decoding the pixel data (metadata only).
+fn decode_ext(path: &Path, dummy: bool) -> Result<Decoded> {
     let source = RawSource::new(path).with_context(|| format!("Kann {} nicht öffnen", path.display()))?;
     let decoder: Box<dyn Decoder> = rawler::get_decoder(&source).map_err(|e| anyhow!("Unbekanntes RAW-Format: {e}"))?;
     let params = RawDecodeParams::default();
-    let raw = decoder.raw_image(&source, &params, false).map_err(|e| anyhow!("RAW-Dekodierung fehlgeschlagen: {e}"))?;
+    let raw = decoder.raw_image(&source, &params, dummy).map_err(|e| anyhow!("RAW-Dekodierung fehlgeschlagen: {e}"))?;
     let md = decoder.raw_metadata(&source, &params).ok();
     let meta = build_meta(path, &raw, md.as_ref())?;
     Ok(Decoded { raw, meta })
@@ -120,9 +125,9 @@ fn build_meta(path: &Path, raw: &RawImage, md: Option<&RawMetadata>) -> Result<R
     Ok(RawMeta { path: path.to_path_buf(), info, color, as_shot_wb, orientation })
 }
 
-/// Reads only the metadata (no pixel processing beyond decoding).
+/// Reads only the metadata, without decoding pixel data.
 pub fn read_meta(path: &Path) -> Result<RawMeta> {
-    Ok(decode(path)?.meta)
+    Ok(decode_ext(path, true)?.meta)
 }
 
 /// Fast preview: half-size "superpixel" demosaic, then box-downscaled so the

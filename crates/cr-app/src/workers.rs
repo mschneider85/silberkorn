@@ -5,6 +5,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+use cr_core::cache;
+use cr_core::catalog::Catalog;
 use cr_core::export::{self, ExportRecipe};
 use cr_core::image::LinearImage;
 use cr_core::params::Adjustments;
@@ -22,6 +24,14 @@ pub enum Event {
     Rendered { generation: u64, image: ColorImage, thumb: Option<ColorImage>, histogram: Histogram, before: bool },
     Thumbnail { path: PathBuf, image: ColorImage },
     ExportProgress { done: usize, total: usize, last: Result<PathBuf, String> },
+    IndexProgress { done: usize, total: usize },
+    IndexDone { indexed: usize, failed: usize, import: bool },
+}
+
+/// Adds files to the catalog. `import` marks them as a new import ("last import").
+pub struct IndexJob {
+    pub paths: Vec<PathBuf>,
+    pub import: bool,
 }
 
 pub struct RenderJob {
@@ -44,6 +54,7 @@ pub struct Workers {
     render_tx: Sender<RenderJob>,
     thumb_tx: Sender<PathBuf>,
     export_tx: Sender<ExportJob>,
+    index_tx: Sender<IndexJob>,
 }
 
 /// Receives the newest message, discarding older queued ones ("latest wins").
@@ -56,8 +67,46 @@ fn recv_latest<T>(rx: &Receiver<T>) -> Option<T> {
 }
 
 impl Workers {
-    pub fn spawn(ctx: egui::Context) -> Self {
+    pub fn spawn(ctx: egui::Context, catalog_path: PathBuf) -> Self {
         let (ev_tx, events) = channel();
+
+        let (index_tx, index_rx) = channel::<IndexJob>();
+        {
+            let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
+            thread::spawn(move || {
+                // The indexer owns its own connection (SQLite in WAL mode allows concurrent readers).
+                let catalog = match Catalog::open(&catalog_path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        log::error!("Katalog nicht verfügbar: {e:#}");
+                        return;
+                    }
+                };
+                while let Ok(job) = index_rx.recv() {
+                    let import_id = if job.import { catalog.begin_import().unwrap_or(0) } else { 0 };
+                    let total = job.paths.len();
+                    let (mut indexed, mut failed) = (0, 0);
+                    for (i, path) in job.paths.iter().enumerate() {
+                        let needs = job.import || catalog.needs_index(path).unwrap_or(true);
+                        if needs {
+                            match catalog.index_file(path, import_id) {
+                                Ok(_) => indexed += 1,
+                                Err(e) => {
+                                    log::warn!("{}: {e:#}", path.display());
+                                    failed += 1;
+                                }
+                            }
+                        }
+                        if i % 10 == 9 || i + 1 == total {
+                            let _ = ev_tx.send(Event::IndexProgress { done: i + 1, total });
+                            ctx.request_repaint();
+                        }
+                    }
+                    let _ = ev_tx.send(Event::IndexDone { indexed, failed, import: job.import });
+                    ctx.request_repaint();
+                }
+            });
+        }
 
         let (load_tx, load_rx) = channel::<(u64, PathBuf)>();
         {
@@ -131,7 +180,7 @@ impl Workers {
             });
         }
 
-        Self { events, load_tx, render_tx, thumb_tx, export_tx }
+        Self { events, load_tx, render_tx, thumb_tx, export_tx, index_tx }
     }
 
     pub fn load(&self, generation: u64, path: PathBuf) {
@@ -149,11 +198,19 @@ impl Workers {
     pub fn export(&self, job: ExportJob) {
         let _ = self.export_tx.send(job);
     }
+
+    pub fn index(&self, job: IndexJob) {
+        let _ = self.index_tx.send(job);
+    }
 }
 
-/// Thumbnail: the embedded camera JPEG, or a real development if the image has edits.
+/// Thumbnail: from the disk cache, else the embedded camera JPEG, or a real
+/// development if the image has edits.
 fn make_thumbnail(path: &std::path::Path) -> Option<ColorImage> {
     let sc = sidecar::load(path);
+    if let Some(img) = cache::load(path, &sc.adjustments) {
+        return Some(to_color_image(&img));
+    }
     let img = if sc.adjustments != Adjustments::default() {
         let (meta, preview) = raw::load_preview(path, THUMB_EDGE as usize * 2).ok()?;
         let r = Processor::new(&meta, &sc.adjustments).render(&preview, false);
@@ -161,7 +218,9 @@ fn make_thumbnail(path: &std::path::Path) -> Option<ColorImage> {
     } else {
         raw::embedded_preview(path).ok()?
     };
-    Some(to_color_image(&img.thumbnail(THUMB_EDGE, THUMB_EDGE)))
+    let thumb = img.thumbnail(THUMB_EDGE, THUMB_EDGE);
+    cache::store(path, &sc.adjustments, &thumb);
+    Some(to_color_image(&thumb))
 }
 
 pub fn to_color_image(img: &::image::DynamicImage) -> ColorImage {
