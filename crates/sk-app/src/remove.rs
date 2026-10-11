@@ -3,51 +3,51 @@
 
 use std::sync::Arc;
 
-use egui::{Color32, Rect, Response, RichText, Stroke, Ui};
+use egui::{Color32, Rect, Response, RichText, Ui};
 use sk_ai::models;
+use sk_core::brush::AutoGuide;
 use sk_core::params::{BrushStroke, WbMode};
 
 use crate::app::App;
 use crate::layers::{LocalDrag, LocalTool};
 use crate::theme::icon;
-use crate::widgets::{section, slider_row};
+use crate::widgets::section;
 use crate::workers::InpaintJob;
 
 impl App {
     /// Viewer interaction of the remove tool: painting the strokes, then the request.
     pub(crate) fn remove_interaction(&mut self, ui: &mut Ui, response: &Response, img_rect: Rect, scale: f32) {
         let painter = ui.painter_at(response.rect);
-        // The marked area in red (also while it is being filled).
-        for s in &self.remove_strokes {
-            let r = self.radius_screen(s.radius, scale);
-            let pts: Vec<egui::Pos2> = s.points.iter().filter_map(|p| self.uv_to_screen(*p, img_rect, scale)).collect();
-            let fill = Color32::from_rgba_unmultiplied(230, 40, 40, 110);
-            for p in &pts {
-                painter.circle_filled(*p, r, fill);
-            }
-            for w in pts.windows(2) {
-                painter.line_segment([w[0], w[1]], Stroke::new(2.0 * r, fill));
-            }
-        }
+        // The marked area in red, as it will be removed (soft edge, opacity, automatic masking).
+        self.draw_remove_overlay(ui, &painter, img_rect, scale);
         if self.inpaint_busy {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Progress);
             return;
         }
+        let b = self.brushes.remove.clone();
         if let Some(p) = response.hover_pos() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-            painter.circle_stroke(p, self.brush.size, Stroke::new(1.5, Color32::WHITE));
-            painter.circle_stroke(p, self.brush.size, Stroke::new(1.0, Color32::from_rgb(230, 40, 40)));
+            crate::layers::brush_cursor(&painter, p, &b);
         }
         if response.drag_started()
             && let Some(p) = response.interact_pointer_pos()
             && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
         {
-            self.remove_strokes.push(BrushStroke { points: vec![uv], radius: self.radius_norm(self.brush.size, scale), hardness: 0.7, flow: 1.0, erase: false });
+            self.remove_strokes.push(BrushStroke {
+                points: vec![uv],
+                radius: self.radius_norm(b.size, scale),
+                hardness: b.hardness,
+                flow: b.flow,
+                erase: false,
+                opacity: b.opacity,
+                auto_mask: b.auto_mask,
+                build_up: true,
+            });
             self.local_drag = LocalDrag::Stroke(p);
         }
         if response.dragged()
             && let (Some(p), LocalDrag::Stroke(last)) = (response.interact_pointer_pos(), self.local_drag.clone())
-            && (p - last).length() > (self.brush.size * 0.15).max(2.0)
+            && (p - last).length() > crate::layers::point_spacing(b.size)
             && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
         {
             if let Some(s) = self.remove_strokes.last_mut() {
@@ -58,6 +58,70 @@ impl App {
         if response.drag_stopped() && !self.remove_strokes.is_empty() {
             self.request_removal();
         }
+    }
+
+    /// Guide for automatic masking from the current image's preview (made once per image).
+    pub(crate) fn viewer_auto_guide(&mut self) -> Option<Arc<AutoGuide>> {
+        let cur = self.current.as_ref()?;
+        let generation = self.generation();
+        if self.auto_guide.as_ref().is_none_or(|(g, _)| *g != generation) {
+            self.auto_guide = Some((generation, Arc::new(AutoGuide::from_image(&cur.preview, 1024))));
+        }
+        self.auto_guide.as_ref().map(|(_, g)| g.clone())
+    }
+
+    /// Draws the strokes' coverage, rasterized for the area they touch at about screen resolution.
+    fn draw_remove_overlay(&mut self, ui: &Ui, painter: &egui::Painter, img_rect: Rect, scale: f32) {
+        if self.remove_strokes.is_empty() {
+            self.remove_overlay = None;
+            return;
+        }
+        let Some(cur) = &self.current else { return };
+        let (pw, ph) = (cur.preview.width as f32, cur.preview.height as f32);
+        let aspect = pw / ph;
+        let (kx, ky) = if aspect >= 1.0 { (1.0, 1.0 / aspect) } else { (aspect, 1.0) };
+        let key = sk_core::cache::fnv1a(serde_json::to_string(&self.remove_strokes).unwrap_or_default().as_bytes()) ^ (scale.to_bits() as u64);
+        if self.remove_overlay.as_ref().is_none_or(|(k, ..)| *k != key) {
+            // Area of the strokes (normalized), with their radius.
+            let (mut u0, mut v0, mut u1, mut v1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for s in &self.remove_strokes {
+                for p in &s.points {
+                    u0 = u0.min(p[0] - s.radius / kx);
+                    v0 = v0.min(p[1] - s.radius / ky);
+                    u1 = u1.max(p[0] + s.radius / kx);
+                    v1 = v1.max(p[1] + s.radius / ky);
+                }
+            }
+            let (u0, v0, u1, v1) = (u0.max(0.0), v0.max(0.0), u1.min(1.0), v1.min(1.0));
+            if u1 <= u0 || v1 <= v0 {
+                return;
+            }
+            let rect = [u0, v0, u1 - u0, v1 - v0];
+            // About one texel per screen pixel, at most 1024 across.
+            let w = ((rect[2] * pw * scale).round() as usize).clamp(4, 1024);
+            let h = ((rect[3] * ph * scale).round() as usize).clamp(4, 1024);
+            let guide = self.remove_strokes.iter().any(|s| s.auto_mask).then(|| self.viewer_auto_guide()).flatten();
+            let cover = sk_core::mask::rasterize_strokes_in(&self.remove_strokes, rect, w, h, aspect, guide.as_deref());
+            let pixels: Vec<Color32> = cover.iter().map(|c| Color32::from_rgba_unmultiplied(235, 45, 45, (c.clamp(0.0, 1.0) * 150.0) as u8)).collect();
+            let image = egui::ColorImage { size: [w, h], source_size: egui::vec2(w as f32, h as f32), pixels };
+            let tex = ui.ctx().load_texture("remove overlay", image, egui::TextureOptions::LINEAR);
+            self.remove_overlay = Some((key, tex, rect));
+        }
+        let Some((_, tex, rect)) = &self.remove_overlay else { return };
+        // A quad through the mapped corners (follows rotation and straightening).
+        let [x, y, w, h] = *rect;
+        let corners = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+        let screen: Vec<Option<egui::Pos2>> = corners.iter().map(|c| self.uv_to_screen(*c, img_rect, scale)).collect();
+        if screen.iter().any(|p| p.is_none()) {
+            return;
+        }
+        let mut mesh = egui::Mesh::with_texture(tex.id());
+        let uvs = [egui::pos2(0.0, 0.0), egui::pos2(1.0, 0.0), egui::pos2(1.0, 1.0), egui::pos2(0.0, 1.0)];
+        for (p, uv) in screen.iter().zip(uvs) {
+            mesh.vertices.push(egui::epaint::Vertex { pos: p.expect("checked"), uv, color: Color32::WHITE });
+        }
+        mesh.indices.extend([0, 1, 2, 0, 2, 3]);
+        painter.add(egui::Shape::mesh(mesh));
     }
 
     /// Fills the painted area in the background.
@@ -112,7 +176,9 @@ impl App {
                 tool = true;
             }
             if self.local_tool == Some(LocalTool::Remove) {
-                slider_row(ui, "Größe", &mut self.brush.size, 2.0..=400.0, 40.0, 0);
+                if crate::layers::brush_controls(ui, &mut self.brushes.remove, Some(LocalTool::Remove), true) {
+                    self.brushes_changed_at = Some(std::time::Instant::now());
+                }
                 ui.label(RichText::new("Über das Störende malen; beim Loslassen füllt die KI die Stelle passend zur Umgebung.").small().color(Color32::from_gray(140)));
             }
             if !models::available(&models::INPAINT) {

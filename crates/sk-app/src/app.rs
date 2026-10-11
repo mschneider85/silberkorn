@@ -230,6 +230,7 @@ struct Settings {
     denoise_strength: Option<f32>,
     /// AI on the graphics card (if available).
     ai_gpu: Option<bool>,
+    brushes: crate::layers::Brushes,
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -328,8 +329,14 @@ pub struct App {
     pub local_tool: Option<crate::layers::LocalTool>,
     pub local_drag: crate::layers::LocalDrag,
     pub active_layer: Option<usize>,
-    pub brush: crate::layers::BrushSettings,
-    pub spot_size: f32,
+    /// Settings of each brush tool.
+    pub brushes: crate::layers::Brushes,
+    /// Brush settings changed at this time (saved once they rest).
+    pub(crate) brushes_changed_at: Option<Instant>,
+    /// Painted area of the remove tool as shown (stroke key, texture, area).
+    pub(crate) remove_overlay: Option<(u64, TextureHandle, [f32; 4])>,
+    /// Guide for automatic masking in the viewer (generation, guide).
+    pub(crate) auto_guide: Option<(u64, Arc<sk_core::brush::AutoGuide>)>,
     pub selected_spot: Option<usize>,
     pub show_mask: bool,
     /// Mask overlay of the latest render request (see `send_render`).
@@ -583,8 +590,10 @@ impl App {
             local_tool: None,
             local_drag: Default::default(),
             active_layer: None,
-            brush: Default::default(),
-            spot_size: 25.0,
+            brushes: settings.brushes.clone(),
+            brushes_changed_at: None,
+            remove_overlay: None,
+            auto_guide: None,
             selected_spot: None,
             show_mask: false,
             rendered_mask_overlay: None,
@@ -738,6 +747,7 @@ impl App {
             pano_options: self.pano_options,
             denoise_strength: Some(self.denoise_strength),
             ai_gpu: Some(sk_ai::runtime::gpu_enabled()),
+            brushes: self.brushes.clone(),
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -1843,12 +1853,14 @@ impl App {
             self.request_render();
         }
         if pressed(Key::OpenBracket, Modifiers::NONE) {
-            self.brush.size = (self.brush.size / 1.2).max(2.0);
-            self.spot_size = (self.spot_size / 1.2).max(3.0);
+            let b = self.brushes.of(self.local_tool);
+            b.size = (b.size / 1.2).max(2.0);
+            self.brushes_changed_at = Some(Instant::now());
         }
         if pressed(Key::CloseBracket, Modifiers::NONE) {
-            self.brush.size = (self.brush.size * 1.2).min(400.0);
-            self.spot_size = (self.spot_size * 1.2).min(300.0);
+            let b = self.brushes.of(self.local_tool);
+            b.size = (b.size * 1.2).min(400.0);
+            self.brushes_changed_at = Some(Instant::now());
         }
         if pressed(Key::Delete, Modifiers::NONE) || pressed(Key::Backspace, Modifiers::NONE) {
             self.delete_selected_spot();
@@ -1934,6 +1946,10 @@ impl App {
         self.send_render();
         self.update_proof(ctx);
         self.fade_in(ctx);
+        if self.brushes_changed_at.is_some_and(|t| t.elapsed() > Duration::from_secs(1)) {
+            self.brushes_changed_at = None;
+            self.save_settings();
+        }
         if self.viewer_window_moved.is_some_and(|t| t.elapsed() > Duration::from_secs(1)) {
             self.viewer_window_moved = None;
             self.save_settings();
@@ -1996,6 +2012,29 @@ impl App {
                 r.watermark = sk_core::watermark::Watermark { enabled: true, text, size: 6.0, opacity: 0.8, ..Default::default() };
             }
             self.proof_view |= std::env::var_os("SILBERKORN_PROOF").is_some();
+            // Brush rendering check: a curved remove stroke and a soft mask stroke.
+            if std::env::var_os("SILBERKORN_BRUSHDEMO").is_some() {
+                let curve = |y: f32, amp: f32| (0..60).map(|i| {
+                    let t = i as f32 / 59.0;
+                    [0.15 + 0.7 * t, y + amp * (t * 9.0).sin()]
+                }).collect::<Vec<_>>();
+                let stroke = |pts, r, hard, flow, op| sk_core::params::BrushStroke { points: pts, radius: r, hardness: hard, flow, erase: false, opacity: op, auto_mask: false, build_up: true };
+                self.set_local_tool(crate::layers::LocalTool::Remove);
+                self.remove_strokes = vec![stroke(curve(0.3, 0.08), 0.012, 0.8, 1.0, 1.0)];
+                // Automatic masking: a big brush along the sky above the trees.
+                if std::env::var_os("SILBERKORN_AUTOMASK").is_some() {
+                    self.remove_strokes = vec![sk_core::params::BrushStroke { auto_mask: true, ..stroke(curve(0.12, 0.02), 0.06, 0.5, 1.0, 1.0) }];
+                }
+                self.edit(|a| a.layers.push(sk_core::params::Layer {
+                    name: "Demo".into(),
+                    mask: sk_core::params::Mask { strokes: vec![stroke(curve(0.7, 0.06), 0.03, 0.0, 0.3, 0.8)], ..Default::default() },
+                    adjustments: sk_core::params::LayerAdjustments { exposure: 1.0, ..Default::default() },
+                    ..Default::default()
+                }));
+                self.active_layer = Some(0);
+                self.show_mask = true;
+                self.request_render();
+            }
             // Shows the activity display (as during a removal).
             if std::env::var_os("SILBERKORN_BUSY").is_some() {
                 (self.inpaint_busy, self.removal_progress) = (true, 0.4);

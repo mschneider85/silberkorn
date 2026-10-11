@@ -144,10 +144,12 @@ pub fn make_removal(full: &LinearImage, wb: [f32; 3], strokes: &[BrushStroke], m
         })
         .collect();
     let norm = [rect[0] / fw, rect[1] / fh, rect[2] / fw, rect[3] / fh];
-    let cover = rasterize_strokes_in(strokes, norm, w, h, aspect);
+    let guide = strokes.iter().any(|s| s.auto_mask).then(|| sk_core::brush::AutoGuide::from_image(full, 1024));
+    let cover = rasterize_strokes_in(strokes, norm, w, h, aspect, guide.as_ref());
     let mut work = Work { rect, w, h, rgb, cover };
     fill_windows(&mut work, model, progress)?;
-    let mut removal = finish(work, full, wb)?;
+    let opacity = strokes.iter().filter(|s| !s.erase).map(|s| s.opacity).fold(0.0f32, f32::max).clamp(0.0, 1.0);
+    let mut removal = finish(work, full, wb, opacity)?;
     removal.strokes = strokes.to_vec();
     Ok(removal)
 }
@@ -224,7 +226,7 @@ fn fill_windows(work: &mut Work, model: &Inpainter, progress: &dyn Fn(f32)) -> R
 
 /// The patch: filled pixels (camera RGB again) with a soft-edged coverage, cut to the marked
 /// part and reduced if very large.
-fn finish(work: Work, full: &LinearImage, wb: [f32; 3]) -> Result<Removal> {
+fn finish(work: Work, full: &LinearImage, wb: [f32; 3], opacity: f32) -> Result<Removal> {
     let (w, h) = (work.w, work.h);
     let hole0: Vec<bool> = work.cover.iter().map(|c| *c > 0.05).collect();
     let grown = dilate(&dilate(&hole0, w, h, 4), w, h, 2);
@@ -245,7 +247,7 @@ fn finish(work: Work, full: &LinearImage, wb: [f32; 3]) -> Result<Removal> {
             let y = (by0 as f32 + ((i / pw) as f32 + 0.5) * red) as usize;
             let k = y.min(h - 1) * w + x.min(w - 1);
             let p = work.rgb[k];
-            [p[0] / wb[0], p[1] / wb[1], p[2] / wb[2], (alpha.data[k] * 1.25).min(1.0)]
+            [p[0] / wb[0], p[1] / wb[1], p[2] / wb[2], (alpha.data[k] * 1.25).min(1.0) * opacity]
         })
         .collect();
     let scale = rgba.iter().flat_map(|p| [p[0], p[1], p[2]]).fold(1e-6f32, f32::max);
@@ -284,7 +286,7 @@ mod tests {
             }
         }
         let img = LinearImage::new(w, h, data);
-        let stroke = BrushStroke { points: vec![[0.5, 0.5]], radius: 30.0 / 1200.0, hardness: 0.8, flow: 1.0, erase: false };
+        let stroke = BrushStroke { points: vec![[0.5, 0.5]], radius: 30.0 / 1200.0, hardness: 0.8, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true };
         let r = make_removal(&img, [1.0, 1.0, 1.0], &[stroke], &model, &|_| {}).unwrap();
         let p = Patch::decode(&r.patch, r.scale).unwrap();
         // The patch covers the blob and is bright there.

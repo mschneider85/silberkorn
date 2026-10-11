@@ -238,9 +238,23 @@ pub struct BrushStroke {
     pub radius: f32,
     /// 0 (soft) .. 1 (hard)
     pub hardness: f32,
-    /// 0..1
+    /// 0..1: how much each dab adds (coverage builds up within a stroke, see `brush`).
     pub flow: f32,
     pub erase: bool,
+    /// 0..1: the most the stroke covers.
+    #[serde(default = "one")]
+    pub opacity: f32,
+    /// Only where the image resembles what is under the brush's center.
+    #[serde(default)]
+    pub auto_mask: bool,
+    /// Rasterized as smooth dabs with build-up (`brush::paint_stroke`). Strokes saved before
+    /// had a polyline with `flow` as opacity; they are drawn as before.
+    #[serde(default)]
+    pub build_up: bool,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 /// Linear gradient: fully masked at `start`, unmasked at `end` (normalized source coordinates).
@@ -366,6 +380,9 @@ pub struct Spot {
     pub radius: f32,
     /// 0..1
     pub feather: f32,
+    /// 0..1
+    #[serde(default = "one")]
+    pub opacity: f32,
 }
 
 /// Crop rectangle, normalized (0..1) to the rotated and straightened frame.

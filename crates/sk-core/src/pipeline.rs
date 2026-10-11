@@ -635,7 +635,7 @@ impl Processor {
         // Layer masks (rasterized once per mask change, sampled in source coordinates).
         let aspect = src.width as f32 / src.height.max(1) as f32;
         let bitmaps: Vec<Option<Arc<MaskBitmap>>> =
-            self.layers.iter().map(|l| (!l.mask.is_empty()).then(|| cached_bitmap(&l.mask, aspect))).collect();
+            self.layers.iter().map(|l| (!l.mask.is_empty()).then(|| cached_bitmap(&l.mask, aspect, Some(src)))).collect();
         let overlay_layer = self.opts.mask_overlay.and_then(|i| self.layers.iter().position(|l| l.index == i));
         let (sw, sh) = (src.width as f32, src.height as f32);
 
@@ -1394,6 +1394,7 @@ mod tests {
             source: [4.5 / 20.0, 4.5 / 20.0],
             radius: 0.1,
             feather: 0.3,
+            opacity: 1.0,
         });
         let base = Processor::new(&meta(), &plain()).render(&src, None, None);
         let r = Processor::new(&meta(), &adj).render(&src, None, None);

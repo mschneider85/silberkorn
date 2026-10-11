@@ -62,8 +62,16 @@ misst die Pipeline.
 
 Lokale Anpassungen (Tab „Ebenen“) wirken als Deltas auf die Hintergrund-Einstellungen und werden pro
 Pixel mit Maske × Deckkraft gemischt; überlappende Ebenen addieren sich. Masken bestehen aus
-Pinselstrichen (Größe, Härte, Fluss, Radierer), linearen und radialen Verläufen, „Füllen“ und
-„Invertieren“. Sie werden in Quellkoordinaten gespeichert und bleiben deshalb nach Zuschnitt,
+Pinselstrichen, linearen und radialen Verläufen, „Füllen“ und „Invertieren“.
+
+**Pinsel** (Pinsel, Radierer, Entfernen; Reparieren/Klonen ohne Fluss und Auto-Maske) haben jeweils
+eigene, gespeicherte Einstellungen: **Größe**, **Härte** (weiche bis harte Kante), **Deckkraft** (das
+Maximum eines Strichs) und **Fluss** (wie viel jeder Pinselabdruck beiträgt; innerhalb eines Strichs
+baut sich die Deckung auf). **Automatisch maskieren** beschränkt den Strich auf Bereiche, die der
+Stelle unter der Pinselmitte in Farbe und Helligkeit ähneln, sodass Kanten erhalten bleiben. Striche
+werden dicht aufgezeichnet und als Catmull-Rom-Kurve mit Abdrücken im Abstand von 15 % des
+Radius gerastert; Masken haben 3072 Pixel an der langen Kante. Beim Malen wird nur der aktuelle
+Strich neu gerastert. Striche aus älteren Sidecars sehen aus wie zuvor. Sie werden in Quellkoordinaten gespeichert und bleiben deshalb nach Zuschnitt,
 Drehen oder Objektivkorrektur am Bildinhalt.
 
 „Reparieren“ übernimmt Struktur von einer automatisch gewählten Quelle und gleicht Farbe/Helligkeit an

@@ -1,6 +1,7 @@
 //! Silberkorn core: raw decoding, development pipeline, sidecars and export.
 
 pub mod auto;
+pub mod brush;
 pub mod cache;
 pub mod catalog;
 pub mod color;

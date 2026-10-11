@@ -75,18 +75,86 @@ impl LocalTool {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct BrushSettings {
     /// Radius in screen pixels.
     pub size: f32,
+    /// 0 (soft) .. 1 (hard edge)
     pub hardness: f32,
+    /// The most a stroke covers, 0..1.
+    pub opacity: f32,
+    /// What each dab adds (builds up within a stroke), 0..1.
     pub flow: f32,
+    /// Only where the image resembles what is under the brush's center.
+    pub auto_mask: bool,
 }
 
 impl Default for BrushSettings {
     fn default() -> Self {
-        Self { size: 40.0, hardness: 0.5, flow: 1.0 }
+        Self { size: 40.0, hardness: 0.5, opacity: 1.0, flow: 1.0, auto_mask: false }
     }
+}
+
+/// Settings of each brush tool (kept between sessions).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct Brushes {
+    pub paint: BrushSettings,
+    pub eraser: BrushSettings,
+    pub remove: BrushSettings,
+    /// Heal and clone (size, hardness, opacity).
+    pub spot: BrushSettings,
+}
+
+impl Default for Brushes {
+    fn default() -> Self {
+        Self {
+            paint: BrushSettings::default(),
+            eraser: BrushSettings::default(),
+            remove: BrushSettings { size: 30.0, hardness: 0.8, ..Default::default() },
+            spot: BrushSettings { size: 25.0, hardness: 0.6, ..Default::default() },
+        }
+    }
+}
+
+impl Brushes {
+    /// Settings of a tool (the paint brush's for tools without own ones).
+    pub fn of(&mut self, tool: Option<LocalTool>) -> &mut BrushSettings {
+        match tool {
+            Some(LocalTool::Eraser) => &mut self.eraser,
+            Some(LocalTool::Remove) => &mut self.remove,
+            Some(LocalTool::Heal | LocalTool::Clone) => &mut self.spot,
+            _ => &mut self.paint,
+        }
+    }
+
+    pub fn defaults_of(tool: Option<LocalTool>) -> BrushSettings {
+        let mut d = Brushes::default();
+        d.of(tool).clone()
+    }
+}
+
+/// Distance (screen pixels) between recorded points of a stroke: dense, for smooth curves.
+pub fn point_spacing(size: f32) -> f32 {
+    (size * 0.05).max(1.5)
+}
+
+/// Controls of a brush: size, hardness, opacity, flow, automatic masking. Returns whether
+/// something changed.
+pub fn brush_controls(ui: &mut Ui, b: &mut BrushSettings, tool: Option<LocalTool>, flow_and_auto: bool) -> bool {
+    let d = Brushes::defaults_of(tool);
+    let before = b.clone();
+    slider_row(ui, "Größe", &mut b.size, 2.0..=400.0, d.size, 0);
+    slider_row(ui, "Härte", &mut b.hardness, 0.0..=1.0, d.hardness, 2);
+    slider_row(ui, "Deckkraft", &mut b.opacity, 0.05..=1.0, d.opacity, 2);
+    if flow_and_auto {
+        slider_row(ui, "Fluss", &mut b.flow, 0.02..=1.0, d.flow, 2);
+        ui.checkbox(&mut b.auto_mask, "Automatisch maskieren")
+            .on_hover_text("Wirkt nur dort, wo das Bild der Stelle unter der Pinselmitte ähnelt (Kanten werden respektiert)");
+    }
+    ui.label(RichText::new("[ und ] ändern die Größe · Doppelklick auf einen Regler: Standard").small().color(Color32::from_gray(140)));
+    *b != before
 }
 
 /// Drag state of the local tools.
@@ -168,11 +236,10 @@ impl App {
 
         match tool {
             LocalTool::Brush | LocalTool::Eraser => {
+                let b = self.brushes.of(Some(tool)).clone();
                 if let Some(p) = hover {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::None);
-                    let r = self.brush.size;
-                    painter.circle_stroke(p, r, Stroke::new(1.5, Color32::WHITE));
-                    painter.circle_stroke(p, r * self.brush.hardness.max(0.05), Stroke::new(1.0, Color32::from_white_alpha(90)));
+                    brush_cursor(&painter, p, &b);
                     if tool == LocalTool::Eraser {
                         painter.text(p, egui::Align2::CENTER_CENTER, "−", egui::FontId::proportional(16.0), Color32::WHITE);
                     }
@@ -184,17 +251,20 @@ impl App {
                 {
                     let stroke = BrushStroke {
                         points: vec![uv],
-                        radius: self.radius_norm(self.brush.size, scale),
-                        hardness: self.brush.hardness,
-                        flow: self.brush.flow,
+                        radius: self.radius_norm(b.size, scale),
+                        hardness: b.hardness,
+                        flow: b.flow,
                         erase: tool == LocalTool::Eraser,
+                        opacity: b.opacity,
+                        auto_mask: b.auto_mask,
+                        build_up: true,
                     };
                     self.edit(|a| a.layers[li].mask.strokes.push(stroke));
                     self.local_drag = LocalDrag::Stroke(p);
                 }
                 if response.dragged()
                     && let (Some(p), LocalDrag::Stroke(last)) = (response.interact_pointer_pos(), self.local_drag.clone())
-                    && (p - last).length() > (self.brush.size * 0.15).max(2.0)
+                    && (p - last).length() > point_spacing(b.size)
                     && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
                     && let Some(li) = self.active_layer
                 {
@@ -317,7 +387,7 @@ impl App {
         }
         if let Some(p) = response.hover_pos() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
-            painter.circle_stroke(p, self.spot_size, Stroke::new(1.0, Color32::from_white_alpha(160)));
+            brush_cursor(&painter, p, &self.brushes.spot);
         }
         let selected = self.selected_spot;
         let hit = |p: Pos2| -> Option<(usize, bool)> {
@@ -361,10 +431,12 @@ impl App {
             if let Some((i, _)) = hit(p) {
                 self.selected_spot = Some(i);
             } else if let Some(uv) = self.screen_to_uv(p, img_rect, scale) {
-                let radius = self.radius_norm(self.spot_size, scale);
+                let b = self.brushes.spot.clone();
+                let radius = self.radius_norm(b.size, scale);
                 let source = self.current.as_ref().map_or(uv, |c| mask::auto_source(&c.preview, uv, radius));
                 let mode = if tool == LocalTool::Heal { SpotMode::Heal } else { SpotMode::Clone };
-                self.edit(|a| a.retouch.push(Spot { mode, target: uv, source, radius, feather: 0.4 }));
+                let (feather, opacity) = (1.0 - b.hardness.clamp(0.0, 1.0), b.opacity);
+                self.edit(|a| a.retouch.push(Spot { mode, target: uv, source, radius, feather, opacity }));
                 self.selected_spot = self.current.as_ref().map(|c| c.adjustments.retouch.len() - 1);
             }
         }
@@ -549,6 +621,7 @@ impl App {
             return;
         }
         let mut tool_click = None;
+        let mut brushes_changed = false;
         section(ui, "Werkzeuge", None, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for t in [LocalTool::Brush, LocalTool::Eraser, LocalTool::Linear, LocalTool::Radial, LocalTool::Heal, LocalTool::Clone] {
@@ -558,14 +631,11 @@ impl App {
                 }
             });
             match self.local_tool {
-                Some(LocalTool::Brush | LocalTool::Eraser) => {
-                    slider_row(ui, "Größe", &mut self.brush.size, 2.0..=400.0, 40.0, 0);
-                    slider_row(ui, "Härte", &mut self.brush.hardness, 0.0..=1.0, 0.5, 2);
-                    slider_row(ui, "Fluss", &mut self.brush.flow, 0.05..=1.0, 1.0, 2);
-                    ui.label(RichText::new("[ und ] ändern die Größe").small().color(Color32::from_gray(140)));
+                Some(t @ (LocalTool::Brush | LocalTool::Eraser)) => {
+                    brushes_changed |= brush_controls(ui, self.brushes.of(Some(t)), Some(t), true);
                 }
-                Some(LocalTool::Heal | LocalTool::Clone) => {
-                    slider_row(ui, "Größe", &mut self.spot_size, 3.0..=300.0, 25.0, 0);
+                Some(t @ (LocalTool::Heal | LocalTool::Clone)) => {
+                    brushes_changed |= brush_controls(ui, self.brushes.of(Some(t)), Some(t), false);
                     ui.label(RichText::new("Klicken: Punkt setzen · Ziehen: verschieben · Entf: löschen").small().color(Color32::from_gray(140)));
                 }
                 _ => {}
@@ -573,6 +643,9 @@ impl App {
         });
         if let Some(t) = tool_click {
             self.set_local_tool(t);
+        }
+        if brushes_changed {
+            self.brushes_changed_at = Some(std::time::Instant::now());
         }
         self.remove_section(ui);
 
@@ -727,4 +800,13 @@ enum LayerAction {
     Select(Option<usize>),
     Add(bool),
     Delete,
+}
+
+/// Brush outline: the size, and inside it where the hard core ends.
+pub fn brush_cursor(painter: &egui::Painter, p: Pos2, b: &BrushSettings) {
+    painter.circle_stroke(p, b.size, Stroke::new(2.5, Color32::from_black_alpha(120)));
+    painter.circle_stroke(p, b.size, Stroke::new(1.2, Color32::WHITE));
+    if b.hardness < 0.97 {
+        painter.circle_stroke(p, b.size * b.hardness.max(0.05), Stroke::new(1.0, Color32::from_white_alpha(110)));
+    }
 }

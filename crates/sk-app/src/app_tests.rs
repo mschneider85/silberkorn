@@ -1370,7 +1370,7 @@ fn remove_tool_fills_the_painted_area() {
     let Some(mut f) = Fixture::new("remove") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
     f.app.set_local_tool(crate::layers::LocalTool::Remove);
-    f.app.remove_strokes = vec![sk_core::params::BrushStroke { points: vec![[0.4, 0.5], [0.45, 0.52]], radius: 0.01, hardness: 0.7, flow: 1.0, erase: false }];
+    f.app.remove_strokes = vec![sk_core::params::BrushStroke { points: vec![[0.4, 0.5], [0.45, 0.52]], radius: 0.01, hardness: 0.7, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true }];
     f.app.request_removal();
     assert!(f.app.inpaint_busy);
     // Shown in the viewer and the status bar while it runs.

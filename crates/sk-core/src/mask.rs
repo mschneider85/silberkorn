@@ -12,7 +12,7 @@ use crate::image::LinearImage;
 use crate::params::{Mask, Spot, SpotMode};
 
 /// Long edge of rasterized masks.
-pub const MASK_RES: usize = 1536;
+pub const MASK_RES: usize = 3072;
 
 #[derive(Clone, Debug)]
 pub struct MaskBitmap {
@@ -56,7 +56,7 @@ fn bitmap_size(aspect: f32) -> (usize, usize) {
 
 /// Rasterizes the drawn parts of a mask (fill, gradients, AI, strokes) for a source of the
 /// given aspect ratio (width / height). Range refinements and inversion are applied per pixel.
-pub fn rasterize(mask: &Mask, aspect: f32) -> MaskBitmap {
+pub fn rasterize(mask: &Mask, aspect: f32, guide: Option<&crate::brush::AutoGuide>) -> MaskBitmap {
     let (w, h) = bitmap_size(aspect);
     let long = w.max(h) as f32;
     let mut data = vec![if mask.fill { 1.0f32 } else { 0.0 }; w * h];
@@ -93,13 +93,29 @@ pub fn rasterize(mask: &Mask, aspect: f32) -> MaskBitmap {
         });
     }
 
+    let mut bm = MaskBitmap { w, h, data };
     for stroke in &mask.strokes {
+        paint_stroke_into(&mut bm, stroke, aspect, guide);
+    }
+    bm
+}
+
+/// Adds one stroke to a bitmap of the whole source.
+fn paint_stroke_into(bm: &mut MaskBitmap, stroke: &crate::params::BrushStroke, aspect: f32, guide: Option<&crate::brush::AutoGuide>) {
+    let (w, h) = (bm.w, bm.h);
+    if stroke.build_up {
+        crate::brush::paint_stroke(&mut bm.data, w, h, [0.0, 0.0, 1.0, 1.0], aspect, stroke, guide);
+        return;
+    }
+    let long = w.max(h) as f32;
+    let data = &mut bm.data;
+    {
         let r = (stroke.radius * long).max(0.5);
         let inner = r * stroke.hardness.clamp(0.0, 0.99);
         // Bounding box of the stroke in bitmap pixels.
         let pts: Vec<(f32, f32)> = stroke.points.iter().map(|p| (p[0] * w as f32, p[1] * h as f32)).collect();
         if pts.is_empty() {
-            continue;
+            return;
         }
         let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
         for &(x, y) in &pts {
@@ -111,7 +127,7 @@ pub fn rasterize(mask: &Mask, aspect: f32) -> MaskBitmap {
         let (bx0, by0) = (x0.floor().max(0.0) as usize, y0.floor().max(0.0) as usize);
         let (bx1, by1) = ((x1.ceil() as usize).min(w), (y1.ceil() as usize).min(h));
         if bx1 <= bx0 || by1 <= by0 {
-            continue;
+            return;
         }
         let bw = bx1 - bx0;
         // Coverage of the stroke: max over the polyline (stamps do not accumulate within a stroke).
@@ -141,7 +157,6 @@ pub fn rasterize(mask: &Mask, aspect: f32) -> MaskBitmap {
             }
         }
     }
-    MaskBitmap { w, h, data }
 }
 
 fn mask_key(mask: &Mask, aspect: f32) -> u64 {
@@ -154,19 +169,36 @@ type MaskCache = Mutex<Vec<(u64, Arc<MaskBitmap>)>>;
 
 static MASK_CACHE: LazyLock<MaskCache> = LazyLock::new(|| Mutex::new(Vec::new()));
 
+fn cache_lookup(key: u64) -> Option<Arc<MaskBitmap>> {
+    let mut cache = MASK_CACHE.lock().unwrap();
+    let pos = cache.iter().position(|(k, _)| *k == key)?;
+    let entry = cache.remove(pos);
+    let bm = entry.1.clone();
+    cache.push(entry);
+    Some(bm)
+}
+
 /// Rasterized mask from a small LRU cache (rasterization only runs when the mask changes).
-pub fn cached_bitmap(mask: &Mask, aspect: f32) -> Arc<MaskBitmap> {
+/// While a stroke is being painted only that stroke is drawn again: the mask without it stays
+/// in the cache. `src` (the oriented camera image) is needed for automatic masking.
+pub fn cached_bitmap(mask: &Mask, aspect: f32, src: Option<&LinearImage>) -> Arc<MaskBitmap> {
     let key = mask_key(mask, aspect);
-    {
-        let mut cache = MASK_CACHE.lock().unwrap();
-        if let Some(pos) = cache.iter().position(|(k, _)| *k == key) {
-            let entry = cache.remove(pos);
-            let bm = entry.1.clone();
-            cache.push(entry);
-            return bm;
-        }
+    if let Some(bm) = cache_lookup(key) {
+        return bm;
     }
-    let bm = Arc::new(rasterize(mask, aspect));
+    let guide = mask.strokes.iter().any(|s| s.auto_mask).then(|| src.map(|s| crate::brush::AutoGuide::from_image(s, 1024))).flatten();
+    let prefix = mask.strokes.split_last().and_then(|(last, rest)| {
+        let without = Mask { strokes: rest.to_vec(), ..mask.clone() };
+        cache_lookup(mask_key(&without, aspect)).map(|b| (b, last))
+    });
+    let bm = match prefix {
+        Some((base, last)) => {
+            let mut b = (*base).clone();
+            paint_stroke_into(&mut b, last, aspect, guide.as_ref());
+            Arc::new(b)
+        }
+        None => Arc::new(rasterize(mask, aspect, guide.as_ref())),
+    };
     let mut cache = MASK_CACHE.lock().unwrap();
     cache.push((key, bm.clone()));
     if cache.len() > 24 {
@@ -212,6 +244,7 @@ struct PreparedSpot {
     r: f32,
     inner: f32,
     gain: [f32; 3],
+    opacity: f32,
 }
 
 /// Applies heal/clone spots to a resampled region (camera space).
@@ -236,7 +269,14 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
                     std::array::from_fn(|c| if q[c] > 1e-5 { (t[c] / q[c]).clamp(0.25, 4.0) } else { 1.0 })
                 }
             };
-            PreparedSpot { target, offset: (source.0 - target.0, source.1 - target.1), r, inner: r * (1.0 - s.feather.clamp(0.0, 1.0)), gain }
+            PreparedSpot {
+                target,
+                offset: (source.0 - target.0, source.1 - target.1),
+                r,
+                inner: r * (1.0 - s.feather.clamp(0.0, 1.0)),
+                gain,
+                opacity: s.opacity.clamp(0.0, 1.0),
+            }
         })
         .collect();
     img.data.par_chunks_mut(region.w).enumerate().for_each(|(ry, line)| {
@@ -250,7 +290,7 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
                 if d >= s.r {
                     continue;
                 }
-                let w = 1.0 - smoothstep(s.inner, s.r, d);
+                let w = (1.0 - smoothstep(s.inner, s.r, d)) * s.opacity;
                 let v = bilinear(src, sx + s.offset.0, sy + s.offset.1);
                 for c in 0..3 {
                     let repl = v[c] * s.gain[c];
@@ -293,38 +333,52 @@ pub fn auto_source(src: &LinearImage, target: [f32; 2], radius: f32) -> [f32; 2]
 
 /// Coverage of brush strokes over the part `rect` (x, y, w, h; normalized source coordinates)
 /// of a source with aspect ratio `aspect`, rasterized at `w` x `h`.
-pub fn rasterize_strokes_in(strokes: &[crate::params::BrushStroke], rect: [f32; 4], w: usize, h: usize, aspect: f32) -> Vec<f32> {
-    // Distances in units of the long image edge.
-    let (kx, ky) = if aspect >= 1.0 { (1.0, 1.0 / aspect) } else { (aspect, 1.0) };
+pub fn rasterize_strokes_in(
+    strokes: &[crate::params::BrushStroke],
+    rect: [f32; 4],
+    w: usize,
+    h: usize,
+    aspect: f32,
+    guide: Option<&crate::brush::AutoGuide>,
+) -> Vec<f32> {
     let mut data = vec![0.0f32; w * h];
     for stroke in strokes {
-        let r = stroke.radius.max(1e-5);
-        let inner = r * stroke.hardness.clamp(0.0, 0.99);
-        let pts: Vec<(f32, f32)> = stroke.points.iter().map(|p| (p[0] * kx, p[1] * ky)).collect();
-        if pts.is_empty() {
-            continue;
+        if stroke.build_up {
+            crate::brush::paint_stroke(&mut data, w, h, rect, aspect, stroke, guide);
+        } else {
+            legacy_stroke_in(&mut data, stroke, rect, w, h, aspect);
         }
-        let segs: Vec<((f32, f32), (f32, f32))> =
-            if pts.len() == 1 { vec![(pts[0], pts[0])] } else { pts.windows(2).map(|p| (p[0], p[1])).collect() };
-        let flow = stroke.flow.clamp(0.0, 1.0);
-        data.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
-            let py = (rect[1] + (y as f32 + 0.5) / h as f32 * rect[3]) * ky;
-            for (x, m) in row.iter_mut().enumerate() {
-                let px = (rect[0] + (x as f32 + 0.5) / w as f32 * rect[2]) * kx;
-                let mut d2min = f32::MAX;
-                for &((ax, ay), (cx, cy)) in &segs {
-                    let (dx, dy) = (cx - ax, cy - ay);
-                    let len2 = dx * dx + dy * dy;
-                    let t = if len2 > 0.0 { (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
-                    let (qx, qy) = (ax + dx * t - px, ay + dy * t - py);
-                    d2min = d2min.min(qx * qx + qy * qy);
-                }
-                let c = (1.0 - smoothstep(inner, r, d2min.sqrt())) * flow;
-                *m = if stroke.erase { *m * (1.0 - c) } else { *m + (1.0 - *m) * c };
-            }
-        });
     }
     data
+}
+
+/// Strokes saved before smooth dabs: coverage of the polyline times the flow.
+fn legacy_stroke_in(data: &mut [f32], stroke: &crate::params::BrushStroke, rect: [f32; 4], w: usize, h: usize, aspect: f32) {
+    let (kx, ky) = if aspect >= 1.0 { (1.0, 1.0 / aspect) } else { (aspect, 1.0) };
+    let r = stroke.radius.max(1e-5);
+    let inner = r * stroke.hardness.clamp(0.0, 0.99);
+    let pts: Vec<(f32, f32)> = stroke.points.iter().map(|p| (p[0] * kx, p[1] * ky)).collect();
+    if pts.is_empty() {
+        return;
+    }
+    let segs: Vec<((f32, f32), (f32, f32))> = if pts.len() == 1 { vec![(pts[0], pts[0])] } else { pts.windows(2).map(|p| (p[0], p[1])).collect() };
+    let flow = stroke.flow.clamp(0.0, 1.0);
+    data.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        let py = (rect[1] + (y as f32 + 0.5) / h as f32 * rect[3]) * ky;
+        for (x, m) in row.iter_mut().enumerate() {
+            let px = (rect[0] + (x as f32 + 0.5) / w as f32 * rect[2]) * kx;
+            let mut d2min = f32::MAX;
+            for &((ax, ay), (cx, cy)) in &segs {
+                let (dx, dy) = (cx - ax, cy - ay);
+                let len2 = dx * dx + dy * dy;
+                let t = if len2 > 0.0 { (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+                let (qx, qy) = (ax + dx * t - px, ay + dy * t - py);
+                d2min = d2min.min(qx * qx + qy * qy);
+            }
+            let c = (1.0 - smoothstep(inner, r, d2min.sqrt())) * flow;
+            *m = if stroke.erase { *m * (1.0 - c) } else { *m + (1.0 - *m) * c };
+        }
+    });
 }
 
 /// A decoded removal patch: camera RGB and coverage.
@@ -435,35 +489,35 @@ mod tests {
     #[test]
     fn brush_stroke_draws_and_erases() {
         let mut m = Mask {
-            strokes: vec![BrushStroke { points: vec![[0.2, 0.5], [0.8, 0.5]], radius: 0.05, hardness: 0.5, flow: 1.0, erase: false }],
+            strokes: vec![BrushStroke { points: vec![[0.2, 0.5], [0.8, 0.5]], radius: 0.05, hardness: 0.5, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true }],
             ..Default::default()
         };
-        let b = rasterize(&m, 1.5);
+        let b = rasterize(&m, 1.5, None);
         assert!(b.sample(0.5, 0.5) > 0.99);
         assert!(b.sample(0.5, 0.1) < 0.01);
-        m.strokes.push(BrushStroke { points: vec![[0.5, 0.5]], radius: 0.05, hardness: 0.9, flow: 1.0, erase: true });
-        assert!(rasterize(&m, 1.5).sample(0.5, 0.5) < 0.05);
-        assert!(rasterize(&m, 1.5).sample(0.3, 0.5) > 0.99);
+        m.strokes.push(BrushStroke { points: vec![[0.5, 0.5]], radius: 0.05, hardness: 0.9, flow: 1.0, erase: true, opacity: 1.0, auto_mask: false, build_up: true });
+        assert!(rasterize(&m, 1.5, None).sample(0.5, 0.5) < 0.05);
+        assert!(rasterize(&m, 1.5, None).sample(0.3, 0.5) > 0.99);
     }
 
     #[test]
     fn gradients() {
         let m = Mask { linear: vec![LinearGradient { start: [0.0, 0.0], end: [0.0, 1.0] }], ..Default::default() };
-        let b = rasterize(&m, 1.0);
+        let b = rasterize(&m, 1.0, None);
         assert!(b.sample(0.5, 0.02) > 0.95 && b.sample(0.5, 0.98) < 0.05);
         let m = Mask {
             radial: vec![RadialGradient { center: [0.5, 0.5], radius_x: 0.2, radius_y: 0.2, feather: 0.5, invert: false }],
             ..Default::default()
         };
-        let b = rasterize(&m, 1.0);
+        let b = rasterize(&m, 1.0, None);
         assert!(b.sample(0.5, 0.5) > 0.99 && b.sample(0.05, 0.05) < 0.01);
     }
 
     #[test]
     fn cache_returns_same_bitmap() {
         let m = Mask { fill: true, ..Default::default() };
-        let a = cached_bitmap(&m, 1.5);
-        let b = cached_bitmap(&m, 1.5);
+        let a = cached_bitmap(&m, 1.5, None);
+        let b = cached_bitmap(&m, 1.5, None);
         assert!(Arc::ptr_eq(&a, &b));
     }
 
@@ -475,7 +529,7 @@ mod tests {
         let geo = GeoMap::new(&Default::default(), &Default::default(), 0, w, h, false);
         let region = Region { x: 0, y: 0, w, h };
         let mut img = geo.resample(&src, region);
-        let spot = Spot { mode: SpotMode::Clone, target: [0.25, 0.5], source: [0.75, 0.5], radius: 0.1, feather: 0.2 };
+        let spot = Spot { mode: SpotMode::Clone, target: [0.25, 0.5], source: [0.75, 0.5], radius: 0.1, feather: 0.2, opacity: 1.0 };
         apply_retouch(&mut img, &src, &geo, region, &[spot]);
         assert!(img.data[10 * w + 10][0] > 0.7);
         assert!(img.data[10 * w + 2][0] < 0.15);
@@ -504,7 +558,7 @@ mod tests {
         let geo = GeoMap::new(&Default::default(), &Default::default(), 0, w, h, false);
         let region = Region { x: 0, y: 0, w, h };
         let mut img = geo.resample(&src, region);
-        let spot = Spot { mode: SpotMode::Heal, target: [15.5 / 60.0, 15.5 / 30.0], source: [45.5 / 60.0, 15.5 / 30.0], radius: 0.06, feather: 0.3 };
+        let spot = Spot { mode: SpotMode::Heal, target: [15.5 / 60.0, 15.5 / 30.0], source: [45.5 / 60.0, 15.5 / 30.0], radius: 0.06, feather: 0.3, opacity: 1.0 };
         apply_retouch(&mut img, &src, &geo, region, &[spot]);
         let v = img.data[15 * w + 15][0];
         assert!((v - 0.1).abs() < 0.03, "healed value {v}");
@@ -518,5 +572,21 @@ mod tests {
         let s = auto_source(&src, [0.5, 0.6], 0.05);
         assert!(s[1] * h as f32 > 25.0, "source in the bright band: {s:?}");
         assert!(s != [0.5, 0.6]);
+    }
+
+    #[test]
+    fn painting_stroke_by_stroke_matches_full_rasterization() {
+        let st = |pts: Vec<[f32; 2]>, erase: bool| BrushStroke { points: pts, radius: 0.04, hardness: 0.3, flow: 0.4, erase, opacity: 0.8, auto_mask: false, build_up: true };
+        let mut m = Mask { linear: vec![crate::params::LinearGradient { start: [0.0, 0.0], end: [0.0, 0.3] }], ..Default::default() };
+        m.strokes.push(st(vec![[0.2, 0.5], [0.4, 0.55]], false));
+        let _ = cached_bitmap(&m, 1.5, None);
+        // The next stroke is drawn on top of the cached mask without it.
+        m.strokes.push(st(vec![[0.3, 0.4], [0.35, 0.6], [0.5, 0.62]], false));
+        m.strokes.push(st(vec![[0.33, 0.5]], true));
+        let _ = cached_bitmap(&Mask { strokes: m.strokes[..2].to_vec(), ..m.clone() }, 1.5, None);
+        let incremental = cached_bitmap(&m, 1.5, None);
+        let full = rasterize(&m, 1.5, None);
+        let diff = incremental.data.iter().zip(&full.data).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(diff < 1e-5, "{diff}");
     }
 }
