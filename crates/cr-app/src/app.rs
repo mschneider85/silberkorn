@@ -25,20 +25,22 @@ pub enum Tab {
     Exposure,
     Color,
     Details,
+    Layers,
     Metadata,
     Styles,
     Output,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 8] =
-        [Tab::Library, Tab::Lens, Tab::Exposure, Tab::Color, Tab::Details, Tab::Metadata, Tab::Styles, Tab::Output];
+    pub const ALL: [Tab; 9] =
+        [Tab::Library, Tab::Lens, Tab::Exposure, Tab::Color, Tab::Details, Tab::Layers, Tab::Metadata, Tab::Styles, Tab::Output];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Library => "📚 Bibliothek",
             Tab::Lens => "📐 Objektiv",
             Tab::Details => "🔍 Details",
+            Tab::Layers => "✏ Ebenen",
             Tab::Exposure => "☀ Belichtung",
             Tab::Color => "🎨 Farbe",
             Tab::Metadata => "ℹ Metadaten",
@@ -153,6 +155,13 @@ pub struct App {
     /// Active crop tool state (the viewer shows the uncropped frame).
     pub crop_tool: Option<crate::crop::CropTool>,
     pub straighten_tool: Option<crate::crop::StraightenTool>,
+    pub local_tool: Option<crate::layers::LocalTool>,
+    pub local_drag: crate::layers::LocalDrag,
+    pub active_layer: Option<usize>,
+    pub brush: crate::layers::BrushSettings,
+    pub spot_size: f32,
+    pub selected_spot: Option<usize>,
+    pub show_mask: bool,
     pub tile: Option<Tile>,
     /// Requested tile (version, region), to avoid resending identical jobs.
     pub tile_requested: Option<(u64, cr_core::geometry::Region)>,
@@ -254,6 +263,13 @@ impl App {
             picking_wb: false,
             crop_tool: None,
             straighten_tool: None,
+            local_tool: None,
+            local_drag: Default::default(),
+            active_layer: None,
+            brush: Default::default(),
+            spot_size: 25.0,
+            selected_spot: None,
+            show_mask: false,
             tile: None,
             tile_requested: None,
             edit_version: 0,
@@ -301,6 +317,12 @@ impl App {
     }
 
     // ---------------------------------------------------------------- selection
+
+    /// Layer whose mask is shown as overlay.
+    pub fn mask_overlay(&self) -> Option<usize> {
+        let drawing = self.local_tool.is_some_and(|t| t.is_mask_tool()) && self.pointer_down;
+        if self.show_mask || drawing { self.active_layer } else { None }
+    }
 
     pub fn generation(&self) -> u64 {
         self.generation
@@ -528,6 +550,9 @@ impl App {
                             self.tile_requested = None;
                             self.crop_tool = None;
                             self.straighten_tool = None;
+                            self.active_layer = None;
+                            self.selected_spot = None;
+                            self.local_drag = Default::default();
                             self.current = Some(Current {
                                 meta,
                                 preview,
@@ -652,6 +677,7 @@ impl App {
                 clip_warning: self.clip_warning,
                 before: self.show_before,
                 ignore_crop: self.crop_tool.is_some(),
+                mask_overlay: self.mask_overlay(),
             });
         }
     }
@@ -709,6 +735,35 @@ impl App {
                 self.set_color_label(l);
             }
         }
+        use crate::layers::LocalTool;
+        for (k, t) in [
+            (Key::B, LocalTool::Brush),
+            (Key::N, LocalTool::Eraser),
+            (Key::L, LocalTool::Linear),
+            (Key::R, LocalTool::Radial),
+            (Key::H, LocalTool::Heal),
+            (Key::S, LocalTool::Clone),
+        ] {
+            if pressed(k, Modifiers::NONE) {
+                self.tab = Tab::Layers;
+                self.set_local_tool(t);
+            }
+        }
+        if pressed(Key::M, Modifiers::NONE) {
+            self.show_mask = !self.show_mask;
+            self.request_render();
+        }
+        if pressed(Key::OpenBracket, Modifiers::NONE) {
+            self.brush.size = (self.brush.size / 1.2).max(2.0);
+            self.spot_size = (self.spot_size / 1.2).max(3.0);
+        }
+        if pressed(Key::CloseBracket, Modifiers::NONE) {
+            self.brush.size = (self.brush.size * 1.2).min(400.0);
+            self.spot_size = (self.spot_size * 1.2).min(300.0);
+        }
+        if pressed(Key::Delete, Modifiers::NONE) || pressed(Key::Backspace, Modifiers::NONE) {
+            self.delete_selected_spot();
+        }
         if pressed(Key::G, Modifiers::NONE) {
             self.grid_view = !self.grid_view;
         }
@@ -738,6 +793,7 @@ impl App {
         }
         if pressed(Key::Escape, Modifiers::NONE) {
             self.picking_wb = false;
+            self.local_tool = None;
             self.straighten_tool = None;
             self.finish_crop_tool();
         }

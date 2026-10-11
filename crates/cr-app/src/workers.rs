@@ -47,6 +47,7 @@ pub struct RenderJob {
     pub before: bool,
     /// Render the whole frame (crop tool active).
     pub ignore_crop: bool,
+    pub mask_overlay: Option<usize>,
 }
 
 /// Full-resolution rendering of a region of the output (for zoomed-in viewing).
@@ -169,12 +170,12 @@ impl Workers {
                 while let Some(job) = recv_latest(&tile_rx) {
                     let adj = if job.before {
                         let mut a = Adjustments::default();
-                        a.keep_geometry_from(&job.adjustments);
+                        a.keep_framing_from(&job.adjustments);
                         a
                     } else {
                         job.adjustments
                     };
-                    let opts = RenderOptions { clip_warning: job.clip_warning, ignore_crop: false };
+                    let opts = RenderOptions { clip_warning: job.clip_warning, ..Default::default() };
                     let r = Processor::with_options(&job.meta, &adj, opts).render(&job.full, Some(job.region), Some(&cache));
                     let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
                     let _ = ev_tx.send(Event::TileRendered {
@@ -197,12 +198,12 @@ impl Workers {
                 while let Some(job) = recv_latest(&render_rx) {
                     let adj = if job.before {
                         let mut a = Adjustments::default();
-                        a.keep_geometry_from(&job.adjustments);
+                        a.keep_framing_from(&job.adjustments);
                         a
                     } else {
                         job.adjustments
                     };
-                    let opts = RenderOptions { clip_warning: job.clip_warning, ignore_crop: job.ignore_crop };
+                    let opts = RenderOptions { clip_warning: job.clip_warning, ignore_crop: job.ignore_crop, mask_overlay: job.mask_overlay };
                     let r = Processor::with_options(&job.meta, &adj, opts).render(&job.preview, None, Some(&cache));
                     let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
                     let thumb = (!job.before)

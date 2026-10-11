@@ -29,13 +29,13 @@ impl App {
         };
         let size = tex.size_vec2();
         let tex_id = tex.id();
-        let tools_active = self.crop_tool.is_some() || self.straighten_tool.is_some();
+        let tools_active = self.crop_tool.is_some() || self.straighten_tool.is_some() || self.local_tool.is_some();
         let margin = if self.crop_tool.is_some() { 40.0 } else { 20.0 };
         let fit = ((rect.width() - margin) / size.x).min((rect.height() - margin) / size.y).max(0.01);
         let scale = self.zoom.unwrap_or(fit);
 
         // Mouse wheel zoom around the cursor.
-        if response.hovered() && !tools_active {
+        if response.hovered() && (self.crop_tool.is_none() && self.straighten_tool.is_none()) {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 let new_scale = (scale * (1.0 + scroll * 0.0015)).clamp(fit.min(0.05), 16.0);
@@ -47,7 +47,7 @@ impl App {
                 self.zoom = Some(new_scale);
             }
         }
-        if response.dragged() && !self.picking_wb && !tools_active {
+        if (response.dragged() && !self.picking_wb && !tools_active) || response.dragged_by(egui::PointerButton::Middle) {
             self.pan += response.drag_delta();
         }
         let scale = self.zoom.unwrap_or(fit);
@@ -61,7 +61,8 @@ impl App {
         self.update_tile(rect, img_rect, scale);
         if let Some(tile) = &self.tile
             && tile.version == self.edit_version
-            && !tools_active
+            && self.crop_tool.is_none()
+            && self.straighten_tool.is_none()
         {
             let k = tile.full_size.0 as f32 / size.x;
             let r = tile.region;
@@ -72,7 +73,9 @@ impl App {
             painter.image(tile.texture.id(), tr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         }
 
-        if self.crop_tool.is_some() {
+        if self.local_tool.is_some() {
+            self.local_overlay(ui, &response, img_rect, scale);
+        } else if self.crop_tool.is_some() {
             self.crop_overlay(ui, &response, img_rect);
         } else if self.straighten_tool.is_some() {
             self.straighten_overlay(ui, &response);

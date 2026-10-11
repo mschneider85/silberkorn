@@ -9,6 +9,7 @@ pub mod export;
 pub mod geometry;
 pub mod icc;
 pub mod lensfun;
+pub mod mask;
 pub mod image;
 pub mod params;
 pub mod pipeline;

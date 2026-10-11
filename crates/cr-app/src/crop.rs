@@ -152,7 +152,12 @@ impl App {
             && let Some(pos) = response.interact_pointer_pos()
             && let Some(tool) = &mut self.crop_tool
         {
-            tool.drag = Some((hit(pos), crop, pos));
+            // Without a crop yet, dragging inside the image draws a new one.
+            let h = match hit(pos) {
+                Handle::Move if crop.is_full() => Handle::New,
+                h => h,
+            };
+            tool.drag = Some((h, crop, pos));
         }
         let mut new_crop = None;
         if response.dragged()

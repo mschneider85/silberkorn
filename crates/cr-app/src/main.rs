@@ -6,6 +6,7 @@ mod app_tests;
 mod browser;
 mod crop;
 mod develop_tools;
+mod layers;
 mod library;
 mod tools;
 mod widgets;
@@ -55,6 +56,7 @@ mod tests {
             include_str!("browser.rs"),
             include_str!("crop.rs"),
             include_str!("develop_tools.rs"),
+            include_str!("layers.rs"),
             include_str!("library.rs"),
             include_str!("tools.rs"),
             include_str!("widgets.rs"),

@@ -18,7 +18,8 @@ use crate::color::{Mat3, Oklab, OutputSpace, luminance, mat_vec, srgb_decode, sr
 use crate::detail::{Plane, fast_guided_filter, gaussian_blur, guided_filter, value_noise};
 use crate::geometry::{GeoMap, Region};
 use crate::image::LinearImage;
-use crate::params::{Adjustments, BaseCurve, HUE_BANDS, WbMode};
+use crate::mask::{MaskBitmap, apply_retouch, cached_bitmap};
+use crate::params::{Adjustments, BaseCurve, HUE_BANDS, LayerAdjustments, Mask, WbMode};
 use crate::raw::RawMeta;
 
 const MID_GREY: f32 = 0.18;
@@ -50,6 +51,8 @@ pub struct RenderOptions {
     pub ignore_crop: bool,
     /// Paint clipped pixels (display rendering only).
     pub clip_warning: bool,
+    /// Tint the mask of this layer red (display rendering only).
+    pub mask_overlay: Option<usize>,
 }
 
 /// Result of a display rendering: 8-bit sRGB RGBA plus histogram.
@@ -87,13 +90,50 @@ struct LocalPlanes {
     structure: Option<Plane>,
 }
 
+/// Tone parameters that can vary per pixel (background + weighted layer deltas).
+#[derive(Clone, Copy, Debug)]
+struct ToneParams {
+    exposure_ev: f32,
+    contrast: f32,
+    hdr: [f32; 4],
+    clarity: f32,
+    structure: f32,
+    saturation: f32,
+    temperature: f32,
+    tint: f32,
+    brightness: f32,
+}
+
+impl ToneParams {
+    fn add(&mut self, l: &LayerAdjustments, w: f32) {
+        self.exposure_ev += l.exposure * w;
+        self.contrast += l.contrast * w;
+        self.hdr[0] += l.highlights / 100.0 * w;
+        self.hdr[1] += l.shadows / 100.0 * w;
+        self.clarity += l.clarity * w;
+        self.structure += l.structure * w;
+        self.saturation += l.saturation * w;
+        self.temperature += l.temperature * w;
+        self.tint += l.tint * w;
+        self.brightness += l.brightness * w;
+    }
+}
+
+/// A layer ready for per-pixel evaluation.
+struct PreparedLayer {
+    /// Index in `Adjustments::layers`.
+    index: usize,
+    mask: Mask,
+    opacity: f32,
+    adj: LayerAdjustments,
+}
+
 pub struct Processor {
     adj: Adjustments,
+    base: ToneParams,
+    layers: Vec<PreparedLayer>,
     wb: [f32; 3],
     cam_to_working: Mat3,
-    exposure_gain: f32,
-    contrast_exp: f32,
-    hdr: [f32; 4],
     oklab: Oklab,
     color_active: bool,
     /// display-linear working 0..1 -> encoded 0..1, per channel (brightness, levels, curves)
@@ -116,17 +156,35 @@ impl Processor {
         // dcraw convention: the smallest multiplier is 1.
         let min_wb = wb.iter().cloned().fold(f32::MAX, f32::min).max(1e-6);
         let wb = wb.map(|v| v / min_wb);
+        let layers: Vec<PreparedLayer> = adj
+            .layers
+            .iter()
+            .enumerate()
+            .filter(|(i, l)| l.enabled && l.opacity > 0.0 && (!l.adjustments.is_neutral() || opts.mask_overlay == Some(*i)))
+            .map(|(index, l)| PreparedLayer { index, mask: l.mask.clone(), opacity: l.opacity / 100.0, adj: l.adjustments })
+            .collect();
         let color_active = adj.saturation != 0.0
             || adj.vibrance != 0.0
             || !adj.color_editor.is_neutral()
             || !adj.color_balance.is_neutral()
-            || adj.black_white.enabled;
+            || adj.black_white.enabled
+            || layers.iter().any(|l| l.adj.saturation != 0.0);
+        let base = ToneParams {
+            exposure_ev: adj.exposure,
+            contrast: adj.contrast,
+            hdr: [adj.highlights / 100.0, adj.shadows / 100.0, adj.whites / 100.0, adj.blacks / 100.0],
+            clarity: adj.detail.clarity,
+            structure: adj.detail.structure,
+            saturation: adj.saturation,
+            temperature: 0.0,
+            tint: 0.0,
+            brightness: 0.0,
+        };
         Self {
+            base,
+            layers,
             wb,
             cam_to_working: meta.color.cam_to_working,
-            exposure_gain: 2f32.powf(adj.exposure),
-            contrast_exp: 1.0 + adj.contrast / 100.0 * 0.5,
-            hdr: [adj.highlights / 100.0, adj.shadows / 100.0, adj.whites / 100.0, adj.blacks / 100.0],
             oklab: Oklab::default(),
             color_active,
             lut: build_output_luts(adj),
@@ -168,17 +226,24 @@ impl Processor {
 
     /// Scene-linear working RGB -> display-linear working RGB.
     #[inline]
-    fn tone(&self, rgb: [f32; 3], local_ev: Option<f32>, clarity_gain: f32) -> [f32; 3] {
-        let mut rgb = rgb.map(|v| v * self.exposure_gain * clarity_gain);
+    fn tone(&self, rgb: [f32; 3], local_ev: Option<f32>, detail_ev: [f32; 2], tp: &ToneParams) -> [f32; 3] {
+        let gain = 2f32.powf(tp.exposure_ev + detail_ev[0] * tp.clarity / 100.0 * 0.6 + detail_ev[1] * tp.structure / 100.0 * 0.8);
+        let mut rgb = rgb.map(|v| v * gain);
+        if tp.temperature != 0.0 || tp.tint != 0.0 {
+            let t = tp.temperature / 100.0;
+            rgb[0] *= 2f32.powf(t * 0.35);
+            rgb[2] *= 2f32.powf(-t * 0.35);
+            rgb[1] *= 2f32.powf(-tp.tint / 100.0 * 0.25);
+        }
         let l = dot(rgb, LUMA);
-        if l > 1e-7 && self.hdr.iter().any(|v| *v != 0.0) {
+        if l > 1e-7 && tp.hdr.iter().any(|v| *v != 0.0) {
             let ev_px = (l / MID_GREY).log2();
             // Weights come mostly from the smoothed neighborhood (local tone mapping).
             let ev = match local_ev {
-                Some(e) => e * 0.75 + ev_px * 0.25,
+                Some(e) => (e + tp.exposure_ev) * 0.75 + ev_px * 0.25,
                 None => ev_px,
             };
-            let [hi, sh, wh, bl] = self.hdr;
+            let [hi, sh, wh, bl] = tp.hdr;
             let w_hi = sigmoid((ev - 0.5) * 1.6);
             let w_sh = sigmoid(-(ev + 2.0) * 1.4);
             let w_wh = sigmoid((ev_px - 2.0) * 2.5);
@@ -187,9 +252,10 @@ impl Processor {
             let g = 2f32.powf(gain_ev);
             rgb.iter_mut().for_each(|v| *v *= g);
         }
-        if self.contrast_exp != 1.0 {
+        let contrast_exp = 1.0 + tp.contrast / 100.0 * 0.5;
+        if contrast_exp != 1.0 {
             for v in rgb.iter_mut() {
-                *v = MID_GREY * (*v / MID_GREY).powf(self.contrast_exp);
+                *v = MID_GREY * (*v / MID_GREY).powf(contrast_exp);
             }
         }
         rgb.map(|v| base_curve(self.adj.base_curve, v))
@@ -197,7 +263,7 @@ impl Processor {
 
     /// Color adjustments in Oklab on display-linear working RGB.
     #[inline]
-    fn color(&self, rgb: [f32; 3]) -> [f32; 3] {
+    fn color(&self, rgb: [f32; 3], saturation: f32) -> [f32; 3] {
         if !self.color_active {
             return rgb;
         }
@@ -221,7 +287,7 @@ impl Processor {
             l *= 1.0 + dl * 0.4 * chroma_w;
         }
 
-        let s = 1.0 + self.adj.saturation / 100.0;
+        let s = 1.0 + saturation / 100.0;
         let vib = self.adj.vibrance / 100.0;
         if s != 1.0 || vib != 0.0 {
             let low = (1.0 - c / 0.2).clamp(0.0, 1.0);
@@ -276,7 +342,7 @@ impl Processor {
     fn stage_key(&self, src: &LinearImage, region: Region) -> u64 {
         let relevant = serde_json::json!({
             "g": self.adj.geometry, "l": self.adj.lens, "r": self.adj.rotation, "ic": self.opts.ignore_crop,
-            "wb": self.wb, "nl": self.adj.detail.nr_luma, "nc": self.adj.detail.nr_color,
+            "wb": self.wb, "nl": self.adj.detail.nr_luma, "nc": self.adj.detail.nr_color, "rt": self.adj.retouch,
         });
         let key = format!("{:p}|{}x{}|{region:?}|{relevant}", src.data.as_ptr(), src.width, src.height);
         crate::cache::fnv1a(key.as_bytes())
@@ -285,6 +351,7 @@ impl Processor {
     /// Geometry + white balance + noise reduction -> linear working RGB.
     fn early_stages(&self, src: &LinearImage, geo: &GeoMap, region: Region, scale: f32) -> LinearImage {
         let mut img = geo.resample(src, region);
+        apply_retouch(&mut img, src, geo, region, &self.adj.retouch);
         img.data.par_iter_mut().for_each(|p| *p = self.to_working(*p));
         self.noise_reduction(&mut img, scale);
         img
@@ -334,7 +401,13 @@ impl Processor {
     }
 
     /// Processes `region` (default: whole output) into encoded working RGB (sRGB transfer).
-    fn process_encoded(&self, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> (LinearImage, (usize, usize)) {
+    #[allow(clippy::type_complexity)]
+    fn process_encoded(
+        &self,
+        src: &LinearImage,
+        region: Option<Region>,
+        cache: Option<&StageCache>,
+    ) -> (LinearImage, (usize, usize), Option<Vec<f32>>) {
         let geo = self.geomap(src.width, src.height);
         let full = (geo.out_w, geo.out_h);
         let region = region.unwrap_or(Region { x: 0, y: 0, w: full.0, h: full.1 });
@@ -342,8 +415,13 @@ impl Processor {
         let scale = src.width.max(src.height) as f32 / self.sensor_long_edge;
         let d = &self.adj.detail;
 
+        // Which local operators are needed (by the background or by any layer).
+        let any_layer = |f: &dyn Fn(&LayerAdjustments) -> bool| self.layers.iter().any(|l| f(&l.adj));
+        let hdr_active = self.base.hdr.iter().any(|v| *v != 0.0) || any_layer(&|l| l.highlights != 0.0 || l.shadows != 0.0);
+        let clarity_active = d.clarity != 0.0 || any_layer(&|l| l.clarity != 0.0);
+        let structure_active = d.structure != 0.0 || any_layer(&|l| l.structure != 0.0);
+
         // Margin for neighborhood operations, so that tiles match the full rendering.
-        let hdr_active = self.hdr.iter().any(|v| *v != 0.0);
         let r_hdr = (long_edge * 0.02).max(2.0);
         let r_clarity = (long_edge * 0.03).max(3.0);
         let r_structure = (3.0 * scale).max(1.0);
@@ -351,10 +429,10 @@ impl Processor {
         if hdr_active {
             margin = margin.max(r_hdr * 2.0);
         }
-        if d.clarity != 0.0 {
+        if clarity_active {
             margin = margin.max(r_clarity * 2.0);
         }
-        if d.structure != 0.0 {
+        if structure_active {
             margin = margin.max(r_structure * 4.0);
         }
         if d.sharpen_amount > 0.0 {
@@ -392,10 +470,10 @@ impl Processor {
 
         // Local operators on log luminance. They are shift invariant in log space, so they
         // are computed before exposure and cached independently of tone settings.
-        let need_log = hdr_active || d.clarity != 0.0 || d.structure != 0.0;
+        let need_log = hdr_active || clarity_active || structure_active;
         let local = if need_log {
             let key = {
-                let k = format!("{}|{}|{}|{}", self.stage_key(src, ext), hdr_active, d.clarity != 0.0, d.structure != 0.0);
+                let k = format!("{}|{hdr_active}|{clarity_active}|{structure_active}", self.stage_key(src, ext));
                 crate::cache::fnv1a(k.as_bytes())
             };
             let compute = || {
@@ -403,11 +481,11 @@ impl Processor {
                 let sub = ((r_hdr.min(r_clarity) / 8.0) as usize).clamp(1, 8);
                 LocalPlanes {
                     hdr_base: hdr_active.then(|| fast_guided_filter(&log_l, r_hdr as usize, 0.5, sub)),
-                    clarity: (d.clarity != 0.0).then(|| {
+                    clarity: clarity_active.then(|| {
                         let base = fast_guided_filter(&log_l, r_clarity as usize, 0.3, sub);
                         log_l.zip(&base, |a, b| (a - b).clamp(-3.0, 3.0))
                     }),
-                    structure: (d.structure != 0.0).then(|| {
+                    structure: structure_active.then(|| {
                         let base = gaussian_blur(&log_l, r_structure);
                         log_l.zip(&base, |a, b| (a - b).clamp(-2.0, 2.0))
                     }),
@@ -431,31 +509,67 @@ impl Processor {
             None
         };
         timer.lap("local operators");
-        let exposure_ev = self.exposure_gain.log2();
-        let (k_clarity, k_structure) = (d.clarity / 100.0 * 0.6, d.structure / 100.0 * 0.8);
 
-        let mut out: Vec<[f32; 3]> = working
+        // Layer masks (rasterized once per mask change, sampled in source coordinates).
+        let aspect = src.width as f32 / src.height.max(1) as f32;
+        let bitmaps: Vec<Option<Arc<MaskBitmap>>> =
+            self.layers.iter().map(|l| (!l.mask.is_empty()).then(|| cached_bitmap(&l.mask, aspect))).collect();
+        let overlay_layer = self.opts.mask_overlay.and_then(|i| self.layers.iter().position(|l| l.index == i));
+        let (sw, sh) = (src.width as f32, src.height as f32);
+
+        let results: Vec<([f32; 3], f32)> = working
             .data
             .par_iter()
             .enumerate()
             .map(|(i, &p)| {
-                let (mut ev, mut g) = (None, 1.0);
+                let (mut ev, mut det) = (None, [0.0f32; 2]);
                 if let Some(lp) = &local {
-                    ev = lp.hdr_base.as_ref().map(|pl| pl.data[i] + exposure_ev);
-                    let mut detail = 0.0;
-                    if let Some(c) = &lp.clarity {
-                        detail += c.data[i] * k_clarity;
+                    ev = lp.hdr_base.as_ref().map(|pl| pl.data[i]);
+                    det = [lp.clarity.as_ref().map_or(0.0, |c| c.data[i]), lp.structure.as_ref().map_or(0.0, |c| c.data[i])];
+                }
+                let base_disp = || self.color(self.tone(p, ev, det, &self.base), self.base.saturation);
+                if self.layers.is_empty() {
+                    return (self.encode(base_disp()), 0.0);
+                }
+                let (ox, oy) = ((ext.x + i % w) as f32 + 0.5, (ext.y + i / w) as f32 + 0.5);
+                let (sx, sy) = geo.source_point(ox, oy);
+                let (u, v) = ((sx + 0.5) / sw, (sy + 0.5) / sh);
+                let mut tp = self.base;
+                let mut any = false;
+                let mut overlay = 0.0;
+                let mut base_cache: Option<[f32; 3]> = None;
+                for (li, layer) in self.layers.iter().enumerate() {
+                    let mut wgt = bitmaps[li].as_ref().map_or(0.0, |b| b.sample(u, v));
+                    if layer.mask.invert {
+                        wgt = 1.0 - wgt;
                     }
-                    if let Some(st) = &lp.structure {
-                        detail += st.data[i] * k_structure;
+                    if wgt > 0.0 && (layer.mask.luma_range.is_some() || layer.mask.color_range.is_some()) {
+                        let bd = *base_cache.get_or_insert_with(base_disp);
+                        wgt *= self.range_weight(&layer.mask, bd);
                     }
-                    if detail != 0.0 {
-                        g = 2f32.powf(detail);
+                    wgt *= layer.opacity;
+                    if Some(li) == overlay_layer {
+                        overlay = wgt;
+                    }
+                    if wgt > 0.0 && !layer.adj.is_neutral() {
+                        tp.add(&layer.adj, wgt);
+                        any = true;
                     }
                 }
-                self.encode(self.color(self.tone(p, ev, g)))
+                if !any {
+                    let bd = base_cache.unwrap_or_else(base_disp);
+                    return (self.encode(bd), overlay);
+                }
+                let mut e = self.encode(self.color(self.tone(p, ev, det, &tp), tp.saturation));
+                if tp.brightness != 0.0 {
+                    let g = 2f32.powf(-tp.brightness / 100.0 * 0.6);
+                    e = e.map(|v| v.max(0.0).powf(g));
+                }
+                (e, overlay)
             })
             .collect();
+        let mut mask_plane = overlay_layer.map(|_| results.iter().map(|r| r.1).collect::<Vec<f32>>());
+        let mut out: Vec<[f32; 3]> = results.into_iter().map(|r| r.0).collect();
         timer.lap("tone + color + encode");
 
         if d.sharpen_amount > 0.0 {
@@ -503,7 +617,7 @@ impl Processor {
         timer.lap("sharpen / vignette / grain");
         // Crop the margin away.
         if ext == region {
-            return (LinearImage::new(w, h, out), full);
+            return (LinearImage::new(w, h, out), full, mask_plane);
         }
         let (ox, oy) = (region.x - ext.x, region.y - ext.y);
         let mut data = Vec::with_capacity(region.w * region.h);
@@ -511,12 +625,41 @@ impl Processor {
             let start = (oy + y) * w + ox;
             data.extend_from_slice(&out[start..start + region.w]);
         }
-        (LinearImage::new(region.w, region.h, data), full)
+        if let Some(mp) = &mut mask_plane {
+            let mut cropped = Vec::with_capacity(region.w * region.h);
+            for y in 0..region.h {
+                let start = (oy + y) * w + ox;
+                cropped.extend_from_slice(&mp[start..start + region.w]);
+            }
+            *mp = cropped;
+        }
+        (LinearImage::new(region.w, region.h, data), full, mask_plane)
+    }
+
+    /// Luminance / color range refinement of a mask, evaluated on the background result.
+    fn range_weight(&self, mask: &Mask, disp: [f32; 3]) -> f32 {
+        let mut w = 1.0;
+        if let Some(r) = &mask.luma_range {
+            let l = srgb_encode(dot(disp, LUMA).clamp(0.0, 1.0));
+            let f = r.falloff.max(1e-3);
+            let inside = smoothstep(r.low - f, r.low, l) * (1.0 - smoothstep(r.high, r.high + f, l));
+            w *= if r.invert { 1.0 - inside } else { inside };
+        }
+        if let Some(c) = &mask.color_range {
+            let [_, a, b] = self.oklab.from_linear(disp);
+            let chroma = (a * a + b * b).sqrt();
+            let hue = b.atan2(a).to_degrees().rem_euclid(360.0);
+            let dh = ((hue - c.hue + 540.0).rem_euclid(360.0) - 180.0).abs();
+            let hue_w = 1.0 - smoothstep(c.width, c.width + c.falloff.max(1e-3), dh);
+            let chroma_w = smoothstep(c.min_chroma * 0.5, c.min_chroma.max(1e-3), chroma);
+            w *= hue_w * chroma_w;
+        }
+        w
     }
 
     /// Full processing into an output color space (encoded 0..1 floats), for export.
     pub fn process(&self, src: &LinearImage, region: Option<Region>, space: OutputSpace) -> LinearImage {
-        let (enc, _) = self.process_encoded(src, region, None);
+        let (enc, _, _) = self.process_encoded(src, region, None);
         let m = space.from_working();
         let trc = space.trc();
         let data = enc
@@ -532,17 +675,21 @@ impl Processor {
 
     /// Display rendering (sRGB, 8-bit) with histogram.
     pub fn render(&self, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Rendered {
-        let (enc, full) = self.process_encoded(src, region, cache);
+        let (enc, full, mask) = self.process_encoded(src, region, cache);
         let mut timer = Timer::start();
         let to_srgb = OutputSpace::Srgb.from_working();
         let dec = &*DECODE_LUT;
         let srgb = &*SRGB_ENCODE_LUT;
         let clip = self.opts.clip_warning;
         let mut rgba = vec![0u8; enc.data.len() * 4];
-        rgba.par_chunks_mut(4).zip(enc.data.par_iter()).for_each(|(out, p)| {
+        rgba.par_chunks_mut(4).zip(enc.data.par_iter()).enumerate().for_each(|(i, (out, p))| {
             let lin = p.map(|v| lut_lookup(dec, v));
             let s = mat_vec(&to_srgb, lin);
-            let px = s.map(|v| (lut_lookup(srgb, v.clamp(0.0, 1.0)) * 255.0 + 0.5) as u8);
+            let mut px = s.map(|v| (lut_lookup(srgb, v.clamp(0.0, 1.0)) * 255.0 + 0.5) as u8);
+            if let Some(m) = &mask {
+                let a = (m[i] * 0.6).clamp(0.0, 0.6);
+                px = [px[0] as f32 * (1.0 - a) + 255.0 * a, px[1] as f32 * (1.0 - a), px[2] as f32 * (1.0 - a)].map(|v| v as u8);
+            }
             if clip && (px[0] == 255 || px[1] == 255 || px[2] == 255) {
                 out.copy_from_slice(&[255, 0, 0, 255]);
             } else if clip && px == [0, 0, 0] {
@@ -718,7 +865,7 @@ mod tests {
     }
 
     fn px(p: &Processor, v: [f32; 3]) -> [f32; 3] {
-        p.encode(p.color(p.tone(p.to_working(v), None, 1.0)))
+        p.encode(p.color(p.tone(p.to_working(v), None, [0.0; 2], &p.base), p.base.saturation))
     }
 
     #[test]
@@ -854,6 +1001,86 @@ mod tests {
         let p = Processor::new(&meta(), &adj);
         let o = px(&p, [0.4, 0.1, 0.05]);
         assert!((o[0] - o[1]).abs() < 0.01 && (o[1] - o[2]).abs() < 0.01, "{o:?}");
+    }
+
+    fn layer(mask: Mask, adj: LayerAdjustments) -> crate::params::Layer {
+        crate::params::Layer { mask, adjustments: adj, ..Default::default() }
+    }
+
+    #[test]
+    fn filled_layer_equals_global_adjustment() {
+        let src = LinearImage::new(16, 12, (0..192).map(|i| [(i % 16) as f32 / 40.0 + 0.01; 3]).collect());
+        let global = Processor::new(&meta(), &Adjustments { exposure: 1.0, contrast: 20.0, ..plain() }).render(&src, None, None);
+        let mut adj = plain();
+        adj.layers.push(layer(Mask { fill: true, ..Default::default() }, LayerAdjustments { exposure: 1.0, contrast: 20.0, ..Default::default() }));
+        let local = Processor::new(&meta(), &adj).render(&src, None, None);
+        let max_diff = global.rgba.iter().zip(&local.rgba).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+        assert!(max_diff <= 1, "{max_diff}");
+    }
+
+    #[test]
+    fn radial_layer_affects_only_inside_and_opacity_scales() {
+        let src = LinearImage::new(40, 40, vec![[0.1; 3]; 1600]);
+        let radial = crate::params::RadialGradient { center: [0.5, 0.5], radius_x: 0.2, radius_y: 0.2, feather: 0.2, invert: false };
+        let mut adj = plain();
+        adj.layers.push(layer(Mask { radial: vec![radial], ..Default::default() }, LayerAdjustments { exposure: 1.5, ..Default::default() }));
+        let base = Processor::new(&meta(), &plain()).render(&src, None, None);
+        let r = Processor::new(&meta(), &adj).render(&src, None, None);
+        let at = |img: &Rendered, x: usize, y: usize| img.rgba[(y * 40 + x) * 4];
+        assert!(at(&r, 20, 20) > at(&base, 20, 20) + 30);
+        assert_eq!(at(&r, 1, 1), at(&base, 1, 1));
+        adj.layers[0].opacity = 50.0;
+        let half = Processor::new(&meta(), &adj).render(&src, None, None);
+        assert!(at(&half, 20, 20) > at(&base, 20, 20) && at(&half, 20, 20) < at(&r, 20, 20));
+        adj.layers[0].enabled = false;
+        assert_eq!(Processor::new(&meta(), &adj).render(&src, None, None).rgba, base.rgba);
+    }
+
+    #[test]
+    fn luma_range_restricts_layer_to_shadows() {
+        let src = LinearImage::new(20, 1, (0..20).map(|i| [0.005 + i as f32 * 0.05; 3]).collect());
+        let mut adj = plain();
+        let mask = Mask { fill: true, luma_range: Some(crate::params::LumaRange { low: 0.0, high: 0.3, falloff: 0.05, invert: false }), ..Default::default() };
+        adj.layers.push(layer(mask, LayerAdjustments { exposure: 1.0, ..Default::default() }));
+        let base = Processor::new(&meta(), &plain()).render(&src, None, None);
+        let r = Processor::new(&meta(), &adj).render(&src, None, None);
+        assert!(r.rgba[0] > base.rgba[0], "dark pixel brightened");
+        assert_eq!(r.rgba[19 * 4], base.rgba[19 * 4], "bright pixel untouched");
+    }
+
+    #[test]
+    fn mask_overlay_tints_masked_area() {
+        let src = LinearImage::new(10, 10, vec![[0.18; 3]; 100]);
+        let mut adj = plain();
+        adj.layers.push(layer(
+            Mask { linear: vec![crate::params::LinearGradient { start: [0.0, 0.0], end: [0.0, 0.5] }], ..Default::default() },
+            LayerAdjustments::default(),
+        ));
+        let opts = RenderOptions { mask_overlay: Some(0), ..Default::default() };
+        let r = Processor::with_options(&meta(), &adj, opts).render(&src, None, None);
+        let top = &r.rgba[0..4];
+        let bottom = &r.rgba[(9 * 10) * 4..(9 * 10) * 4 + 4];
+        assert!(top[0] > top[1] + 50, "{top:?}");
+        assert_eq!(bottom[0], bottom[1]);
+    }
+
+    #[test]
+    fn retouch_is_part_of_the_render() {
+        let mut data = vec![[0.1f32; 3]; 400];
+        data[10 * 20 + 10] = [0.9; 3];
+        let src = LinearImage::new(20, 20, data);
+        let mut adj = plain();
+        adj.retouch.push(crate::params::Spot {
+            mode: crate::params::SpotMode::Heal,
+            target: [10.5 / 20.0, 10.5 / 20.0],
+            source: [4.5 / 20.0, 4.5 / 20.0],
+            radius: 0.1,
+            feather: 0.3,
+        });
+        let base = Processor::new(&meta(), &plain()).render(&src, None, None);
+        let r = Processor::new(&meta(), &adj).render(&src, None, None);
+        let i = (10 * 20 + 10) * 4;
+        assert!(base.rgba[i] > 200 && r.rgba[i] < 120, "{} -> {}", base.rgba[i], r.rgba[i]);
     }
 
     #[test]

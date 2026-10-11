@@ -42,6 +42,17 @@ Hineinzoomen rendert ein Hintergrund-Worker den sichtbaren Ausschnitt in voller 
 `CR_TRACE=1` gibt die Zeiten der einzelnen Stufen aus; `cargo run --release -p cr-core --example bench -- <raw>`
 misst die Pipeline.
 
+### Ebenen & Masken
+
+Lokale Anpassungen (Tab „Ebenen“) wirken als Deltas auf die Hintergrund-Einstellungen und werden pro
+Pixel mit Maske × Deckkraft gemischt; überlappende Ebenen addieren sich. Masken bestehen aus
+Pinselstrichen (Größe, Härte, Fluss, Radierer), linearen und radialen Verläufen, „Füllen“ und
+„Invertieren“. Sie werden in Quellkoordinaten gespeichert und bleiben deshalb nach Zuschnitt,
+Drehen oder Objektivkorrektur am Bildinhalt.
+
+„Reparieren“ übernimmt Struktur von einer automatisch gewählten Quelle und gleicht Farbe/Helligkeit an
+die Umgebung an; „Klonen“ kopiert 1:1. Quelle und Ziel lassen sich verschieben.
+
 ### Objektivprofile
 
 Lensfun-XML-Dateien werden aus `~/.local/share/capture-room/lensfun`, `~/.local/share/lensfun` und
@@ -84,6 +95,9 @@ Sidecars bleiben die maßgebliche Quelle; der Katalog ist ein Index und kann jed
 | W | Weißabgleich-Pipette |
 | Z / Doppelklick | Einpassen ↔ 100 % · Mausrad: zoomen · Ziehen: verschieben |
 | C / Enter / Esc | Zuschnitt-Werkzeug / übernehmen / beenden |
+| B / N / L / R | Pinsel / Radierer / linearer / radialer Verlauf |
+| H / S | Reparieren / Klonen · Entf: Punkt löschen |
+| M | Maske anzeigen · [ / ]: Pinselgröße · mittlere Maustaste: verschieben |
 
 Doppelklick auf einen Reglernamen setzt den Regler zurück.
 
@@ -92,5 +106,5 @@ Doppelklick auf einen Reglernamen setzt den Regler zurück.
 - **Phase 1 (fertig):** RAW laden/anzeigen, Weißabgleich, Belichtung, HDR, Levels, Kurven, Sättigung/Dynamik, Drehen, Bewertung/Farb-Labels, Kopieren/Anwenden, Undo, Export JPEG/TIFF/PNG
 - **Phase 2 (fertig):** Katalog (SQLite), Thumbnail-Cache, Alben/Smart-Alben, Keywords, Suche, Sortierung, Stile, Rasteransicht
 - **Phase 3 (fertig):** Zuschnitt/Geraderichten/Keystone, Schärfen, Rauschreduzierung, Objektivkorrektur (manuell + Lensfun), Color Editor, Color Balance, Schwarzweiß, Klarheit/Struktur, lokales HDR, Körnung/Vignette, Auto-Anpassungen, echtes 100 % (Kachel-Rendering), Highlight-Rekonstruktion, Ausgabe-Farbräume mit ICC
-- **Phase 4:** Ebenen und Masken (Pinsel, Verlauf), Reparieren/Klonen
+- **Phase 4 (fertig):** Ebenen und Masken (Pinsel, Radierer, linearer/radialer Verlauf, Deckkraft), Reparieren/Klonen
 - **Phase 5:** Luma Range, Farbbereichsmasken, Style Brushes, KI-Masken (ONNX)

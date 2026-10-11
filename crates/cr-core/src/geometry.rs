@@ -174,6 +174,34 @@ impl GeoMap {
         (g[0], g[1])
     }
 
+    /// Inverse of `source_point`: output position of a source pixel position (Newton iteration).
+    pub fn output_point(&self, sx: f32, sy: f32) -> (f32, f32) {
+        // Initial guess: proportional position in the output frame.
+        let mut p = ((sx + 0.5) / self.src_w * self.out_w as f32, (sy + 0.5) / self.src_h * self.out_h as f32);
+        if self.turns % 2 == 1 {
+            p = ((sy + 0.5) / self.src_h * self.out_w as f32, (sx + 0.5) / self.src_w * self.out_h as f32);
+        }
+        for _ in 0..20 {
+            let f = self.source_point(p.0, p.1);
+            let (ex, ey) = (sx - f.0, sy - f.1);
+            if ex * ex + ey * ey < 1e-6 {
+                break;
+            }
+            let h = 0.5;
+            let fx = self.source_point(p.0 + h, p.1);
+            let fy = self.source_point(p.0, p.1 + h);
+            let (a, c) = ((fx.0 - f.0) / h, (fx.1 - f.1) / h);
+            let (b, d) = ((fy.0 - f.0) / h, (fy.1 - f.1) / h);
+            let det = a * d - b * c;
+            if det.abs() < 1e-9 {
+                break;
+            }
+            p.0 += (d * ex - b * ey) / det;
+            p.1 += (-c * ex + a * ey) / det;
+        }
+        p
+    }
+
     /// Resamples `src` (camera space) into the output region.
     pub fn resample(&self, src: &LinearImage, region: Region) -> LinearImage {
         let mut out = vec![[0.0f32; 3]; region.w * region.h];
@@ -309,6 +337,26 @@ mod tests {
         let lens = LensCorrection { vignetting: 50.0, ..Default::default() };
         let out = GeoMap::new(&Geometry::default(), &lens, 0, 20, 20, false).resample(&src, full(20, 20));
         assert!(out.data[0][0] > out.data[210][0]);
+    }
+
+    #[test]
+    fn output_point_inverts_source_point() {
+        let geom = Geometry {
+            straighten: 7.0,
+            keystone_v: 30.0,
+            crop: CropRect { x: 0.1, y: 0.2, w: 0.7, h: 0.6 },
+            flip_h: true,
+            ..Default::default()
+        };
+        let lens = LensCorrection { distortion: 40.0, ..Default::default() };
+        for turns in 0..4 {
+            let g = GeoMap::new(&geom, &lens, turns, 300, 200, false);
+            for (ox, oy) in [(10.0, 20.0), (100.5, 60.25), (150.0, 100.0)] {
+                let (sx, sy) = g.source_point(ox, oy);
+                let (bx, by) = g.output_point(sx, sy);
+                assert!((bx - ox).abs() < 0.05 && (by - oy).abs() < 0.05, "turns {turns}: ({ox},{oy}) -> ({bx},{by})");
+            }
+        }
     }
 
     #[test]

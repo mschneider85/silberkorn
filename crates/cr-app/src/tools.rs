@@ -20,6 +20,7 @@ impl App {
             Tab::Library => self.library_tab(ui),
             Tab::Lens => self.lens_tab(ui),
             Tab::Details => self.details_tab(ui),
+            Tab::Layers => self.layers_tab(ui),
             Tab::Styles => self.styles_tab(ui),
             Tab::Exposure => self.exposure_tab(ui),
             Tab::Color => self.color_tab(ui),

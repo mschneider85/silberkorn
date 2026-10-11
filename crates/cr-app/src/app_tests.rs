@@ -176,3 +176,81 @@ fn crop_full_resolution_and_tiles() {
     assert!(tile.full_size.0 > 2000 && tile.full_size.0 < full.width, "{:?}", tile.full_size);
     assert!(tile.region.w > 300 && tile.region.w < tile.full_size.0);
 }
+
+/// Runs one UI frame of the viewer with the given input events.
+fn viewer_frame(f: &mut Fixture, events: Vec<egui::Event>) {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+        events,
+        ..Default::default()
+    };
+    let app = &mut f.app;
+    let out = f.ctx.run_ui(input, |ui| {
+        app.pointer_down = ui.ctx().input(|i| i.pointer.any_down());
+        egui::CentralPanel::no_frame().show(ui, |ui| app.viewer(ui));
+    });
+    let mut delta = out.textures_delta;
+    delta.clear();
+}
+
+fn press(p: egui::Pos2, pressed: bool) -> egui::Event {
+    egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }
+}
+
+/// Drags the mouse from `a` to `b` in `steps` frames.
+fn drag(f: &mut Fixture, a: egui::Pos2, b: egui::Pos2, steps: usize) {
+    viewer_frame(f, vec![egui::Event::PointerMoved(a)]);
+    viewer_frame(f, vec![press(a, true)]);
+    for i in 1..=steps {
+        let p = a + (b - a) * (i as f32 / steps as f32);
+        viewer_frame(f, vec![egui::Event::PointerMoved(p)]);
+    }
+    viewer_frame(f, vec![press(b, false)]);
+    viewer_frame(f, vec![]);
+}
+
+#[test]
+fn viewer_tools_brush_heal_crop() {
+    let Some(mut f) = Fixture::new("viewer") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    viewer_frame(&mut f, vec![]);
+    let c = egui::pos2(600.0, 400.0);
+
+    // Brush stroke creates a layer with one stroke of several points.
+    f.app.set_local_tool(crate::layers::LocalTool::Brush);
+    drag(&mut f, c, c + egui::vec2(200.0, 50.0), 12);
+    let adj = &f.app.current.as_ref().unwrap().adjustments;
+    assert_eq!(adj.layers.len(), 1);
+    assert_eq!(adj.layers[0].mask.strokes.len(), 1);
+    assert!(adj.layers[0].mask.strokes[0].points.len() >= 4, "{:?}", adj.layers[0].mask.strokes[0].points.len());
+    let uv = adj.layers[0].mask.strokes[0].points[0];
+    assert!((uv[0] - 0.5).abs() < 0.1 && (uv[1] - 0.5).abs() < 0.1, "stroke starts near the image center: {uv:?}");
+
+    // Linear gradient on the same layer.
+    f.app.set_local_tool(crate::layers::LocalTool::Linear);
+    drag(&mut f, c, c + egui::vec2(0.0, 150.0), 5);
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.layers[0].mask.linear.len(), 1);
+
+    // A click with the heal tool adds a spot with an automatically chosen source.
+    f.app.set_local_tool(crate::layers::LocalTool::Heal);
+    let p = c + egui::vec2(-150.0, -100.0);
+    viewer_frame(&mut f, vec![egui::Event::PointerMoved(p)]);
+    viewer_frame(&mut f, vec![press(p, true)]);
+    viewer_frame(&mut f, vec![press(p, false)]);
+    viewer_frame(&mut f, vec![]);
+    let spots = &f.app.current.as_ref().unwrap().adjustments.retouch;
+    assert_eq!(spots.len(), 1);
+    assert_ne!(spots[0].source, spots[0].target);
+    f.app.delete_selected_spot();
+    assert!(f.app.current.as_ref().unwrap().adjustments.retouch.is_empty());
+
+    // Crop tool: drawing a new rectangle sets the crop.
+    f.app.local_tool = None;
+    f.app.start_crop_tool();
+    f.pump("Unbeschnittene Vorschau", |a| a.texture.is_some());
+    viewer_frame(&mut f, vec![]);
+    drag(&mut f, egui::pos2(150.0, 120.0), egui::pos2(500.0, 400.0), 6);
+    let crop = f.app.current.as_ref().unwrap().adjustments.geometry.crop;
+    assert!(crop.w < 0.8 && crop.h < 0.8 && crop.x > 0.0, "{crop:?}");
+    f.app.finish_crop_tool();
+}

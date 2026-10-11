@@ -178,6 +178,173 @@ pub struct Adjustments {
     pub color_editor: ColorEditor,
     pub color_balance: ColorBalance,
     pub black_white: BlackWhite,
+    /// Local adjustment layers (applied on top of the background adjustments).
+    pub layers: Vec<Layer>,
+    /// Heal and clone spots.
+    pub retouch: Vec<Spot>,
+}
+
+/// Adjustments of a local layer, as deltas added to the background values.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct LayerAdjustments {
+    /// EV
+    pub exposure: f32,
+    pub contrast: f32,
+    pub brightness: f32,
+    pub saturation: f32,
+    pub highlights: f32,
+    pub shadows: f32,
+    pub clarity: f32,
+    pub structure: f32,
+    /// Warm (+) / cool (-), -100..100
+    pub temperature: f32,
+    /// Magenta (+) / green (-), -100..100
+    pub tint: f32,
+}
+
+impl LayerAdjustments {
+    pub fn is_neutral(&self) -> bool {
+        *self == LayerAdjustments::default()
+    }
+}
+
+/// A brush stroke in normalized source coordinates (0..1 of the oriented image).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BrushStroke {
+    pub points: Vec<[f32; 2]>,
+    /// Radius relative to the long image edge.
+    pub radius: f32,
+    /// 0 (soft) .. 1 (hard)
+    pub hardness: f32,
+    /// 0..1
+    pub flow: f32,
+    pub erase: bool,
+}
+
+/// Linear gradient: fully masked at `start`, unmasked at `end` (normalized source coordinates).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LinearGradient {
+    pub start: [f32; 2],
+    pub end: [f32; 2],
+}
+
+/// Radial gradient: masked inside the ellipse, `feather` (0..1) controls the soft edge.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RadialGradient {
+    pub center: [f32; 2],
+    /// Radii relative to the long image edge.
+    pub radius_x: f32,
+    pub radius_y: f32,
+    pub feather: f32,
+    pub invert: bool,
+}
+
+/// Luminance range refinement of a mask (0..1 display luminance).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LumaRange {
+    pub low: f32,
+    pub high: f32,
+    /// Soft transition width.
+    pub falloff: f32,
+    pub invert: bool,
+}
+
+impl Default for LumaRange {
+    fn default() -> Self {
+        Self { low: 0.0, high: 1.0, falloff: 0.1, invert: false }
+    }
+}
+
+/// Color range refinement: hue (degrees) with a tolerance, plus minimum chroma.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColorRange {
+    pub hue: f32,
+    /// Half width in degrees.
+    pub width: f32,
+    pub falloff: f32,
+    /// Minimum Oklab chroma (0..0.3).
+    pub min_chroma: f32,
+}
+
+impl Default for ColorRange {
+    fn default() -> Self {
+        Self { hue: 30.0, width: 25.0, falloff: 15.0, min_chroma: 0.03 }
+    }
+}
+
+/// A mask predicted by a neural network (subject, sky, ...), stored as a bitmap.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AiMask {
+    pub kind: String,
+    pub width: usize,
+    pub height: usize,
+    /// 8-bit mask values, row-major.
+    pub data: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Mask {
+    /// Start fully masked ("Maske füllen").
+    pub fill: bool,
+    pub strokes: Vec<BrushStroke>,
+    pub linear: Vec<LinearGradient>,
+    pub radial: Vec<RadialGradient>,
+    pub ai: Option<AiMask>,
+    pub luma_range: Option<LumaRange>,
+    pub color_range: Option<ColorRange>,
+    pub invert: bool,
+}
+
+impl Mask {
+    pub fn is_empty(&self) -> bool {
+        !self.fill && self.strokes.is_empty() && self.linear.is_empty() && self.radial.is_empty() && self.ai.is_none()
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Layer {
+    pub name: String,
+    pub enabled: bool,
+    /// 0..100
+    pub opacity: f32,
+    pub adjustments: LayerAdjustments,
+    pub mask: Mask,
+}
+
+impl Default for Layer {
+    fn default() -> Self {
+        Self {
+            name: "Ebene".into(),
+            enabled: true,
+            opacity: 100.0,
+            adjustments: LayerAdjustments::default(),
+            mask: Mask::default(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SpotMode {
+    #[default]
+    Heal,
+    Clone,
+}
+
+/// Retouch spot in normalized source coordinates.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Spot {
+    pub mode: SpotMode,
+    pub target: [f32; 2],
+    pub source: [f32; 2],
+    /// Radius relative to the long image edge.
+    pub radius: f32,
+    /// 0..1
+    pub feather: f32,
 }
 
 /// Crop rectangle, normalized (0..1) to the rotated and straightened frame.
@@ -434,16 +601,27 @@ impl Default for Adjustments {
             color_editor: ColorEditor::default(),
             color_balance: ColorBalance::default(),
             black_white: BlackWhite::default(),
+            layers: Vec::new(),
+            retouch: Vec::new(),
         }
     }
 }
 
 impl Adjustments {
-    /// Copies the geometric settings (rotation, crop, ...) from `other`.
-    /// Used when pasting adjustments or applying styles, which should not change framing.
+    /// Copies only the framing (rotation, crop, straighten, ...), e.g. for the before view.
+    pub fn keep_framing_from(&mut self, other: &Adjustments) {
+        self.rotation = other.rotation;
+        self.geometry = other.geometry.clone();
+    }
+
+    /// Copies the image-specific settings (rotation, crop, layers, retouching) from `other`.
+    /// Used when pasting adjustments or applying styles, which should not change framing or masks.
     pub fn keep_geometry_from(&mut self, other: &Adjustments) {
         self.rotation = other.rotation;
         self.geometry = other.geometry.clone();
+        // Masks and retouching are tied to image content.
+        self.layers = other.layers.clone();
+        self.retouch = other.retouch.clone();
     }
 }
 
