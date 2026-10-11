@@ -47,6 +47,8 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Strg+[ / Strg+]", "Links / rechts drehen"),
             ("C", "Zuschneiden (Enter übernimmt)"),
             ("F2 / F3", "Neue Variante / Variante klonen"),
+            ("Strg+G / Strg+Umschalt+G", "Stapel bilden / auflösen"),
+            ("Umschalt+G", "Stapel auf-/zuklappen"),
             ("W", "Weißabgleich-Pipette"),
         ],
     ),
@@ -339,6 +341,7 @@ impl App {
         });
         ui.separator();
         self.variant_menu(ui);
+        self.stack_menu(ui);
         ui.separator();
         let ref_text = if self.compare_ref.is_some() && self.compare_ref == self.primary_path() { "Referenzbild entfernen" } else { "Als Referenzbild festlegen" };
         if item(ui, icon::PUSH_PIN, ref_text, "Umschalt+Enter", has) {

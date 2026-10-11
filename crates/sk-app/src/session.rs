@@ -57,6 +57,7 @@ pub enum PendingAction {
     NewVariant { clone: bool },
     DeleteVariant,
     Trash,
+    Stack(crate::stacks::StackAction),
 }
 
 pub fn folder_icon(f: SessionFolder) -> &'static str {
@@ -306,6 +307,7 @@ impl App {
             Some(PendingAction::NewVariant { clone }) => self.new_variant(clone),
             Some(PendingAction::DeleteVariant) => self.request_delete_variant(),
             Some(PendingAction::Trash) => self.trash_selection(),
+            Some(PendingAction::Stack(a)) => self.run_stack_action(a),
             None => {}
         }
     }

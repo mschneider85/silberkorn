@@ -14,7 +14,7 @@ use rusqlite::{Connection, OptionalExtension, params, params_from_iter, types::V
 use serde::{Deserialize, Serialize};
 
 use crate::raw::{self, RawMeta};
-use crate::sidecar::{self, ColorLabel, Sidecar};
+use crate::sidecar::{self, ColorLabel, Sidecar, Stack};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImageRecord {
@@ -28,6 +28,7 @@ pub struct ImageRecord {
     pub rating: u8,
     pub color_label: ColorLabel,
     pub keywords: Vec<String>,
+    pub stack: Option<Stack>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -247,6 +248,14 @@ impl Catalog {
              CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
              CREATE TABLE IF NOT EXISTS favorites (path TEXT PRIMARY KEY);",
         )?;
+        // Columns added later.
+        let columns: Vec<String> =
+            conn.prepare("SELECT name FROM pragma_table_info('images')")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        for (name, def) in [("stack", "TEXT"), ("stack_top", "INTEGER NOT NULL DEFAULT 0")] {
+            if !columns.iter().any(|c| c == name) {
+                conn.execute_batch(&format!("ALTER TABLE images ADD COLUMN {name} {def}"))?;
+            }
+        }
         let catalog = Self { conn, path, base };
         if catalog.base.is_some() {
             catalog.make_paths_relative()?;
@@ -297,14 +306,17 @@ impl Catalog {
                 .unwrap_or(0),
             _ => import_id,
         };
+        // A variant is in the stack of its file.
+        let stack = if crate::variant::number(path) > 1 { sidecar::load(path).stack } else { sc.stack.clone() };
         // Keep the original import id when re-indexing a changed file.
         let id: i64 = self.conn.query_row(
-            "INSERT INTO images (path, folder, name, capture_date, camera, lens, iso, rating, color_label, file_mtime, file_size, import_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+            "INSERT INTO images (path, folder, name, capture_date, camera, lens, iso, rating, color_label, file_mtime, file_size, import_id, stack, stack_top)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT(path) DO UPDATE SET
                  folder=excluded.folder, name=excluded.name, capture_date=excluded.capture_date,
                  camera=excluded.camera, lens=excluded.lens, iso=excluded.iso, rating=excluded.rating,
-                 color_label=excluded.color_label, file_mtime=excluded.file_mtime, file_size=excluded.file_size
+                 color_label=excluded.color_label, file_mtime=excluded.file_mtime, file_size=excluded.file_size,
+                 stack=excluded.stack, stack_top=excluded.stack_top
              RETURNING id",
             params![
                 self.key(path),
@@ -318,7 +330,9 @@ impl Catalog {
                 label_to_str(sc.color_label),
                 mtime,
                 size,
-                import_id
+                import_id,
+                stack.as_ref().map(|s| s.id.clone()),
+                stack.as_ref().is_some_and(|s| s.top)
             ],
             |r| r.get(0),
         )?;
@@ -345,6 +359,15 @@ impl Catalog {
             )?;
             self.write_keywords(id, &sc.keywords)?;
         }
+        Ok(())
+    }
+
+    /// Mirrors the stack of an image (no-op if it is not indexed).
+    pub fn set_stack(&self, path: &Path, stack: Option<&Stack>) -> Result<()> {
+        self.conn.execute(
+            "UPDATE images SET stack = ?2, stack_top = ?3 WHERE path = ?1",
+            params![self.key(path), stack.map(|s| s.id.clone()), stack.is_some_and(|s| s.top)],
+        )?;
         Ok(())
     }
 
@@ -436,7 +459,7 @@ impl Catalog {
     pub fn query(&self, scope: &Scope, filter: &Filter, sort: SortKey, descending: bool) -> Result<Vec<ImageRecord>> {
         let mut sql = String::from(
             "SELECT i.id, i.path, i.name, i.capture_date, i.camera, i.lens, i.iso, i.rating, i.color_label,
-                    (SELECT group_concat(keyword, char(31)) FROM keywords k WHERE k.image_id = i.id)
+                    (SELECT group_concat(keyword, char(31)) FROM keywords k WHERE k.image_id = i.id), i.stack, i.stack_top
              FROM images i WHERE 1=1",
         );
         let mut args: Vec<Value> = Vec::new();
@@ -518,6 +541,7 @@ impl Catalog {
                 rating: r.get::<_, i64>(7)?.clamp(0, 5) as u8,
                 color_label: label_from_str(&r.get::<_, String>(8)?),
                 keywords: kw.map(|s| s.split('\u{1f}').map(String::from).collect()).unwrap_or_default(),
+                stack: r.get::<_, Option<String>>(10)?.map(|id| Stack { id, top: r.get::<_, bool>(11).unwrap_or(false) }),
             })
         })?;
         Ok(rows.collect::<rusqlite::Result<_>>()?)

@@ -17,6 +17,7 @@ mod library;
 mod rename;
 mod session;
 mod splash;
+mod stacks;
 mod theme;
 mod tools;
 mod variants;

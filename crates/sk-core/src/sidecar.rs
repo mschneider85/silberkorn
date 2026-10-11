@@ -78,6 +78,19 @@ pub struct Sidecar {
     /// a newer XMP file overrides rating, label and keywords.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub xmp_mtime: Option<i64>,
+    /// Stack the image belongs to (see `stack`); kept by [`save`], changed by [`set_stack`].
+    /// Variants belong to the stack of their file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stack: Option<Stack>,
+}
+
+/// Membership in a stack: images with the same id form a stack, shown collapsed as its top image.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Stack {
+    pub id: String,
+    /// The image shown for the collapsed stack.
+    pub top: bool,
 }
 
 /// A named state of the adjustments.
@@ -112,6 +125,7 @@ impl Variant {
             variants: Vec::new(),
             snapshots: self.snapshots.clone(),
             xmp_mtime: None,
+            stack: None,
         }
     }
 
@@ -163,7 +177,10 @@ pub fn load(image: &Path) -> Sidecar {
     let file = load_file(image);
     match crate::variant::number(image) {
         1 => with_xmp(image, file),
-        n => file.variants.iter().find(|v| v.id == n).map(Variant::to_sidecar).unwrap_or_default(),
+        n => Sidecar {
+            stack: file.stack.as_ref().map(|s| Stack { id: s.id.clone(), top: false }),
+            ..file.variants.iter().find(|v| v.id == n).map(Variant::to_sidecar).unwrap_or_default()
+        },
     }
 }
 
@@ -256,6 +273,7 @@ pub fn save(image: &Path, sidecar: &Sidecar) -> Result<()> {
             file = Sidecar {
                 variants: std::mem::take(&mut file.variants),
                 snapshots: std::mem::take(&mut file.snapshots),
+                stack: file.stack.take(),
                 xmp_mtime,
                 ..sidecar.clone()
             }
@@ -279,6 +297,16 @@ pub fn set_snapshots(image: &Path, snapshots: Vec<Snapshot>) -> Result<()> {
         },
     }
     write_file(image, &file)
+}
+
+/// Sets or removes the stack of an image's file.
+pub fn set_stack(image: &Path, stack: Option<Stack>) -> Result<()> {
+    let mut file = load_for_update(image)?;
+    if file.stack != stack {
+        file.stack = stack;
+        write_file(image, &file)?;
+    }
+    Ok(())
 }
 
 /// Adds a variant with these settings to an image; returns its path.

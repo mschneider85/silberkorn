@@ -1295,3 +1295,48 @@ fn xmp_exchange() {
     let x = sk_core::xmp::parse(&std::fs::read_to_string(f.dir.join("photos/_DSC0009.xmp")).unwrap()).unwrap();
     assert_eq!(x.rating, Some(5));
 }
+
+#[test]
+fn stacks_collapse_and_expand() {
+    use crate::stacks::StackAction;
+    let Some(mut f) = Fixture::new("stacks") else { return };
+    f.pump("Indexiert", |a| a.lists.total == 2 && a.entries.iter().all(|e| e.capture_date.is_some()));
+    let a = f.photo("_DSC0009.ARW");
+    let b = f.photo("_DSC0010.ARW");
+    f.app.selection = [a.clone(), b.clone()].into_iter().collect();
+    f.app.make_primary(&b);
+    f.app.run_stack_action(StackAction::Create);
+    // Collapsed: only the top image (the one in the viewer) is shown.
+    assert_eq!(f.app.visible.len(), 1);
+    assert_eq!(f.app.entries[f.app.visible[0]].path, b);
+    assert!(sidecar::load(&a).stack.is_some_and(|s| !s.top));
+    assert_eq!(f.app.stack_size(f.app.visible[0]), 2);
+    // A variant joins its file's stack.
+    f.app.select_path(&a, egui::Modifiers::NONE);
+    f.pump("a geladen", |app| app.current.is_some() && app.loading.is_none());
+    f.app.new_variant(false);
+    assert_eq!(f.app.stack_size(f.app.visible[0]), 3);
+    // Expanded: all of them, the top image first.
+    f.app.run_stack_action(StackAction::ExpandAll);
+    assert_eq!(f.app.visible.len(), 3);
+    assert_eq!(f.app.entries[f.app.visible[0]].path, b);
+    // The catalog knows the stack after reloading.
+    f.app.reload_entries();
+    assert_eq!(f.app.visible.len(), 3);
+    f.app.run_stack_action(StackAction::CollapseAll);
+    assert_eq!(f.app.visible.len(), 1);
+    // Another top image.
+    f.app.run_stack_action(StackAction::ExpandAll);
+    f.app.select_path(&a, egui::Modifiers::NONE);
+    f.app.run_stack_action(StackAction::MakeTop);
+    f.app.run_stack_action(StackAction::CollapseAll);
+    assert_eq!(f.app.entries[f.app.visible[0]].path, a);
+    // Dissolved.
+    f.app.run_stack_action(StackAction::Dissolve);
+    assert_eq!(f.app.visible.len(), 3);
+    assert!(sidecar::load(&a).stack.is_none() && sidecar::load(&b).stack.is_none());
+    // Both samples were taken within a short time: automatic stacking finds them.
+    f.app.selection.clear();
+    f.app.auto_stack_by_time(3600.0);
+    assert_eq!(f.app.visible.len(), 1, "{}", f.app.status);
+}

@@ -269,6 +269,11 @@ pub struct App {
     /// Indices into `entries` that pass the filter, in display order.
     pub visible: Vec<usize>,
     pub selection: HashSet<PathBuf>,
+    /// Stacks shown with all their images (see `stacks.rs`); others show only their top image.
+    pub expanded_stacks: HashSet<String>,
+    /// Number of images in each stack of `entries`.
+    pub stack_sizes: HashMap<String, usize>,
+    pub auto_stack: Option<crate::stacks::AutoStackDialog>,
     pub thumbs: HashMap<PathBuf, TextureHandle>,
     pub thumb_requested: HashSet<PathBuf>,
     pub grid_view: bool,
@@ -515,6 +520,9 @@ impl App {
             entries: Vec::new(),
             visible: Vec::new(),
             selection: HashSet::new(),
+            expanded_stacks: HashSet::new(),
+            stack_sizes: HashMap::new(),
+            auto_stack: None,
             thumbs: HashMap::new(),
             thumb_requested: HashSet::new(),
             grid_view: false,
@@ -1776,6 +1784,15 @@ impl App {
         if pressed(Key::Delete, Modifiers::NONE) || pressed(Key::Backspace, Modifiers::NONE) {
             self.delete_selected_spot();
         }
+        if pressed(Key::G, Modifiers::COMMAND | Modifiers::SHIFT) {
+            self.run_stack_action(crate::stacks::StackAction::Dissolve);
+        }
+        if pressed(Key::G, Modifiers::COMMAND) {
+            self.run_stack_action(crate::stacks::StackAction::Create);
+        }
+        if pressed(Key::G, Modifiers::SHIFT) {
+            self.run_stack_action(crate::stacks::StackAction::Toggle);
+        }
         if pressed(Key::G, Modifiers::NONE) {
             self.grid_view = !self.grid_view;
         }
@@ -2009,6 +2026,7 @@ impl eframe::App for App {
             self.dialogs(&ctx);
             self.session_dialogs(&ctx);
             self.variant_dialogs(&ctx);
+            self.stack_dialogs(&ctx);
             self.finish_frame(&ctx);
             return;
         }
@@ -2040,6 +2058,7 @@ impl eframe::App for App {
         self.dialogs(&ctx);
         self.session_dialogs(&ctx);
         self.variant_dialogs(&ctx);
+        self.stack_dialogs(&ctx);
         self.finish_frame(&ctx);
     }
 

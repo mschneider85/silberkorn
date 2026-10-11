@@ -46,6 +46,7 @@ fn record_from_sidecar(path: PathBuf) -> ImageRecord {
         rating: sc.rating,
         color_label: sc.color_label,
         keywords: sc.keywords,
+        stack: sc.stack,
     }
 }
 
@@ -187,7 +188,8 @@ impl App {
     }
 
     pub fn refilter(&mut self) {
-        self.visible = self.entries.iter().enumerate().filter(|(_, r)| self.filter.matches(r)).map(|(i, _)| i).collect();
+        let matching = self.entries.iter().enumerate().filter(|(_, r)| self.filter.matches(r)).map(|(i, _)| i).collect();
+        self.visible = self.arrange_stacks(matching);
     }
 
     pub fn index_of(&self, path: &Path) -> Option<usize> {

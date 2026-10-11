@@ -249,6 +249,21 @@ beziehen sich aber nur auf die Bilder der Session.
 
 Sidecars bleiben die maßgebliche Quelle; der Katalog ist ein Index und kann jederzeit neu aufgebaut werden.
 
+### Stapel
+
+Zusammengehörige Bilder (Serie, Belichtungsreihe, Varianten eines Motivs) zeigt
+der Browser als ein Vorschaubild, das oberste Bild des Stapels. Die Zahl oben links nennt die
+Bilder im Stapel; ein Klick darauf (oder **Umschalt+G**) klappt ihn auf und wieder zu.
+
+- **Strg+G** bildet aus der Auswahl einen Stapel, das Bild im Viewer wird das oberste.
+  **Strg+Umschalt+G** löst die Stapel der Auswahl auf. Im Menü **Bild → Stapel** (auch per
+  Rechtsklick) außerdem: aus dem Stapel entfernen, als oberstes Bild festlegen, alle auf-/zuklappen.
+- **Automatisch nach Aufnahmezeit …** stapelt die Auswahl (oder alle Bilder der Ansicht): Eine
+  Pause von mehr als der eingestellten Zeit (Standard 2 s) beginnt einen neuen Stapel. Bilder, die
+  schon gestapelt sind, bleiben in ihrem Stapel.
+- Die Zugehörigkeit steht im Sidecar jeder RAW-Datei (Feld `stack`); Varianten gehören zum Stapel
+  ihrer Datei. Bewertung, Verschieben usw. betreffen nur die ausgewählten Bilder.
+
 ### XMP (Lightroom, Bridge, Capture One)
 
 Bewertung, Farb-Label und Keywords werden mit XMP-Sidecars ausgetauscht (`IMG_0001.xmp`, auch
@@ -301,6 +316,8 @@ Daten aus der Zeit als „Capture Room“ werden übernommen: Ordner `capture-ro
 | Umschalt+Enter | Referenzbild festlegen / entfernen |
 | K | Fokusmaske |
 | F2 / F3 | neue Variante / Variante klonen |
+| Strg+G / Strg+Umschalt+G | Stapel bilden / auflösen |
+| Umschalt+G | Stapel auf-/zuklappen |
 | Q / A / D / F / V / T + Mausrad | Speed Edit: Belichtung / Kontrast / Sättigung / Lichter / Tiefen / Temperatur (auf der aktiven Ebene, sonst global) |
 
 Doppelklick auf einen Reglernamen setzt den Regler zurück.
@@ -324,4 +341,4 @@ Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verklei
 - **Phase 8 (fertig):** Vorher/Nachher nebeneinander, Wasserzeichen (Text/Logo), EXIF und Copyright im Export, Hilfslinien und Layout-Overlay
 - **Phase 9 (fertig):** automatisches Geraderichten (Drehung, vertikaler/horizontaler Keystone)
 - **Phase 10 (fertig):** Lupe, Verlauf und Schnappschüsse, Umbenennen mit Platzhaltern (auch im Ausgaberezept)
-- **Phase 11:** XMP-Austausch
+- **Phase 11:** XMP-Austausch, Stapel

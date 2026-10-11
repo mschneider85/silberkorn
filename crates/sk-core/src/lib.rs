@@ -21,6 +21,7 @@ pub mod pipeline;
 pub mod raw;
 pub mod session;
 pub mod sidecar;
+pub mod stack;
 pub mod styles;
 pub mod upright;
 pub mod variant;

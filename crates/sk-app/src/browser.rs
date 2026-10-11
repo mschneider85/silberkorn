@@ -658,6 +658,7 @@ impl App {
             if is_primary { Color32::WHITE } else { theme::TEXT_DIM },
         );
         widgets::paint_badges(ui, img_area, entry.rating, entry.color_label.rgb());
+        let stack_toggle = self.stack_badge(ui, idx, img_area);
         let tooltip = [
             Some(entry.name.clone()),
             entry.capture_date.clone(),
@@ -685,11 +686,43 @@ impl App {
         }
         resp.context_menu(|ui| {
             self.variant_menu(ui);
+            self.stack_menu(ui);
             ui.separator();
             self.move_menu(ui);
         });
+        if let Some(id) = stack_toggle {
+            self.toggle_stack(&id);
+            return (None, false);
+        }
         let mods = resp.clicked().then(|| ui.input(|i| i.modifiers));
         (mods, resp.double_clicked())
+    }
+
+    /// Badge of a stacked image (top left): the number of images, with an arrow to expand or
+    /// collapse. Returns the stack id if the badge was clicked.
+    fn stack_badge(&self, ui: &mut Ui, idx: usize, img_area: Rect) -> Option<String> {
+        let entry = &self.entries[idx];
+        let s = entry.stack.as_ref()?;
+        let n = self.stack_size(idx);
+        if n < 2 {
+            return None;
+        }
+        let expanded = self.expanded_stacks.contains(&s.id);
+        let is_top = s.top && sk_core::variant::number(&entry.path) == 1;
+        let text = if is_top || !expanded {
+            format!("{} {n} {}", theme::icon::STACK_SIMPLE, if expanded { theme::icon::CARET_LEFT } else { theme::icon::CARET_RIGHT })
+        } else {
+            theme::icon::STACK_SIMPLE.to_string()
+        };
+        let font = egui::FontId::proportional(11.0);
+        let galley = ui.painter().layout_no_wrap(text, font, Color32::WHITE);
+        let rect = Rect::from_min_size(img_area.min + vec2(2.0, 2.0), galley.size() + vec2(8.0, 4.0));
+        let resp = ui.interact(rect, ui.id().with(("stack badge", &entry.path)), Sense::click());
+        let fill = if is_top || !expanded { theme::ACCENT.gamma_multiply(if resp.hovered() { 1.0 } else { 0.85 }) } else { Color32::from_black_alpha(150) };
+        ui.painter().rect_filled(rect, 3.0, fill);
+        ui.painter().galley(rect.min + vec2(4.0, 2.0), galley, Color32::WHITE);
+        let hover = if expanded { "Stapel zuklappen (Umschalt+G)" } else { "Stapel aufklappen (Umschalt+G)" };
+        resp.on_hover_text(hover).clicked().then(|| s.id.clone())
     }
 
     pub fn filmstrip(&mut self, ui: &mut Ui) {
