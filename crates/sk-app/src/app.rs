@@ -223,6 +223,7 @@ struct Settings {
     last_image: Option<PathBuf>,
     /// Write rating, label and keywords into XMP sidecars automatically.
     write_xmp: bool,
+    viewer_window: crate::viewer_window::ViewerWindow,
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -444,6 +445,12 @@ pub struct App {
     pub(crate) pixels_per_point: f32,
     /// Debug aid: `SILBERKORN_SCREENSHOT=<file.png>` saves a screenshot once the first image is shown, then quits.
     screenshot: Option<(PathBuf, Option<f64>)>,
+    /// The viewer in a window of its own (see `viewer_window.rs`).
+    pub viewer_window: crate::viewer_window::ViewerWindow,
+    /// The viewer window has been created (its full screen state is only set on creation).
+    pub(crate) viewer_window_shown: bool,
+    /// The viewer window was moved or resized at this time (saved once it rests).
+    pub(crate) viewer_window_moved: Option<Instant>,
 }
 
 /// Startup options (separate from `eframe` so that tests can construct the app).
@@ -637,6 +644,12 @@ impl App {
             export_log: Vec::new(),
             status,
             screenshot: std::env::var_os("SILBERKORN_SCREENSHOT").map(|p| (PathBuf::from(p), None)),
+            viewer_window: crate::viewer_window::ViewerWindow {
+                open: (settings.viewer_window.open && opts.persist_settings) || std::env::var_os("SILBERKORN_VIEWER_WINDOW").is_some(),
+                ..settings.viewer_window
+            },
+            viewer_window_shown: false,
+            viewer_window_moved: None,
         };
         app.reload_styles();
         match session {
@@ -683,6 +696,7 @@ impl App {
             rename_template: self.rename_template.clone(),
             last_image: self.primary_path().or_else(|| self.restore_image.clone()),
             write_xmp: sk_core::xmp::write_enabled(),
+            viewer_window: self.viewer_window,
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -1821,6 +1835,9 @@ impl App {
         if pressed(Key::Enter, Modifiers::NONE) {
             self.finish_crop_tool();
         }
+        if pressed(Key::F11, Modifiers::SHIFT) {
+            self.toggle_viewer_window();
+        }
         if pressed(Key::F11, Modifiers::NONE) || pressed(Key::F, Modifiers::COMMAND | Modifiers::SHIFT) {
             self.toggle_fullscreen(ctx);
         }
@@ -1859,6 +1876,10 @@ impl App {
         self.send_render();
         self.update_proof(ctx);
         self.fade_in(ctx);
+        if self.viewer_window_moved.is_some_and(|t| t.elapsed() > Duration::from_secs(1)) {
+            self.viewer_window_moved = None;
+            self.save_settings();
+        }
         self.debug_screenshot(ctx);
     }
 
@@ -2045,7 +2066,8 @@ impl eframe::App for App {
             .default_size(340.0)
             .size_range(280.0..=560.0)
             .show(ui, |ui| self.tool_panel(ui));
-        if !self.grid_view && self.show_filmstrip {
+        let grid = self.grid_view || self.viewer_detached();
+        if !grid && self.show_filmstrip {
             egui::Panel::bottom("filmstrip")
                 .frame(egui::Frame::new().fill(theme::BROWSER).inner_margin(egui::Margin::same(6)))
                 .resizable(true)
@@ -2053,7 +2075,8 @@ impl eframe::App for App {
                 .min_size(100.0)
                 .show(ui, |ui| self.filmstrip(ui));
         }
-        egui::CentralPanel::no_frame().show(ui, |ui| if self.grid_view { self.grid(ui) } else { self.viewer(ui) });
+        egui::CentralPanel::no_frame().show(ui, |ui| if grid { self.grid(ui) } else { self.viewer(ui) });
+        self.show_viewer_window(&ctx);
         crate::chrome::resize_edges(ui);
         self.dialogs(&ctx);
         self.session_dialogs(&ctx);

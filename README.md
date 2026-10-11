@@ -120,6 +120,15 @@ oder Wege bleiben unberücksichtigt. Keystone wird nur gesetzt, wenn mehrere pas
 das Bild verteilt sind. Die Buttons stehen im Tab „Objektiv“ unter „Keystone“; das Ergebnis ist ein
 Rückgängig-Schritt und lässt sich mit den Reglern nachjustieren.
 
+### Viewer auf dem Zweitmonitor
+
+**Ansicht → „Viewer in eigenem Fenster“** (Umschalt+F11) öffnet den Viewer als eigenes Fenster,
+etwa für einen zweiten Bildschirm. Das Hauptfenster zeigt dann
+das Raster zum Sichten und Auswählen, die Werkzeuge bleiben links. Im Viewer-Fenster
+funktionieren Zoom, Vergleichsansicht, Werkzeuge und alle Tastenkürzel; **F11** schaltet dort auf
+Vollbild, Esc zurück. Position, Größe und Vollbild werden gemerkt, beim nächsten Start öffnet sich
+das Fenster wieder.
+
 ### Lupe
 
 Maustaste auf dem eingepassten Bild gedrückt halten: Ein Ausschnitt unter dem Cursor erscheint in
@@ -312,6 +321,7 @@ Daten aus der Zeit als „Capture Room“ werden übernommen: Ordner `capture-ro
 | O / Umschalt+O | Hilfslinien wechseln / eigenes Overlay |
 | Umschalt+A | automatisch geraderichten |
 | Strg+Umschalt+R | Auswahl umbenennen |
+| Umschalt+F11 | Viewer in eigenem Fenster (Zweitmonitor) |
 | Maustaste halten | Lupe (100 %) im eingepassten Bild |
 | Umschalt+Enter | Referenzbild festlegen / entfernen |
 | K | Fokusmaske |
@@ -341,4 +351,4 @@ Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verklei
 - **Phase 8 (fertig):** Vorher/Nachher nebeneinander, Wasserzeichen (Text/Logo), EXIF und Copyright im Export, Hilfslinien und Layout-Overlay
 - **Phase 9 (fertig):** automatisches Geraderichten (Drehung, vertikaler/horizontaler Keystone)
 - **Phase 10 (fertig):** Lupe, Verlauf und Schnappschüsse, Umbenennen mit Platzhaltern (auch im Ausgaberezept)
-- **Phase 11:** XMP-Austausch, Stapel
+- **Phase 11:** XMP-Austausch, Stapel, Viewer auf dem Zweitmonitor

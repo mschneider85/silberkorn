@@ -70,6 +70,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Umschalt+A", "Automatisch geraderichten (Drehung und stürzende Linien)"),
             ("Strg+Umschalt+R", "Auswahl umbenennen (mit Platzhaltern)"),
             ("F11 / Strg+Umschalt+F", "Vollbild ohne Ablenkung (Esc beendet)"),
+            ("Umschalt+F11", "Viewer in eigenem Fenster, z. B. auf dem Zweitmonitor (dort F11: Vollbild)"),
         ],
     ),
     (
@@ -451,6 +452,9 @@ impl App {
             });
         }
         ui.separator();
+        if check(ui, self.viewer_window.open, "Viewer in eigenem Fenster (Zweitmonitor)", "Umschalt+F11") {
+            self.toggle_viewer_window();
+        }
         if check(ui, self.fullscreen, "Vollbild ohne Ablenkung", "F11") {
             self.toggle_fullscreen(&ui.ctx().clone());
         }

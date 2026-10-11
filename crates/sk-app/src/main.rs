@@ -21,6 +21,7 @@ mod stacks;
 mod theme;
 mod tools;
 mod variants;
+mod viewer_window;
 mod widgets;
 mod window_placement;
 mod workers;
