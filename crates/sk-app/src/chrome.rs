@@ -407,7 +407,11 @@ impl App {
                 }
                 let n = self.selected_paths().len();
                 let sel = if n > 1 { format!("  ·  {n} ausgewählt") } else { String::new() };
-                ui.label(dim(format!("{}  ·  {} Bilder{sel}", scope_label(&self.scope, &self.lists), self.visible.len())));
+                let count = match self.visible.len() {
+                    1 => "1 Bild".to_string(),
+                    n => format!("{n} Bilder"),
+                };
+                ui.label(dim(format!("{}  ·  {count}{sel}", scope_label(&self.scope, &self.lists))));
                 if let Some((done, total)) = self.export_progress.or(self.index_progress) {
                     ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).desired_width(120.0).desired_height(12.0));
                 }
