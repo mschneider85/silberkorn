@@ -1,30 +1,30 @@
-# Capture Room
+# Silberkorn
 
 RAW-Entwickler und Bildverwaltung in Rust.
 
 ## Starten
 
 ```bash
-cargo run --release -p cr-app -- /pfad/zu/raws
+cargo run --release -p sk-app -- /pfad/zu/raws
 ```
 
 Der erste Build dauert einige Minuten (u. a. wegen der ONNX-Inferenz-Bibliothek tract).
 Ohne Pfad wird der zuletzt geöffnete Ordner verwendet. Falls wgpu (Vulkan) nicht startet,
-fällt die App automatisch auf OpenGL zurück; erzwingen mit `CAPTURE_ROOM_RENDERER=glow`.
+fällt die App automatisch auf OpenGL zurück; erzwingen mit `SILBERKORN_RENDERER=glow`.
 
 Kommandozeilen-Entwicklung (ohne GUI):
 
 ```bash
-CR_ADJ='{"exposure":0.5,"shadows":40}' cargo run --release -p cr-core --example develop -- bild.ARW ausgabe/
+SK_ADJ='{"exposure":0.5,"shadows":40}' cargo run --release -p sk-core --example develop -- bild.ARW ausgabe/
 ```
 
 ## Aufbau
 
 | Crate | Inhalt |
 |---|---|
-| `cr-core` | RAW-Dekodierung (rawler), Farbmathematik, Entwicklungs-Pipeline, Sidecars, Export |
-| `cr-ai`   | Masken aus Bildinhalt: Motiv (U²-Net via tract/ONNX), Himmel, Magic Brush, Kantenverfeinerung |
-| `cr-app`  | egui/wgpu-Oberfläche, Hintergrund-Worker |
+| `sk-core` | RAW-Dekodierung (rawler), Farbmathematik, Entwicklungs-Pipeline, Sidecars, Export |
+| `sk-ai`   | Masken aus Bildinhalt: Motiv (U²-Net via tract/ONNX), Himmel, Magic Brush, Kantenverfeinerung |
+| `sk-app`  | egui/wgpu-Oberfläche, Hintergrund-Worker |
 
 Pipeline (Arbeitsfarbraum: lineares Rec.2020):
 
@@ -41,7 +41,7 @@ Pipeline (Arbeitsfarbraum: lineares Rec.2020):
 Die frühen Stufen werden zwischengespeichert, sodass Ton- und Farbregler flüssig bleiben. Beim
 Hineinzoomen rendert ein Hintergrund-Worker den sichtbaren Ausschnitt in voller Auflösung.
 
-`CR_TRACE=1` gibt die Zeiten der einzelnen Stufen aus; `cargo run --release -p cr-core --example bench -- <raw>`
+`SK_TRACE=1` gibt die Zeiten der einzelnen Stufen aus; `cargo run --release -p sk-core --example bench -- <raw>`
 misst die Pipeline.
 
 ### Ebenen & Masken
@@ -58,7 +58,7 @@ die Umgebung an; „Klonen“ kopiert 1:1. Quelle und Ziel lassen sich verschieb
 ### Auswahl aus Bildinhalt
 
 - **Motiv auswählen:** neuronales Netz U²-Net-p (Apache-2.0, 4,6 MB). Das Modell wird im Tab „Ebenen“
-  auf Wunsch nach `~/.local/share/capture-room/models/` geladen (oder `CAPTURE_ROOM_MODEL=<pfad>`).
+  auf Wunsch nach `~/.local/share/silberkorn/models/` geladen (oder `SILBERKORN_MODEL=<pfad>`).
 - **Himmel auswählen:** helle, strukturarme, blaue oder neutrale Bereiche, die mit dem oberen Rand verbunden sind.
 - **Magic Brush (J):** Klick wählt zusammenhängende, farbähnliche Bereiche (Toleranz einstellbar).
 - **Luma Range** und **Farbbereich** (mit Pipette) verfeinern jede Maske.
@@ -70,27 +70,31 @@ in einem Durchgang verarbeitet werden (das RAW wird pro Bild nur einmal entwicke
 
 ### Objektivprofile
 
-Lensfun-XML-Dateien werden aus `~/.local/share/capture-room/lensfun`, `~/.local/share/lensfun` und
+Lensfun-XML-Dateien werden aus `~/.local/share/silberkorn/lensfun`, `~/.local/share/lensfun` und
 `/usr/share/lensfun` gelesen. Im Tab „Objektiv“ lässt sich die Datenbank auch herunterladen
-(Quelle: lensfun auf GitHub, Lizenz CC BY-SA 3.0; sie wird nicht mit Capture Room ausgeliefert).
+(Quelle: lensfun auf GitHub, Lizenz CC BY-SA 3.0; sie wird nicht mit Silberkorn ausgeliefert).
 
-Einstellungen werden nicht-destruktiv als `<Bild>.crs.json` neben dem RAW gespeichert.
+Einstellungen werden nicht-destruktiv als `<Bild>.sk.json` neben dem RAW gespeichert.
 
 ## Bibliothek
 
 - **Ordner** werden wie eine Session direkt durchsucht und im Hintergrund indexiert.
-- **Katalog** (SQLite, `~/.local/share/capture-room/catalog.sqlite`, überschreibbar mit
-  `CAPTURE_ROOM_CATALOG`): „Ordner importieren“ nimmt einen Ordnerbaum auf; danach stehen
+- **Katalog** (SQLite, `~/.local/share/silberkorn/catalog.sqlite`, überschreibbar mit
+  `SILBERKORN_CATALOG`): „Ordner importieren“ nimmt einen Ordnerbaum auf; danach stehen
   „Alle Bilder“, „Letzter Import“, Katalogordner und Alben zur Verfügung.
 - **Alben** (manuell) und **Smart-Alben** (gespeicherter Filter), Rechtsklick für Umbenennen/Löschen.
 - **Filter & Suche:** Freitext (Name, Kamera, Objektiv, Keyword), Mindestbewertung, Farb-Label,
   Keyword; Sortierung nach Name, Aufnahmedatum oder Bewertung.
 - **Keywords** im Tab „Metadaten“ (mit Vorschlägen aus dem Katalog); Bewertung, Label und
   Keywords wirken auf die ganze Auswahl.
-- **Stile:** Anpassungen als Preset speichern (`~/.config/capture-room/styles`) und auf die Auswahl anwenden.
-- **Thumbnail-Cache** unter `~/.cache/capture-room/thumbs`.
+- **Stile:** Anpassungen als Preset speichern (`~/.config/silberkorn/styles`) und auf die Auswahl anwenden.
+- **Thumbnail-Cache** unter `~/.cache/silberkorn/thumbs`.
 
 Sidecars bleiben die maßgebliche Quelle; der Katalog ist ein Index und kann jederzeit neu aufgebaut werden.
+
+Daten aus der Zeit als „Capture Room“ werden übernommen: Ordner `capture-room` in `~/.config`,
+`~/.local/share` und `~/.cache` werden beim ersten Start nach `silberkorn` verschoben, und alte
+`<Bild>.crs.json`-Sidecars werden gelesen und beim nächsten Speichern durch `.sk.json` ersetzt.
 
 ## Tastenkürzel
 

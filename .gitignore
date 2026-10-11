@@ -1,3 +1,4 @@
 /target
 /samples
+*.sk.json.tmp
 *.crs.json.tmp

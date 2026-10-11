@@ -914,48 +914,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cr-ai"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cr-core",
- "image",
- "tract-onnx",
- "ureq",
-]
-
-[[package]]
-name = "cr-app"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cr-ai",
- "cr-core",
- "eframe",
- "egui",
- "env_logger",
- "image",
- "log",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "cr-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "image",
- "rawler",
- "rayon",
- "roxmltree",
- "rusqlite",
- "serde",
- "serde_json",
- "ureq",
-]
-
-[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4003,6 +3961,48 @@ name = "siphasher"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
+
+[[package]]
+name = "sk-ai"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "sk-core",
+ "tract-onnx",
+ "ureq",
+]
+
+[[package]]
+name = "sk-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "eframe",
+ "egui",
+ "env_logger",
+ "image",
+ "log",
+ "serde",
+ "serde_json",
+ "sk-ai",
+ "sk-core",
+]
+
+[[package]]
+name = "sk-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "rawler",
+ "rayon",
+ "roxmltree",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "ureq",
+]
 
 [[package]]
 name = "skrifa"
