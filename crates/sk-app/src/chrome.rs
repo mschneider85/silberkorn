@@ -65,6 +65,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("E", "Belichtungswarnung"),
             ("K", "Fokusmaske (scharfe Bereiche grün)"),
             ("P", "Proof: Bild wie vom Ausgabe-Rezept geschrieben"),
+            ("Umschalt+P", "Softproof: Bild wie im Farbraum oder auf dem Drucker, mit Farbumfang-Warnung"),
             ("O", "Hilfslinien wechseln (Drittel, Goldener Schnitt, Raster, Diagonalen)"),
             ("Umschalt+O", "Eigenes Overlay (Layout-PNG) ein/aus"),
             ("Umschalt+A", "Automatisch geraderichten (Drehung und stürzende Linien)"),
@@ -423,6 +424,9 @@ impl App {
         });
         if check(ui, self.proof_view, "Proof (Ausgabe-Rezept)", "P") {
             self.toggle_proof();
+        }
+        if check(ui, self.softproof.on, "Softproof (Profil im Tab „Ausgabe“)", "Umschalt+P") {
+            self.toggle_softproof();
         }
         ui.separator();
         ui.menu_button("Hilfslinien", |ui| {

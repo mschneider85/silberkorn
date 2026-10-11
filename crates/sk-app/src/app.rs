@@ -224,6 +224,7 @@ struct Settings {
     /// Write rating, label and keywords into XMP sidecars automatically.
     write_xmp: bool,
     viewer_window: crate::viewer_window::ViewerWindow,
+    softproof: sk_core::softproof::ProofSettings,
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -451,6 +452,7 @@ pub struct App {
     pub(crate) viewer_window_shown: bool,
     /// The viewer window was moved or resized at this time (saved once it rests).
     pub(crate) viewer_window_moved: Option<Instant>,
+    pub softproof: crate::softproof::SoftProofState,
 }
 
 /// Startup options (separate from `eframe` so that tests can construct the app).
@@ -650,6 +652,7 @@ impl App {
             },
             viewer_window_shown: false,
             viewer_window_moved: None,
+            softproof: crate::softproof::SoftProofState { settings: settings.softproof.clone(), ..Default::default() },
         };
         app.reload_styles();
         match session {
@@ -697,6 +700,7 @@ impl App {
             last_image: self.primary_path().or_else(|| self.restore_image.clone()),
             write_xmp: sk_core::xmp::write_enabled(),
             viewer_window: self.viewer_window,
+            softproof: self.softproof.settings.clone(),
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -792,6 +796,7 @@ impl App {
             && !self.clip_warning
             && !self.show_before
             && self.crop_tool.is_none()
+            && !self.softproof.on
             && self.mask_overlay().is_none();
         let texture = self.texture.take();
         let rendered = texture.filter(|_| plain).zip(self.histogram.clone());
@@ -1642,9 +1647,11 @@ impl App {
                     mask_overlay: None,
                     cache_as: None,
                     draft: 1,
+                    softproof: None,
                 });
             }
         }
+        let softproof = self.active_softproof();
         if let Some(cur) = &self.current {
             self.workers.render(RenderJob {
                 generation: self.generation,
@@ -1663,6 +1670,7 @@ impl App {
                 before: self.show_before,
                 ignore_crop: self.crop_tool.is_some(),
                 mask_overlay: self.mask_overlay(),
+                softproof,
             });
         }
     }
@@ -1841,6 +1849,9 @@ impl App {
         if pressed(Key::F11, Modifiers::NONE) || pressed(Key::F, Modifiers::COMMAND | Modifiers::SHIFT) {
             self.toggle_fullscreen(ctx);
         }
+        if pressed(Key::P, Modifiers::SHIFT) {
+            self.toggle_softproof();
+        }
         if pressed(Key::P, Modifiers::NONE) {
             self.toggle_proof();
         }
@@ -1938,6 +1949,11 @@ impl App {
                 r.watermark = sk_core::watermark::Watermark { enabled: true, text, size: 6.0, opacity: 0.8, ..Default::default() };
             }
             self.proof_view |= std::env::var_os("SILBERKORN_PROOF").is_some();
+            if std::env::var_os("SILBERKORN_SOFTPROOF").is_some() {
+                self.tab = Tab::Output;
+                self.edit(|a| a.saturation = 60.0);
+                self.toggle_softproof();
+            }
             // Layout only (the window itself stays as it is).
             self.fullscreen |= std::env::var_os("SILBERKORN_FULLSCREEN").is_some();
         }

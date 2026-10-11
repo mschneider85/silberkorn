@@ -170,6 +170,21 @@ als **Dateiname** der verarbeiteten Bilder (der Zähler zählt dort die Bilder e
   (abschaltbar) sowie Fotograf und Copyright. GPS-Daten werden nie übernommen. TIFF-Dateien
   erhalten keine Metadaten.
 
+### Softproof
+
+**Umschalt+P** (Ansicht → „Softproof“) zeigt das Bild so, wie es in einem anderen Farbraum oder
+auf einem Drucker herauskommt. Eingestellt wird im Tab **„Ausgabe“ → Softproof**:
+
+- **Profil:** sRGB, Adobe RGB, Display P3 oder ein ICC-Profil (Drucker/Papier). Gefunden werden
+  Profile in `~/.config/silberkorn/profiles`, `/usr/share/color/icc`, `~/.local/share/icc`
+  bzw. unter Windows im Farbprofil-Ordner des Systems; weitere über „ICC-Profil laden …“.
+- **Priorität** (wahrnehmungsorientiert, relativ/absolut farbmetrisch, Sättigung),
+  **Tiefenkompensierung** und **Papier und Druckfarbe simulieren** (Papierton und echtes Schwarz).
+- **Farbumfang-Warnung:** Farben, die das Profil nicht wiedergeben kann, erscheinen magenta.
+
+Die Umrechnung übernimmt Little CMS (statisch eingebunden). Der Softproof betrifft nur die
+Anzeige, nicht den Export.
+
 ### Objektivprofile
 
 Lensfun-XML-Dateien werden aus `~/.local/share/silberkorn/lensfun`, `~/.local/share/lensfun` und
@@ -310,6 +325,7 @@ Daten aus der Zeit als „Capture Room“ werden übernommen: Ordner `capture-ro
 | Strg+[ / Strg+] | drehen |
 | Y | Vorher/Nachher |
 | E | Belichtungswarnung |
+| Umschalt+P | Softproof |
 | W | Weißabgleich-Pipette |
 | Z / Doppelklick | Einpassen ↔ 100 % · Mausrad: zoomen · Ziehen: verschieben |
 | C / Enter / Esc | Zuschnitt-Werkzeug / übernehmen / beenden |
@@ -351,4 +367,4 @@ Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verklei
 - **Phase 8 (fertig):** Vorher/Nachher nebeneinander, Wasserzeichen (Text/Logo), EXIF und Copyright im Export, Hilfslinien und Layout-Overlay
 - **Phase 9 (fertig):** automatisches Geraderichten (Drehung, vertikaler/horizontaler Keystone)
 - **Phase 10 (fertig):** Lupe, Verlauf und Schnappschüsse, Umbenennen mit Platzhaltern (auch im Ausgaberezept)
-- **Phase 11:** XMP-Austausch, Stapel, Viewer auf dem Zweitmonitor
+- **Phase 11:** XMP-Austausch, Stapel, Viewer auf dem Zweitmonitor, Softproof

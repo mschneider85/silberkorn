@@ -16,6 +16,7 @@ mod layers;
 mod library;
 mod rename;
 mod session;
+mod softproof;
 mod splash;
 mod stacks;
 mod theme;

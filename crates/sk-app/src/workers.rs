@@ -108,6 +108,7 @@ pub struct RenderJob {
     /// Reduction for fluid dragging (1 = full preview; 2 = a quarter of the pixels; 4 when
     /// zoomed in, where the view draft covers the screen and this only feeds the histogram).
     pub draft: usize,
+    pub softproof: Option<Arc<sk_core::softproof::SoftProof>>,
 }
 
 /// Full-resolution rendering for zoomed-in viewing: first the exact visible region (fastest
@@ -129,6 +130,7 @@ pub struct TileRequest {
     pub tiles: Vec<(usize, usize)>,
     /// Also analyse the full-resolution renderings for the focus mask.
     pub focus: bool,
+    pub softproof: Option<Arc<sk_core::softproof::SoftProof>>,
 }
 
 /// Data, live adjustments and edit version of the image being edited.
@@ -380,7 +382,7 @@ impl Workers {
                         } else {
                             req.adjustments.clone()
                         };
-                        let opts = RenderOptions { clip_warning: req.clip_warning, mask_overlay: req.mask_overlay, ..Default::default() };
+                        let opts = RenderOptions { clip_warning: req.clip_warning, mask_overlay: req.mask_overlay, softproof: req.softproof.clone(), ..Default::default() };
                         let p = Processor::with_options(&req.meta, &adj, opts);
                         let (fw, fh) = p.output_size(req.full.width, req.full.height);
                         let job = match req.view.take() {
@@ -529,7 +531,7 @@ impl Workers {
                     } else {
                         job.adjustments.clone()
                     };
-                    let opts = RenderOptions { clip_warning: job.clip_warning, ignore_crop: job.ignore_crop, mask_overlay: job.mask_overlay };
+                    let opts = RenderOptions { clip_warning: job.clip_warning, ignore_crop: job.ignore_crop, mask_overlay: job.mask_overlay, softproof: job.softproof.clone() };
                     let processor = Processor::with_options(&job.meta, &adj, opts);
                     let draft = job.draft > 1;
                     let r = if draft {
@@ -547,7 +549,7 @@ impl Workers {
                     };
                     let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
                     // Thumbnails and cached previews only from regular renderings (no drafts, overlays, warnings or crop tool view).
-                    let plain = !draft && !job.before && !job.clip_warning && job.mask_overlay.is_none() && !job.ignore_crop;
+                    let plain = !draft && !job.before && !job.clip_warning && job.mask_overlay.is_none() && !job.ignore_crop && job.softproof.is_none();
                     let full = plain
                         .then(|| ::image::RgbaImage::from_raw(r.width as u32, r.height as u32, r.rgba))
                         .flatten()

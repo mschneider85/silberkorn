@@ -45,7 +45,7 @@ const LUT_SIZE: usize = 8192;
 /// Rec.2020 luminance coefficients.
 const LUMA: [f32; 3] = [0.2627, 0.6780, 0.0593];
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Default)]
 pub struct RenderOptions {
     /// Show the whole frame (for the crop tool).
     pub ignore_crop: bool,
@@ -53,6 +53,8 @@ pub struct RenderOptions {
     pub clip_warning: bool,
     /// Tint the mask of this layer red (display rendering only).
     pub mask_overlay: Option<usize>,
+    /// Show the image as in this output space or on this printer (display rendering only).
+    pub softproof: Option<Arc<crate::softproof::SoftProof>>,
 }
 
 /// Result of a display rendering: 8-bit sRGB RGBA plus histogram.
@@ -214,6 +216,8 @@ pub struct Processor {
     tone_luts: ToneLuts,
     /// Ratio of the rendered source to the full sensor resolution (for radii in full-res pixels).
     sensor_long_edge: f32,
+    /// Unclipped floating point data: no highlight reconstruction.
+    hdr: bool,
     opts: RenderOptions,
 }
 
@@ -269,6 +273,7 @@ impl Processor {
             lut: build_output_luts(adj),
             tone_luts: ToneLuts::new(&base, adj.base_curve),
             sensor_long_edge: meta.info.width.max(meta.info.height).max(1) as f32,
+            hdr: meta.hdr,
             opts,
             adj: adj.clone(),
         }
@@ -291,7 +296,7 @@ impl Processor {
     fn to_working(&self, raw: [f32; 3]) -> [f32; 3] {
         let mut b = [raw[0] * self.wb[0], raw[1] * self.wb[1], raw[2] * self.wb[2]];
         let max_raw = raw[0].max(raw[1]).max(raw[2]);
-        if max_raw > 0.95 {
+        if max_raw > 0.95 && !self.hdr {
             // Clipped channels are unreliable: estimate them as at least as bright as the
             // brightest channel, which keeps blown highlights neutral (not magenta) while
             // retaining the gradient of unclipped channels.
@@ -812,11 +817,19 @@ impl Processor {
         let (dec, enc8) = (&*DISPLAY_DECODE, &*DISPLAY_ENCODE_U8);
         let clip = self.opts.clip_warning;
         let w = enc.width;
+        // Soft proof: through the proofing profile instead of straight to sRGB.
+        let proofed: Option<Vec<[u8; 3]>> = self.opts.softproof.as_ref().map(|sp| {
+            let mut out = vec![[0u8; 3]; enc.data.len()];
+            out.par_chunks_mut(w * 16).zip(enc.data.par_chunks(w * 16)).for_each(|(o, s)| sp.apply(s, o));
+            out
+        });
         let mut rgba = vec![0u8; enc.data.len() * 4];
         rgba.par_chunks_mut(w * 4).zip(enc.data.par_chunks(w)).enumerate().for_each(|(y, (row, src))| {
             for (x, (out, p)) in row.as_chunks_mut::<4>().0.iter_mut().zip(src).enumerate() {
-                let lin = p.map(|v| dec[display_index(v)]);
-                let mut px = mat_vec(&to_srgb, lin).map(|v| enc8[display_index(v)]);
+                let mut px = match &proofed {
+                    Some(pr) => pr[y * w + x],
+                    None => mat_vec(&to_srgb, p.map(|v| dec[display_index(v)])).map(|v| enc8[display_index(v)]),
+                };
                 if let Some(m) = &mask {
                     let a = (m[y * w + x] * 0.6).clamp(0.0, 0.6);
                     px = [px[0] as f32 * (1.0 - a) + 255.0 * a, px[1] as f32 * (1.0 - a), px[2] as f32 * (1.0 - a)].map(|v| v as u8);
@@ -1127,6 +1140,7 @@ mod tests {
             color,
             as_shot_wb: [1.0, 1.0, 1.0],
             orientation: Orientation::Normal,
+            hdr: false,
         }
     }
 

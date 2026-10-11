@@ -671,6 +671,7 @@ mod tests {
             color: CameraColor::new(id),
             as_shot_wb: [1.0; 3],
             orientation: Orientation::Normal,
+            hdr: false,
         }
     }
 

@@ -54,6 +54,9 @@ pub struct RawMeta {
     /// As-shot camera multipliers, normalized to green = 1.
     pub as_shot_wb: [f32; 3],
     pub orientation: Orientation,
+    /// Floating point linear data (merged HDR, panorama, denoised DNG): values above 1 are real,
+    /// nothing is clipped.
+    pub hdr: bool,
 }
 
 struct Decoded {
@@ -74,7 +77,8 @@ fn decode_ext(path: &Path, dummy: bool) -> Result<Decoded> {
     let params = RawDecodeParams::default();
     let raw = decoder.raw_image(&source, &params, dummy).map_err(|e| anyhow!("RAW-Dekodierung fehlgeschlagen: {e}"))?;
     let md = decoder.raw_metadata(&source, &params).ok();
-    let meta = build_meta(path, &raw, md.as_ref())?;
+    let mut meta = build_meta(path, &raw, md.as_ref())?;
+    meta.hdr = raw.cpp == 3 && matches!(raw.data, RawImageData::Float(_));
     Ok(Decoded { raw, meta })
 }
 
@@ -131,7 +135,7 @@ fn build_meta(path: &Path, raw: &RawImage, md: Option<&RawMetadata>) -> Result<R
             orientation = Orientation::from_exif(o);
         }
     }
-    Ok(RawMeta { path: path.to_path_buf(), info, color, as_shot_wb, orientation })
+    Ok(RawMeta { path: path.to_path_buf(), info, color, as_shot_wb, orientation, hdr: false })
 }
 
 /// Reads only the metadata, without decoding pixel data.

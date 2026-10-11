@@ -21,7 +21,10 @@ impl App {
             Tab::Exposure => self.exposure_tab(ui),
             Tab::Color => self.color_tab(ui),
             Tab::Metadata => self.metadata_tab(ui),
-            Tab::Output => self.output_tab(ui),
+            Tab::Output => {
+                self.output_tab(ui);
+                self.softproof_section(ui);
+            }
         });
     }
 

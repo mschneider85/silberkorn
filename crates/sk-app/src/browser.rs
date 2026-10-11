@@ -354,6 +354,12 @@ impl App {
             painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand2(vec2(8.0, 4.0)), 4.0, theme::ACCENT.gamma_multiply(0.85));
             painter.galley(pos, galley, Color32::WHITE);
         }
+        if let Some(text) = self.softproof_label() {
+            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), Color32::WHITE);
+            let pos = rect.left_top() + vec2(14.0, if self.proof_view { 40.0 } else { 12.0 });
+            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand2(vec2(8.0, 4.0)), 4.0, Color32::from_rgb(150, 60, 150).gamma_multiply(0.9));
+            painter.galley(pos, galley, Color32::WHITE);
+        }
         if let Some(until) = self.fullscreen_hint_until {
             let left = until.saturating_duration_since(std::time::Instant::now()).as_secs_f32();
             if left > 0.0 {
@@ -612,6 +618,7 @@ impl App {
             view,
             tiles,
             focus: self.focus_mask,
+            softproof: self.softproof.transform.clone().filter(|_| self.softproof.on),
         });
     }
 
