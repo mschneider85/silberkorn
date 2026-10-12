@@ -11,6 +11,7 @@ pub mod exif;
 pub mod export;
 pub mod focus;
 pub mod geometry;
+pub mod gpu;
 pub mod hdr;
 pub mod panorama;
 pub mod history;

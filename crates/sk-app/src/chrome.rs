@@ -294,7 +294,7 @@ impl App {
             self.select_all();
         }
         ui.separator();
-        if item(ui, icon::LIGHTNING, "KI-Beschleunigung …", "", true) {
+        if item(ui, icon::LIGHTNING, "Grafikkarte …", "", true) {
             self.show_gpu_dialog = true;
         }
     }

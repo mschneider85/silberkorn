@@ -244,6 +244,8 @@ struct Settings {
     denoise_strength: Option<f32>,
     /// AI on the graphics card (if available).
     ai_gpu: Option<bool>,
+    /// Development pipeline on the graphics card (if available).
+    develop_gpu: Option<bool>,
     brushes: crate::layers::Brushes,
     /// Thumbnail size in the grid.
     grid_thumb: Option<f32>,
@@ -534,6 +536,9 @@ impl App {
         // Without an explicit folder, reopen the session that was open last time.
         sk_core::xmp::set_write_enabled(settings.write_xmp && opts.persist_settings);
         sk_ai::runtime::set_gpu_enabled(settings.ai_gpu.unwrap_or(true));
+        sk_core::gpu::set_enabled(settings.develop_gpu.unwrap_or(true));
+        // Sets up the graphics card and compiles the shaders while the window opens.
+        std::thread::spawn(sk_core::pipeline::prepare_gpu);
         let session = opts.session.or_else(|| settings.last_session.clone().filter(|p| p.exists() && opts.start_folder.is_none()));
         let folder = opts
             .start_folder
@@ -770,6 +775,7 @@ impl App {
             pano_options: self.pano_options,
             denoise_strength: Some(self.denoise_strength),
             ai_gpu: Some(sk_ai::runtime::gpu_enabled()),
+            develop_gpu: Some(sk_core::gpu::enabled()),
             brushes: self.brushes.clone(),
             grid_thumb: Some(self.grid_thumb),
         };

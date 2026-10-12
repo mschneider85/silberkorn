@@ -254,6 +254,102 @@ impl GeoMap {
     }
 }
 
+/// [`GeoMap`] as laid out in the `Geo` struct of the compute shaders (common.wgsl).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub(crate) struct GeoGpu {
+    src_w: f32,
+    src_h: f32,
+    frame_w: f32,
+    frame_h: f32,
+    crop_x: f32,
+    crop_y: f32,
+    cos: f32,
+    sin: f32,
+    fill: f32,
+    kv: f32,
+    kh: f32,
+    norm: f32,
+    half_diag: f32,
+    k1: f32,
+    pt: [f32; 3],
+    p5: [f32; 2],
+    lens_scale: f32,
+    ca_r: f32,
+    ca_b: f32,
+    vig: [f32; 3],
+    turns: u32,
+    flip_h: u32,
+    flip_v: u32,
+    has_pt: u32,
+    has_p5: u32,
+    identity_lens: u32,
+    has_vig: u32,
+    pixel_exact: u32,
+}
+
+impl GeoMap {
+    pub(crate) fn gpu(&self) -> GeoGpu {
+        let (pt, has_pt) = self.ptlens.map_or(([0.0; 3], 0), |(a, b, c)| ([a, b, c], 1));
+        let (p5, has_p5) = self.poly5.map_or(([0.0; 2], 0), |(a, b)| ([a, b], 1));
+        GeoGpu {
+            src_w: self.src_w,
+            src_h: self.src_h,
+            frame_w: self.frame_w,
+            frame_h: self.frame_h,
+            crop_x: self.crop.x,
+            crop_y: self.crop.y,
+            cos: self.cos,
+            sin: self.sin,
+            fill: self.fill,
+            kv: self.kv,
+            kh: self.kh,
+            norm: self.norm,
+            half_diag: self.half_diag,
+            k1: self.k1,
+            pt,
+            p5,
+            lens_scale: self.lens_scale,
+            ca_r: self.ca[0],
+            ca_b: self.ca[2],
+            vig: self.vig,
+            turns: self.turns as u32,
+            flip_h: self.flip_h as u32,
+            flip_v: self.flip_v as u32,
+            has_pt,
+            has_p5,
+            identity_lens: self.identity_lens as u32,
+            has_vig: (self.vig != [0.0; 3]) as u32,
+            pixel_exact: self.pixel_exact as u32,
+        }
+    }
+
+    /// Source pixels needed to resample `region` (x, y, w, h), so that only that part of a
+    /// large source has to go to the graphics card. The mapping is smooth, so a grid over
+    /// the region (with all of its border) bounds it; two pixels are added for interpolation.
+    pub(crate) fn source_window(&self, region: Region) -> (usize, usize, usize, usize) {
+        const N: usize = 32;
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for j in 0..=N {
+            for i in 0..=N {
+                let ox = region.x as f32 + region.w as f32 * i as f32 / N as f32;
+                let oy = region.y as f32 + region.h as f32 * j as f32 / N as f32;
+                let (pts, _) = self.map(ox, oy);
+                for p in pts {
+                    x0 = x0.min(p[0]);
+                    y0 = y0.min(p[1]);
+                    x1 = x1.max(p[0]);
+                    y1 = y1.max(p[1]);
+                }
+            }
+        }
+        let clamp = |v: f32, max: f32| v.clamp(0.0, max) as usize;
+        let (x0, y0) = (clamp(x0.floor() - 2.0, self.src_w - 1.0), clamp(y0.floor() - 2.0, self.src_h - 1.0));
+        let (x1, y1) = (clamp(x1.ceil() + 2.0, self.src_w - 1.0), clamp(y1.ceil() + 2.0, self.src_h - 1.0));
+        (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+    }
+}
+
 /// Radial distortion factor r_src / r_out.
 #[inline]
 fn distortion_factor(k1: f32, ptlens: Option<(f32, f32, f32)>, poly5: Option<(f32, f32)>, r2: f32, r: f32) -> f32 {

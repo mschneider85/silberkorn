@@ -1,4 +1,5 @@
-//! "AI acceleration": the networks on the graphics card (see `sk_ai::runtime`).
+//! The graphics card: development pipeline (see `sk_core::gpu`) and the AI networks
+//! (see `sk_ai::runtime`).
 
 use egui::{Button, Color32, RichText, vec2};
 use sk_ai::runtime;
@@ -10,6 +11,14 @@ impl App {
     pub fn set_ai_gpu(&mut self, on: bool) {
         runtime::set_gpu_enabled(on);
         self.save_settings();
+    }
+
+    pub fn set_develop_gpu(&mut self, on: bool) {
+        sk_core::gpu::set_enabled(on);
+        self.save_settings();
+        if on {
+            std::thread::spawn(sk_core::pipeline::prepare_gpu);
+        }
     }
 
     fn install_gpu_job(&mut self) {
@@ -29,10 +38,26 @@ impl App {
         let installing = self.jobs.iter().find(|j| j.label == GPU_JOB).map(|j| j.progress);
         let (mut close, mut install) = (false, false);
         let mut enabled = runtime::gpu_enabled();
+        let mut develop = sk_core::gpu::enabled();
         let modal = egui::Modal::new(egui::Id::new("gpu")).show(ctx, |ui| {
             ui.set_width(440.0);
-            ui.label(RichText::new(format!("{}  KI-Beschleunigung", icon::LIGHTNING)).size(17.0).strong().color(Color32::WHITE));
+            ui.label(RichText::new(format!("{}  Grafikkarte", icon::LIGHTNING)).size(17.0).strong().color(Color32::WHITE));
             ui.add_space(6.0);
+            ui.label(RichText::new("Bildberechnung").strong());
+            ui.label("Die Entwicklung (Regler, Vorschau, Export) rechnet auf der Grafikkarte, mit dem Prozessor als Rückfall.");
+            ui.checkbox(&mut develop, "Grafikkarte verwenden");
+            let status = match sk_core::gpu::status() {
+                _ if !develop => "Aus: alles rechnet auf dem Prozessor.".to_string(),
+                None => {
+                    ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                    "Wird eingerichtet …".to_string()
+                }
+                Some(None) => "Keine geeignete Grafikkarte gefunden; es rechnet der Prozessor.".to_string(),
+                Some(Some(name)) => format!("Aktiv: {name}"),
+            };
+            ui.label(RichText::new(status).small().color(Color32::from_gray(170)));
+            ui.add_space(10.0);
+            ui.label(RichText::new("KI").strong());
             ui.label(
                 "Entrauschen, Entfernen, Motivmasken und die Gesichtserkennung können auf der Grafikkarte rechnen \
                  (DirectML: jede Karte mit DirectX 12, auch AMD und Intel). Das ist ein Vielfaches schneller als auf dem Prozessor.",
@@ -75,6 +100,9 @@ impl App {
         });
         if enabled != runtime::gpu_enabled() {
             self.set_ai_gpu(enabled);
+        }
+        if develop != sk_core::gpu::enabled() {
+            self.set_develop_gpu(develop);
         }
         if install {
             self.install_gpu_job();

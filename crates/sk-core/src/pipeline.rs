@@ -9,6 +9,9 @@
 //! 6. encoding (sRGB transfer in working primaries), brightness, levels, curves
 //! 7. sharpening, post-crop vignette, grain
 //! 8. conversion to the output color space
+//!
+//! [`Processor::render`] and [`Processor::process`] run on the graphics card when there is
+//! one (see `pipeline/gpu.rs`); the CPU implementation here is the reference and fallback.
 
 use std::sync::{Arc, Mutex};
 
@@ -21,6 +24,10 @@ use crate::image::LinearImage;
 use crate::mask::{MaskBitmap, apply_retouch, cached_bitmap};
 use crate::params::{Adjustments, BaseCurve, HUE_BANDS, LayerAdjustments, Mask, WbMode};
 use crate::raw::RawMeta;
+
+mod gpu;
+
+pub use gpu::prepare as prepare_gpu;
 
 const MID_GREY: f32 = 0.18;
 
@@ -81,6 +88,26 @@ pub struct Histogram {
 pub struct StageCache {
     entry: Mutex<Option<(u64, Arc<LinearImage>)>>,
     local: Mutex<Option<(u64, Arc<LocalPlanes>)>>,
+    gpu: Mutex<gpu::Cache>,
+}
+
+/// What a rendering processes: see [`Processor::plan`].
+struct Plan {
+    geo: GeoMap,
+    /// Full output size at the resolution of the source.
+    full: (usize, usize),
+    region: Region,
+    /// `region` plus the margin needed by neighborhood operations.
+    ext: Region,
+    /// Source resolution relative to the sensor.
+    scale: f32,
+    r_hdr: f32,
+    r_clarity: f32,
+    r_structure: f32,
+    hdr_active: bool,
+    clarity_active: bool,
+    structure_active: bool,
+    dehaze_active: bool,
 }
 
 /// Neighborhood planes derived from log luminance; independent of exposure and tone settings.
@@ -106,10 +133,8 @@ impl DarkChannel {
         let (w, h) = (img.width, img.height);
         let step = (w.max(h) / 256).max(1);
         let min_c: Vec<f32> = img.data.par_iter().map(|p| p[0].min(p[1]).min(p[2])).collect();
-        // Airlight: bright end of the minimum channel.
-        let mut sorted: Vec<f32> = min_c.iter().step_by(7).copied().collect();
-        let idx = ((sorted.len() as f32 * 0.997) as usize).min(sorted.len().saturating_sub(1));
-        let airlight = if sorted.is_empty() { 1.0 } else { *sorted.select_nth_unstable_by(idx, |a, b| a.total_cmp(b)).1 }.max(0.05);
+        // Airlight: bright end of the minimum channel (sampled).
+        let samples: Vec<f32> = min_c.iter().step_by(7).copied().collect();
         // Min-pool into blocks, then smooth.
         let (lw, lh) = (w.div_ceil(step), h.div_ceil(step));
         let pooled: Vec<f32> = (0..lw * lh)
@@ -122,11 +147,10 @@ impl DarkChannel {
                         m = m.min(min_c[y * w + x]);
                     }
                 }
-                (m / airlight).clamp(0.0, 1.0)
+                m
             })
             .collect();
-        let plane = gaussian_blur(&Plane::new(lw, lh, pooled), 1.5);
-        Self { plane, step, airlight }
+        Self::from_parts(samples, pooled, lw, lh, step)
     }
 
     #[inline]
@@ -517,14 +541,9 @@ impl Processor {
         });
     }
 
-    /// Processes `region` (default: whole output) into encoded working RGB (sRGB transfer).
-    #[allow(clippy::type_complexity)]
-    fn process_encoded(
-        &self,
-        src: &LinearImage,
-        region: Option<Region>,
-        cache: Option<&StageCache>,
-    ) -> (LinearImage, (usize, usize), Option<Vec<f32>>) {
+    /// Regions, radii and active local operators of a rendering. `align` rounds the start of
+    /// the processed region down to a multiple (for tiles that match the whole image).
+    fn plan(&self, src: &LinearImage, region: Option<Region>, align: usize) -> Plan {
         let geo = self.geomap(src.width, src.height);
         let full = (geo.out_w, geo.out_h);
         let region = region.unwrap_or(Region { x: 0, y: 0, w: full.0, h: full.1 });
@@ -563,12 +582,22 @@ impl Processor {
             margin = margin.max(long_edge / 64.0);
         }
         let m = margin.ceil() as usize;
-        let ext = Region {
-            x: region.x.saturating_sub(m),
-            y: region.y.saturating_sub(m),
-            w: (region.x + region.w + m).min(full.0) - region.x.saturating_sub(m),
-            h: (region.y + region.h + m).min(full.1) - region.y.saturating_sub(m),
-        };
+        let (x0, y0) = (region.x.saturating_sub(m) / align * align, region.y.saturating_sub(m) / align * align);
+        let ext = Region { x: x0, y: y0, w: (region.x + region.w + m).min(full.0) - x0, h: (region.y + region.h + m).min(full.1) - y0 };
+        Plan { geo, full, region, ext, scale, r_hdr, r_clarity, r_structure, hdr_active, clarity_active, structure_active, dehaze_active }
+    }
+
+    /// Processes `region` (default: whole output) into encoded working RGB (sRGB transfer).
+    #[allow(clippy::type_complexity)]
+    fn process_encoded(
+        &self,
+        src: &LinearImage,
+        region: Option<Region>,
+        cache: Option<&StageCache>,
+    ) -> (LinearImage, (usize, usize), Option<Vec<f32>>) {
+        let Plan { geo, full, region, ext, scale, r_hdr, r_clarity, r_structure, hdr_active, clarity_active, structure_active, dehaze_active, .. } =
+            self.plan(src, region, 1);
+        let d = &self.adj.detail;
 
         let mut timer = Timer::start();
         let working = match cache {
@@ -796,6 +825,17 @@ impl Processor {
 
     /// Full processing into an output color space (encoded 0..1 floats), for export.
     pub fn process(&self, src: &LinearImage, region: Option<Region>, space: OutputSpace) -> LinearImage {
+        if let Some(g) = crate::gpu::active() {
+            match self.process_gpu(g, src, region, space) {
+                Ok(img) => return img,
+                Err(e) => log::warn!("Export auf dem Prozessor: {e:#}"),
+            }
+        }
+        self.process_cpu(src, region, space)
+    }
+
+    /// [`Self::process`] without the graphics card.
+    pub fn process_cpu(&self, src: &LinearImage, region: Option<Region>, space: OutputSpace) -> LinearImage {
         let (enc, _, _) = self.process_encoded(src, region, None);
         let m = space.from_working();
         let trc = space.trc();
@@ -812,7 +852,23 @@ impl Processor {
 
     /// Display rendering (sRGB, 8-bit) with histogram.
     pub fn render(&self, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Rendered {
+        if let Some(g) = crate::gpu::active() {
+            match self.render_gpu(g, src, region, cache) {
+                Ok(r) => return r,
+                Err(e) => log::warn!("Darstellung auf dem Prozessor: {e:#}"),
+            }
+        }
+        self.render_cpu(src, region, cache)
+    }
+
+    /// [`Self::render`] without the graphics card.
+    pub fn render_cpu(&self, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Rendered {
         let (enc, full, mask) = self.process_encoded(src, region, cache);
+        self.display(enc, full, mask)
+    }
+
+    /// Encoded working RGB -> display sRGB (or soft proof), clip warning, mask overlay, histogram.
+    fn display(&self, enc: LinearImage, full: (usize, usize), mask: Option<Vec<f32>>) -> Rendered {
         let mut timer = Timer::start();
         let to_srgb = OutputSpace::Srgb.from_working();
         // Direct (not interpolated) tables: fine enough for 8-bit output and much faster.
@@ -834,7 +890,8 @@ impl Processor {
                 };
                 if let Some(m) = &mask {
                     let a = (m[y * w + x] * 0.6).clamp(0.0, 0.6);
-                    px = [px[0] as f32 * (1.0 - a) + 255.0 * a, px[1] as f32 * (1.0 - a), px[2] as f32 * (1.0 - a)].map(|v| v as u8);
+                    // The small offset keeps exact results (255 for a red pixel) from rounding down.
+                    px = [px[0] as f32 * (1.0 - a) + 255.0 * a, px[1] as f32 * (1.0 - a), px[2] as f32 * (1.0 - a)].map(|v| (v + 1e-3) as u8);
                 }
                 if clip && (px[0] == 255 || px[1] == 255 || px[2] == 255) {
                     out.copy_from_slice(&[255, 0, 0, 255]);

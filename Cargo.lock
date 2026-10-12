@@ -4114,12 +4114,14 @@ dependencies = [
  "ab_glyph",
  "anyhow",
  "base64 0.22.1",
+ "bytemuck",
  "epaint_default_fonts",
  "flate2",
  "half",
  "image",
  "lcms2",
  "log",
+ "pollster 1.0.1",
  "rawler",
  "rayon",
  "roxmltree",
@@ -4127,6 +4129,7 @@ dependencies = [
  "serde",
  "serde_json",
  "ureq",
+ "wgpu",
 ]
 
 [[package]]

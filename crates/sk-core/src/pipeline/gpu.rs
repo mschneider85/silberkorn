@@ -1,0 +1,1163 @@
+//! The pipeline on the graphics card: the same stages as the CPU path (kernels in
+//! `gpu/shaders`), which stays the reference and the fallback.
+//!
+//! Heal/clone areas and removals are applied on the CPU while resampling (only when there
+//! are any), soft proofing converts the developed result on the CPU (Little CMS).
+
+use std::sync::{LazyLock, OnceLock, Weak};
+
+use anyhow::{Result, bail};
+use bytemuck::{Pod, Zeroable};
+use wgpu::Buffer;
+
+use super::*;
+use crate::color::mat_inv;
+use crate::geometry::GeoGpu;
+use crate::gpu::{Encoder, Gpu, Kernel};
+use crate::mask::apply_removals;
+
+macro_rules! kernel {
+    ($name:literal) => {
+        ($name, include_str!(concat!("../gpu/shaders/", $name, ".wgsl")))
+    };
+}
+
+const RESAMPLE: Kernel = kernel!("resample");
+const BOX_H: Kernel = kernel!("box_h");
+const BOX_V: Kernel = kernel!("box_v");
+const PLANE_OP: Kernel = kernel!("plane_op");
+const IMG_PLANES: Kernel = kernel!("img_planes");
+const DOWNSAMPLE: Kernel = kernel!("downsample");
+const UPSAMPLE_APPLY: Kernel = kernel!("upsample_apply");
+const NR_COMBINE: Kernel = kernel!("nr_combine");
+const DARK_POOL: Kernel = kernel!("dark_pool");
+const DEVELOP: Kernel = kernel!("develop");
+const SHARPEN: Kernel = kernel!("sharpen");
+const FINISH: Kernel = kernel!("finish");
+const DISPLAY: Kernel = kernel!("display");
+const OUTPUT: Kernel = kernel!("output");
+
+const ALL: [Kernel; 14] =
+    [RESAMPLE, BOX_H, BOX_V, PLANE_OP, IMG_PLANES, DOWNSAMPLE, UPSAMPLE_APPLY, NR_COMBINE, DARK_POOL, DEVELOP, SHARPEN, FINISH, DISPLAY, OUTPUT];
+
+/// Sets up the graphics card and compiles all kernels (takes a moment; call it early in
+/// the background so that the first rendering does not wait for it).
+pub fn prepare() {
+    if let Some(g) = crate::gpu::active() {
+        let t = std::time::Instant::now();
+        g.prepare(&ALL);
+        log::info!("Shader übersetzt in {:?}", t.elapsed());
+    }
+}
+
+// plane_op.wgsl
+const OP_SQUARE: u32 = 0;
+const OP_GUIDED_A: u32 = 1;
+const OP_GUIDED_B: u32 = 2;
+const OP_GUIDED_OUT: u32 = 3;
+const OP_DETAIL: u32 = 4;
+const OP_KEEP: u32 = 5;
+
+// img_planes.wgsl
+const IMG_SQRT_LUMA: u32 = 0;
+const IMG_CHROMA: u32 = 1;
+const IMG_LOG_LUMA: u32 = 2;
+const IMG_MIN: u32 = 3;
+const IMG_LUMA: u32 = 4;
+
+/// Region size above which exports are processed in tiles (output pixels per side).
+const TILE: usize = 2048;
+/// Largest processed region (with margin) rendered in one piece.
+const MAX_PIXELS: usize = 12_000_000;
+
+/// Results of the expensive stages kept on the graphics card between renderings.
+#[derive(Default)]
+pub(super) struct Cache {
+    source: Option<(u64, Arc<Buffer>)>,
+    early: Option<(u64, Arc<Buffer>)>,
+    local: Option<(u64, Arc<Local>)>,
+}
+
+/// Local operator planes, concatenated in one buffer.
+struct Local {
+    buf: Buffer,
+    /// Offsets (in floats) of: smoothed log luminance, clarity, structure, dark channel.
+    off: [u32; 4],
+    has: [bool; 4],
+    dark: Option<DarkInfo>,
+}
+
+#[derive(Clone, Copy)]
+struct DarkInfo {
+    w: u32,
+    h: u32,
+    step: u32,
+    airlight: f32,
+    /// Offset of the processed region in the dark channel's domain.
+    origin: (u32, u32),
+}
+
+/// An encoder with the buffer helpers the stages need.
+struct Ops<'a> {
+    g: &'a Gpu,
+    enc: Encoder<'a>,
+    /// Bound to unused bindings.
+    dummy: Buffer,
+}
+
+impl<'a> Ops<'a> {
+    fn new(g: &'a Gpu) -> Self {
+        Self { g, enc: g.encoder(), dummy: g.buffer(16) }
+    }
+
+    /// Submits the recorded work and continues with a new encoder.
+    fn flush(&mut self) {
+        std::mem::replace(&mut self.enc, self.g.encoder()).submit();
+    }
+
+    fn plane(&self, n: usize) -> Buffer {
+        self.g.buffer(n as u64 * 4)
+    }
+
+    fn image(&self, n: usize) -> Buffer {
+        self.g.buffer(n as u64 * 16)
+    }
+
+    fn args<T: Pod>(&self, a: &T) -> Buffer {
+        self.g.upload(std::slice::from_ref(a))
+    }
+
+    fn copy_plane(&mut self, p: &Buffer, n: usize) -> Buffer {
+        let out = self.plane(n);
+        self.enc.copy(p, &out, 0, n as u64 * 4);
+        out
+    }
+
+    fn op(&mut self, op: u32, k: f32, x: &Buffer, y: &Buffer, z: &Buffer, n: usize) -> Buffer {
+        #[repr(C)]
+        #[derive(Clone, Copy, Pod, Zeroable)]
+        struct Args {
+            n: u32,
+            op: u32,
+            k: f32,
+        }
+        let out = self.plane(n);
+        let a = self.args(&Args { n: n as u32, op, k });
+        self.enc.run_1d(PLANE_OP, &[&a, x, y, z, &out], n);
+        out
+    }
+
+    /// Planes derived from an image (`IMG_*`); the second only for `IMG_CHROMA`.
+    fn img_planes(&mut self, op: u32, img: &Buffer, n: usize) -> (Buffer, Buffer) {
+        #[repr(C)]
+        #[derive(Clone, Copy, Pod, Zeroable)]
+        struct Args {
+            n: u32,
+            op: u32,
+        }
+        let o0 = self.plane(n);
+        let o1 = if op == IMG_CHROMA { self.plane(n) } else { self.g.buffer(16) };
+        let a = self.args(&Args { n: n as u32, op });
+        self.enc.run_1d(IMG_PLANES, &[&a, img, &o0, &o1], n);
+        (o0, o1)
+    }
+
+    fn box_pass(&mut self, from: &Buffer, to: &Buffer, w: usize, h: usize, r: usize) {
+        let a = self.args(&[w as u32, h as u32, r as u32]);
+        let tmp = self.plane(w * h);
+        self.enc.run_1d(BOX_H, &[&a, from, &tmp], h);
+        self.enc.run_1d(BOX_V, &[&a, &tmp, to], w);
+    }
+
+    /// detail::box_blur
+    fn box_blur(&mut self, p: &Buffer, w: usize, h: usize, r: usize) -> Buffer {
+        if r == 0 || w == 0 || h == 0 {
+            return self.copy_plane(p, w * h);
+        }
+        let out = self.plane(w * h);
+        self.box_pass(p, &out, w, h, r);
+        out
+    }
+
+    /// detail::gaussian_blur (three box passes)
+    fn gaussian(&mut self, p: &Buffer, w: usize, h: usize, sigma: f32) -> Buffer {
+        if sigma < 0.3 || w == 0 || h == 0 {
+            return self.copy_plane(p, w * h);
+        }
+        let r = (((12.0 * sigma * sigma / 3.0 + 1.0).sqrt() - 1.0) / 2.0).round().max(1.0) as usize;
+        let a = self.plane(w * h);
+        let b = self.plane(w * h);
+        self.box_pass(p, &a, w, h, r);
+        self.box_pass(&a, &b, w, h, r);
+        self.box_pass(&b, &a, w, h, r);
+        a
+    }
+
+    /// Guided filter coefficients (mean a, mean b) of `p` with radius `r`.
+    fn guided_coefficients(&mut self, p: &Buffer, w: usize, h: usize, r: usize, eps: f32) -> (Buffer, Buffer) {
+        let n = w * h;
+        let mean = self.box_blur(p, w, h, r);
+        let sq = self.op(OP_SQUARE, 0.0, p, p, p, n);
+        let sq = self.box_blur(&sq, w, h, r);
+        let a = self.op(OP_GUIDED_A, eps, &mean, &sq, &sq, n);
+        let b = self.op(OP_GUIDED_B, 0.0, &mean, &a, &a, n);
+        (self.box_blur(&a, w, h, r), self.box_blur(&b, w, h, r))
+    }
+
+    /// detail::guided_filter
+    fn guided(&mut self, p: &Buffer, w: usize, h: usize, r: usize, eps: f32) -> Buffer {
+        if r == 0 {
+            return self.copy_plane(p, w * h);
+        }
+        let (ma, mb) = self.guided_coefficients(p, w, h, r, eps);
+        self.op(OP_GUIDED_OUT, 0.0, &ma, &mb, p, w * h)
+    }
+
+    /// detail::fast_guided_filter
+    fn fast_guided(&mut self, p: &Buffer, w: usize, h: usize, r: usize, eps: f32, s: usize) -> Buffer {
+        if s <= 1 || r / s < 2 || w < s * 4 || h < s * 4 {
+            return self.guided(p, w, h, r, eps);
+        }
+        let (lw, lh) = (w / s, h / s);
+        let low = self.plane(lw * lh);
+        let a = self.args(&[w as u32, lw as u32, lh as u32, s as u32]);
+        self.enc.run_1d(DOWNSAMPLE, &[&a, p, &low], lw * lh);
+        let (ma, mb) = self.guided_coefficients(&low, lw, lh, r / s, eps);
+        let out = self.plane(w * h);
+        let a = self.args(&[w as u32, h as u32, lw as u32, lh as u32, s as u32]);
+        self.enc.run_2d(UPSAMPLE_APPLY, &[&a, &ma, &mb, p, &out], w, h);
+        out
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct ResampleArgs {
+    geo: GeoGpu,
+    region: [u32; 4],
+    win: [u32; 4],
+    wb: [f32; 3],
+    cam: [f32; 9],
+    hdr: u32,
+    to_working: u32,
+}
+
+/// Layout of `Params` in develop.wgsl.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct DevelopParams {
+    w: u32,
+    h: u32,
+    ext_x: u32,
+    ext_y: u32,
+    n_layers: u32,
+    overlay: i32,
+    has_ev: u32,
+    has_clarity: u32,
+    has_structure: u32,
+    has_dark: u32,
+    color_active: u32,
+    editor_active: u32,
+    skin_active: u32,
+    balance_active: u32,
+    bw_enabled: u32,
+    base_curve: u32,
+    off_ev: u32,
+    off_clarity: u32,
+    off_structure: u32,
+    off_dark: u32,
+    dark_w: u32,
+    dark_h: u32,
+    dark_step: u32,
+    dark_ox: u32,
+    dark_oy: u32,
+    airlight: f32,
+    lut_hdr_ev: u32,
+    lut_hdr_px: u32,
+    lut_hdr_len: u32,
+    lut_curve: u32,
+    lut_out: [u32; 3],
+    lut_out_len: u32,
+    exposure_ev: f32,
+    contrast: f32,
+    hdr: [f32; 4],
+    clarity: f32,
+    structure: f32,
+    saturation: f32,
+    dehaze: f32,
+    vibrance: f32,
+    band_center: [f32; 8],
+    band_hue: [f32; 8],
+    band_sat: [f32; 8],
+    band_light: [f32; 8],
+    /// hue, chroma, lightness, range, hue/saturation/lightness uniformity, hue shift,
+    /// saturation, lightness shift
+    skin: [f32; 10],
+    balance: [f32; 12],
+    bw_mix: [f32; 8],
+    bw_tint: [f32; 4],
+    to_lms: [f32; 9],
+    from_lms: [f32; 9],
+    src_w: f32,
+    src_h: f32,
+    geo: GeoGpu,
+}
+
+/// Layout of `Layer` in develop.wgsl.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct LayerGpu {
+    mask_off: u32,
+    mask_w: u32,
+    mask_h: u32,
+    has_bitmap: u32,
+    invert: u32,
+    has_luma: u32,
+    luma_invert: u32,
+    has_color: u32,
+    neutral: u32,
+    opacity: f32,
+    /// low, high, falloff
+    luma: [f32; 3],
+    /// hue, width, falloff, minimum chroma
+    color: [f32; 4],
+    /// exposure, contrast, brightness, saturation, highlights, shadows, clarity, structure,
+    /// temperature, tint, dehaze
+    adj: [f32; 11],
+}
+
+const NO_LUT: u32 = u32::MAX;
+
+fn flat(m: &Mat3) -> [f32; 9] {
+    [m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]]
+}
+
+fn key(s: &str) -> u64 {
+    crate::cache::fnv1a(s.as_bytes())
+}
+
+/// Uploads a part (x, y, w, h) of an image as RGBA floats.
+fn upload_window(g: &Gpu, img: &LinearImage, (x0, y0, w, h): (usize, usize, usize, usize)) -> Buffer {
+    let mut data = vec![[0.0f32; 4]; w * h];
+    data.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+        let start = (y0 + y) * img.width + x0;
+        for (o, p) in row.iter_mut().zip(&img.data[start..start + w]) {
+            *o = [p[0], p[1], p[2], 0.0];
+        }
+    });
+    g.upload(&data)
+}
+
+/// Rasterized masks on the graphics card (uploaded again only when the mask changes).
+static MASKS: LazyLock<Mutex<Vec<(Weak<MaskBitmap>, Arc<Buffer>)>>> = LazyLock::new(Default::default);
+
+fn mask_buffer(g: &Gpu, bm: &Arc<MaskBitmap>) -> Arc<Buffer> {
+    let mut masks = MASKS.lock().unwrap();
+    masks.retain(|(w, _)| w.strong_count() > 0);
+    if let Some((_, b)) = masks.iter().find(|(w, _)| std::ptr::eq(w.as_ptr(), Arc::as_ptr(bm))) {
+        return b.clone();
+    }
+    let b = Arc::new(g.upload(&bm.data));
+    masks.push((Arc::downgrade(bm), b.clone()));
+    if masks.len() > 16 {
+        masks.remove(0);
+    }
+    b
+}
+
+/// Display tables (DISPLAY_DECODE, DISPLAY_ENCODE_U8) on the graphics card.
+fn display_tables(g: &Gpu) -> &'static (Buffer, Buffer) {
+    static TABLES: OnceLock<(Buffer, Buffer)> = OnceLock::new();
+    TABLES.get_or_init(|| {
+        let enc: Vec<u32> = DISPLAY_ENCODE_U8.iter().map(|&v| v as u32).collect();
+        (g.upload(&DISPLAY_DECODE), g.upload(&enc))
+    })
+}
+
+impl DarkChannel {
+    /// From block minima (before dividing by the airlight) and airlight samples.
+    pub(super) fn from_parts(mut samples: Vec<f32>, pooled: Vec<f32>, lw: usize, lh: usize, step: usize) -> Self {
+        let idx = ((samples.len() as f32 * 0.997) as usize).min(samples.len().saturating_sub(1));
+        let airlight = if samples.is_empty() { 1.0 } else { *samples.select_nth_unstable_by(idx, |a, b| a.total_cmp(b)).1 }.max(0.05);
+        let plane = gaussian_blur(&Plane::new(lw, lh, pooled.into_iter().map(|m| (m / airlight).clamp(0.0, 1.0)).collect()), 1.5);
+        Self { plane, step, airlight }
+    }
+}
+
+/// Block minima and airlight samples of a working region on the graphics card.
+struct DarkPool {
+    pooled: Buffer,
+    samples: Buffer,
+    count: Buffer,
+    lw: usize,
+    lh: usize,
+    step: usize,
+    /// Domain (working region, or whole image for tiles).
+    dom: (usize, usize),
+}
+
+impl DarkPool {
+    fn new(g: &Gpu, dom: (usize, usize)) -> Self {
+        let step = (dom.0.max(dom.1) / 256).max(1);
+        let (lw, lh) = (dom.0.div_ceil(step), dom.1.div_ceil(step));
+        Self {
+            pooled: g.upload(&vec![f32::MAX.to_bits(); lw * lh]),
+            samples: g.buffer((dom.0 * dom.1).div_ceil(7) as u64 * 4),
+            count: g.upload(&[0u32; 4]),
+            lw,
+            lh,
+            step,
+            dom,
+        }
+    }
+
+    /// Adds the pixels `own` (in working region coordinates) of a working region at `origin`.
+    fn add(&self, ops: &mut Ops, working: &Buffer, ext: Region, own: Region, origin: (usize, usize)) {
+        let min_c = ops.img_planes(IMG_MIN, working, ext.w * ext.h).0;
+        let a = ops.args(&[
+            own.x as u32,
+            own.y as u32,
+            own.w as u32,
+            own.h as u32,
+            ext.w as u32,
+            origin.0 as u32,
+            origin.1 as u32,
+            self.dom.0 as u32,
+            self.step as u32,
+            self.lw as u32,
+        ]);
+        ops.enc.run_2d(DARK_POOL, &[&a, &min_c, &self.pooled, &self.samples, &self.count], own.w, own.h);
+    }
+
+    fn finish(self, g: &Gpu) -> Result<DarkChannel> {
+        let count = g.read::<u32>(&self.count, 1)?[0] as usize;
+        let samples = g.read::<f32>(&self.samples, count)?;
+        let pooled = g.read::<f32>(&self.pooled, self.lw * self.lh)?;
+        Ok(DarkChannel::from_parts(samples, pooled, self.lw, self.lh, self.step))
+    }
+}
+
+impl Processor {
+    /// Geometry, heal/clone/removals, white balance, noise reduction -> working RGB of `ext`.
+    fn early_gpu(&self, ops: &mut Ops, src: &LinearImage, plan: &Plan, cache: Option<&StageCache>) -> Buffer {
+        let g = ops.g;
+        let ext = plan.ext;
+        let out = ops.image(ext.w * ext.h);
+        let mut args = ResampleArgs {
+            geo: plan.geo.gpu(),
+            region: [ext.x as u32, ext.y as u32, ext.w as u32, ext.h as u32],
+            win: [0; 4],
+            wb: self.wb,
+            cam: flat(&self.cam_to_working),
+            hdr: self.hdr as u32,
+            to_working: 1,
+        };
+        let input = if self.adj.retouch.is_empty() && self.adj.removals.is_empty() {
+            let win = plan.geo.source_window(ext);
+            args.win = [win.0 as u32, win.1 as u32, win.2 as u32, win.3 as u32];
+            let k = key(&format!("{:p}|{}x{}|{win:?}", src.data.as_ptr(), src.width, src.height));
+            let mut c = cache.map(|c| c.gpu.lock().unwrap());
+            match c.as_mut().and_then(|c| c.source.as_ref().filter(|(ck, _)| *ck == k).map(|(_, b)| b.clone())) {
+                Some(b) => b,
+                None => {
+                    let b = Arc::new(upload_window(g, src, win));
+                    if let Some(c) = c.as_mut() {
+                        c.source = Some((k, b.clone()));
+                    }
+                    b
+                }
+            }
+        } else {
+            // Heal/clone and removals stay on the CPU: resample there and let the graphics
+            // card only copy pixel by pixel.
+            let mut img = plan.geo.resample(src, ext);
+            apply_removals(&mut img, src, &plan.geo, ext, &self.adj.removals);
+            apply_retouch(&mut img, src, &plan.geo, ext, &self.adj.retouch);
+            let id = GeoMap::new(&Default::default(), &Default::default(), 0, ext.w, ext.h, false);
+            args.geo = id.gpu();
+            args.region = [0, 0, ext.w as u32, ext.h as u32];
+            args.win = [0, 0, ext.w as u32, ext.h as u32];
+            Arc::new(upload_window(g, &img, (0, 0, ext.w, ext.h)))
+        };
+        let a = ops.args(&args);
+        ops.enc.run_2d(RESAMPLE, &[&a, &input, &out], ext.w, ext.h);
+        self.noise_reduction_gpu(ops, &out, ext.w, ext.h, plan.scale);
+        out
+    }
+
+    fn noise_reduction_gpu(&self, ops: &mut Ops, img: &Buffer, w: usize, h: usize, scale: f32) {
+        let d = &self.adj.detail;
+        if d.nr_luma <= 0.0 && d.nr_color <= 0.0 {
+            return;
+        }
+        let n = w * h;
+        let y_new = (d.nr_luma > 0.0).then(|| {
+            let y = ops.img_planes(IMG_SQRT_LUMA, img, n).0;
+            let r = ((2.0 * scale).round() as usize).max(1);
+            let eps = (d.nr_luma / 100.0).powi(2) * 0.0025;
+            let f = ops.guided(&y, w, h, r, eps);
+            let keep = 1.0 - d.nr_luma / 100.0 * 0.85;
+            ops.op(OP_KEEP, keep, &y, &f, &f, n)
+        });
+        let chroma = (d.nr_color > 0.0).then(|| {
+            let sigma = (d.nr_color / 100.0 * 6.0 * scale).max(0.5);
+            let (cr, cb) = ops.img_planes(IMG_CHROMA, img, n);
+            (ops.gaussian(&cr, w, h, sigma), ops.gaussian(&cb, w, h, sigma))
+        });
+        let a = ops.args(&[n as u32, y_new.is_some() as u32, chroma.is_some() as u32]);
+        let dummy = &ops.dummy;
+        let y = y_new.as_ref().unwrap_or(dummy);
+        let (cr, cb) = chroma.as_ref().map_or((dummy, dummy), |(r, b)| (r, b));
+        ops.enc.run_1d(NR_COMBINE, &[&a, img, y, cr, cb], n);
+    }
+
+    /// Local operator planes (smoothed log luminance, clarity, structure, dark channel).
+    fn local_gpu(&self, ops: &mut Ops, working: &Buffer, plan: &Plan, global_dark: Option<&DarkChannel>) -> Result<Local> {
+        let (w, h) = (plan.ext.w, plan.ext.h);
+        let n = w * h;
+        let log_l = ops.img_planes(IMG_LOG_LUMA, working, n).0;
+        let sub = ((plan.r_hdr.min(plan.r_clarity) / 8.0) as usize).clamp(1, 8);
+        let ev = plan.hdr_active.then(|| ops.fast_guided(&log_l, w, h, plan.r_hdr as usize, 0.5, sub));
+        let clarity = plan.clarity_active.then(|| {
+            let base = ops.fast_guided(&log_l, w, h, plan.r_clarity as usize, 0.3, sub);
+            ops.op(OP_DETAIL, 3.0, &log_l, &base, &base, n)
+        });
+        let structure = plan.structure_active.then(|| {
+            let base = ops.gaussian(&log_l, w, h, plan.r_structure);
+            ops.op(OP_DETAIL, 2.0, &log_l, &base, &base, n)
+        });
+        let dark = if !plan.dehaze_active {
+            None
+        } else if let Some(dc) = global_dark {
+            Some((dc.plane.clone(), dc.step, dc.airlight, (plan.ext.x as u32, plan.ext.y as u32)))
+        } else {
+            let pool = DarkPool::new(ops.g, (w, h));
+            pool.add(ops, working, plan.ext, Region { x: 0, y: 0, w, h }, (0, 0));
+            ops.flush();
+            let dc = pool.finish(ops.g)?;
+            Some((dc.plane, dc.step, dc.airlight, (0, 0)))
+        };
+        let planes = [ev.as_ref(), clarity.as_ref(), structure.as_ref()];
+        let dark_len = dark.as_ref().map_or(0, |d| d.0.data.len());
+        let total = planes.iter().flatten().count() * n + dark_len;
+        let buf = ops.plane(total);
+        let mut off = [0u32; 4];
+        let mut at = 0usize;
+        for (i, p) in planes.iter().enumerate() {
+            if let Some(p) = p {
+                off[i] = at as u32;
+                ops.enc.copy(p, &buf, at as u64 * 4, n as u64 * 4);
+                at += n;
+            }
+        }
+        let dark = dark.map(|(plane, step, airlight, origin)| {
+            off[3] = at as u32;
+            let d = ops.g.upload(&plane.data);
+            ops.enc.copy(&d, &buf, at as u64 * 4, plane.data.len() as u64 * 4);
+            DarkInfo { w: plane.w as u32, h: plane.h as u32, step: step as u32, airlight, origin }
+        });
+        Ok(Local { buf, off, has: [ev.is_some(), clarity.is_some(), structure.is_some(), dark.is_some()], dark })
+    }
+
+    /// Everything up to the encoded result (with mask overlay weight in w) of `plan.ext`.
+    fn develop_gpu(&self, ops: &mut Ops, src: &LinearImage, plan: &Plan, cache: Option<&StageCache>, global_dark: Option<&DarkChannel>) -> Result<Buffer> {
+        let g = ops.g;
+        let ext = plan.ext;
+        let n = ext.w * ext.h;
+        if n as u64 * 16 > g.max_binding {
+            bail!("Ausschnitt {}x{} zu groß für die Grafikkarte", ext.w, ext.h);
+        }
+        let mut timer = Timer::start();
+        let stage_key = self.stage_key(src, ext);
+        let cached = cache.and_then(|c| c.gpu.lock().unwrap().early.as_ref().filter(|(k, _)| *k == stage_key).map(|(_, b)| b.clone()));
+        let working = match cached {
+            Some(b) => b,
+            None => {
+                let b = Arc::new(self.early_gpu(ops, src, plan, cache));
+                if let Some(c) = cache {
+                    c.gpu.lock().unwrap().early = Some((stage_key, b.clone()));
+                }
+                b
+            }
+        };
+
+        let need_log = plan.hdr_active || plan.clarity_active || plan.structure_active || plan.dehaze_active;
+        let local = if need_log {
+            let k = key(&format!("{stage_key}|{}|{}|{}|{}", plan.hdr_active, plan.clarity_active, plan.structure_active, plan.dehaze_active));
+            let cached = cache.and_then(|c| c.gpu.lock().unwrap().local.as_ref().filter(|(ck, _)| *ck == k).map(|(_, l)| l.clone()));
+            match cached {
+                Some(l) if global_dark.is_none() => Some(l),
+                _ => {
+                    let l = Arc::new(self.local_gpu(ops, &working, plan, global_dark)?);
+                    if let Some(c) = cache.filter(|_| global_dark.is_none()) {
+                        c.gpu.lock().unwrap().local = Some((k, l.clone()));
+                    }
+                    Some(l)
+                }
+            }
+        } else {
+            None
+        };
+
+        // Tables: HDR gain, contrast/base curve, output curves.
+        let mut luts: Vec<f32> = Vec::new();
+        let mut push = |t: &[f32]| {
+            let off = luts.len() as u32;
+            luts.extend_from_slice(t);
+            off
+        };
+        let (lut_hdr_ev, lut_hdr_px, lut_hdr_len) = match &self.tone_luts.hdr {
+            Some([a, b]) => (push(a), push(b), a.len() as u32),
+            None => (NO_LUT, NO_LUT, 2),
+        };
+        let lut_curve = self.tone_luts.curve.as_ref().map_or(NO_LUT, |c| push(c));
+        let lut_out = [push(&self.lut[0]), push(&self.lut[1]), push(&self.lut[2])];
+        let luts = g.upload(&luts);
+
+        // Layers and their masks.
+        let aspect = src.width as f32 / src.height.max(1) as f32;
+        let mut masks: Vec<(Arc<Buffer>, usize)> = Vec::new();
+        let mut layers: Vec<LayerGpu> = Vec::new();
+        let mut mask_len = 0usize;
+        for l in &self.layers {
+            let mut lg = LayerGpu::zeroed();
+            if !l.mask.is_empty() {
+                let bm = cached_bitmap(&l.mask, aspect, Some(src));
+                lg.mask_off = mask_len as u32;
+                lg.mask_w = bm.w as u32;
+                lg.mask_h = bm.h as u32;
+                lg.has_bitmap = 1;
+                masks.push((mask_buffer(g, &bm), bm.data.len()));
+                mask_len += bm.data.len();
+            }
+            lg.invert = l.mask.invert as u32;
+            if let Some(r) = &l.mask.luma_range {
+                lg.has_luma = 1;
+                lg.luma_invert = r.invert as u32;
+                lg.luma = [r.low, r.high, r.falloff];
+            }
+            if let Some(c) = &l.mask.color_range {
+                lg.has_color = 1;
+                lg.color = [c.hue, c.width, c.falloff, c.min_chroma];
+            }
+            lg.neutral = l.adj.is_neutral() as u32;
+            lg.opacity = l.opacity;
+            let a = &l.adj;
+            lg.adj = [a.exposure, a.contrast, a.brightness, a.saturation, a.highlights, a.shadows, a.clarity, a.structure, a.temperature, a.tint, a.dehaze];
+            layers.push(lg);
+        }
+        let layer_buf = if layers.is_empty() { g.upload(&[LayerGpu::zeroed()]) } else { g.upload(&layers) };
+        let mask_buf = match masks.as_slice() {
+            [] => Arc::new(g.buffer(16)),
+            [(b, _)] => b.clone(),
+            _ => {
+                let all = ops.plane(mask_len);
+                let mut at = 0u64;
+                for (b, len) in &masks {
+                    ops.enc.copy(b, &all, at * 4, *len as u64 * 4);
+                    at += *len as u64;
+                }
+                Arc::new(all)
+            }
+        };
+
+        let adj = &self.adj;
+        let oklab_to = crate::color::working_to_lms();
+        let st = &adj.skin_tone;
+        let cb = &adj.color_balance;
+        let bw = &adj.black_white;
+        let local_info = local.as_ref();
+        let has = |i: usize| local_info.is_some_and(|l| l.has[i]) as u32;
+        let off = |i: usize| local_info.map_or(0, |l| l.off[i]);
+        let dark = local_info.and_then(|l| l.dark);
+        let params = DevelopParams {
+            w: ext.w as u32,
+            h: ext.h as u32,
+            ext_x: ext.x as u32,
+            ext_y: ext.y as u32,
+            n_layers: self.layers.len() as u32,
+            overlay: self.opts.mask_overlay.and_then(|i| self.layers.iter().position(|l| l.index == i)).map_or(-1, |p| p as i32),
+            has_ev: has(0),
+            has_clarity: has(1),
+            has_structure: has(2),
+            has_dark: has(3),
+            color_active: self.color_active as u32,
+            editor_active: self.editor_active as u32,
+            skin_active: self.skin_active as u32,
+            balance_active: self.balance_active as u32,
+            bw_enabled: bw.enabled as u32,
+            base_curve: adj.base_curve as u32,
+            off_ev: off(0),
+            off_clarity: off(1),
+            off_structure: off(2),
+            off_dark: off(3),
+            dark_w: dark.map_or(1, |d| d.w),
+            dark_h: dark.map_or(1, |d| d.h),
+            dark_step: dark.map_or(1, |d| d.step),
+            dark_ox: dark.map_or(0, |d| d.origin.0),
+            dark_oy: dark.map_or(0, |d| d.origin.1),
+            airlight: dark.map_or(1.0, |d| d.airlight),
+            lut_hdr_ev,
+            lut_hdr_px,
+            lut_hdr_len,
+            lut_curve,
+            lut_out,
+            lut_out_len: LUT_SIZE as u32,
+            exposure_ev: self.base.exposure_ev,
+            contrast: self.base.contrast,
+            hdr: self.base.hdr,
+            clarity: self.base.clarity,
+            structure: self.base.structure,
+            saturation: self.base.saturation,
+            dehaze: self.base.dehaze,
+            vibrance: adj.vibrance,
+            band_center: HUE_BANDS.map(|b| b.1),
+            band_hue: adj.color_editor.bands.map(|b| b.hue),
+            band_sat: adj.color_editor.bands.map(|b| b.saturation),
+            band_light: adj.color_editor.bands.map(|b| b.lightness),
+            skin: [
+                st.hue,
+                st.chroma,
+                st.lightness,
+                st.range,
+                st.hue_uniformity,
+                st.saturation_uniformity,
+                st.lightness_uniformity,
+                st.hue_shift,
+                st.saturation,
+                st.lightness_shift,
+            ],
+            balance: [cb.master, cb.shadows, cb.midtones, cb.highlights]
+                .iter()
+                .flat_map(|w| [w.hue, w.amount, w.lightness])
+                .collect::<Vec<_>>()
+                .try_into()
+                .expect("4 wheels"),
+            bw_mix: bw.mix,
+            bw_tint: [bw.shadow_tint.hue, bw.shadow_tint.amount, bw.highlight_tint.hue, bw.highlight_tint.amount],
+            to_lms: flat(&oklab_to),
+            from_lms: flat(&mat_inv(&oklab_to).expect("invertible")),
+            src_w: src.width as f32,
+            src_h: src.height as f32,
+            geo: plan.geo.gpu(),
+        };
+        let p = ops.args(&params);
+        let local_buf = local.as_ref().map(|l| &l.buf).unwrap_or(&ops.dummy);
+        let out = ops.image(n);
+        ops.enc.run_2d(DEVELOP, &[&p, &working, local_buf, &luts, &layer_buf, &mask_buf, &out], ext.w, ext.h);
+
+        let d = &adj.detail;
+        if d.sharpen_amount > 0.0 {
+            let sigma = d.sharpen_radius * plan.scale;
+            if sigma >= 0.25 {
+                let y = ops.img_planes(IMG_LUMA, &out, n).0;
+                let blur = ops.gaussian(&y, ext.w, ext.h, sigma);
+                #[repr(C)]
+                #[derive(Clone, Copy, Pod, Zeroable)]
+                struct Args {
+                    n: u32,
+                    amount: f32,
+                    thr: f32,
+                }
+                let a = ops.args(&Args { n: n as u32, amount: d.sharpen_amount / 100.0, thr: d.sharpen_threshold / 255.0 });
+                ops.enc.run_1d(SHARPEN, &[&a, &out, &y, &blur], n);
+            }
+        }
+        if d.vignette_amount != 0.0 || d.grain_amount > 0.0 {
+            #[repr(C)]
+            #[derive(Clone, Copy, Pod, Zeroable)]
+            struct Args {
+                w: u32,
+                h: u32,
+                ext_x: u32,
+                ext_y: u32,
+                full_w: f32,
+                full_h: f32,
+                vignette: f32,
+                grain: f32,
+                cell: f32,
+            }
+            let a = ops.args(&Args {
+                w: ext.w as u32,
+                h: ext.h as u32,
+                ext_x: ext.x as u32,
+                ext_y: ext.y as u32,
+                full_w: plan.full.0 as f32,
+                full_h: plan.full.1 as f32,
+                vignette: d.vignette_amount / 100.0,
+                grain: d.grain_amount / 100.0 * 0.12,
+                cell: (1.0 + d.grain_size / 100.0 * 4.0) * plan.scale,
+            });
+            ops.enc.run_2d(FINISH, &[&a, &out], ext.w, ext.h);
+        }
+        timer.lap("gpu: recorded");
+        Ok(out)
+    }
+
+    /// Crops `plan.region` out of a developed buffer, optionally converted into `space`.
+    fn output_gpu(&self, ops: &mut Ops, developed: &Buffer, plan: &Plan, space: Option<OutputSpace>) -> Result<Vec<[f32; 4]>> {
+        #[repr(C)]
+        #[derive(Clone, Copy, Pod, Zeroable)]
+        struct Args {
+            w: u32,
+            h: u32,
+            ext_w: u32,
+            off_x: u32,
+            off_y: u32,
+            convert: u32,
+            gamma: f32,
+            m: [f32; 9],
+        }
+        let (r, ext) = (plan.region, plan.ext);
+        let a = ops.args(&Args {
+            w: r.w as u32,
+            h: r.h as u32,
+            ext_w: ext.w as u32,
+            off_x: (r.x - ext.x) as u32,
+            off_y: (r.y - ext.y) as u32,
+            convert: space.is_some() as u32,
+            gamma: match space.map(|s| s.trc()) {
+                Some(crate::color::Trc::Gamma(g)) => g,
+                _ => 0.0,
+            },
+            m: flat(&space.unwrap_or_default().from_working()),
+        });
+        let out = ops.image(r.w * r.h);
+        ops.enc.run_2d(OUTPUT, &[&a, developed, &out], r.w, r.h);
+        ops.flush();
+        ops.g.read::<[f32; 4]>(&out, r.w * r.h)
+    }
+
+    pub(super) fn render_gpu(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Result<Rendered> {
+        g.checked(|| {
+            let mut timer = Timer::start();
+            let plan = self.plan(src, region, 1);
+            let mut ops = Ops::new(g);
+            let developed = self.develop_gpu(&mut ops, src, &plan, cache, None)?;
+            let (r, ext) = (plan.region, plan.ext);
+            let has_mask = self.opts.mask_overlay.is_some_and(|i| self.layers.iter().any(|l| l.index == i));
+            if self.opts.softproof.is_some() {
+                let data = self.output_gpu(&mut ops, &developed, &plan, None)?;
+                let enc = LinearImage::new(r.w, r.h, data.iter().map(|p| [p[0], p[1], p[2]]).collect());
+                let mask = has_mask.then(|| data.iter().map(|p| p[3]).collect());
+                return Ok(self.display(enc, plan.full, mask));
+            }
+            #[repr(C)]
+            #[derive(Clone, Copy, Pod, Zeroable)]
+            struct Args {
+                w: u32,
+                h: u32,
+                ext_w: u32,
+                off_x: u32,
+                off_y: u32,
+                clip: u32,
+                mask: u32,
+                to_srgb: [f32; 9],
+            }
+            let a = ops.args(&Args {
+                w: r.w as u32,
+                h: r.h as u32,
+                ext_w: ext.w as u32,
+                off_x: (r.x - ext.x) as u32,
+                off_y: (r.y - ext.y) as u32,
+                clip: self.opts.clip_warning as u32,
+                mask: has_mask as u32,
+                to_srgb: flat(&OutputSpace::Srgb.from_working()),
+            });
+            let (decode, encode8) = display_tables(g);
+            let rgba = g.buffer(r.w as u64 * r.h as u64 * 4);
+            let hist = g.upload(&[0u32; 1024]);
+            ops.enc.run_2d(DISPLAY, &[&a, &developed, decode, encode8, &rgba, &hist], r.w, r.h);
+            ops.flush();
+            let rgba = g.read::<u8>(&rgba, r.w * r.h * 4)?;
+            let h = g.read::<u32>(&hist, 1024)?;
+            timer.lap("gpu: develop + display");
+            let histogram = Histogram { r: h[0..256].to_vec(), g: h[256..512].to_vec(), b: h[512..768].to_vec(), luma: h[768..1024].to_vec() };
+            Ok(Rendered { width: r.w, height: r.h, rgba, histogram, full_size: plan.full })
+        })
+    }
+
+    pub(super) fn process_gpu(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, space: OutputSpace) -> Result<LinearImage> {
+        g.checked(|| {
+            let whole = self.plan(src, region, 1);
+            let r = whole.region;
+            let ext_px = whole.ext.w * whole.ext.h;
+            let tiles: Vec<Region> = if ext_px <= MAX_PIXELS && ext_px as u64 * 16 <= g.max_binding {
+                vec![r]
+            } else {
+                (0..r.h.div_ceil(TILE))
+                    .flat_map(|ty| (0..r.w.div_ceil(TILE)).map(move |tx| (tx, ty)))
+                    .map(|(tx, ty)| {
+                        let (x, y) = (r.x + tx * TILE, r.y + ty * TILE);
+                        Region { x, y, w: TILE.min(r.x + r.w - x), h: TILE.min(r.y + r.h - y) }
+                    })
+                    .collect()
+            };
+            // Tiles start on multiples of the largest subsampling of the fast guided filter,
+            // so that its grid is the same as for the whole image.
+            let align = if tiles.len() > 1 { 8 } else { 1 };
+            // Dehaze needs the dark channel and airlight of the whole image.
+            let dark = if tiles.len() > 1 && whole.dehaze_active {
+                let pool = DarkPool::new(g, whole.full);
+                for t in &tiles {
+                    let plan = self.plan(src, Some(*t), align);
+                    let mut ops = Ops::new(g);
+                    let working = self.early_gpu(&mut ops, src, &plan, None);
+                    let own = Region { x: t.x - plan.ext.x, y: t.y - plan.ext.y, w: t.w, h: t.h };
+                    pool.add(&mut ops, &working, plan.ext, own, (plan.ext.x, plan.ext.y));
+                    ops.flush();
+                }
+                Some(pool.finish(g)?)
+            } else {
+                None
+            };
+            let mut out = vec![[0.0f32; 3]; r.w * r.h];
+            for t in &tiles {
+                let plan = self.plan(src, Some(*t), align);
+                let mut ops = Ops::new(g);
+                let developed = self.develop_gpu(&mut ops, src, &plan, None, dark.as_ref())?;
+                let data = self.output_gpu(&mut ops, &developed, &plan, Some(space))?;
+                for (y, row) in data.chunks(t.w).enumerate() {
+                    let start = (t.y - r.y + y) * r.w + t.x - r.x;
+                    for (o, p) in out[start..start + t.w].iter_mut().zip(row) {
+                        *o = [p[0], p[1], p[2]];
+                    }
+                }
+            }
+            Ok(LinearImage::new(r.w, r.h, out))
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::color::{CameraColor, IDENTITY, REC2020_TO_XYZ};
+    use crate::detail::hash_noise;
+    use crate::image::Orientation;
+    use crate::params::*;
+    use crate::raw::CaptureInfo;
+
+    /// The graphics card, or `None` (the test is skipped). Without a real one, run with
+    /// `SILBERKORN_GPU=software` (lavapipe / WARP).
+    fn gpu() -> Option<&'static Gpu> {
+        let g = crate::gpu::active();
+        if g.is_none() {
+            eprintln!("keine Grafikkarte: Vergleich übersprungen (SILBERKORN_GPU=software verwendet den Software-Adapter)");
+        }
+        g
+    }
+
+    fn meta(w: usize, h: usize) -> RawMeta {
+        let mut color = CameraColor::new(mat_inv(&REC2020_TO_XYZ).unwrap());
+        color.cam_to_working = IDENTITY;
+        RawMeta {
+            path: Default::default(),
+            info: CaptureInfo { width: w * 4, height: h * 4, ..Default::default() },
+            color,
+            as_shot_wb: [1.6, 1.0, 1.3],
+            orientation: Orientation::Normal,
+            hdr: false,
+        }
+    }
+
+    /// Colorful content with edges, smooth gradients, noise and clipped highlights.
+    fn image(w: usize, h: usize) -> LinearImage {
+        LinearImage::new(
+            w,
+            h,
+            (0..w * h)
+                .map(|i| {
+                    let (x, y) = ((i % w) as f32 / w as f32, (i / w) as f32 / h as f32);
+                    let n = hash_noise(i as i64, 3, 9) * 0.01;
+                    let block = (((i % w) / 23 + (i / w) / 17) % 3) as f32 * 0.15;
+                    let base = [x * 0.6 + block, (1.0 - y) * 0.4 + 0.02, (x * 7.0 + y * 3.0).sin().abs() * 0.5];
+                    let hi = if x > 0.85 && y < 0.2 { 1.0 } else { 0.0 };
+                    base.map(|v| (v + n).max(0.0).max(hi))
+                })
+                .collect(),
+        )
+    }
+
+    fn compare(name: &str, g: &Gpu, adj: &Adjustments, opts: RenderOptions, region: Option<Region>) {
+        let (w, h) = (300, 200);
+        let src = image(w, h);
+        let p = Processor::with_options(&meta(w, h), adj, opts);
+        let cpu = p.render_cpu(&src, region, None);
+        let gpu = p.render_gpu(g, &src, region, None).unwrap_or_else(|e| panic!("{name}: {e:#}"));
+        assert_eq!((gpu.width, gpu.height, gpu.full_size), (cpu.width, cpu.height, cpu.full_size), "{name}");
+        let diffs: Vec<i32> = cpu.rgba.iter().zip(&gpu.rgba).map(|(a, b)| (*a as i32 - *b as i32).abs()).collect();
+        let max = diffs.iter().copied().max().unwrap_or(0);
+        let mean = diffs.iter().map(|d| *d as f64).sum::<f64>() / diffs.len() as f64;
+        let off = diffs.iter().filter(|d| **d > 1).count() as f64 / diffs.len() as f64;
+        eprintln!("{name}: max {max}, mittel {mean:.4}, >1: {:.3} %", off * 100.0);
+        assert!(max <= 4 && mean < 0.05 && off < 0.002, "{name}: max {max}, mittel {mean}, >1: {off}");
+        assert_eq!(gpu.histogram.luma.iter().sum::<u32>(), (gpu.width * gpu.height) as u32, "{name}");
+    }
+
+    fn layer(adjustments: LayerAdjustments, mask: Mask) -> Layer {
+        Layer { adjustments, mask, opacity: 80.0, ..Default::default() }
+    }
+
+    #[test]
+    fn rendering_matches_cpu() {
+        let Some(g) = gpu() else { return };
+        let plain = Adjustments::default();
+        let radial = Mask {
+            radial: vec![RadialGradient { center: [0.4, 0.5], radius_x: 0.3, radius_y: 0.25, feather: 0.6, invert: false }],
+            ..Default::default()
+        };
+        let cases: Vec<(&str, Adjustments, RenderOptions, Option<Region>)> = vec![
+            ("Standard", plain.clone(), Default::default(), None),
+            (
+                "Ton",
+                Adjustments { exposure: 0.7, contrast: 35.0, highlights: 60.0, shadows: 50.0, whites: -20.0, blacks: 15.0, base_curve: BaseCurve::FilmHigh, ..plain.clone() },
+                Default::default(),
+                None,
+            ),
+            (
+                "Linear, Kurven",
+                Adjustments {
+                    base_curve: BaseCurve::Linear,
+                    contrast: -30.0,
+                    brightness: 20.0,
+                    levels: Levels { in_black: 0.05, in_white: 0.9, midtone: 1.2, out_black: 0.02, out_white: 0.97 },
+                    ..plain.clone()
+                },
+                Default::default(),
+                None,
+            ),
+            (
+                "Details",
+                Adjustments {
+                    detail: Detail { clarity: 45.0, structure: 30.0, dehaze: 40.0, nr_luma: 40.0, nr_color: 50.0, sharpen_amount: 120.0, sharpen_threshold: 2.0, ..Default::default() },
+                    ..plain.clone()
+                },
+                Default::default(),
+                None,
+            ),
+            (
+                "Dunst hinzu, Körnung, Vignette",
+                Adjustments { detail: Detail { dehaze: -50.0, grain_amount: 40.0, grain_size: 30.0, vignette_amount: -40.0, ..Default::default() }, ..plain.clone() },
+                Default::default(),
+                None,
+            ),
+            (
+                "Farbe",
+                {
+                    let mut a = Adjustments { saturation: 25.0, vibrance: 30.0, ..plain.clone() };
+                    a.color_editor.bands[1] = HslBand { hue: 10.0, saturation: 30.0, lightness: -20.0 };
+                    a.color_editor.bands[5] = HslBand { hue: -15.0, saturation: -40.0, lightness: 10.0 };
+                    a.color_balance.shadows = ColorWheel { hue: 200.0, amount: 40.0, lightness: 10.0 };
+                    a.color_balance.highlights = ColorWheel { hue: 50.0, amount: 30.0, lightness: -5.0 };
+                    a.skin_tone.saturation = 30.0;
+                    a.skin_tone.hue_uniformity = 50.0;
+                    a
+                },
+                Default::default(),
+                None,
+            ),
+            (
+                "Schwarzweiß",
+                {
+                    let mut a = plain.clone();
+                    a.black_white.enabled = true;
+                    a.black_white.mix = [20.0, -10.0, 30.0, 0.0, -40.0, 10.0, 0.0, 5.0];
+                    a.black_white.shadow_tint = ColorWheel { hue: 220.0, amount: 30.0, lightness: 0.0 };
+                    a
+                },
+                Default::default(),
+                None,
+            ),
+            (
+                "Geometrie",
+                Adjustments {
+                    rotation: 1,
+                    geometry: Geometry {
+                        straighten: 4.0,
+                        keystone_v: 20.0,
+                        flip_h: true,
+                        crop: CropRect { x: 0.1, y: 0.05, w: 0.8, h: 0.85 },
+                        ..Default::default()
+                    },
+                    lens: LensCorrection { distortion: 30.0, ca_red: 40.0, ca_blue: -30.0, vignetting: 40.0, ..Default::default() },
+                    ..plain.clone()
+                },
+                Default::default(),
+                None,
+            ),
+            (
+                "Ebenen",
+                Adjustments {
+                    layers: vec![
+                        layer(LayerAdjustments { exposure: 0.8, saturation: -30.0, temperature: 40.0, clarity: 30.0, ..Default::default() }, radial.clone()),
+                        layer(
+                            LayerAdjustments { brightness: 30.0, shadows: 40.0, dehaze: 30.0, ..Default::default() },
+                            Mask { fill: true, luma_range: Some(LumaRange { low: 0.3, high: 0.8, falloff: 0.1, invert: false }), ..Default::default() },
+                        ),
+                        layer(
+                            LayerAdjustments { contrast: 40.0, tint: -30.0, ..Default::default() },
+                            Mask { fill: true, color_range: Some(ColorRange::default()), invert: true, ..Default::default() },
+                        ),
+                    ],
+                    ..plain.clone()
+                },
+                Default::default(),
+                None,
+            ),
+            (
+                "Maskenanzeige, Clipping",
+                Adjustments { exposure: 1.0, layers: vec![layer(LayerAdjustments::default(), radial.clone())], ..plain.clone() },
+                RenderOptions { clip_warning: true, mask_overlay: Some(0), ..Default::default() },
+                None,
+            ),
+            (
+                "Ausschnitt",
+                Adjustments { shadows: 40.0, detail: Detail { clarity: 40.0, ..Default::default() }, ..plain.clone() },
+                Default::default(),
+                Some(Region { x: 70, y: 40, w: 90, h: 60 }),
+            ),
+            (
+                "Klonen",
+                Adjustments {
+                    retouch: vec![Spot { mode: SpotMode::Clone, target: [0.3, 0.3], source: [0.6, 0.6], path: vec![], radius: 0.05, feather: 0.5, opacity: 1.0 }],
+                    ..plain.clone()
+                },
+                Default::default(),
+                None,
+            ),
+        ];
+        for (name, adj, opts, region) in cases {
+            compare(name, g, &adj, opts, region);
+        }
+    }
+
+    #[test]
+    fn tiled_export_matches_cpu() {
+        let Some(g) = gpu() else { return };
+        // Large enough for several tiles.
+        let (w, h) = (4600, 3100);
+        let src = image(w, h);
+        let adj = Adjustments {
+            shadows: 40.0,
+            detail: Detail { clarity: 40.0, dehaze: 30.0, grain_amount: 20.0, vignette_amount: -30.0, ..Default::default() },
+            ..Default::default()
+        };
+        let p = Processor::new(&meta(w, h), &adj);
+        let cpu = p.process_cpu(&src, None, OutputSpace::AdobeRgb);
+        let gpu = p.process_gpu(g, &src, None, OutputSpace::AdobeRgb).unwrap();
+        assert_eq!((gpu.width, gpu.height), (cpu.width, cpu.height));
+        let mut max = 0.0f32;
+        let mut sum = 0.0f64;
+        for (a, b) in cpu.data.iter().zip(&gpu.data) {
+            for c in 0..3 {
+                let d = (a[c] - b[c]).abs();
+                max = max.max(d);
+                sum += d as f64;
+            }
+        }
+        let mean = sum / (cpu.data.len() * 3) as f64;
+        eprintln!("Export in Kacheln: max {max}, mittel {mean:.6}");
+        assert!(max < 0.02 && mean < 1e-4, "max {max}, mittel {mean}");
+    }
+}

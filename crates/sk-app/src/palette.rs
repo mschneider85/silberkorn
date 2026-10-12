@@ -150,7 +150,7 @@ impl App {
         add(icon::CLIPBOARD_TEXT, "Anpassungen auf Auswahl anwenden", g, "Strg+Umschalt+V", self.clipboard.is_some(), "paste einfügen", Run(|a, _| a.paste_adjustments()));
         add(icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", g, "", has, "reset", Run(|a, _| a.reset_adjustments()));
         add(icon::CHECK_SQUARE, "Alle auswählen", g, "Strg+A", !self.visible.is_empty(), "select all", Run(|a, _| a.select_all()));
-        add(icon::LIGHTNING, "KI-Beschleunigung …", g, "", true, "gpu grafikkarte", Run(|a, _| a.show_gpu_dialog = true));
+        add(icon::LIGHTNING, "Grafikkarte …", g, "", true, "gpu grafikkarte", Run(|a, _| a.show_gpu_dialog = true));
 
         let g = "Bild";
         add(icon::MAGIC_WAND, "Auto Belichtung", g, "", has, "automatisch exposure", Action::Auto(Auto::Exposure));

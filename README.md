@@ -55,8 +55,17 @@ Pipeline (Arbeitsfarbraum: lineares Rec.2020):
 Die frühen Stufen werden zwischengespeichert, sodass Ton- und Farbregler flüssig bleiben. Beim
 Hineinzoomen rendert ein Hintergrund-Worker den sichtbaren Ausschnitt in voller Auflösung.
 
+Die Pipeline läuft auf der Grafikkarte (wgpu-Compute-Shader in `sk-core/src/gpu/shaders`, über
+Vulkan, DirectX 12 oder Metal) und fällt ohne geeignete Karte oder bei einem Fehler auf den Prozessor
+zurück. Der Prozessor-Pfad bleibt die Referenz: `pipeline::gpu`-Tests vergleichen beide Wege (höchstens
+1/255 Abweichung). Exporte großer Bilder werden in Kacheln gerechnet. Heilen/Klonen und Entfernen
+werden beim Resampling auf dem Prozessor angewendet, der Softproof (Little CMS) ebenfalls.
+Abschalten im Dialog „Grafikkarte …“ oder mit `SILBERKORN_GPU=0`; `SILBERKORN_GPU=software` erlaubt
+Software-Adapter (unter WSL zusätzlich `GALLIUM_DRIVER=llvmpipe`), z. B. für die Tests ohne Grafikkarte.
+`cargo run --release -p sk-core --example gpu_info` zeigt die gefundenen Adapter.
+
 `SK_TRACE=1` gibt die Zeiten der einzelnen Stufen aus; `cargo run --release -p sk-core --example bench -- <raw>`
-misst die Pipeline.
+misst die Pipeline auf Prozessor und Grafikkarte.
 
 ### Ebenen & Masken
 

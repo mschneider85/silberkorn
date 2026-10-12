@@ -1,4 +1,5 @@
-//! Times the pipeline stages on a raw file: `cargo run --release --example bench -- <raw>`
+//! Times the pipeline stages on a raw file, on the CPU and (if available) on the graphics
+//! card: `cargo run --release --example bench -- <raw>`
 
 use std::time::Instant;
 
@@ -20,6 +21,10 @@ fn main() -> anyhow::Result<()> {
     let _ = gaussian_blur(&plane, 1.0);
     println!("gaussian s=1: {:?}", t.elapsed());
 
+    let gpu = sk_core::gpu::adapter_name();
+    println!("Grafikkarte: {}", gpu.as_deref().unwrap_or("keine (SILBERKORN_GPU=software für den Software-Adapter)"));
+    sk_core::pipeline::prepare_gpu();
+
     let none = Adjustments { detail: Detail { sharpen_amount: 0.0, nr_color: 0.0, ..Default::default() }, ..Default::default() };
     for (name, adj) in [
         ("ohne Details", none.clone()),
@@ -28,13 +33,24 @@ fn main() -> anyhow::Result<()> {
     ] {
         let p = Processor::new(&meta, &adj);
         let t = Instant::now();
-        let _ = p.render(&preview, None, None);
+        let _ = p.render_cpu(&preview, None, None);
         let cold = t.elapsed();
         let cache = StageCache::default();
-        let _ = p.render(&preview, None, Some(&cache));
+        let _ = p.render_cpu(&preview, None, Some(&cache));
         let t = Instant::now();
-        let _ = p.render(&preview, None, Some(&cache));
-        println!("{name}: {cold:?} (mit Cache: {:?})", t.elapsed());
+        let _ = p.render_cpu(&preview, None, Some(&cache));
+        println!("{name} (Prozessor): {cold:?} (mit Cache: {:?})", t.elapsed());
+        if gpu.is_some() {
+            let _ = p.render(&preview, None, None);
+            let t = Instant::now();
+            let _ = p.render(&preview, None, None);
+            let cold = t.elapsed();
+            let cache = StageCache::default();
+            let _ = p.render(&preview, None, Some(&cache));
+            let t = Instant::now();
+            let _ = p.render(&preview, None, Some(&cache));
+            println!("{name} (Grafikkarte): {cold:?} (mit Cache: {:?})", t.elapsed());
+        }
     }
     Ok(())
 }
