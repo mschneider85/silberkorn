@@ -411,7 +411,7 @@ impl App {
         if self.loading.is_some() {
             painter.text(rect.right_top() + vec2(-10.0, 8.0), egui::Align2::RIGHT_TOP, "Lade…", egui::FontId::proportional(13.0), Color32::from_gray(200));
         }
-        let mut labels: Vec<(String, Color32)> = Vec::new();
+        let mut labels: Vec<(String, Color32, Option<String>)> = Vec::new();
         if self.proof_view {
             let text = match (&self.proof, self.recipes.get(self.selected_recipe)) {
                 (Some(p), Some(r)) if proof_ready => {
@@ -427,20 +427,24 @@ impl App {
                 (_, Some(r)) => format!("PROOF  ·  {}  ·  wird berechnet …", r.name),
                 (_, None) => "PROOF  ·  kein Ausgabe-Rezept".into(),
             };
-            labels.push((text, theme::ACCENT.gamma_multiply(0.85)));
+            labels.push((text, theme::ACCENT.gamma_multiply(0.85), None));
         }
         if let Some(text) = self.softproof_label() {
-            labels.push((text, Color32::from_rgb(150, 60, 150).gamma_multiply(0.9)));
+            labels.push((text, Color32::from_rgb(150, 60, 150).gamma_multiply(0.9), None));
         }
         if let Some(label) = self.print_label(ui.ctx(), size) {
             labels.push(label);
         }
         // Active output previews, one below the other.
-        for (i, (text, fill)) in labels.into_iter().enumerate() {
+        for (i, (text, fill, tip)) in labels.into_iter().enumerate() {
             let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), Color32::WHITE);
             let pos = rect.left_top() + vec2(14.0, 12.0 + 28.0 * i as f32);
-            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand2(vec2(8.0, 4.0)), 4.0, fill);
+            let r = Rect::from_min_size(pos, galley.size()).expand2(vec2(8.0, 4.0));
+            painter.rect_filled(r, 4.0, fill);
             painter.galley(pos, galley, Color32::WHITE);
+            if let Some(tip) = tip {
+                ui.interact(r, ui.id().with(("output-label", i)), Sense::hover()).on_hover_text(tip);
+            }
         }
         if let Some(until) = self.fullscreen_hint_until {
             let left = until.saturating_duration_since(std::time::Instant::now()).as_secs_f32();

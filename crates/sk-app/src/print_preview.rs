@@ -114,8 +114,9 @@ impl App {
         Some(l.image[0] * px_per_mm / self.pixels_per_point / size.x.max(1.0))
     }
 
-    /// Label in the viewer: format, resolution on paper and its rating (background color).
-    pub(crate) fn print_label(&self, ctx: &egui::Context, size: Vec2) -> Option<(String, Color32)> {
+    /// Label in the viewer: format, resolution on paper and its rating (background color), with
+    /// the explanation of its short hints as tooltip.
+    pub(crate) fn print_label(&self, ctx: &egui::Context, size: Vec2) -> Option<(String, Color32, Option<String>)> {
         let l = self.print_layout(size)?;
         let s = &self.print.settings;
         let off = (l.off * 100.0).round();
@@ -124,10 +125,14 @@ impl App {
             Fit::Contain => format!("  ·  Rand {off:.0} %"),
             Fit::Fill => format!("  ·  schneidet {off:.0} % ab"),
         };
-        let zoom = if self.print.zoom {
-            if self.screen_px_per_mm(ctx).1 { "  ·  Druckgröße" } else { "  ·  Druckgröße ≈ (Bildschirm nicht kalibriert)" }
-        } else {
-            ""
+        let mut hints = Vec::new();
+        let zoom = match (self.print.zoom, self.screen_px_per_mm(ctx).1) {
+            (false, _) => "",
+            (true, true) => "  ·  Druckgröße",
+            (true, false) => {
+                hints.push("Druckgröße ≈: Bildschirm nicht kalibriert, die Größe ist geschätzt (Tab „Ausgabe“ → Bildschirm kalibrieren).");
+                "  ·  Druckgröße ≈"
+            }
         };
         let color = if l.ppi < PPI_POOR {
             theme::DANGER.gamma_multiply(0.9)
@@ -136,7 +141,15 @@ impl App {
         } else {
             Color32::from_rgb(50, 120, 90)
         };
-        Some((format!("DRUCK  ·  {}  ·  {}  ·  {:.0} ppi{off}{zoom}", s.format.label(), s.fit.label(), l.ppi), color))
+        // Size and cut are judged here, colors only with the soft proof.
+        let colors = if self.softproof.on {
+            ""
+        } else {
+            hints.push("Softproof aus: Die Farben zeigen den Bildschirm, nicht das Papier (Umschalt+P).");
+            "  ·  Softproof aus"
+        };
+        let text = format!("DRUCK  ·  {}  ·  {}  ·  {:.0} ppi{off}{zoom}{colors}", s.format.label(), s.fit.label(), l.ppi);
+        Some((text, color, (!hints.is_empty()).then(|| hints.join("\n"))))
     }
 
     fn change_print_settings(&mut self, f: impl FnOnce(&mut PrintSettings)) {
