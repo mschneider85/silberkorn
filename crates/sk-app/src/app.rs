@@ -75,6 +75,22 @@ impl Tab {
         }
     }
 
+    /// Label under the icon in the tab rail.
+    pub fn short_title(self) -> &'static str {
+        match self {
+            Tab::Library => "Bibliothek",
+            Tab::Lens => "Objektiv",
+            Tab::Exposure => "Belichtung",
+            Tab::Color => "Farbe",
+            Tab::Details => "Details",
+            Tab::Layers => "Ebenen",
+            Tab::Metadata => "Info",
+            Tab::Styles => "Stile",
+            Tab::History => "Verlauf",
+            Tab::Output => "Ausgabe",
+        }
+    }
+
     pub fn icon(self) -> &'static str {
         use crate::theme::icon;
         match self {
@@ -249,6 +265,7 @@ struct Settings {
     brushes: crate::layers::Brushes,
     /// Thumbnail size in the grid.
     grid_thumb: Option<f32>,
+    side_column: crate::side_column::SideColumn,
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -338,6 +355,8 @@ pub struct App {
     pub curve_channel: CurveChannel,
     /// Selected hue band in the color editor.
     pub color_band: usize,
+    /// Color editor view: all colors for one property, or one color with all properties.
+    pub color_view: crate::develop_tools::ColorView,
     pub picking_wb: bool,
     /// The skin tone pipette is active (color tab).
     pub picking_skin: bool,
@@ -452,6 +471,18 @@ pub struct App {
     pub palette: crate::palette::Palette,
     /// Minimap of the whole image while zoomed in.
     pub show_navigator: bool,
+    pub side_column: crate::side_column::SideColumn,
+    /// The right column is shown this frame.
+    pub side_column_shown: bool,
+    /// Viewer area of the last frame (decides whether the right column fits).
+    pub viewer_rect: Option<egui::Rect>,
+    /// Viewport and image rectangle of the last frame (for the navigator in the right column).
+    pub view_geometry: Option<(egui::Rect, egui::Rect)>,
+    /// Reduction of the whole-image draft and of the view draft, fixed while a control is dragged.
+    pub(crate) drag_draft_level: Option<usize>,
+    pub(crate) drag_view_level: Option<usize>,
+    /// Rendered while the mouse was down (perhaps without reduction): render once more after release.
+    pub(crate) drag_rendered: bool,
     pub guides: crate::guides::Guides,
     pub overlay: crate::guides::Overlay,
     /// Distraction-free full screen: only the image.
@@ -573,6 +604,13 @@ impl App {
             sort: settings.sort,
             sort_desc: settings.sort_desc,
             show_navigator: !settings.hide_navigator,
+            side_column: settings.side_column,
+            side_column_shown: false,
+            viewer_rect: None,
+            view_geometry: None,
+            drag_draft_level: None,
+            drag_view_level: None,
+            drag_rendered: false,
             guides: settings.guides,
             overlay: crate::guides::Overlay::new(settings.overlay_file.clone(), settings.overlay_opacity),
             folder: PathBuf::new(),
@@ -608,6 +646,7 @@ impl App {
             tab: Tab::Exposure,
             curve_channel: CurveChannel::Rgb,
             color_band: 0,
+            color_view: Default::default(),
             picking_wb: false,
             picking_skin: false,
             crop_tool: None,
@@ -762,6 +801,7 @@ impl App {
             sort: self.sort,
             sort_desc: self.sort_desc,
             hide_navigator: !self.show_navigator,
+            side_column: self.side_column,
             focus_sensitivity: Some(self.focus_sensitivity),
             guides: self.guides,
             overlay_file: self.overlay.file.clone(),
@@ -812,10 +852,9 @@ impl App {
         self.request_render();
     }
 
-    /// Layer whose mask is shown as overlay.
+    /// Layer whose mask is shown as overlay: only while "Maske anzeigen" (M) is on.
     pub fn mask_overlay(&self) -> Option<usize> {
-        let drawing = self.local_tool.is_some_and(|t| t.is_mask_tool()) && self.pointer_down;
-        if self.show_mask || drawing { self.active_layer } else { None }
+        if self.show_mask { self.active_layer } else { None }
     }
 
     /// Size of the shown image in the viewer's coordinates (preview pixels).
@@ -1704,9 +1743,11 @@ impl App {
             self.rendered_mask_overlay = overlay;
             self.request_render();
         }
-        // A draft was shown while dragging: render at full resolution once released.
-        if self.texture_draft && !self.pointer_down && !self.render_requested {
+        // A draft was shown while dragging: render at full resolution once released (also
+        // without reduction, so that the final state is cached).
+        if (self.texture_draft || self.drag_rendered) && !self.pointer_down && !self.render_requested {
             self.texture_draft = false;
+            self.drag_rendered = false;
             self.render_requested = true;
         }
         if !self.render_requested {
@@ -1738,17 +1779,20 @@ impl App {
             }
         }
         let softproof = self.active_softproof();
+        let draft = match (self.pointer_down, self.view_magnified) {
+            (false, _) => 1,
+            (true, false) => self.drag_draft_level(),
+            // Zoomed in, the view draft covers the screen; this only feeds the histogram.
+            (true, true) => 4,
+        };
+        self.drag_rendered |= self.pointer_down && self.current.is_some();
         if let Some(cur) = &self.current {
             self.workers.render(RenderJob {
                 generation: self.generation,
                 version: self.edit_version,
                 // A style preview is shown, but never cached.
                 adjustments: self.style_preview.clone().unwrap_or_else(|| cur.adjustments.clone()),
-                draft: match (self.pointer_down, self.view_magnified) {
-                    (false, _) => 1,
-                    (true, false) => 2,
-                    (true, true) => 4,
-                },
+                draft,
                 cache_as: (!self.pointer_down && self.style_preview.is_none()).then(|| (cur.meta.path.clone(), self.session_root())),
                 meta: cur.meta.clone(),
                 preview: cur.preview.clone(),
@@ -1969,6 +2013,7 @@ impl App {
     /// End of every frame (also in full screen): pending actions, saving and rendering.
     fn finish_frame(&mut self, ctx: &egui::Context) {
         self.splash_ui(ctx);
+        hover_cursor(ctx);
         self.run_pending();
         // The pointer left the styles: back to the real adjustments.
         if !self.style_hovered && self.style_preview.take().is_some() {
@@ -2171,6 +2216,16 @@ impl eframe::App for App {
             self.workers.touch();
         }
         self.pointer_down = ctx.input(|i| i.pointer.any_down());
+        if !self.pointer_down {
+            (self.drag_draft_level, self.drag_view_level) = (None, None);
+        }
+        // The space bar pans the image: it must not also press the focused button again.
+        if ctx.input(|i| i.key_pressed(egui::Key::Space))
+            && !ctx.egui_wants_keyboard_input()
+            && let Some(id) = ctx.memory(|m| m.focused())
+        {
+            ctx.memory_mut(|m| m.surrender_focus(id));
+        }
         if !crate::browser::SPEED_KEYS.iter().any(|(k, _)| ctx.input(|i| i.key_down(*k))) {
             self.speed_message = None;
         }
@@ -2211,7 +2266,7 @@ impl eframe::App for App {
             .show(ui, |ui| self.title_bar(ui));
         egui::Panel::top("toolbar").frame(chrome_frame(bar_margin())).show(ui, |ui| self.toolbar(ui));
         egui::Panel::bottom("status").frame(chrome_frame(egui::Margin::symmetric(10, 3))).show(ui, |ui| self.status_bar(ui));
-        egui::Panel::left("tabrail").frame(chrome_frame(egui::Margin::symmetric(2, 2))).resizable(false).exact_size(46.0).show(ui, |ui| self.tab_rail(ui));
+        egui::Panel::left("tabrail").frame(chrome_frame(egui::Margin::symmetric(2, 2))).resizable(false).exact_size(66.0).show(ui, |ui| self.tab_rail(ui));
         egui::Panel::left("tools")
             .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin { left: 8, right: 6, top: 0, bottom: 0 }))
             .resizable(true)
@@ -2219,6 +2274,14 @@ impl eframe::App for App {
             .size_range(280.0..=560.0)
             .show(ui, |ui| self.tool_panel(ui));
         let grid = self.grid_view || self.viewer_detached();
+        self.side_column_shown = self.side_column_wanted(grid);
+        if self.side_column_shown {
+            egui::Panel::right("side_column")
+                .frame(egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin { left: 8, right: 8, top: 0, bottom: 0 }))
+                .resizable(false)
+                .exact_size(crate::side_column::WIDTH)
+                .show(ui, |ui| self.side_column(ui));
+        }
         if !grid && self.show_filmstrip && !self.entries.is_empty() {
             egui::Panel::bottom("filmstrip")
                 .frame(egui::Frame::new().fill(theme::BROWSER).inner_margin(egui::Margin::same(6)))
@@ -2243,5 +2306,23 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.commit_and_save();
         self.save_settings();
+    }
+}
+
+/// Everything clickable shows the hand under the pointer (egui only does that for buttons, and
+/// only when asked), unless a widget chose its own cursor. Widgets that are dragged (sliders,
+/// the image, the curve) set theirs themselves.
+pub(crate) fn hover_cursor(ctx: &egui::Context) {
+    if ctx.output(|o| o.cursor_icon) != egui::CursorIcon::Default {
+        return;
+    }
+    let (hit, hovered) = ctx.viewport(|v| (v.hits.click, v.interact_widgets.hovered.clone()));
+    if let Some(w) = hit
+        && w.enabled
+        && w.sense.senses_click()
+        && !w.sense.senses_drag()
+        && hovered.contains(&w.id)
+    {
+        ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
     }
 }

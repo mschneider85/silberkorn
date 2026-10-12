@@ -36,12 +36,16 @@ fn file_size(bytes: usize) -> String {
     }
 }
 
-/// Pixel budget of a view draft while dragging a control (about that of the whole-image draft).
+/// Time a draft rendering may take while a control is dragged; with the measured speed it gives
+/// the pixel budget of drafts.
+const DRAFT_MS: f32 = 40.0;
+/// Pixel budget of a view draft while dragging a control, until the speed is measured.
 const DRAFT_PIXELS: usize = 700_000;
 
 impl App {
     pub fn viewer(&mut self, ui: &mut Ui) {
         let rect = ui.available_rect_before_wrap();
+        self.viewer_rect = Some(rect);
         self.viewer_content(ui);
         // What the user waits for here (mask, removal, matching).
         self.activity_overlay(ui, rect);
@@ -130,7 +134,7 @@ impl App {
 
         // Mouse wheel zoom around the cursor.
         let zoom_blocked = ui.input(|i| i.time) < self.zoom_blocked_until;
-        if response.hovered() && speed.is_none() && !zoom_blocked && self.crop_tool.is_none() && self.straighten_tool.is_none() {
+        if response.hovered() && speed.is_none() && !zoom_blocked {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
                 let new_scale = (scale * (1.0 + scroll * 0.0015)).clamp(fit.min(0.05), 16.0);
@@ -144,7 +148,14 @@ impl App {
                 self.zoom = Some(new_scale);
             }
         }
-        if (response.dragged() && !self.picking_wb && !self.picking_skin && !tools_active && !self.split_dragging) || response.dragged_by(egui::PointerButton::Middle) {
+        // Holding the space bar: dragging moves the image, whatever tool is active.
+        let space_pan = ui.input(|i| i.key_down(egui::Key::Space)) && !ui.ctx().egui_wants_keyboard_input();
+        if space_pan && (response.hovered() || response.dragged()) {
+            ui.ctx().set_cursor_icon(if response.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+        }
+        if (response.dragged() && (space_pan || (!self.picking_wb && !self.picking_skin && !tools_active && !self.split_dragging)))
+            || response.dragged_by(egui::PointerButton::Middle)
+        {
             self.pan += response.drag_delta();
         }
         let scale = self.zoom.unwrap_or(fit);
@@ -155,6 +166,7 @@ impl App {
         let ppp = self.pixels_per_point;
         let img_rect = Rect::from_center_size(rect.center() + self.pan, size * scale);
         let img_rect = img_rect.translate((img_rect.min.to_vec2() * ppp).round() / ppp - img_rect.min.to_vec2());
+        self.view_geometry = Some((rect, img_rect));
         // Proof view: the exported image instead of the preview, once it is ready.
         let proof_key = self.proof_key();
         let proof = self.proof.as_ref().filter(|p| self.proof_view && p.version == self.edit_version && Some(p.key) == proof_key);
@@ -267,7 +279,7 @@ impl App {
         }
 
         // Not in distraction-free full screen.
-        if self.show_navigator && !self.fullscreen && self.zoom.is_some() && !rect.contains_rect(img_rect) && !tools_active {
+        if self.show_navigator && !self.fullscreen && !self.side_column_shown && self.zoom.is_some() && !rect.contains_rect(img_rect) && !tools_active {
             self.navigator(ui, rect, img_rect, tex_id);
         }
 
@@ -280,6 +292,7 @@ impl App {
             && !self.picking_wb
             && !self.picking_skin
             && !split_drag
+            && !space_pan
             && in_after
             && response.is_pointer_button_down_on()
             && ui.input(|i| i.pointer.primary_down());
@@ -290,6 +303,8 @@ impl App {
         }
         if split_drag || !in_after {
             // The divider takes the drag.
+        } else if space_pan {
+            // Only panning while the space bar is held.
         } else if self.local_tool.is_some() {
             self.local_overlay(ui, &response, img_rect, scale);
         } else if self.crop_tool.is_some() {
@@ -312,8 +327,21 @@ impl App {
             {
                 self.pick_skin_tone((pos - img_rect.min) / scale);
             }
-        } else if response.double_clicked() {
-            self.toggle_zoom_100();
+        } else {
+            // No tool: zoomed in, the image can be moved; fitted, it can be magnified
+            // (double-click, or hold the button for the loupe).
+            let free = ui.ctx().output(|o| o.cursor_icon) == egui::CursorIcon::Default;
+            if free && (response.dragged() || response.hover_pos().is_some_and(|p| img_rect.contains(p))) {
+                let icon = match (self.zoom.is_some(), response.dragged()) {
+                    (true, true) => egui::CursorIcon::Grabbing,
+                    (true, false) => egui::CursorIcon::Grab,
+                    (false, _) => egui::CursorIcon::ZoomIn,
+                };
+                ui.ctx().set_cursor_icon(icon);
+            }
+            if response.double_clicked() {
+                self.toggle_zoom_100();
+            }
         }
 
         // File name and zoom are shown in the status bar; the viewer only marks active modes.
@@ -531,6 +559,26 @@ impl App {
         self.pan = Vec2::ZERO;
     }
 
+    /// Pixels a draft may have to keep up with a dragged control.
+    fn draft_budget(&self) -> f32 {
+        self.workers.draft_speed.pixels_within(DRAFT_MS).unwrap_or(DRAFT_PIXELS as f32).max(200_000.0)
+    }
+
+    /// Reduction of the whole-image draft while a control is dragged: as little as the measured
+    /// speed allows, and never finer than the screen shows. Fixed for the whole drag.
+    pub(crate) fn drag_draft_level(&mut self) -> usize {
+        if let Some(l) = self.drag_draft_level {
+            return l;
+        }
+        let Some(size) = self.view_size else { return 2 };
+        let screen_w = self.view_geometry.map_or(size.x, |(_, r)| r.width() * self.pixels_per_point);
+        let perf = (size.x * size.y / self.draft_budget()).sqrt().ceil();
+        let screen = (size.x / screen_w.max(1.0)).floor();
+        let level = perf.max(screen).clamp(1.0, 8.0) as usize;
+        self.drag_draft_level = Some(level);
+        level
+    }
+
     /// Requests the missing full-resolution renderings: when zoomed in, the exact visible
     /// region (unless tiles already cover it), then the grid tiles nearest to the view
     /// center; otherwise all tiles once editing pauses, so that zooming in later is instant.
@@ -577,13 +625,35 @@ impl App {
         // Something was edited while the mouse is down (not just panning): no sharp rendering yet.
         let sharp = self.tiles.version == self.edit_version || self.tiles.view.as_ref().is_some_and(|v| v.version == self.edit_version && v.level == 1);
         if self.pointer_down && !sharp {
-            // Dragging a control: only the view, reduced to the pixel budget of the whole-image
-            // draft, so it keeps up like the draft but stays far sharper when zoomed in.
-            let level = ((region.w * region.h) as f32 / DRAFT_PIXELS as f32).sqrt().ceil().max(1.0) as usize;
+            // Dragging a control: only the view, reduced as far as the measured speed requires
+            // (and never finer than the screen), so it keeps up but stays as sharp as possible.
+            let level = match self.drag_view_level {
+                Some(l) => l,
+                None => {
+                    let perf = ((region.w * region.h) as f32 / self.draft_budget()).sqrt().ceil();
+                    let screen = (region.w as f32 / (vis.width() * self.pixels_per_point).max(1.0)).floor();
+                    let l = perf.max(screen).clamp(1.0, 16.0) as usize;
+                    self.drag_view_level = Some(l);
+                    l
+                }
+            };
             let key = (self.edit_version, Some((region, level)), Vec::new());
             if self.tiles_requested.as_ref() != Some(&key) {
                 self.tiles_requested = Some(key);
                 self.send_tiles(Some((region, level)), Vec::new());
+            }
+            return;
+        }
+        // Fitted on a high-density screen (the preview is magnified): first the view reduced to
+        // about the screen resolution, which is quick, then the full resolution. Without this
+        // step the magnified preview stays blurry until the whole image is rendered in full.
+        let screen_level = (region.w as f32 / (vis.width() * self.pixels_per_point).max(1.0)).floor().max(1.0) as usize;
+        let have_view = self.tiles.view.as_ref().is_some_and(|v| v.version == self.edit_version);
+        if zoomed && !sharp && screen_level >= 2 && !have_view {
+            let key = (self.edit_version, Some((region, screen_level)), Vec::new());
+            if self.tiles_requested.as_ref() != Some(&key) {
+                self.tiles_requested = Some(key);
+                self.send_tiles(Some((region, screen_level)), Vec::new());
             }
             return;
         }

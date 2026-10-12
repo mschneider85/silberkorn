@@ -10,8 +10,73 @@ use crate::widgets::{self, section, slider_row};
 
 /// Approximate display color of a hue band (for swatches).
 fn band_color(hue: f32) -> Color32 {
-    let c = egui::ecolor::Hsva::new(((hue - 25.0 + 360.0) % 360.0 + 5.0) / 360.0, 0.75, 0.9, 1.0);
-    c.into()
+    band_hsv(hue, 0.75, 0.9)
+}
+
+/// A band hue (Oklab degrees) at the given HSV saturation and value.
+fn band_hsv(hue: f32, s: f32, v: f32) -> Color32 {
+    egui::ecolor::Hsva::new(((hue - 25.0 + 720.0) % 360.0 + 5.0) / 360.0, s, v, 1.0).into()
+}
+
+/// What the color editor shows: one property for all colors (hue, saturation or
+/// lightness), or all properties of one color.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorView {
+    #[default]
+    Hue,
+    Saturation,
+    Lightness,
+    Single,
+}
+
+impl ColorView {
+    const ALL: [ColorView; 4] = [ColorView::Hue, ColorView::Saturation, ColorView::Lightness, ColorView::Single];
+
+    fn label(self) -> &'static str {
+        match self {
+            ColorView::Hue => "Farbton",
+            ColorView::Saturation => "Sättigung",
+            ColorView::Lightness => "Helligkeit",
+            ColorView::Single => "Einzeln",
+        }
+    }
+}
+
+/// Rail colors of a band slider: the neighbouring hues, grey to color, or dark to light.
+fn band_rail(view: ColorView, hue: f32) -> [Color32; 3] {
+    match view {
+        ColorView::Hue => [band_hsv(hue - 30.0, 0.75, 0.9), band_hsv(hue, 0.75, 0.9), band_hsv(hue + 30.0, 0.75, 0.9)],
+        ColorView::Saturation => [Color32::from_gray(140), band_hsv(hue, 0.45, 0.85), band_hsv(hue, 0.95, 0.95)],
+        ColorView::Lightness | ColorView::Single => [band_hsv(hue, 0.8, 0.3), band_hsv(hue, 0.75, 0.7), band_hsv(hue, 0.35, 1.0)],
+    }
+}
+
+/// Slider of one property of a band, with its colored rail.
+fn band_slider(ui: &mut Ui, label: &str, band: &mut HslBand, view: ColorView, hue: f32) -> bool {
+    let rail = band_rail(view, hue);
+    let opts = widgets::SliderOpts { rail: Some(&rail), ..Default::default() };
+    match view {
+        ColorView::Hue => widgets::slider_row_with(ui, label, &mut band.hue, -30.0..=30.0, 0.0, 1, opts),
+        ColorView::Saturation => widgets::slider_row_with(ui, label, &mut band.saturation, -100.0..=100.0, 0.0, 0, opts),
+        ColorView::Lightness | ColorView::Single => widgets::slider_row_with(ui, label, &mut band.lightness, -100.0..=100.0, 0.0, 0, opts),
+    }
+}
+
+/// Round color swatch of a band: a ring when selected, a dot below when edited.
+fn band_swatch(ui: &mut Ui, color: Color32, selected: bool, edited: bool, name: &str) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(28.0, 32.0), egui::Sense::click());
+    let p = ui.painter();
+    let c = rect.center_top() + egui::vec2(0.0, 13.0);
+    p.circle_filled(c, 10.0, color);
+    if selected {
+        p.circle_stroke(c, 12.5, egui::Stroke::new(2.0, Color32::WHITE));
+    } else if resp.hovered() {
+        p.circle_stroke(c, 12.0, egui::Stroke::new(1.0, Color32::from_gray(150)));
+    }
+    if edited {
+        p.circle_filled(rect.center_bottom() - egui::vec2(0.0, 2.5), 2.0, crate::theme::TEXT);
+    }
+    resp.on_hover_text(if edited { format!("{name} (bearbeitet)") } else { name.to_string() })
 }
 
 /// Display color of the skin tone target (Oklab in the working space).
@@ -294,6 +359,7 @@ impl App {
     /// Color editor, color balance and black & white (appended to the color tab).
     pub fn color_advanced(&mut self, ui: &mut Ui) {
         let band = &mut self.color_band;
+        let view = &mut self.color_view;
         let picking_skin = &mut self.picking_skin;
         let mut toggle_skin = false;
         let Some(cur) = self.current.as_mut() else { return };
@@ -302,19 +368,36 @@ impl App {
 
         let mut reset_ed = false;
         section(ui, "Color Editor", Some(&mut || reset_ed = true), |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (i, (name, hue)) in HUE_BANDS.iter().enumerate() {
-                    let edited = adj.color_editor.bands[i] != HslBand::default();
-                    let text = RichText::new(if edited { format!("{name}•") } else { name.to_string() }).color(band_color(*hue));
-                    if ui.selectable_label(*band == i, text).clicked() {
-                        *band = i;
+            ui.horizontal(|ui| {
+                for v in ColorView::ALL {
+                    if ui.selectable_label(*view == v, v.label()).clicked() {
+                        *view = v;
                     }
                 }
             });
-            let b = &mut adj.color_editor.bands[*band];
-            changed |= slider_row(ui, "Farbton", &mut b.hue, -30.0..=30.0, 0.0, 1);
-            changed |= slider_row(ui, "Sättigung", &mut b.saturation, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Helligkeit", &mut b.lightness, -100.0..=100.0, 0.0, 0);
+            ui.add_space(4.0);
+            let bands = &mut adj.color_editor.bands;
+            if *view == ColorView::Single {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = ((ui.available_width() - 8.0 * 28.0) / 7.0).max(0.0);
+                    for (i, (name, hue)) in HUE_BANDS.iter().enumerate() {
+                        let edited = bands[i] != HslBand::default();
+                        if band_swatch(ui, band_color(*hue), *band == i, edited, name).clicked() {
+                            *band = i;
+                        }
+                    }
+                });
+                ui.add_space(4.0);
+                let (_, hue) = HUE_BANDS[*band];
+                let b = &mut bands[*band];
+                changed |= band_slider(ui, "Farbton", b, ColorView::Hue, hue);
+                changed |= band_slider(ui, "Sättigung", b, ColorView::Saturation, hue);
+                changed |= band_slider(ui, "Helligkeit", b, ColorView::Lightness, hue);
+            } else {
+                for (i, (name, hue)) in HUE_BANDS.iter().enumerate() {
+                    changed |= band_slider(ui, name, &mut bands[i], *view, *hue);
+                }
+            }
         });
         if reset_ed {
             adj.color_editor = Default::default();

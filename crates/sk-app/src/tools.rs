@@ -33,8 +33,14 @@ impl App {
             widgets::no_image(ui);
             return;
         }
-        widgets::histogram(ui, self.histogram.as_ref());
-        ui.add_space(4.0);
+        // With the right column open, the histogram is shown there.
+        if !self.side_column_shown {
+            let r = widgets::histogram(ui, self.histogram.as_ref());
+            if widgets::clip_triangles(ui, r, self.histogram.as_ref(), self.clip_warning) {
+                self.toggle_clip_warning();
+            }
+            ui.add_space(4.0);
+        }
         self.auto_section(ui);
         let Some(cur) = self.current.as_mut() else {
             crate::widgets::no_image(ui);
@@ -197,17 +203,56 @@ impl App {
         self.color_advanced(ui);
     }
 
+    /// Keyword chips (click removes), an input with catalog suggestions.
+    pub(crate) fn keywords_ui(&mut self, ui: &mut Ui) {
+        let Some(cur) = self.current.as_ref() else { return };
+        let keywords = cur.keywords.clone();
+        let mut remove_kw = None;
+        let mut add_kw = None;
+        ui.horizontal_wrapped(|ui| {
+            for k in &keywords {
+                if ui.add(egui::Button::new(format!("{k}  \u{E4F6}")).small()).on_hover_text("Entfernen").clicked() {
+                    remove_kw = Some(k.clone());
+                }
+            }
+            if keywords.is_empty() {
+                ui.label(RichText::new("Keine Keywords").color(crate::theme::TEXT_FAINT));
+            }
+        });
+        let resp = ui.add(egui::TextEdit::singleline(&mut self.keyword_input).hint_text("Keyword hinzufügen (Enter)"));
+        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            add_kw = Some(self.keyword_input.clone());
+            resp.request_focus();
+        }
+        // Suggestions from the catalog.
+        let typed = self.keyword_input.trim().to_lowercase();
+        if !typed.is_empty() {
+            ui.horizontal_wrapped(|ui| {
+                for (k, _) in self.lists.keywords.iter().filter(|(k, _)| k.to_lowercase().starts_with(&typed)).take(8) {
+                    if ui.small_button(k).clicked() {
+                        add_kw = Some(k.clone());
+                    }
+                }
+            });
+        }
+        if let Some(k) = remove_kw {
+            self.remove_keyword(&k);
+        }
+        if let Some(k) = add_kw {
+            self.add_keyword(&k);
+            self.keyword_input.clear();
+        }
+    }
+
     fn metadata_tab(&mut self, ui: &mut Ui) {
         let Some(cur) = self.current.as_ref() else {
             crate::widgets::no_image(ui);
             return;
         };
         let n_sel = self.selected_paths().len();
-        let (mut rating, current_label, keywords) = (cur.rating, cur.color_label, cur.keywords.clone());
+        let (mut rating, current_label) = (cur.rating, cur.color_label);
         let mut new_rating = None;
         let mut new_label = None;
-        let mut remove_kw = None;
-        let mut add_kw = None;
         let title = if n_sel > 1 { format!("Bewertung ({n_sel} Bilder)") } else { "Bewertung".to_string() };
         section(ui, &title, None, |ui| {
             if widgets::stars(ui, &mut rating, 22.0) {
@@ -221,46 +266,12 @@ impl App {
                 }
             });
         });
-        section(ui, "Keywords", None, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for k in &keywords {
-                    if ui.add(egui::Button::new(format!("{k}  \u{E4F6}")).small()).on_hover_text("Entfernen").clicked() {
-                        remove_kw = Some(k.clone());
-                    }
-                }
-                if keywords.is_empty() {
-                    ui.label(RichText::new("Keine Keywords").color(crate::theme::TEXT_FAINT));
-                }
-            });
-            let resp = ui.add(egui::TextEdit::singleline(&mut self.keyword_input).hint_text("Keyword hinzufügen (Enter)"));
-            if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                add_kw = Some(self.keyword_input.clone());
-                resp.request_focus();
-            }
-            // Suggestions from the catalog.
-            let typed = self.keyword_input.trim().to_lowercase();
-            if !typed.is_empty() {
-                ui.horizontal_wrapped(|ui| {
-                    for (k, _) in self.lists.keywords.iter().filter(|(k, _)| k.to_lowercase().starts_with(&typed)).take(8) {
-                        if ui.small_button(k).clicked() {
-                            add_kw = Some(k.clone());
-                        }
-                    }
-                });
-            }
-        });
+        section(ui, "Keywords", None, |ui| self.keywords_ui(ui));
         if let Some(r) = new_rating {
             self.set_rating(r);
         }
         if let Some(l) = new_label {
             self.set_color_label(l);
-        }
-        if let Some(k) = remove_kw {
-            self.remove_keyword(&k);
-        }
-        if let Some(k) = add_kw {
-            self.add_keyword(&k);
-            self.keyword_input.clear();
         }
 
         let Some(cur) = self.current.as_ref() else { return };

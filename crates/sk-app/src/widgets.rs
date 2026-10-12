@@ -16,13 +16,26 @@ pub fn reveal_section(ctx: &egui::Context, title: &str) {
     ctx.data_mut(|d| d.insert_temp(reveal_id(), title.to_string()));
 }
 
-/// Collapsible tool section with a header strip and an optional reset button.
+/// Collapsible tool section with an optional reset button.
 pub fn section(ui: &mut Ui, title: &str, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
-    section_with(ui, title, true, reset, body);
+    section_full(ui, title, true, None, reset, body);
 }
 
-/// [`section`] that starts closed unless `default_open`.
-pub fn section_with(ui: &mut Ui, title: &str, default_open: bool, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
+/// [`section`] with an explanation behind an info icon in the header instead of text in the panel.
+pub fn section_help(ui: &mut Ui, title: &str, help: &str, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
+    section_full(ui, title, true, Some(help), reset, body);
+}
+
+/// Section that starts closed unless `default_open`, with an optional help icon.
+/// Flat header: a fine line above, the title on the left, help, reset and caret on the right.
+pub fn section_full(
+    ui: &mut Ui,
+    title: &str,
+    default_open: bool,
+    help: Option<&str>,
+    reset: Option<&mut dyn FnMut()>,
+    body: impl FnOnce(&mut Ui),
+) {
     let id = ui.make_persistent_id(title);
     let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(id, default_open));
     let reveal = ui.data(|d| d.get_temp::<String>(reveal_id())).is_some_and(|t| t == title);
@@ -36,48 +49,64 @@ pub fn section_with(ui: &mut Ui, title: &str, default_open: bool, reset: Option<
             d.insert_temp(flash_id, now);
         });
     }
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
     if reveal {
         resp.scroll_to_me(Some(egui::Align::TOP));
     }
     let painter = ui.painter();
     let hovered = resp.hovered();
-    painter.rect_filled(rect, 6.0, if hovered { Color32::from_rgb(52, 52, 57) } else { theme::SECTION });
+    painter.hline(rect.x_range(), rect.top(), Stroke::new(1.0, theme::BORDER));
+    let inner = rect.shrink2(vec2(0.0, 2.0)).translate(vec2(0.0, 1.0));
+    if hovered {
+        painter.rect_filled(inner, 5.0, Color32::from_rgb(42, 42, 46));
+    }
+    let title_color = if open || hovered { Color32::WHITE } else { theme::TEXT };
+    let galley = painter.layout_no_wrap(title.to_string(), egui::FontId::proportional(13.5), title_color);
+    let title_w = galley.size().x;
+    painter.galley(pos2(inner.left() + 6.0, inner.center().y - galley.size().y / 2.0), galley, title_color);
     let caret = if open { theme::icon::CARET_DOWN } else { theme::icon::CARET_RIGHT };
     let dim = if hovered { theme::TEXT } else { theme::TEXT_FAINT };
-    painter.text(rect.left_center() + vec2(9.0, 0.0), egui::Align2::LEFT_CENTER, caret, egui::FontId::proportional(11.0), dim);
-    let title_color = if open { Color32::WHITE } else { theme::TEXT };
-    painter.text(rect.left_center() + vec2(26.0, 0.0), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(13.0), title_color);
+    painter.text(inner.right_center() - vec2(10.0, 0.0), egui::Align2::CENTER_CENTER, caret, egui::FontId::proportional(11.0), dim);
     // Brief accent outline after the command palette jumped here.
     if let Some(t0) = ui.data(|d| d.get_temp::<f64>(flash_id)) {
         let a = 1.0 - ((now - t0) / 1.4) as f32;
         if a > 0.0 {
-            painter.rect_stroke(rect, 6.0, Stroke::new(1.5, theme::ACCENT.gamma_multiply(a)), StrokeKind::Inside);
+            painter.rect_stroke(inner, 5.0, Stroke::new(1.5, theme::ACCENT.gamma_multiply(a)), StrokeKind::Inside);
             ui.ctx().request_repaint();
         } else {
             ui.data_mut(|d| d.remove::<f64>(flash_id));
         }
     }
-    let mut reset_clicked = false;
+    let mut header_button_clicked = false;
+    if let Some(help) = help {
+        let r = Rect::from_center_size(pos2(inner.left() + 6.0 + title_w + 14.0, inner.center().y), vec2(20.0, 20.0));
+        let hr = ui.interact(r, id.with("help"), Sense::hover());
+        let c = if hr.hovered() { theme::TEXT } else { theme::TEXT_FAINT };
+        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, theme::icon::INFO, egui::FontId::proportional(13.0), c);
+        hr.on_hover_ui(|ui| {
+            ui.set_max_width(260.0);
+            ui.label(help);
+        });
+    }
     if let Some(reset) = reset {
-        let r = Rect::from_center_size(rect.right_center() - vec2(16.0, 0.0), vec2(24.0, 22.0));
+        let r = Rect::from_center_size(inner.right_center() - vec2(34.0, 0.0), vec2(24.0, 22.0));
         let color = if hovered || ui.rect_contains_pointer(r) { theme::TEXT } else { theme::TEXT_FAINT };
         let b = egui::Button::new(RichText::new(theme::icon::ARROW_COUNTER_CLOCKWISE).size(13.0).color(color)).frame_when_inactive(false);
         if ui.put(r, b).on_hover_text("Werkzeug zurücksetzen").clicked() {
             reset();
-            reset_clicked = true;
+            header_button_clicked = true;
         }
     }
-    if resp.clicked() && !reset_clicked {
+    if resp.clicked() && !header_button_clicked {
         open = !open;
         ui.data_mut(|d| d.insert_persisted(id, open));
     }
     if open {
-        ui.add_space(6.0);
+        ui.add_space(2.0);
         egui::Frame::new().inner_margin(egui::Margin { left: 6, right: 4, top: 0, bottom: 0 }).show(ui, body);
-        ui.add_space(4.0);
+        ui.add_space(8.0);
     }
-    ui.add_space(6.0);
+    ui.add_space(2.0);
 }
 
 /// Width of the label column of slider rows and form fields, so they line up.
@@ -109,12 +138,12 @@ pub fn combo_field(ui: &mut Ui, label: &str, selected: impl Into<egui::WidgetTex
 
 /// Options of a [`slider_row_with`].
 #[derive(Clone, Copy, Default)]
-pub struct SliderOpts {
+pub struct SliderOpts<'a> {
     /// Unit after the value, e.g. " %".
     pub suffix: &'static str,
     /// Colors painted along the rail (left to right) instead of the accent fill, e.g. blue to
     /// yellow for a color temperature.
-    pub rail: Option<&'static [Color32]>,
+    pub rail: Option<&'a [Color32]>,
 }
 
 /// Rail colors for color temperature (cool to warm).
@@ -155,7 +184,7 @@ pub fn slider_row_with(
     range: std::ops::RangeInclusive<f32>,
     default: f32,
     decimals: usize,
-    opts: SliderOpts,
+    opts: SliderOpts<'_>,
 ) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -217,6 +246,9 @@ fn rail_slider(
     let span = (hi - lo).max(f32::EPSILON);
     let fill_from = default.clamp(lo, hi);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click_and_drag());
+    if ui.is_enabled() && (resp.hovered() || resp.dragged()) {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
     let x0 = rect.left() + 7.0;
     let x1 = rect.right() - 7.0;
     let to_x = |v: f32| x0 + (x1 - x0) * ((v - lo) / span).clamp(0.0, 1.0);
@@ -357,11 +389,12 @@ pub fn no_image(ui: &mut Ui) {
     empty_state(ui, theme::icon::IMAGE_SQUARE, "Kein Bild ausgewählt", "Ein Bild im Filmstreifen oder Raster anklicken");
 }
 
-pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>) {
+/// Returns the area it was drawn in.
+pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>) -> Rect {
     let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 110.0), Sense::hover());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, theme::BROWSER);
-    let Some(h) = hist else { return };
+    let Some(h) = hist else { return rect };
     // Ignore the extreme bins for scaling so clipping spikes do not flatten everything.
     let max = [&h.r, &h.g, &h.b]
         .iter()
@@ -408,6 +441,7 @@ pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>) {
     if lo > 0.001 {
         painter.circle_filled(rect.left_top() + vec2(8.0, 8.0), 4.0, Color32::from_rgb(60, 120, 255));
     }
+    rect
 }
 
 /// Interactive curve editor. Click to add a point, drag to move, right-click to remove.
@@ -441,6 +475,12 @@ pub fn curve_editor(ui: &mut Ui, curve: &mut Curve, color: Color32, hist: Option
     let drag_id = response.id.with("drag_point");
     let mut dragging: Option<usize> = ui.data(|d| d.get_temp(drag_id));
     let hit = |pos: Pos2, pts: &[[f32; 2]]| pts.iter().position(|p| to_screen(*p).distance(pos) < 8.0);
+    // Grab a point, or click elsewhere to add one.
+    if response.dragged() && dragging.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if let Some(pos) = response.hover_pos() {
+        ui.ctx().set_cursor_icon(if hit(pos, &curve.points).is_some() { egui::CursorIcon::Grab } else { egui::CursorIcon::Crosshair });
+    }
 
     if response.drag_started()
         && let Some(pos) = response.interact_pointer_pos()
@@ -610,4 +650,53 @@ mod tests {
         frame(&ctx, &mut value, vec![]);
         assert_eq!(value, 0.0);
     }
+}
+
+/// Clipping triangles in the top corners of a histogram (shadows left, highlights right):
+/// lit when the image clips there, filled while the warning is shown. True when clicked.
+pub fn clip_triangles(ui: &mut Ui, rect: Rect, hist: Option<&Histogram>, warning_on: bool) -> bool {
+    // Share of pixels in the outermost bin of any channel.
+    let clipped = |bin: usize| {
+        hist.is_some_and(|h| {
+            let total: u32 = h.luma.iter().sum::<u32>().max(1);
+            [&h.r, &h.g, &h.b].iter().any(|c| c.get(bin).is_some_and(|&n| n as f32 / total as f32 > 0.001))
+        })
+    };
+    let mut clicked = false;
+    for (left, bin, hover) in [(true, 0, "Abgesoffene Tiefen"), (false, 255, "Ausgefressene Lichter")] {
+        let size = vec2(16.0, 14.0);
+        let r = if left {
+            Rect::from_min_size(rect.min + vec2(4.0, 4.0), size)
+        } else {
+            Rect::from_min_size(pos2(rect.right() - 4.0 - size.x, rect.top() + 4.0), size)
+        };
+        let resp = ui.interact(r, ui.id().with(("clip_triangle", left)), Sense::click());
+        let is_clipped = clipped(bin);
+        let color = if warning_on {
+            theme::ACCENT
+        } else if is_clipped {
+            if left { Color32::from_rgb(110, 160, 255) } else { theme::DANGER }
+        } else if resp.hovered() {
+            theme::TEXT_DIM
+        } else {
+            Color32::from_gray(80)
+        };
+        let c = r.shrink(2.0);
+        let pts = if left {
+            vec![c.left_top(), c.right_top(), c.left_bottom()]
+        } else {
+            vec![c.left_top(), c.right_top(), c.right_bottom()]
+        };
+        let stroke = Stroke::new(1.2, color);
+        if warning_on || is_clipped {
+            ui.painter().add(Shape::convex_polygon(pts, color, stroke));
+        } else {
+            ui.painter().add(Shape::closed_line(pts, stroke));
+        }
+        let state = if is_clipped { "vorhanden" } else { "keine" };
+        if resp.on_hover_text(format!("{hover}: {state}\nKlick: Belichtungswarnung im Bild (E)")).clicked() {
+            clicked = true;
+        }
+    }
+    clicked
 }

@@ -7,7 +7,7 @@ use sk_core::sidecar::{self, Snapshot};
 
 use crate::app::App;
 use crate::theme::icon;
-use crate::widgets::section;
+use crate::widgets::section_help;
 
 enum SnapshotAction {
     Add,
@@ -65,12 +65,13 @@ impl App {
         let mut typed = None;
         let editing = self.snapshot_rename.clone();
         let Some(cur) = &self.current else { return };
-        section(ui, "Schnappschüsse", None, |ui| {
+        let help = "Ein Schnappschuss sichert den jetzigen Stand; ein Klick darauf stellt ihn wieder her.";
+        section_help(ui, "Schnappschüsse", help, None, |ui| {
             if ui.button(format!("{}  Schnappschuss", icon::PLUS)).on_hover_text("Den jetzigen Stand unter einem Namen sichern").clicked() {
                 action = Some(SnapshotAction::Add);
             }
             if cur.snapshots.is_empty() {
-                ui.label(RichText::new("Noch keine. Ein Schnappschuss sichert den jetzigen Stand; ein Klick darauf stellt ihn wieder her.").small().color(crate::theme::TEXT_FAINT));
+                crate::widgets::hint(ui, "Noch keine Schnappschüsse.");
             }
             for (i, s) in cur.snapshots.iter().enumerate() {
                 ui.horizontal(|ui| {
@@ -109,8 +110,8 @@ impl App {
         }
         let mut jump = None;
         if let Some((steps, now)) = self.history_steps() {
-            section(ui, "Verlauf", None, |ui| {
-                ui.label(RichText::new("Klick springt zu diesem Stand; neue Änderungen verwerfen die Schritte darüber.").small().color(crate::theme::TEXT_FAINT));
+            let help = "Klick springt zu diesem Stand; neue Änderungen verwerfen die Schritte darüber.";
+            section_help(ui, "Verlauf", help, None, |ui| {
                 for j in (0..steps.len()).rev() {
                     let label = if j == 0 { "Geöffnet".to_string() } else { describe(steps[j - 1], steps[j]) };
                     let text = if j > now { RichText::new(label).color(Color32::from_gray(120)).italics() } else { RichText::new(label) };

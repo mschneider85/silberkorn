@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use egui::{Color32, Rect, Response, RichText, Ui};
+use egui::{Color32, Rect, Response, Ui};
 use sk_ai::models;
 use sk_core::brush::AutoGuide;
 use sk_core::params::{BrushStroke, WbMode};
@@ -11,7 +11,7 @@ use sk_core::params::{BrushStroke, WbMode};
 use crate::app::App;
 use crate::layers::{LocalDrag, LocalTool};
 use crate::theme::icon;
-use crate::widgets::section;
+use crate::widgets::section_help;
 use crate::workers::InpaintJob;
 
 impl App {
@@ -169,20 +169,17 @@ impl App {
     pub(crate) fn remove_section(&mut self, ui: &mut Ui) {
         let n = self.current.as_ref().map_or(0, |c| c.adjustments.removals.len());
         let mut clear: Option<bool> = None;
-        let mut tool = false;
         let mut download = false;
         let downloading = self.model_download_progress(&models::INPAINT);
-        section(ui, "Entfernen (KI)", None, |ui| {
-            let (ic, name, key) = LocalTool::Remove.tile();
-            let w = ui.available_width();
-            if crate::widgets::tool_tile(ui, ic, &format!("{name}: über das Störende malen"), key, self.local_tool == Some(LocalTool::Remove), w).clicked() {
-                tool = true;
-            }
-            if self.local_tool == Some(LocalTool::Remove) {
-                if crate::layers::brush_controls(ui, &mut self.brushes.remove, Some(LocalTool::Remove), true) {
-                    self.brushes_changed_at = Some(std::time::Instant::now());
-                }
-                ui.label(RichText::new("Über das Störende malen; beim Loslassen füllt die KI die Stelle passend zur Umgebung.").small().color(crate::theme::TEXT_FAINT));
+        let active = self.local_tool == Some(LocalTool::Remove);
+        // The tool itself sits in the tool grid; this section only appears when it has something to show.
+        if !active && n == 0 && models::available(&models::INPAINT) {
+            return;
+        }
+        let help = "Über das Störende malen; beim Loslassen füllt die KI die Stelle passend zur Umgebung.";
+        section_help(ui, "Entfernen (KI)", help, None, |ui| {
+            if active && crate::layers::brush_controls(ui, &mut self.brushes.remove, Some(LocalTool::Remove), true) {
+                self.brushes_changed_at = Some(std::time::Instant::now());
             }
             if !models::available(&models::INPAINT) {
                 match downloading {
@@ -191,8 +188,8 @@ impl App {
                         ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
                     }
                     None => {
-                        ui.label(RichText::new(format!("Benötigt das Modell {} ({} MB, Lizenz {}).", models::INPAINT.label, models::INPAINT.size_mb, models::INPAINT.license)).small());
-                        if ui.button(format!("{}  Modell laden", icon::DOWNLOAD_SIMPLE)).clicked() {
+                        let hover = format!("Lädt das Modell {} ({} MB, Lizenz {}).", models::INPAINT.label, models::INPAINT.size_mb, models::INPAINT.license);
+                        if ui.button(format!("{}  Modell laden ({} MB)", icon::DOWNLOAD_SIMPLE, models::INPAINT.size_mb)).on_hover_text(hover).clicked() {
                             download = true;
                         }
                     }
@@ -210,9 +207,6 @@ impl App {
                 });
             }
         });
-        if tool {
-            self.set_local_tool(LocalTool::Remove);
-        }
         if download {
             self.download_model_job(&models::INPAINT);
         }

@@ -197,6 +197,7 @@ impl App {
         };
         if let Some(pos) = response.hover_pos() {
             let icon = match hit(pos) {
+                Handle::Move if response.dragged() => egui::CursorIcon::Grabbing,
                 Handle::Move => egui::CursorIcon::Grab,
                 Handle::Corner(a, b) if a == b => egui::CursorIcon::ResizeNwSe,
                 Handle::Corner(..) => egui::CursorIcon::ResizeNeSw,

@@ -591,7 +591,9 @@ fn dragging_renders_drafts_then_full_resolution() {
     let full = f.app.texture.as_ref().unwrap().size();
     assert_eq!(f.app.view_size, Some(egui::vec2(full[0] as f32, full[1] as f32)));
 
-    // While a slider is dragged: quarter of the pixels, shown at the same size.
+    // While a slider is dragged: quarter of the pixels, shown at the same size. (Without a
+    // measured speed: a fast graphics card would not need a draft for this image.)
+    f.app.workers.draft_speed = Default::default();
     f.app.pointer_down = true;
     f.app.edit(|adj| adj.exposure = 0.7);
     let v = f.app.edit_version;
@@ -1598,3 +1600,74 @@ fn heal_clone_and_magic_brush_are_painted() {
     assert!(layers.iter().any(|l| l.mask.ai.is_some()));
 }
 
+
+#[test]
+fn wheel_zooms_while_cropping_and_space_pans() {
+    let Some(mut f) = Fixture::new("spacepan") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    f.app.start_crop_tool();
+    let c = egui::pos2(600.0, 400.0);
+    viewer_frame(&mut f, vec![egui::Event::PointerMoved(c)]);
+    let wheel = egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Point,
+        delta: egui::vec2(0.0, 120.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Default::default(),
+    };
+    viewer_frame(&mut f, vec![wheel]);
+    for _ in 0..30 {
+        viewer_frame(&mut f, vec![]);
+    }
+    assert!(f.app.zoom.is_some(), "Mausrad zoomt auch beim Zuschneiden");
+
+    // Space held: dragging moves the image instead of the crop frame.
+    let geometry = f.app.current.as_ref().unwrap().adjustments.geometry.clone();
+    let pan = f.app.pan;
+    let space = |pressed| egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed, repeat: false, modifiers: Default::default() };
+    viewer_frame(&mut f, vec![space(true)]);
+    drag(&mut f, c, c + egui::vec2(-150.0, 60.0), 6);
+    viewer_frame(&mut f, vec![space(false)]);
+    assert!((f.app.pan - pan - egui::vec2(-150.0, 60.0)).length() < 2.0, "verschoben: {:?} → {:?}", pan, f.app.pan);
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.geometry, geometry, "Zuschnitt unverändert");
+    assert!(f.app.crop_tool.is_some());
+}
+
+/// Cursor of a few frames with the pointer at `p` over `ui`.
+fn cursor_over(p: egui::Pos2, add: impl Fn(&mut egui::Ui)) -> egui::CursorIcon {
+    let ctx = egui::Context::default();
+    crate::theme::install(&ctx);
+    let mut cursor = egui::CursorIcon::Default;
+    for _ in 0..3 {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+            events: vec![egui::Event::PointerMoved(p)],
+            ..Default::default()
+        };
+        let out = ctx.run_ui(input, |ui| {
+            egui::CentralPanel::no_frame().show(ui, |ui| add(ui));
+            crate::app::hover_cursor(ui.ctx());
+        });
+        cursor = out.platform_output.cursor_icon;
+        let mut delta = out.textures_delta;
+        delta.clear();
+    }
+    cursor
+}
+
+#[test]
+fn cursors_match_what_can_be_done() {
+    // Rating stars (clickable labels): the hand.
+    let stars = |ui: &mut egui::Ui| {
+        let mut r = 2;
+        crate::widgets::stars(ui, &mut r, 18.0);
+    };
+    assert_eq!(cursor_over(egui::pos2(8.0, 8.0), stars), egui::CursorIcon::PointingHand);
+    // Plain text: the arrow.
+    assert_eq!(cursor_over(egui::pos2(8.0, 8.0), |ui| { ui.label("Text"); }), egui::CursorIcon::Default);
+    // A slider rail: drag sideways.
+    let slider = |ui: &mut egui::Ui| {
+        let mut v = 0.0;
+        crate::widgets::compact_slider(ui, "x", &mut v, 0.0..=1.0, 0.0, 200.0);
+    };
+    assert_eq!(cursor_over(egui::pos2(100.0, 10.0), slider), egui::CursorIcon::ResizeHorizontal);
+}

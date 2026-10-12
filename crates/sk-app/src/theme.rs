@@ -1,7 +1,7 @@
 //! Look and feel: a calm, neutral dark theme, plus the Phosphor icon font.
 //!
 //! The greys are strictly neutral so they don't tint the judgement of colors; depth comes from
-//! a few steps of lightness: chrome (darkest) < browser < viewer < panel < section < controls.
+//! a few steps of lightness: chrome (darkest) < browser < viewer < panel < controls.
 
 use egui::{Color32, CornerRadius, FontFamily, FontId, Margin, Shadow, Stroke, TextStyle, vec2};
 
@@ -11,8 +11,6 @@ pub use egui_phosphor::regular as icon;
 pub const CHROME: Color32 = Color32::from_rgb(24, 24, 26);
 /// Tool panel background.
 pub const PANEL: Color32 = Color32::from_rgb(36, 36, 39);
-/// Tool section header strip.
-pub const SECTION: Color32 = Color32::from_rgb(45, 45, 49);
 /// Neutral background behind the image, dark enough to judge tones.
 pub const VIEWER: Color32 = Color32::from_rgb(30, 30, 32);
 /// Browser / filmstrip background.
@@ -103,6 +101,9 @@ pub fn install(ctx: &egui::Context) {
         sp.indent = 14.0;
         sp.combo_height = 300.0;
         s.interaction.tooltip_delay = 0.35;
+        // Labels are not text to select: no I-beam over names, values and clickable labels
+        // (rating stars). Text fields stay editable.
+        s.interaction.selectable_labels = false;
     });
 }
 

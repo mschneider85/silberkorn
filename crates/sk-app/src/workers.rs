@@ -250,6 +250,27 @@ pub struct Workers {
     match_tx: Sender<MatchJob>,
     inpaint_tx: Sender<InpaintJob>,
     activity: Activity,
+    pub draft_speed: DraftSpeed,
+}
+
+/// Measured speed of draft renderings (while a control is dragged), in nanoseconds per output
+/// pixel; it decides how small drafts must be to keep up, instead of a fixed reduction.
+#[derive(Clone, Default)]
+pub struct DraftSpeed(Arc<AtomicU64>);
+
+impl DraftSpeed {
+    fn record(&self, pixels: usize, elapsed: Duration) {
+        let ns = elapsed.as_nanos() as f64 / pixels.max(1) as f64;
+        let old = f64::from_bits(self.0.load(Ordering::Relaxed));
+        let new = if old > 0.0 { old * 0.7 + ns * 0.3 } else { ns };
+        self.0.store(new.to_bits(), Ordering::Relaxed);
+    }
+
+    /// Output pixels that render within `ms`, once measured.
+    pub fn pixels_within(&self, ms: f32) -> Option<f32> {
+        let ns = f64::from_bits(self.0.load(Ordering::Relaxed));
+        (ns > 0.0).then(|| (ms as f64 * 1e6 / ns) as f32)
+    }
 }
 
 /// When the user or a foreground worker last did something; background preview
@@ -291,6 +312,7 @@ impl Workers {
         let (ev_tx, events) = channel();
         let (ev_tx_keep, ctx_keep) = (ev_tx.clone(), ctx.clone());
         let activity = Activity::new();
+        let draft_speed = DraftSpeed::default();
 
         let (index_tx, index_rx) = channel::<IndexJob>();
         {
@@ -385,7 +407,7 @@ impl Workers {
 
         let (tile_tx, tile_rx) = channel::<Option<TileRequest>>();
         {
-            let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
+            let (ev_tx, ctx, activity, speed) = (ev_tx.clone(), ctx.clone(), activity.clone(), draft_speed.clone());
             thread::spawn(move || {
                 let cache = StageCache::default();
                 // Reduced copy of the full resolution for view drafts: (source, level, copy).
@@ -432,7 +454,11 @@ impl Workers {
                             let (x, y) = (region.x / level, region.y / level);
                             if x < lw && y < lh {
                                 let scaled = Region { x, y, w: region.w.div_ceil(level).min(lw - x), h: region.h.div_ceil(level).min(lh - y) };
+                                let t0 = Instant::now();
                                 let r = p.render(&src, Some(scaled), Some(&cache));
+                                if level > 1 {
+                                    speed.record(r.width * r.height, t0.elapsed());
+                                }
                                 let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
                                 let focus = (req.focus && level == 1).then(|| crate::focus::sharpness_of(&image, r.full_size.0.max(r.full_size.1)));
                                 let _ = ev_tx.send(Event::TileRendered {
@@ -516,7 +542,7 @@ impl Workers {
 
         let (render_tx, render_rx) = channel::<RenderJob>();
         {
-            let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
+            let (ev_tx, ctx, activity, speed) = (ev_tx.clone(), ctx.clone(), activity.clone(), draft_speed.clone());
             thread::spawn(move || {
                 let cache = StageCache::default();
                 // Drafts: reduced copy of the preview (made once per image and level) with its own stage cache.
@@ -564,9 +590,16 @@ impl Workers {
                                 small
                             }
                         };
-                        processor.render(&small, None, Some(&draft_cache))
+                        let t0 = Instant::now();
+                        let r = processor.render(&small, None, Some(&draft_cache));
+                        speed.record(r.width * r.height, t0.elapsed());
+                        r
                     } else {
-                        processor.render(&job.preview, None, Some(&cache))
+                        // Measured as well, so that the first drag already knows the speed.
+                        let t0 = Instant::now();
+                        let r = processor.render(&job.preview, None, Some(&cache));
+                        speed.record(r.width * r.height, t0.elapsed());
+                        r
                     };
                     let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
                     // Thumbnails and cached previews only from regular renderings (no drafts, overlays, warnings or crop tool view).
@@ -879,6 +912,7 @@ impl Workers {
             match_tx,
             inpaint_tx,
             activity,
+            draft_speed,
         }
     }
 

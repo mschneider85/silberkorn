@@ -217,6 +217,16 @@ impl App {
             a.show_navigator = !a.show_navigator;
             a.save_settings();
         }));
+        add(icon::SIDEBAR_SIMPLE, "Seitenleiste rechts: wenn Platz ist / immer / aus", g, "", true, "spalte histogramm rechts panel", Run(|a, _| {
+            use crate::side_column::SideColumn;
+            a.side_column = match a.side_column {
+                SideColumn::Auto => SideColumn::Always,
+                SideColumn::Always => SideColumn::Off,
+                SideColumn::Off => SideColumn::Auto,
+            };
+            a.status = a.side_column.label().into();
+            a.save_settings();
+        }));
         add(icon::CORNERS_OUT, "Einpassen", g, "", has, "fit zoom", Run(|a, _| a.zoom_fit()));
         add(icon::MAGNIFYING_GLASS_PLUS, "100 % Ansicht", g, "Z", has, "zoom", Run(|a, _| {
             a.zoom = None;

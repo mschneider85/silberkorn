@@ -607,8 +607,8 @@ impl App {
         let mut delete: Option<String> = None;
         let mut hovered: Option<(Style, bool)> = None;
         let current = self.current.as_ref().map(|c| c.adjustments.clone());
-        ui.label(RichText::new("Zeiger auf einen Stil: Vorschau im Bild. „Anwenden“ übernimmt ihn für die Auswahl.").color(Color32::from_gray(150)).small());
-        section(ui, "Filmsimulationen", None, |ui| {
+        let help = "Zeiger auf einen Stil: Vorschau im Bild. „Anwenden“ übernimmt ihn für die Auswahl.";
+        crate::widgets::section_help(ui, "Filmsimulationen", help, None, |ui| {
             for (style, description) in &self.film_looks {
                 let row = ui.horizontal(|ui| {
                     if ui.button("Anwenden").on_hover_text("Auf Auswahl anwenden").clicked() {

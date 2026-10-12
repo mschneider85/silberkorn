@@ -8,7 +8,7 @@ use sk_core::catalog::{Catalog, CullFilter, FaceRecord, Scope};
 
 use crate::app::App;
 use crate::theme::icon;
-use crate::widgets::section;
+use crate::widgets::section_help;
 
 /// Analyses one image: the camera preview is enough (and fast); without one, a rendering.
 fn analyze_file(models: &sk_ai::faces::FaceModels, path: &std::path::Path) -> anyhow::Result<sk_ai::faces::Analysis> {
@@ -101,8 +101,8 @@ impl App {
         let shown: Vec<&sk_core::catalog::ImageRecord> = self.visible.iter().map(|&i| &self.entries[i]).collect();
         let analysed = shown.iter().filter(|r| r.culling.is_some()).count();
         let count = |f: CullFilter| self.entries.iter().filter(|r| f.matches(r.culling.as_ref())).count();
-        section(ui, "Gesichter & Sichtung", None, |ui| {
-            ui.label(RichText::new("Erkennt Gesichter, geschlossene Augen und unscharfe Bilder und ordnet Gesichter Personen zu.").small().color(Color32::from_gray(150)));
+        let help = "Erkennt Gesichter, geschlossene Augen und unscharfe Bilder und ordnet Gesichter Personen zu.\n\nBeim ersten Mal werden die Modelle geladen (YuNet, SFace, open-closed-eye; zusammen etwa 40 MB).";
+        section_help(ui, "Gesichter & Sichtung", help, None, |ui| {
             ui.horizontal(|ui| {
                 if ui.button(format!("{}  Ansicht analysieren", icon::SCAN)).on_hover_text("Noch nicht analysierte Bilder dieser Ansicht").clicked() {
                     analyze = Some(false);
@@ -112,9 +112,6 @@ impl App {
                 }
             });
             ui.label(RichText::new(format!("{analysed} von {} analysiert", shown.len())).small().color(Color32::from_gray(150)));
-            if !sk_ai::faces::NEEDED.iter().all(|m| sk_ai::models::available(m)) {
-                ui.label(RichText::new("Beim ersten Mal werden die Modelle geladen (YuNet, SFace, open-closed-eye; zusammen etwa 40 MB).").small().color(Color32::from_gray(150)));
-            }
             ui.horizontal_wrapped(|ui| {
                 for f in CullFilter::ALL {
                     let on = self.filter.culling == Some(f);

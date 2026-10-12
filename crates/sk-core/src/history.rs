@@ -4,7 +4,7 @@
 use crate::params::Adjustments;
 
 /// "0,8", "-12", "1,25"
-fn number(v: f32) -> String {
+pub fn number(v: f32) -> String {
     let s = format!("{v:.2}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
     s.replace('.', ",")
@@ -12,6 +12,22 @@ fn number(v: f32) -> String {
 
 /// What changed from `before` to `after`, e.g. "Belichtung 0,8" or "Kontrast, Lichter".
 pub fn describe(before: &Adjustments, after: &Adjustments) -> String {
+    let mut changes = changes(before, after);
+    if changes.is_empty() && before != after {
+        changes.push(("Bearbeitung", None));
+    }
+    match changes.as_slice() {
+        [] => "Keine Änderung".into(),
+        [(name, Some(v))] => format!("{name} {}", number(*v)),
+        [(a, _)] => a.to_string(),
+        [(a, _), (b, _)] => format!("{a}, {b}"),
+        [(a, _), (b, _), rest @ ..] => format!("{a}, {b} +{}", rest.len()),
+    }
+}
+
+/// The tools that differ between `before` and `after`, in panel order: the name and the new
+/// value if the tool is a single number.
+pub fn changes(before: &Adjustments, after: &Adjustments) -> Vec<(&'static str, Option<f32>)> {
     let (a, b) = (before, after);
     // (name, new value if it is a single number)
     let mut changes: Vec<(&'static str, Option<f32>)> = Vec::new();
@@ -70,16 +86,8 @@ pub fn describe(before: &Adjustments, after: &Adjustments) -> String {
     push(a.black_white != b.black_white, "Schwarzweiß", None);
     push(a.layers != b.layers, "Ebenen", None);
     push(a.retouch != b.retouch, "Retusche", None);
-    if changes.is_empty() && a != b {
-        changes.push(("Bearbeitung", None));
-    }
-    match changes.as_slice() {
-        [] => "Keine Änderung".into(),
-        [(name, Some(v))] => format!("{name} {}", number(*v)),
-        [(a, _)] => a.to_string(),
-        [(a, _), (b, _)] => format!("{a}, {b}"),
-        [(a, _), (b, _), rest @ ..] => format!("{a}, {b} +{}", rest.len()),
-    }
+    push(a.removals != b.removals, "Entfernen", None);
+    changes
 }
 
 #[cfg(test)]

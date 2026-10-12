@@ -4,7 +4,7 @@
 use sk_core::mask;
 use sk_core::params::{BrushStroke, Layer, LayerAdjustments, LinearGradient, Mask, RadialGradient, Spot, SpotMode};
 use sk_core::pipeline::{Processor, RenderOptions};
-use egui::{Color32, Pos2, Rect, Response, RichText, Stroke, Ui, Vec2, vec2};
+use egui::{Color32, Pos2, Rect, Response, Stroke, Ui, Vec2, pos2, vec2};
 
 use crate::app::App;
 use crate::widgets::{section, slider_row};
@@ -173,7 +173,6 @@ pub fn brush_controls(ui: &mut Ui, b: &mut BrushSettings, tool: Option<LocalTool
         ui.checkbox(&mut b.auto_mask, "Automatisch maskieren")
             .on_hover_text("Wirkt nur dort, wo das Bild der Stelle unter der Pinselmitte ähnelt (Kanten werden respektiert)");
     }
-    ui.label(RichText::new("[ und ] ändern die Größe · Doppelklick auf einen Regler: Standard").small().color(crate::theme::TEXT_FAINT));
     *b != before
 }
 
@@ -733,9 +732,10 @@ impl App {
         let selected = self.selected_spot;
         let Some(cur) = self.current.as_mut() else { return };
         let spots = &mut cur.adjustments.retouch;
-        section(ui, "Reparieren & Klonen", None, |ui| {
+        let help = "Mit Reparieren (H) oder Klonen (S) über eine Stelle malen; die Quelle wird automatisch gewählt. Pins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · Entf: löschen";
+        crate::widgets::section_help(ui, "Reparieren & Klonen", help, None, |ui| {
             if spots.is_empty() {
-                crate::widgets::hint(ui, "Noch keine. Mit Reparieren (H) oder Klonen (S) über eine Stelle malen.");
+                crate::widgets::hint(ui, "Noch keine.");
                 return;
             }
             for (i, s) in spots.iter().enumerate() {
@@ -818,6 +818,110 @@ impl App {
         }
     }
 
+    /// Layer overview: one row per layer with visibility toggle and delete button.
+    pub(crate) fn layer_list(&mut self, ui: &mut Ui) -> Option<LayerAction> {
+        use crate::theme::{self, icon};
+        let cur = self.current.as_ref()?;
+        let layers = &cur.adjustments.layers;
+        let mut action = None;
+        let title = if layers.is_empty() { "Ebenen".to_string() } else { format!("Ebenen ({})", layers.len()) };
+        let help = "Oberste Ebene zuerst. Auge: ein-/ausblenden · Papierkorb: löschen · Klick: Ebene wählen, ihre Einstellungen erscheinen darunter.\n\nPinsel, Verlauf und Magic Brush legen automatisch eine Ebene an, wenn keine gewählt ist.";
+        crate::widgets::section_help(ui, &title, help, None, |ui| {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            let w = ui.available_width();
+            let row = |ui: &mut Ui, id: usize, name: &str, sub: &str, selected: bool, state: Option<(bool, f32)>| {
+                let h = if sub.is_empty() { 28.0 } else { 38.0 };
+                let (rect, resp) = ui.allocate_exact_size(vec2(w, h), egui::Sense::click());
+                let ctrl = |ui: &mut Ui, r: Rect, tag: &str| ui.interact(r, ui.id().with((tag, id)), egui::Sense::click());
+                let eye_rect = Rect::from_min_size(rect.min + vec2(4.0, (h - 24.0) / 2.0), vec2(24.0, 24.0));
+                let bin_rect = Rect::from_min_size(pos2(rect.right() - 28.0, rect.top() + (h - 24.0) / 2.0), vec2(24.0, 24.0));
+                let enabled = state.map(|s| s.0);
+                let eye = state.map(|_| ctrl(ui, eye_rect, "eye"));
+                let bin = state.map(|_| ctrl(ui, bin_rect, "bin"));
+                let p = ui.painter();
+                let fill = if selected {
+                    theme::ACCENT_SOFT
+                } else if resp.hovered() {
+                    Color32::from_rgb(54, 54, 60)
+                } else {
+                    Color32::TRANSPARENT
+                };
+                p.rect_filled(rect, 6.0, fill);
+                let on = enabled.unwrap_or(true);
+                let text_color = if on { theme::TEXT } else { theme::TEXT_FAINT };
+                if let (Some(enabled), Some(eye)) = (enabled, &eye) {
+                    let c = if eye.hovered() { Color32::WHITE } else if enabled { theme::TEXT_DIM } else { theme::TEXT_FAINT };
+                    let ic = if enabled { icon::EYE } else { icon::EYE_CLOSED };
+                    p.text(eye_rect.center(), egui::Align2::CENTER_CENTER, ic, egui::FontId::proportional(16.0), c);
+                }
+                if let Some(bin) = &bin
+                    && (resp.hovered() || bin.hovered() || selected)
+                {
+                    let c = if bin.hovered() { theme::DANGER } else { theme::TEXT_FAINT };
+                    p.text(bin_rect.center(), egui::Align2::CENTER_CENTER, icon::TRASH, egui::FontId::proportional(15.0), c);
+                }
+                // Opacity: number plus a thin bar, always visible.
+                let mut right = bin_rect.left() - 4.0;
+                if let Some((on, opacity)) = state {
+                    let c = if on { theme::TEXT_DIM } else { theme::TEXT_FAINT };
+                    let g = p.layout_no_wrap(format!("{opacity:.0} %"), egui::FontId::proportional(11.5), c);
+                    let bar = Rect::from_min_size(pos2(right - 36.0, rect.center().y + 7.0), vec2(36.0, 3.0));
+                    p.galley(pos2(bar.right() - g.size().x, rect.center().y - g.size().y + 3.0), g, c);
+                    p.rect_filled(bar, 1.5, Color32::from_rgb(60, 60, 66));
+                    let mut fill = bar;
+                    fill.set_width(bar.width() * (opacity / 100.0).clamp(0.0, 1.0));
+                    p.rect_filled(fill, 1.5, if on { theme::ACCENT } else { theme::TEXT_FAINT });
+                    right = bar.left() - 6.0;
+                }
+                let x = eye_rect.right() + 6.0;
+                let max_w = right - x;
+                let line = |text: &str, size: f32, color: Color32| {
+                    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), egui::FontId::proportional(size), color);
+                    job.wrap = egui::text::TextWrapping::truncate_at_width(max_w);
+                    p.layout_job(job)
+                };
+                if sub.is_empty() {
+                    let g = line(name, 13.0, text_color);
+                    p.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, text_color);
+                } else {
+                    let g = line(name, 13.0, text_color);
+                    p.galley(pos2(x, rect.top() + 4.0), g, text_color);
+                    let g = line(sub, 11.0, theme::TEXT_FAINT);
+                    p.galley(pos2(x, rect.bottom() - 17.0), g, theme::TEXT_FAINT);
+                }
+                (resp, eye, bin)
+            };
+            // The topmost layer first, the background at the bottom.
+            for (i, l) in layers.iter().enumerate().rev() {
+                let (resp, eye, bin) = row(ui, i, &l.name, &layer_summary(l), self.active_layer == Some(i), Some((l.enabled, l.opacity)));
+                if eye.is_some_and(|r| r.on_hover_text(if l.enabled { "Ausblenden" } else { "Einblenden" }).clicked()) {
+                    action = Some(LayerAction::Toggle(i));
+                } else if bin.is_some_and(|r| r.on_hover_text("Ebene löschen").clicked()) {
+                    action = Some(LayerAction::Delete(i));
+                } else if resp.clicked() {
+                    action = Some(LayerAction::Select(Some(i)));
+                }
+            }
+            let (bg, _, _) = row(ui, usize::MAX, "Hintergrund", "", self.active_layer.is_none(), None);
+            if bg.clicked() {
+                action = Some(LayerAction::Select(None));
+            }
+            if layers.is_empty() {
+                crate::widgets::hint(ui, "Noch keine Ebenen.");
+            }
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button(format!("{}  Ebene", icon::PLUS)).on_hover_text("Leere Ebene, dann malen").clicked() {
+                    action = Some(LayerAction::Add(false));
+                }
+                if ui.button(format!("{}  Gefüllt", icon::PLUS)).on_hover_text("Ebene mit gefüllter Maske: wirkt auf das ganze Bild").clicked() {
+                    action = Some(LayerAction::Add(true));
+                }
+            });
+        });
+        action
+    }
+
     // ---------------------------------------------------------------- tab
 
     pub fn layers_tab(&mut self, ui: &mut Ui) {
@@ -825,99 +929,11 @@ impl App {
             crate::widgets::no_image(ui);
             return;
         }
-        let mut tool_click = None;
-        let mut brushes_changed = false;
-        section(ui, "Werkzeuge", None, |ui| {
-            let tools = [
-                [LocalTool::Brush, LocalTool::Eraser, LocalTool::Linear, LocalTool::Radial],
-                [LocalTool::Magic, LocalTool::Heal, LocalTool::Clone, LocalTool::Remove],
-            ];
-            let gap = 4.0;
-            let w = ((ui.available_width() - 3.0 * gap) / 4.0).floor();
-            for row in tools {
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = gap;
-                    for t in row {
-                        let (ic, name, key) = t.tile();
-                        let hover = if key.is_empty() { name.to_string() } else { format!("{name} ({key})") };
-                        if crate::widgets::tool_tile(ui, ic, name, key, self.local_tool == Some(t), w).on_hover_text(hover).clicked() {
-                            tool_click = Some(t);
-                        }
-                    }
-                });
-            }
-            ui.add_space(4.0);
-            match self.local_tool {
-                Some(t @ (LocalTool::Brush | LocalTool::Eraser)) => {
-                    brushes_changed |= brush_controls(ui, self.brushes.of(Some(t)), Some(t), true);
-                }
-                Some(t @ (LocalTool::Heal | LocalTool::Clone)) => {
-                    brushes_changed |= brush_controls(ui, self.brushes.of(Some(t)), Some(t), false);
-                    crate::widgets::hint(ui, "Über die Stelle malen, die Quelle wird automatisch gewählt. Pins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · Entf: löschen");
-                }
-                Some(LocalTool::Magic) => {
-                    let d = Brushes::defaults_of(Some(LocalTool::Magic));
-                    brushes_changed |= slider_row(ui, "Größe", &mut self.brushes.magic.size, 2.0..=400.0, d.size, 0);
-                    slider_row(ui, "Toleranz", &mut self.magic_tolerance, 0.0..=1.0, 0.3, 2);
-                    crate::widgets::hint(ui, "Über den Bereich malen: ähnliche, zusammenhängende Farben werden ausgewählt. Weitere Striche erweitern die Auswahl.");
-                }
-                _ => {}
-            }
-        });
-        if let Some(t) = tool_click {
-            self.set_local_tool(t);
-        }
-        if brushes_changed {
-            self.brushes_changed_at = Some(std::time::Instant::now());
-        }
-        self.remove_section(ui);
-
-        let mut style = None;
-        crate::widgets::section_with(ui, "Style Brushes", false, None, |ui| {
-            crate::widgets::hint(ui, "Neue Ebene mit fertigen Einstellungen, dann malen");
-            ui.horizontal_wrapped(|ui| {
-                for (name, adj) in STYLE_BRUSHES {
-                    if ui.button(*name).clicked() {
-                        style = Some((*name, *adj));
-                    }
-                }
-            });
-        });
-        if let Some((name, adj)) = style {
-            self.add_style_brush(name, adj);
-        }
-
-        // Layer list.
-        let mut action: Option<LayerAction> = None;
+        let action = self.layer_list(ui);
+        // Options of the active layer directly below the list.
         let Some(cur) = self.current.as_mut() else { return };
         let layers = &mut cur.adjustments.layers;
         let mut changed = false;
-        section(ui, "Ebenen", None, |ui| {
-            if ui.selectable_label(self.active_layer.is_none(), "Hintergrund").clicked() {
-                action = Some(LayerAction::Select(None));
-            }
-            for (i, l) in layers.iter_mut().enumerate() {
-                ui.horizontal(|ui| {
-                    changed |= ui.checkbox(&mut l.enabled, "").on_hover_text("Ebene ein/aus").changed();
-                    let edited = if l.mask.is_empty() { " (leere Maske)" } else { "" };
-                    if ui.selectable_label(self.active_layer == Some(i), format!("{}{edited}", l.name)).clicked() {
-                        action = Some(LayerAction::Select(Some(i)));
-                    }
-                });
-            }
-            ui.horizontal(|ui| {
-                if ui.button("+ Ebene").clicked() {
-                    action = Some(LayerAction::Add(false));
-                }
-                if ui.button("+ Gefüllt").on_hover_text("Ebene mit gefüllter Maske").clicked() {
-                    action = Some(LayerAction::Add(true));
-                }
-                if self.active_layer.is_some() && ui.button("\u{E4A6}  Löschen").clicked() {
-                    action = Some(LayerAction::Delete);
-                }
-            });
-        });
-
         if let Some(li) = self.active_layer.filter(|i| *i < layers.len()) {
             let layer = &mut layers[li];
             let show_mask = &mut self.show_mask;
@@ -965,7 +981,71 @@ impl App {
         if changed {
             self.request_render();
         }
+        let mut tool_click = None;
+        let mut brushes_changed = false;
+        let help = "Pinsel, Radierer, Verläufe und Magic Brush malen die Maske der gewählten Ebene.\n\n[ und ] ändern die Pinselgröße · Doppelklick auf einen Regler: Standard.\n\nMagic Brush: ähnliche, zusammenhängende Farben werden ausgewählt; weitere Striche erweitern die Auswahl.";
+        crate::widgets::section_help(ui, "Werkzeuge", help, None, |ui| {
+            let tools = [
+                [LocalTool::Brush, LocalTool::Eraser, LocalTool::Linear, LocalTool::Radial],
+                [LocalTool::Magic, LocalTool::Heal, LocalTool::Clone, LocalTool::Remove],
+            ];
+            let gap = 4.0;
+            let w = ((ui.available_width() - 3.0 * gap) / 4.0).floor();
+            for row in tools {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = gap;
+                    for t in row {
+                        let (ic, name, key) = t.tile();
+                        let hover = if key.is_empty() { name.to_string() } else { format!("{name} ({key})") };
+                        if crate::widgets::tool_tile(ui, ic, name, key, self.local_tool == Some(t), w).on_hover_text(hover).clicked() {
+                            tool_click = Some(t);
+                        }
+                    }
+                });
+            }
+            ui.add_space(4.0);
+            match self.local_tool {
+                Some(t @ (LocalTool::Brush | LocalTool::Eraser)) => {
+                    brushes_changed |= brush_controls(ui, self.brushes.of(Some(t)), Some(t), true);
+                }
+                Some(t @ (LocalTool::Heal | LocalTool::Clone)) => {
+                    brushes_changed |= brush_controls(ui, self.brushes.of(Some(t)), Some(t), false);
+                }
+                Some(LocalTool::Magic) => {
+                    let d = Brushes::defaults_of(Some(LocalTool::Magic));
+                    brushes_changed |= slider_row(ui, "Größe", &mut self.brushes.magic.size, 2.0..=400.0, d.size, 0);
+                    slider_row(ui, "Toleranz", &mut self.magic_tolerance, 0.0..=1.0, 0.3, 2);
+                }
+                _ => {}
+            }
+        });
+        if let Some(t) = tool_click {
+            self.set_local_tool(t);
+        }
+        if brushes_changed {
+            self.brushes_changed_at = Some(std::time::Instant::now());
+        }
+        self.remove_section(ui);
+
+        let mut style = None;
+        crate::widgets::section_full(ui, "Style Brushes", false, Some("Neue Ebene mit fertigen Einstellungen, dann malen"), None, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (name, adj) in STYLE_BRUSHES {
+                    if ui.button(*name).clicked() {
+                        style = Some((*name, *adj));
+                    }
+                }
+            });
+        });
+        if let Some((name, adj)) = style {
+            self.add_style_brush(name, adj);
+        }
+
         self.retouch_section(ui);
+        self.apply_layer_action(action);
+    }
+
+    pub(crate) fn apply_layer_action(&mut self, action: Option<LayerAction>) {
         match action {
             Some(LayerAction::Select(i)) => {
                 self.active_layer = i;
@@ -980,24 +1060,66 @@ impl App {
                     self.request_render();
                 }
             }
-            Some(LayerAction::Delete) => {
-                if let Some(i) = self.active_layer.take() {
-                    self.edit(|a| {
-                        if i < a.layers.len() {
-                            a.layers.remove(i);
-                        }
-                    });
-                }
+            Some(LayerAction::Toggle(i)) => {
+                self.edit(|a| {
+                    if let Some(l) = a.layers.get_mut(i) {
+                        l.enabled = !l.enabled;
+                    }
+                });
+            }
+            Some(LayerAction::Delete(i)) => {
+                self.active_layer = match self.active_layer {
+                    Some(a) if a == i => None,
+                    Some(a) if a > i => Some(a - 1),
+                    a => a,
+                };
+                self.edit(|a| {
+                    if i < a.layers.len() {
+                        a.layers.remove(i);
+                    }
+                });
             }
             None => {}
         }
     }
 }
 
-enum LayerAction {
+pub(crate) enum LayerAction {
     Select(Option<usize>),
     Add(bool),
-    Delete,
+    Toggle(usize),
+    Delete(usize),
+}
+
+/// Short description of what a layer's mask consists of, e.g. "Pinsel · Verlauf".
+fn layer_summary(l: &Layer) -> String {
+    let m = &l.mask;
+    let mut parts: Vec<String> = Vec::new();
+    if m.fill {
+        parts.push("Gefüllt".into());
+    }
+    if !m.strokes.is_empty() {
+        parts.push("Pinsel".into());
+    }
+    if !m.linear.is_empty() {
+        parts.push("Verlauf".into());
+    }
+    if !m.radial.is_empty() {
+        parts.push("Radial".into());
+    }
+    if m.ai.is_some() {
+        parts.push("KI-Maske".into());
+    }
+    if m.is_empty() {
+        parts.push("Leere Maske".into());
+    }
+    if m.luma_range.is_some() || m.color_range.is_some() {
+        parts.push("Bereich".into());
+    }
+    if m.invert {
+        parts.push("Invertiert".into());
+    }
+    parts.join(" · ")
 }
 
 /// Brush outline: the size, and inside it where the hard core ends.

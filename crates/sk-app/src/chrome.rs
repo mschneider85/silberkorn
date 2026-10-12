@@ -102,11 +102,7 @@ impl App {
     }
 
     pub fn reset_adjustments(&mut self) {
-        self.edit(|a| {
-            let mut n = Adjustments::default();
-            n.keep_geometry_from(a);
-            *a = n;
-        });
+        self.edit(|a| *a = Adjustments::default());
     }
 
     pub fn toggle_crop(&mut self) {
@@ -413,6 +409,13 @@ impl App {
             self.show_navigator = !self.show_navigator;
         }
         ui.separator();
+        for m in crate::side_column::SideColumn::ALL {
+            if check(ui, self.side_column == m, m.label(), "") {
+                self.side_column = m;
+                self.save_settings();
+            }
+        }
+        ui.separator();
         if check(ui, self.zoom.is_none(), "Einpassen", "") {
             self.zoom_fit();
         }
@@ -518,6 +521,8 @@ impl App {
     pub fn toolbar(&mut self, ui: &mut Ui) {
         let has = self.current.is_some();
         let ctx = ui.ctx().clone();
+        // Main image tools get a label when there is room for it.
+        let wide = ui.available_width() > 1350.0;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             if tool(ui, icon::FOLDER_OPEN, "Ordner öffnen (Strg+O)", false, true).clicked() {
@@ -549,13 +554,13 @@ impl App {
             if tool(ui, icon::ARROW_CLOCKWISE, "Rechts drehen (Strg+])", false, has).clicked() {
                 self.rotate(1);
             }
-            if tool(ui, icon::CROP, "Zuschneiden (C, Enter übernimmt)", self.crop_tool.is_some(), has).clicked() {
+            if labeled_tool(ui, wide, icon::CROP, "Zuschneiden", "Zuschneiden (C, Enter übernimmt)", self.crop_tool.is_some(), has).clicked() {
                 self.toggle_crop();
             }
-            if tool(ui, icon::RULER, "Geraderichten: eine Linie entlang des Horizonts ziehen", self.straighten_tool.is_some(), has).clicked() {
+            if labeled_tool(ui, wide, icon::RULER, "Ausrichten", "Geraderichten: eine Linie entlang des Horizonts ziehen", self.straighten_tool.is_some(), has).clicked() {
                 self.toggle_straighten();
             }
-            if tool(ui, icon::EYEDROPPER, "Weißabgleich-Pipette: auf eine neutrale Stelle klicken (W)", self.picking_wb, has).clicked() {
+            if labeled_tool(ui, wide, icon::EYEDROPPER, "Weißabgleich", "Weißabgleich-Pipette: auf eine neutrale Stelle klicken (W)", self.picking_wb, has).clicked() {
                 self.toggle_wb_picker();
                 if self.picking_wb {
                     self.tab = Tab::Color;
@@ -658,7 +663,7 @@ impl App {
                     ui.add_space(4.0);
                 }
                 let selected = self.tab == tab;
-                let (rect, resp) = ui.allocate_exact_size(vec2(40.0, 38.0), Sense::click());
+                let (rect, resp) = ui.allocate_exact_size(vec2(60.0, 46.0), Sense::click());
                 let painter = ui.painter();
                 let t = ui.ctx().animate_bool_with_time(resp.id, selected, 0.12);
                 if resp.hovered() && !selected {
@@ -666,11 +671,12 @@ impl App {
                 }
                 if t > 0.0 {
                     painter.rect_filled(rect, 7.0, theme::ACCENT_SOFT.gamma_multiply(t));
-                    let bar = egui::Rect::from_center_size(pos2(rect.left() - 2.0, rect.center().y), vec2(3.0, 20.0 * t));
+                    let bar = egui::Rect::from_center_size(pos2(rect.left() - 2.0, rect.center().y), vec2(3.0, 24.0 * t));
                     painter.rect_filled(bar, 1.5, theme::ACCENT);
                 }
                 let color = if selected { Color32::WHITE } else if resp.hovered() { theme::TEXT } else { theme::TEXT_DIM };
-                painter.text(rect.center(), egui::Align2::CENTER_CENTER, tab.icon(), egui::FontId::proportional(20.0), color);
+                painter.text(rect.center() - vec2(0.0, 7.0), egui::Align2::CENTER_CENTER, tab.icon(), egui::FontId::proportional(19.0), color);
+                painter.text(rect.center_bottom() - vec2(0.0, 9.0), egui::Align2::CENTER_CENTER, tab.short_title(), egui::FontId::proportional(10.0), color);
                 let key = crate::palette::tab_shortcut(i);
                 if resp.on_hover_text(format!("{}  ({key})", tab.title())).clicked() {
                     self.tab = tab;
@@ -958,6 +964,17 @@ fn check(ui: &mut Ui, on: bool, text: &str, shortcut: &str) -> bool {
 fn tool(ui: &mut Ui, ic: &str, hover: &str, active: bool, enabled: bool) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 28.0), if enabled { Sense::click() } else { Sense::hover() });
     paint_tool(ui, rect, &resp, ic, "", active, enabled, 7.0);
+    resp.on_hover_text(hover)
+}
+
+/// [`tool`] with its name next to the icon when `with_label`.
+fn labeled_tool(ui: &mut Ui, with_label: bool, ic: &str, label: &str, hover: &str, active: bool, enabled: bool) -> egui::Response {
+    if !with_label {
+        return tool(ui, ic, hover, active, enabled);
+    }
+    let w = ui.painter().layout_no_wrap(label.to_string(), FontId::proportional(13.0), Color32::WHITE).size().x;
+    let (rect, resp) = ui.allocate_exact_size(vec2(w + 42.0, 28.0), if enabled { Sense::click() } else { Sense::hover() });
+    paint_tool(ui, rect, &resp, ic, label, active, enabled, 7.0);
     resp.on_hover_text(hover)
 }
 
