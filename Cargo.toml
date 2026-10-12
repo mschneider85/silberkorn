@@ -14,3 +14,8 @@ debug = "line-tables-only"
 [profile.dev.package."*"]
 opt-level = 3
 debug = false
+
+# The pipeline is too slow unoptimized: the tests (and the app in dev builds) push real raw files
+# through it. Rebuilding sk-core after a change still takes only seconds.
+[profile.dev.package.sk-core]
+opt-level = 3

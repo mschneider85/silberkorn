@@ -151,7 +151,11 @@ pub struct Curves {
 /// 1. Original renderer.
 /// 2. Colors outside the output space are desaturated towards their own luminance (hue kept)
 ///    instead of clipped per channel, which shifted the hue of saturated light.
-pub const PROCESS_LATEST: u32 = 2;
+/// 3. The tone curve keeps hues: it is applied to the largest and smallest channel and the
+///    middle one follows (instead of each channel on its own, which turned skin orange and
+///    skies cyan). Highlights/shadows work on a median of the brightness, so fine lines and
+///    texture keep their contrast.
+pub const PROCESS_LATEST: u32 = 3;
 /// Version of settings saved before process versions existed.
 pub const PROCESS_LEGACY: u32 = 1;
 
@@ -741,6 +745,11 @@ impl Adjustments {
     /// Colors outside the output space are mapped instead of clipped (process version 2).
     pub fn gamut_mapping(&self) -> bool {
         self.process >= 2
+    }
+
+    /// Hue-preserving tone curve and median-based highlights/shadows (process version 3).
+    pub fn process_3(&self) -> bool {
+        self.process >= 3
     }
 
     /// Copies the image-specific settings (rotation, crop, layers, retouching) from `other`.

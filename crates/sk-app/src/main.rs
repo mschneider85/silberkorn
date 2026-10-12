@@ -7,6 +7,7 @@ mod app;
 mod app_tests;
 mod browser;
 mod chrome;
+mod commands;
 mod compare;
 mod crop;
 mod culling;

@@ -40,7 +40,8 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             c = gamut_map(c, dot(lin, LUMA));
         }
         c = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
-        o = vec4<f32>(trc_encode(c.x), trc_encode(c.y), trc_encode(c.z), 0.0);
+        // w = 1 marks the pixel as written (checked on the CPU).
+        o = vec4<f32>(trc_encode(c.x), trc_encode(c.y), trc_encode(c.z), 1.0);
     }
     out[gid.y * a.w + gid.x] = o;
 }

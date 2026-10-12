@@ -3,12 +3,10 @@
 //! "rausch", "hdr") is often quicker than knowing where it lives.
 
 use egui::{Align2, Color32, Id, Key, Modifiers, Order, Rect, RichText, Sense, Ui, vec2};
-use sk_core::sidecar::ColorLabel;
 
 use crate::app::{App, Tab};
 use crate::develop_tools::Auto;
 use crate::guides::Guides;
-use crate::layers::LocalTool;
 use crate::theme::{self, icon};
 
 #[derive(Default)]
@@ -48,13 +46,12 @@ impl Palette {
 
 #[derive(Clone, Copy)]
 enum Action {
+    /// A command of the command list, by id.
+    Command(&'static str),
     Tab(Tab),
     /// Opens the tab and jumps to the section with this title.
     Section(Tab, &'static str),
     Run(fn(&mut App, &egui::Context)),
-    Local(LocalTool),
-    Rating(u8),
-    Label(ColorLabel),
     Guides(Guides),
     Auto(Auto),
 }
@@ -116,8 +113,6 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
 impl App {
     fn commands(&self) -> Vec<Command> {
         let has = self.current.is_some();
-        let n_sel = self.selected_paths().len();
-        let files = sk_core::variant::files_of(&self.selected_paths()).len();
         let mut v = Vec::new();
         let mut add = |icon, label: &str, group, shortcut: &str, enabled, keywords, action| {
             v.push(Command { icon, label: label.to_string(), group, shortcut: shortcut.to_string(), enabled, keywords, action });
@@ -132,146 +127,34 @@ impl App {
             add(tab.icon(), title, tab.title(), "", true, keywords, Action::Section(tab, title));
         }
 
-        let g = "Datei";
-        add(icon::FOLDER_OPEN, "Ordner öffnen …", g, "Strg+O", true, "open", Run(|a, _| a.open_folder_dialog()));
+        // Everything in the command list (see `commands`), with the same shortcuts as the keyboard.
+        for c in crate::commands::COMMANDS {
+            add(c.icon, c.label, c.group, &c.shortcut(), (c.enabled)(self), c.keywords, Action::Command(c.id));
+        }
+
+        // Entries that only the palette offers.
         let import = if self.session.is_some() { "In Session importieren …" } else { "Ordner in Katalog importieren …" };
-        add(icon::FOLDER_PLUS, import, g, "", true, "import", Run(|a, _| a.import_folder_dialog()));
-        add(icon::FOLDER_STAR, "Neue Session …", g, "Strg+N", true, "session", Run(|a, _| {
-            let folder = a.folder.clone();
-            a.session_ui.start_new(&folder);
-        }));
-        add(icon::FOLDER_OPEN, "Session öffnen …", g, "Strg+Umschalt+O", true, "session", Run(|a, _| a.open_session_dialog()));
-        add(icon::EXPORT, "Verarbeiten (exportieren)", g, "Strg+D", n_sel > 0, "export ausgabe speichern", Run(|a, _| a.export_selection()));
-
-        let g = "Bearbeiten";
-        add(icon::ARROW_U_UP_LEFT, "Rückgängig", g, "Strg+Z", self.can_undo(), "undo", Run(|a, _| a.undo()));
-        add(icon::ARROW_U_UP_RIGHT, "Wiederholen", g, "Strg+Y", !self.redo.is_empty(), "redo", Run(|a, _| a.redo()));
-        add(icon::COPY, "Anpassungen kopieren", g, "Strg+Umschalt+C", has, "copy", Run(|a, _| a.copy_adjustments()));
-        add(icon::CLIPBOARD_TEXT, "Anpassungen auf Auswahl anwenden", g, "Strg+Umschalt+V", self.clipboard.is_some(), "paste einfügen", Run(|a, _| a.paste_adjustments()));
-        add(icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", g, "", has, "reset", Run(|a, _| a.reset_adjustments()));
-        add(icon::CHECK_SQUARE, "Alle auswählen", g, "Strg+A", !self.visible.is_empty(), "select all", Run(|a, _| a.select_all()));
-        add(icon::LIGHTNING, "Grafikkarte …", g, "", true, "gpu grafikkarte", Run(|a, _| a.show_gpu_dialog = true));
-
+        add(icon::FOLDER_PLUS, import, "Datei", "", true, "import", Run(|a, _| a.import_folder_dialog()));
         let g = "Bild";
         add(icon::MAGIC_WAND, "Auto Belichtung", g, "", has, "automatisch exposure", Action::Auto(Auto::Exposure));
         add(icon::MAGIC_WAND, "Auto Levels", g, "", has, "automatisch tonwerte", Action::Auto(Auto::Levels));
         add(icon::MAGIC_WAND, "Auto Weißabgleich", g, "", has, "automatisch wb white balance", Action::Auto(Auto::WhiteBalance));
-        add(icon::ARROW_COUNTER_CLOCKWISE, "Links drehen", g, "Strg+[", has, "rotate", Run(|a, _| a.rotate(3)));
-        add(icon::ARROW_CLOCKWISE, "Rechts drehen", g, "Strg+]", has, "rotate", Run(|a, _| a.rotate(1)));
-        add(icon::CROP, "Zuschneiden", g, "C", has, "crop", Run(|a, _| a.toggle_crop()));
-        add(icon::RULER, "Geraderichten (Linie ziehen)", g, "", has, "straighten horizont", Run(|a, _| {
-            a.tab = Tab::Lens;
-            a.toggle_straighten();
-        }));
-        add(icon::PERSPECTIVE, "Automatisch geraderichten", g, "Umschalt+A", has, "upright", Run(|a, _| a.auto_upright(sk_core::upright::UprightMode::Vertical)));
-        add(icon::EYEDROPPER, "Weißabgleich-Pipette", g, "W", has, "white balance wb", Run(|a, _| {
-            a.tab = Tab::Color;
-            if !a.picking_wb {
-                a.toggle_wb_picker();
-            }
-        }));
-        add(icon::PENCIL_SIMPLE, "Umbenennen …", g, "Strg+Umschalt+R", n_sel > 0, "rename", Run(|a, _| a.open_rename()));
-        add(icon::ARROW_CIRCLE_UP, "Auf aktuelle Prozessversion heben", g, "", n_sel > 0, "prozessversion engine update", Run(|a, _| a.update_process_version()));
-        for r in 0..=5u8 {
-            let label = if r == 0 { "Bewertung entfernen".to_string() } else { format!("Bewertung {}", "★".repeat(r as usize)) };
-            add(icon::STAR, &label, g, &r.to_string(), n_sel > 0, "sterne rating", Action::Rating(r));
-        }
-        for (l, key) in [(ColorLabel::Red, "6"), (ColorLabel::Yellow, "7"), (ColorLabel::Green, "8"), (ColorLabel::Blue, "9"), (ColorLabel::None, "")] {
-            add(icon::TAG, &format!("Farb-Label: {}", l.label()), g, key, n_sel > 0, "farbe label", Action::Label(l));
-        }
-        add(icon::COPY_SIMPLE, "Neue Variante", g, "F2", has, "variant kopie", Run(|a, _| a.pending = Some(crate::session::PendingAction::NewVariant { clone: false })));
-        add(icon::COPY, "Variante klonen", g, "F3", has, "variant kopie", Run(|a, _| a.pending = Some(crate::session::PendingAction::NewVariant { clone: true })));
-        add(icon::STACK_PLUS, "Stapel bilden", g, "Strg+G", files >= 2, "stack gruppieren", Run(|a, _| a.run_stack_action(crate::stacks::StackAction::Create)));
-        add(icon::STACK_MINUS, "Stapel auflösen", g, "Strg+Umschalt+G", !self.selected_stack_ids().is_empty(), "stack", Run(|a, _| a.run_stack_action(crate::stacks::StackAction::Dissolve)));
-        add(icon::SUN_HORIZON, "HDR zusammenfügen …", g, "", files >= 2, "merge belichtungsreihe", Run(|a, _| a.open_merge(crate::merge::MergeKind::Hdr)));
-        add(icon::PANORAMA, "Panorama zusammenfügen …", g, "", files >= 2, "merge stitch", Run(|a, _| a.open_merge(crate::merge::MergeKind::Panorama)));
-        add(icon::SPARKLE, "Entrauschen (KI) …", g, "", n_sel > 0, "denoise rauschen", Run(|a, _| a.open_denoise()));
-        add(icon::PUSH_PIN, "Referenzbild festlegen / entfernen", g, "Umschalt+Enter", has, "vergleich compare", Run(|a, _| a.toggle_reference()));
-        add(icon::CARET_LEFT, "Vorheriges Bild", g, icon::ARROW_LEFT, !self.visible.is_empty(), "zurück previous", Run(|a, _| a.step(-1)));
-        add(icon::CARET_RIGHT, "Nächstes Bild", g, icon::ARROW_RIGHT, !self.visible.is_empty(), "weiter next", Run(|a, _| a.step(1)));
-        if self.session.is_some() {
-            add(icon::TRASH, "In den Session-Papierkorb", g, "Strg+Entf", n_sel > 0, "löschen delete", Run(|a, _| a.trash_selection()));
-        }
-
-        let g = "Ebenen & Retusche";
-        for (t, ic, label, key, kw) in [
-            (LocalTool::Brush, icon::PAINT_BRUSH, "Pinsel", "B", "brush maske malen"),
-            (LocalTool::Eraser, icon::ERASER, "Radierer", "N", "eraser maske"),
-            (LocalTool::Linear, icon::GRADIENT, "Linearer Verlauf", "L", "gradient verlaufsfilter"),
-            (LocalTool::Radial, icon::CIRCLE_DASHED, "Radialer Verlauf", "R", "radial"),
-            (LocalTool::Magic, icon::MAGIC_WAND, "Magic Brush", "J", "zauberstab auswahl"),
-            (LocalTool::Heal, icon::BANDAIDS, "Reparieren", "H", "heal flecken"),
-            (LocalTool::Clone, icon::STAMP, "Klonen", "S", "clone stempel"),
-            (LocalTool::Remove, icon::SPARKLE, "Entfernen (KI)", "X", "remove objekt"),
-        ] {
-            add(ic, label, g, key, has, kw, Action::Local(t));
-        }
-        add(icon::EYE, "Maske anzeigen", g, "M", self.active_layer.is_some(), "mask", Run(|a, _| {
-            a.show_mask = !a.show_mask;
-            a.request_render();
-        }));
-
-        let g = "Ansicht";
-        add(icon::SQUARES_FOUR, "Raster / Viewer umschalten", g, "G", true, "grid browser übersicht", Run(|a, _| a.grid_view = !a.grid_view));
-        add(icon::FILM_STRIP, "Filmstreifen ein/aus", g, "", true, "filmstrip", Run(|a, _| a.show_filmstrip = !a.show_filmstrip));
-        add(icon::MAP_TRIFOLD, "Navigator beim Zoomen", g, "", true, "minimap", Run(|a, _| {
-            a.show_navigator = !a.show_navigator;
-            a.save_settings();
-        }));
-        add(icon::SIDEBAR_SIMPLE, "Seitenleiste rechts: wenn Platz ist / immer / aus", g, "", true, "spalte histogramm rechts panel", Run(|a, _| {
-            use crate::side_column::SideColumn;
-            a.side_column = match a.side_column {
-                SideColumn::Auto => SideColumn::Always,
-                SideColumn::Always => SideColumn::Off,
-                SideColumn::Off => SideColumn::Auto,
-            };
-            a.status = a.side_column.label().into();
-            a.save_settings();
-        }));
-        add(icon::CORNERS_OUT, "Einpassen", g, "", has, "fit zoom", Run(|a, _| a.zoom_fit()));
-        add(icon::MAGNIFYING_GLASS_PLUS, "100 % Ansicht", g, "Z", has, "zoom", Run(|a, _| {
-            a.zoom = None;
-            a.toggle_zoom_100();
-        }));
-        add(icon::CIRCLE_HALF, "Vorher / Nachher", g, "Y", has, "before after vergleich", Run(|a, _| a.toggle_before()));
-        add(icon::SQUARE_SPLIT_HORIZONTAL, "Geteilter Vergleich", g, "U", has, "split vorher nachher", Run(|a, _| a.toggle_split()));
-        add(icon::COLUMNS, "Vorher | Nachher nebeneinander", g, "Umschalt+U", has, "side by side", Run(|a, _| a.toggle_side_by_side()));
-        add(icon::SQUARES_FOUR, "Auswahl nebeneinander vergleichen", g, "", true, "compare mehrere", Run(|a, _| a.multi_view = !a.multi_view));
-        add(icon::WARNING, "Belichtungswarnung", g, "E", has, "clipping überbelichtet", Run(|a, _| a.toggle_clip_warning()));
-        add(icon::CROSSHAIR, "Fokusmaske", g, "K", has, "schärfe focus peaking", Run(|a, _| a.toggle_focus_mask()));
-        add(icon::FILE_MAGNIFYING_GLASS, "Proof (Ausgabe-Rezept)", g, "P", has, "vorschau export", Run(|a, _| a.toggle_proof()));
-        add(icon::PRINTER, "Softproof", g, "Umschalt+P", has, "drucker profil gamut", Run(|a, _| a.toggle_softproof()));
         for gd in Guides::ALL {
             let label = if gd == Guides::Off { "Hilfslinien aus".to_string() } else { format!("Hilfslinien: {}", gd.label()) };
-            add(icon::GRID_NINE, &label, g, "", true, "guides raster drittel", Action::Guides(gd));
+            add(icon::GRID_NINE, &label, "Ansicht", "", true, "guides raster drittel", Action::Guides(gd));
         }
-        add(icon::IMAGE, "Overlay ein/aus", g, "Umschalt+O", true, "layout png", Run(|a, _| a.toggle_overlay()));
-        add(icon::IMAGE, "Overlay wählen …", g, "", true, "layout png", Run(|a, _| a.choose_overlay()));
-        add(icon::MONITOR, "Viewer in eigenem Fenster", g, "Umschalt+F11", true, "zweitmonitor", Run(|a, _| a.toggle_viewer_window()));
-        add(icon::ARROWS_OUT, "Vollbild ohne Ablenkung", g, "F11", true, "fullscreen", Run(|a, ctx| a.toggle_fullscreen(ctx)));
-
-        let g = "Hilfe";
-        add(icon::KEYBOARD, "Tastenkürzel", g, "F1", true, "shortcuts hilfe", Run(|a, _| a.show_shortcuts = true));
-        add(icon::INFO, "Über Silberkorn", g, "", true, "about version", Run(|a, _| a.splash = Some(crate::splash::Splash::about())));
         v
     }
 
     fn run_command(&mut self, ctx: &egui::Context, action: Action) {
         match action {
+            Action::Command(id) => self.run_command_id(ctx, id),
             Action::Tab(tab) => self.tab = tab,
             Action::Section(tab, title) => {
                 self.tab = tab;
                 crate::widgets::reveal_section(ctx, title);
             }
             Action::Run(f) => f(self, ctx),
-            Action::Local(t) => {
-                self.tab = Tab::Layers;
-                if self.local_tool != Some(t) {
-                    self.set_local_tool(t);
-                }
-            }
-            Action::Rating(r) => self.set_rating(r),
-            Action::Label(l) => self.set_color_label(l),
             Action::Guides(g) => {
                 self.guides = g;
                 self.save_settings();
@@ -507,7 +390,7 @@ mod tests {
     use super::*;
 
     fn cmd(label: &str, keywords: &'static str) -> Command {
-        Command { icon: "", label: label.into(), group: "Test", shortcut: String::new(), enabled: true, keywords, action: Action::Rating(0) }
+        Command { icon: "", label: label.into(), group: "Test", shortcut: String::new(), enabled: true, keywords, action: Action::Command("reset") }
     }
 
     #[test]

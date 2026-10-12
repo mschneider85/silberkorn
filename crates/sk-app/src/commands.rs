@@ -1,0 +1,287 @@
+//! Every command in one place: label, menu group, keyboard shortcuts, when it is available and
+//! what it does. The keyboard, the command palette and the menus all run commands from here, so
+//! they can't drift apart (a shortcut shown in a menu is the one that works).
+
+use egui::{Key, Modifiers};
+use sk_core::sidecar::ColorLabel;
+
+use crate::app::{App, Tab};
+use crate::layers::LocalTool;
+use crate::theme::icon;
+
+pub struct Command {
+    pub id: &'static str,
+    pub icon: &'static str,
+    pub label: &'static str,
+    /// Group in the palette (and the menu it belongs to).
+    pub group: &'static str,
+    /// Shortcuts; the first one is shown.
+    pub keys: &'static [(Modifiers, Key)],
+    /// Further search terms for the palette.
+    pub keywords: &'static str,
+    pub enabled: fn(&App) -> bool,
+    pub run: fn(&mut App, &egui::Context),
+}
+
+const NONE: Modifiers = Modifiers::NONE;
+const CTRL: Modifiers = Modifiers::COMMAND;
+const SHIFT: Modifiers = Modifiers::SHIFT;
+const CTRL_SHIFT: Modifiers = Modifiers::COMMAND.plus(Modifiers::SHIFT);
+
+fn always(_: &App) -> bool {
+    true
+}
+fn has_image(a: &App) -> bool {
+    a.current.is_some()
+}
+fn has_selection(a: &App) -> bool {
+    !a.selection.is_empty() || a.current.is_some()
+}
+fn has_images(a: &App) -> bool {
+    !a.visible.is_empty()
+}
+fn several_files(a: &App) -> bool {
+    sk_core::variant::files_of(&a.selected_paths()).len() >= 2
+}
+fn in_session(a: &App) -> bool {
+    a.session.is_some() && has_selection(a)
+}
+
+fn tool(a: &mut App, t: LocalTool) {
+    a.tab = Tab::Layers;
+    if a.local_tool != Some(t) {
+        a.set_local_tool(t);
+    }
+}
+
+fn brush_size(a: &mut App, factor: f32) {
+    let b = a.brushes.of(a.local_tool);
+    b.size = (b.size * factor).clamp(2.0, 400.0);
+    a.brushes_changed_at = Some(std::time::Instant::now());
+}
+
+macro_rules! cmd {
+    ($id:literal, $icon:expr, $label:literal, $group:literal, [$($m:expr => $k:expr),*], $kw:literal, $enabled:expr, $run:expr) => {
+        Command { id: $id, icon: $icon, label: $label, group: $group, keys: &[$(($m, $k)),*], keywords: $kw, enabled: $enabled, run: $run }
+    };
+}
+
+pub const COMMANDS: &[Command] = &[
+    // Datei
+    cmd!("open-folder", icon::FOLDER_OPEN, "Ordner öffnen …", "Datei", [CTRL => Key::O], "open", always, |a, _| a.open_folder_dialog()),
+    cmd!("new-session", icon::FOLDER_STAR, "Neue Session …", "Datei", [CTRL => Key::N], "session", always, |a, _| {
+        let folder = a.folder.clone();
+        a.session_ui.start_new(&folder);
+    }),
+    cmd!("open-session", icon::FOLDER_OPEN, "Session öffnen …", "Datei", [CTRL_SHIFT => Key::O], "session", always, |a, _| a.open_session_dialog()),
+    cmd!("export", icon::EXPORT, "Verarbeiten (exportieren)", "Datei", [CTRL => Key::D], "export ausgabe speichern", has_selection, |a, _| a.export_selection()),
+    // Bearbeiten
+    cmd!("undo", icon::ARROW_U_UP_LEFT, "Rückgängig", "Bearbeiten", [CTRL => Key::Z], "undo", |a| a.can_undo(), |a, _| a.undo()),
+    cmd!("redo", icon::ARROW_U_UP_RIGHT, "Wiederholen", "Bearbeiten", [CTRL => Key::Y, CTRL_SHIFT => Key::Z], "redo", |a| !a.redo.is_empty(), |a, _| a.redo()),
+    cmd!("copy-adjustments", icon::COPY, "Anpassungen kopieren", "Bearbeiten", [CTRL_SHIFT => Key::C], "copy", has_image, |a, _| a.copy_adjustments()),
+    cmd!("paste-adjustments", icon::CLIPBOARD_TEXT, "Anpassungen auf Auswahl anwenden", "Bearbeiten", [CTRL_SHIFT => Key::V], "paste einfügen", |a| a.clipboard.is_some(), |a, _| a.paste_adjustments()),
+    cmd!("reset", icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", "Bearbeiten", [], "reset", has_image, |a, _| a.reset_adjustments()),
+    cmd!("select-all", icon::CHECK_SQUARE, "Alle auswählen", "Bearbeiten", [CTRL => Key::A], "select all", has_images, |a, _| a.select_all()),
+    cmd!("gpu", icon::LIGHTNING, "Grafikkarte …", "Bearbeiten", [], "gpu grafikkarte", always, |a, _| a.show_gpu_dialog = true),
+    // Bild
+    cmd!("rotate-left", icon::ARROW_COUNTER_CLOCKWISE, "Links drehen", "Bild", [CTRL => Key::OpenBracket], "rotate", has_image, |a, _| a.rotate(3)),
+    cmd!("rotate-right", icon::ARROW_CLOCKWISE, "Rechts drehen", "Bild", [CTRL => Key::CloseBracket], "rotate", has_image, |a, _| a.rotate(1)),
+    cmd!("crop", icon::CROP, "Zuschneiden", "Bild", [NONE => Key::C], "crop", has_image, |a, _| a.toggle_crop()),
+    cmd!("finish-crop", icon::CHECK, "Zuschnitt übernehmen", "Bild", [NONE => Key::Enter], "crop fertig", |a| a.crop_tool.is_some(), |a, _| a.finish_crop_tool()),
+    cmd!("straighten", icon::RULER, "Geraderichten (Linie ziehen)", "Bild", [], "straighten horizont", has_image, |a, _| {
+        a.tab = Tab::Lens;
+        a.toggle_straighten();
+    }),
+    cmd!("auto-upright", icon::PERSPECTIVE, "Automatisch geraderichten", "Bild", [SHIFT => Key::A], "upright", has_image, |a, _| a.auto_upright(sk_core::upright::UprightMode::Vertical)),
+    cmd!("wb-picker", icon::EYEDROPPER, "Weißabgleich-Pipette", "Bild", [NONE => Key::W], "white balance wb aufnehmen", has_image, |a, _| {
+        if !a.picking_wb {
+            a.tab = Tab::Color;
+        }
+        a.toggle_wb_picker();
+    }),
+    cmd!("rename", icon::PENCIL_SIMPLE, "Umbenennen …", "Bild", [CTRL_SHIFT => Key::R], "rename", has_selection, |a, _| a.open_rename()),
+    cmd!("process-update", icon::ARROW_CIRCLE_UP, "Auf aktuelle Prozessversion heben", "Bild", [], "prozessversion engine update", has_selection, |a, _| a.update_process_version()),
+    cmd!("rating-0", icon::STAR, "Bewertung entfernen", "Bild", [NONE => Key::Num0], "sterne rating", has_selection, |a, _| a.set_rating(0)),
+    cmd!("rating-1", icon::STAR, "Bewertung ★", "Bild", [NONE => Key::Num1], "sterne rating", has_selection, |a, _| a.set_rating(1)),
+    cmd!("rating-2", icon::STAR, "Bewertung ★★", "Bild", [NONE => Key::Num2], "sterne rating", has_selection, |a, _| a.set_rating(2)),
+    cmd!("rating-3", icon::STAR, "Bewertung ★★★", "Bild", [NONE => Key::Num3], "sterne rating", has_selection, |a, _| a.set_rating(3)),
+    cmd!("rating-4", icon::STAR, "Bewertung ★★★★", "Bild", [NONE => Key::Num4], "sterne rating", has_selection, |a, _| a.set_rating(4)),
+    cmd!("rating-5", icon::STAR, "Bewertung ★★★★★", "Bild", [NONE => Key::Num5], "sterne rating", has_selection, |a, _| a.set_rating(5)),
+    cmd!("label-red", icon::TAG, "Farb-Label: Rot", "Bild", [NONE => Key::Num6], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Red)),
+    cmd!("label-yellow", icon::TAG, "Farb-Label: Gelb", "Bild", [NONE => Key::Num7], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Yellow)),
+    cmd!("label-green", icon::TAG, "Farb-Label: Grün", "Bild", [NONE => Key::Num8], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Green)),
+    cmd!("label-blue", icon::TAG, "Farb-Label: Blau", "Bild", [NONE => Key::Num9], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Blue)),
+    cmd!("label-none", icon::TAG, "Farb-Label: Keine", "Bild", [], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::None)),
+    cmd!("new-variant", icon::COPY_SIMPLE, "Neue Variante", "Bild", [NONE => Key::F2], "variant kopie", has_image, |a, _| a.pending = Some(crate::session::PendingAction::NewVariant { clone: false })),
+    cmd!("clone-variant", icon::COPY, "Variante klonen", "Bild", [NONE => Key::F3], "variant kopie", has_image, |a, _| a.pending = Some(crate::session::PendingAction::NewVariant { clone: true })),
+    cmd!("stack-create", icon::STACK_PLUS, "Stapel bilden", "Bild", [CTRL => Key::G], "stack gruppieren", several_files, |a, _| a.run_stack_action(crate::stacks::StackAction::Create)),
+    cmd!("stack-dissolve", icon::STACK_MINUS, "Stapel auflösen", "Bild", [CTRL_SHIFT => Key::G], "stack", |a| !a.selected_stack_ids().is_empty(), |a, _| a.run_stack_action(crate::stacks::StackAction::Dissolve)),
+    cmd!("stack-toggle", icon::STACK, "Stapel auf-/zuklappen", "Bild", [SHIFT => Key::G], "stack", has_selection, |a, _| a.run_stack_action(crate::stacks::StackAction::Toggle)),
+    cmd!("merge-hdr", icon::SUN_HORIZON, "HDR zusammenfügen …", "Bild", [], "merge belichtungsreihe", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Hdr)),
+    cmd!("merge-pano", icon::PANORAMA, "Panorama zusammenfügen …", "Bild", [], "merge stitch", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Panorama)),
+    cmd!("denoise", icon::SPARKLE, "Entrauschen (KI) …", "Bild", [], "denoise rauschen", has_selection, |a, _| a.open_denoise()),
+    cmd!("reference", icon::PUSH_PIN, "Referenzbild festlegen / entfernen", "Bild", [SHIFT => Key::Enter], "vergleich compare", has_image, |a, _| a.toggle_reference()),
+    cmd!("previous", icon::CARET_LEFT, "Vorheriges Bild", "Bild", [NONE => Key::ArrowLeft], "zurück previous", has_images, |a, _| a.step(-1)),
+    cmd!("next", icon::CARET_RIGHT, "Nächstes Bild", "Bild", [NONE => Key::ArrowRight], "weiter next", has_images, |a, _| a.step(1)),
+    cmd!("to-selects", icon::FOLDER_SIMPLE_STAR, "Nach „Auswahl“ verschieben", "Bild", [CTRL => Key::J], "selects session", in_session, |a, _| a.move_to_session_folder(sk_core::session::SessionFolder::Selects)),
+    cmd!("trash", icon::TRASH, "In den Papierkorb", "Bild", [CTRL => Key::Delete, CTRL => Key::Backspace], "löschen delete", has_selection, |a, _| a.trash_selection()),
+    // Ebenen & Retusche
+    cmd!("tool-brush", icon::PAINT_BRUSH, "Pinsel", "Ebenen & Retusche", [NONE => Key::B], "brush maske malen", has_image, |a, _| tool(a, LocalTool::Brush)),
+    cmd!("tool-eraser", icon::ERASER, "Radierer", "Ebenen & Retusche", [NONE => Key::N], "eraser maske", has_image, |a, _| tool(a, LocalTool::Eraser)),
+    cmd!("tool-linear", icon::GRADIENT, "Linearer Verlauf", "Ebenen & Retusche", [NONE => Key::L], "gradient verlaufsfilter", has_image, |a, _| tool(a, LocalTool::Linear)),
+    cmd!("tool-radial", icon::CIRCLE_DASHED, "Radialer Verlauf", "Ebenen & Retusche", [NONE => Key::R], "radial", has_image, |a, _| tool(a, LocalTool::Radial)),
+    cmd!("tool-magic", icon::MAGIC_WAND, "Magic Brush", "Ebenen & Retusche", [NONE => Key::J], "zauberstab auswahl", has_image, |a, _| tool(a, LocalTool::Magic)),
+    cmd!("tool-heal", icon::BANDAIDS, "Reparieren", "Ebenen & Retusche", [NONE => Key::H], "heal flecken", has_image, |a, _| tool(a, LocalTool::Heal)),
+    cmd!("tool-clone", icon::STAMP, "Klonen", "Ebenen & Retusche", [NONE => Key::S], "clone stempel", has_image, |a, _| tool(a, LocalTool::Clone)),
+    cmd!("tool-remove", icon::SPARKLE, "Entfernen (KI)", "Ebenen & Retusche", [NONE => Key::X], "remove objekt", has_image, |a, _| tool(a, LocalTool::Remove)),
+    cmd!("brush-smaller", icon::MINUS, "Pinsel kleiner", "Ebenen & Retusche", [NONE => Key::OpenBracket], "größe", always, |a, _| brush_size(a, 1.0 / 1.2)),
+    cmd!("brush-larger", icon::PLUS, "Pinsel größer", "Ebenen & Retusche", [NONE => Key::CloseBracket], "größe", always, |a, _| brush_size(a, 1.2)),
+    cmd!("show-mask", icon::EYE, "Maske anzeigen", "Ebenen & Retusche", [NONE => Key::M], "mask", always, |a, _| {
+        a.show_mask = !a.show_mask;
+        a.request_render();
+    }),
+    cmd!("delete-spot", icon::TRASH, "Retuschepunkt löschen", "Ebenen & Retusche", [NONE => Key::Delete, NONE => Key::Backspace], "spot", always, |a, _| a.delete_selected_spot()),
+    // Ansicht
+    cmd!("grid", icon::SQUARES_FOUR, "Raster / Viewer umschalten", "Ansicht", [NONE => Key::G], "grid browser übersicht", always, |a, _| a.grid_view = !a.grid_view),
+    cmd!("filmstrip", icon::FILM_STRIP, "Filmstreifen ein/aus", "Ansicht", [], "filmstrip", always, |a, _| a.show_filmstrip = !a.show_filmstrip),
+    cmd!("navigator", icon::MAP_TRIFOLD, "Navigator beim Zoomen", "Ansicht", [], "minimap", always, |a, _| {
+        a.show_navigator = !a.show_navigator;
+        a.save_settings();
+    }),
+    cmd!("side-column", icon::SIDEBAR_SIMPLE, "Seitenleiste rechts: wenn Platz ist / immer / aus", "Ansicht", [], "spalte histogramm rechts panel", always, |a, _| {
+        use crate::side_column::SideColumn;
+        a.side_column = match a.side_column {
+            SideColumn::Auto => SideColumn::Always,
+            SideColumn::Always => SideColumn::Off,
+            SideColumn::Off => SideColumn::Auto,
+        };
+        a.status = a.side_column.label().into();
+        a.save_settings();
+    }),
+    cmd!("zoom-fit", icon::CORNERS_OUT, "Einpassen", "Ansicht", [], "fit zoom", has_image, |a, _| a.zoom_fit()),
+    cmd!("zoom-100", icon::MAGNIFYING_GLASS_PLUS, "100 % / Einpassen", "Ansicht", [NONE => Key::Z], "zoom", has_image, |a, _| a.toggle_zoom_100()),
+    cmd!("print-zoom", icon::RULER, "Druckgröße", "Ansicht", [SHIFT => Key::Z], "print zoom kalibrieren", has_image, |a, _| a.toggle_print_zoom()),
+    cmd!("before", icon::CIRCLE_HALF, "Vorher / Nachher", "Ansicht", [NONE => Key::Y], "before after vergleich", has_image, |a, _| a.toggle_before()),
+    cmd!("split", icon::SQUARE_SPLIT_HORIZONTAL, "Geteilter Vergleich", "Ansicht", [NONE => Key::U], "split vorher nachher", has_image, |a, _| a.toggle_split()),
+    cmd!("side-by-side", icon::COLUMNS, "Vorher | Nachher nebeneinander", "Ansicht", [SHIFT => Key::U], "side by side", has_image, |a, _| a.toggle_side_by_side()),
+    cmd!("multi-view", icon::SQUARES_FOUR, "Auswahl nebeneinander vergleichen", "Ansicht", [], "compare mehrere", always, |a, _| a.multi_view = !a.multi_view),
+    cmd!("clip-warning", icon::WARNING, "Belichtungswarnung", "Ansicht", [NONE => Key::E], "clipping überbelichtet", has_image, |a, _| a.toggle_clip_warning()),
+    cmd!("focus-mask", icon::CROSSHAIR, "Fokusmaske", "Ansicht", [NONE => Key::K], "schärfe focus peaking", has_image, |a, _| a.toggle_focus_mask()),
+    cmd!("proof", icon::FILE_MAGNIFYING_GLASS, "Proof (Ausgabe-Rezept)", "Ansicht", [NONE => Key::P], "vorschau export", has_image, |a, _| a.toggle_proof()),
+    cmd!("softproof", icon::PRINTER, "Softproof", "Ansicht", [SHIFT => Key::P], "drucker profil gamut", has_image, |a, _| a.toggle_softproof()),
+    cmd!("print-preview", icon::PRINTER, "Druckvorschau", "Ansicht", [CTRL => Key::P], "drucken papier", has_image, |a, _| a.toggle_print_preview()),
+    cmd!("guides-next", icon::GRID_NINE, "Hilfslinien wechseln", "Ansicht", [NONE => Key::O], "guides raster drittel", always, |a, _| {
+        a.guides = a.guides.next();
+        a.save_settings();
+    }),
+    cmd!("overlay", icon::IMAGE, "Overlay ein/aus", "Ansicht", [SHIFT => Key::O], "layout png", always, |a, _| a.toggle_overlay()),
+    cmd!("overlay-choose", icon::IMAGE, "Overlay wählen …", "Ansicht", [], "layout png", always, |a, _| a.choose_overlay()),
+    cmd!("viewer-window", icon::MONITOR, "Viewer in eigenem Fenster", "Ansicht", [SHIFT => Key::F11], "zweitmonitor", always, |a, _| a.toggle_viewer_window()),
+    cmd!("fullscreen", icon::ARROWS_OUT, "Vollbild ohne Ablenkung", "Ansicht", [NONE => Key::F11, CTRL_SHIFT => Key::F], "fullscreen", always, |a, ctx| a.toggle_fullscreen(ctx)),
+    cmd!("find", icon::MAGNIFYING_GLASS, "Suchen (Bibliothek)", "Ansicht", [CTRL => Key::F], "filter suche", always, |a, _| a.tab = Tab::Library),
+    // Hilfe
+    cmd!("shortcuts", icon::KEYBOARD, "Tastenkürzel", "Hilfe", [NONE => Key::F1], "shortcuts hilfe", always, |a, _| a.show_shortcuts = !a.show_shortcuts),
+    cmd!("about", icon::INFO, "Über Silberkorn", "Hilfe", [], "about version", always, |a, _| a.splash = Some(crate::splash::Splash::about())),
+];
+
+pub fn get(id: &str) -> Option<&'static Command> {
+    COMMANDS.iter().find(|c| c.id == id)
+}
+
+/// A shortcut as shown in menus and the palette ("Strg+Umschalt+R").
+pub fn key_text((m, k): (Modifiers, Key)) -> String {
+    let mut s = String::new();
+    if m.command || m.ctrl {
+        s += "Strg+";
+    }
+    if m.alt {
+        s += "Alt+";
+    }
+    if m.shift {
+        s += "Umschalt+";
+    }
+    s += &match k {
+        Key::Delete => "Entf".to_string(),
+        Key::Backspace => "Rück".to_string(),
+        Key::OpenBracket => "[".to_string(),
+        Key::CloseBracket => "]".to_string(),
+        Key::ArrowLeft => icon::ARROW_LEFT.to_string(),
+        Key::ArrowRight => icon::ARROW_RIGHT.to_string(),
+        Key::Escape => "Esc".to_string(),
+        k => k.symbol_or_name().to_string(),
+    };
+    s
+}
+
+impl Command {
+    /// The first shortcut, as text (empty without one).
+    pub fn shortcut(&self) -> String {
+        self.keys.first().map(|k| key_text(*k)).unwrap_or_default()
+    }
+}
+
+impl App {
+    /// Runs a command by id, if it is available now.
+    pub fn run_command_id(&mut self, ctx: &egui::Context, id: &str) {
+        if let Some(c) = get(id)
+            && (c.enabled)(self)
+        {
+            (c.run)(self, ctx);
+        }
+    }
+
+    /// Runs the command whose shortcut was pressed. Shortcuts with more modifiers are checked
+    /// first: egui matches a key without modifiers also when Shift is held.
+    pub(crate) fn command_shortcuts(&mut self, ctx: &egui::Context) {
+        let mut keys: Vec<(&'static Command, (Modifiers, Key))> = COMMANDS.iter().flat_map(|c| c.keys.iter().map(move |k| (c, *k))).collect();
+        let count = |m: Modifiers| m.command as u8 + m.ctrl as u8 + m.shift as u8 + m.alt as u8;
+        keys.sort_by_key(|(_, (m, _))| std::cmp::Reverse(count(*m)));
+        for (c, (m, k)) in keys {
+            if ctx.input_mut(|i| i.consume_key(m, k)) && (c.enabled)(self) {
+                (c.run)(self, ctx);
+            }
+        }
+    }
+
+    /// A menu entry for a command (its label, icon, shortcut and availability); runs it when
+    /// clicked.
+    pub(crate) fn command_item(&mut self, ui: &mut egui::Ui, id: &str) {
+        let Some(c) = get(id) else { return };
+        self.command_item_labeled(ui, id, c.label);
+    }
+
+    /// Like [`Self::command_item`] with a label of its own (e.g. with a count).
+    pub(crate) fn command_item_labeled(&mut self, ui: &mut egui::Ui, id: &str, label: &str) {
+        let Some(c) = get(id) else { return };
+        let button = egui::Button::new(format!("{}  {label}", c.icon)).shortcut_text(c.shortcut());
+        if ui.add_enabled((c.enabled)(self), button).clicked() {
+            (c.run)(self, ui.ctx());
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ids_and_shortcuts_are_unique() {
+        let mut ids: Vec<&str> = COMMANDS.iter().map(|c| c.id).collect();
+        ids.sort();
+        let n = ids.len();
+        ids.dedup();
+        assert_eq!(ids.len(), n, "doppelte Befehls-IDs");
+        let mut keys: Vec<String> = COMMANDS.iter().flat_map(|c| c.keys.iter().map(|k| key_text(*k))).collect();
+        keys.sort();
+        let dups: Vec<&String> = keys.windows(2).filter(|w| w[0] == w[1]).map(|w| &w[0]).collect();
+        assert!(dups.is_empty(), "Tastenkürzel doppelt belegt: {dups:?}");
+    }
+
+    #[test]
+    fn shortcut_text() {
+        assert_eq!(get("rename").unwrap().shortcut(), "Strg+Umschalt+R");
+        assert_eq!(get("trash").unwrap().shortcut(), "Strg+Entf");
+        assert_eq!(get("rotate-left").unwrap().shortcut(), "Strg+[");
+        assert_eq!(get("reset").unwrap().shortcut(), "");
+    }
+}

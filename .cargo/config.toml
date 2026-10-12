@@ -1,0 +1,8 @@
+# Test commands (see README, "Tests"):
+#   cargo t       quick run: everything except the slow tests marked #[ignore = "langsam …"]
+#   cargo t-slow  only the slow tests
+#   cargo t-all   everything
+[alias]
+t = "test --workspace"
+t-slow = "test --workspace -- --ignored"
+t-all = "test --workspace -- --include-ignored"

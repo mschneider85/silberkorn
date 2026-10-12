@@ -2,6 +2,9 @@
 //! bar (spinner, label, progress where known) and, when the user waits for it in the viewer,
 //! in the viewer too.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use egui::{Color32, Rect, RichText, Ui, pos2, vec2};
 
 use crate::app::App;
@@ -13,34 +16,41 @@ pub struct Activity {
     pub progress: Option<f32>,
     /// The user waits for it in the viewer (shown there too).
     pub in_viewer: bool,
+    /// Stops it; `None` if it can't be stopped (short or not interruptible).
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 impl App {
     pub fn activities(&self) -> Vec<Activity> {
         let mut v = Vec::new();
         if self.inpaint_busy {
-            v.push(Activity { label: "Entfernen".into(), progress: Some(self.removal_progress), in_viewer: true });
+            v.push(Activity { label: "Entfernen".into(), progress: Some(self.removal_progress), in_viewer: true, cancel: None });
         }
         if self.ai_busy {
-            v.push(Activity { label: "Maske wird berechnet".into(), progress: None, in_viewer: true });
+            v.push(Activity { label: "Maske wird berechnet".into(), progress: None, in_viewer: true, cancel: None });
         }
         if let Some((done, total)) = self.match_progress {
-            v.push(Activity { label: "An Referenz angleichen".into(), progress: Some(done as f32 / total.max(1) as f32), in_viewer: true });
+            v.push(Activity { label: "An Referenz angleichen".into(), progress: Some(done as f32 / total.max(1) as f32), in_viewer: true, cancel: None });
         }
         for j in &self.jobs {
-            v.push(Activity { label: j.label.clone(), progress: Some(j.progress), in_viewer: false });
+            v.push(Activity { label: j.label.clone(), progress: Some(j.progress), in_viewer: false, cancel: Some(j.cancel.clone()) });
         }
         if let Some((done, total)) = self.export_progress {
-            v.push(Activity { label: format!("Verarbeiten {done} / {total}"), progress: Some(done as f32 / total.max(1) as f32), in_viewer: false });
+            v.push(Activity {
+                label: format!("Verarbeiten {done} / {total}"),
+                progress: Some(done as f32 / total.max(1) as f32),
+                in_viewer: false,
+                cancel: self.export_cancel.clone(),
+            });
         }
         if let Some((done, total)) = self.index_progress {
-            v.push(Activity { label: format!("Indexieren {done} / {total}"), progress: Some(done as f32 / total.max(1) as f32), in_viewer: false });
+            v.push(Activity { label: format!("Indexieren {done} / {total}"), progress: Some(done as f32 / total.max(1) as f32), in_viewer: false, cancel: None });
         }
         if self.model_downloading {
-            v.push(Activity { label: "KI-Modell wird geladen".into(), progress: None, in_viewer: false });
+            v.push(Activity { label: "KI-Modell wird geladen".into(), progress: None, in_viewer: false, cancel: None });
         }
         if self.lens_db_downloading {
-            v.push(Activity { label: "Objektivprofile werden geladen".into(), progress: None, in_viewer: false });
+            v.push(Activity { label: "Objektivprofile werden geladen".into(), progress: None, in_viewer: false, cancel: None });
         }
         v
     }
@@ -52,6 +62,13 @@ impl App {
         // The status bar's right part is laid out from right to left: last item first.
         let resp = ui
             .horizontal(|ui| {
+                if let Some(cancel) = &first.cancel {
+                    let stopping = cancel.load(Ordering::Relaxed);
+                    let b = ui.add_enabled(!stopping, egui::Button::new(RichText::new("✕").size(11.0)).small().frame(false));
+                    if b.on_hover_text(if stopping { "Wird abgebrochen …" } else { "Abbrechen" }).clicked() {
+                        cancel.store(true, Ordering::Relaxed);
+                    }
+                }
                 if let Some(p) = first.progress {
                     ui.label(RichText::new(format!("{:.0} %", p * 100.0)).size(11.0).color(crate::theme::TEXT_DIM));
                     ui.add(egui::ProgressBar::new(p).desired_width(110.0).desired_height(10.0));

@@ -462,6 +462,11 @@ pub struct App {
     pub recipes: Vec<ExportRecipe>,
     pub selected_recipe: usize,
     pub export_progress: Option<(usize, usize)>,
+    /// Cancels the running export.
+    pub export_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Closing was requested while work was running; the user is asked first.
+    pub quit_asked: bool,
+    quit_confirmed: bool,
     pub export_log: Vec<String>,
 
     pub status: String,
@@ -754,6 +759,9 @@ impl App {
             },
             selected_recipe: 0,
             export_progress: None,
+            export_cancel: None,
+            quit_asked: false,
+            quit_confirmed: false,
             export_log: Vec::new(),
             status,
             screenshot: std::env::var_os("SILBERKORN_SCREENSHOT").map(|p| (PathBuf::from(p), None)),
@@ -1456,7 +1464,9 @@ impl App {
             return;
         }
         let session = self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
-        self.workers.export(ExportJob { items, recipes, session });
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.export_cancel = Some(cancel.clone());
+        self.workers.export(ExportJob { items, recipes, session, cancel });
     }
 
     /// Average camera RGB of a 7x7 spot; `image_pos` is in displayed preview pixels.
@@ -1682,7 +1692,13 @@ impl App {
                     }
                     if done == total {
                         self.status = format!("Verarbeitung abgeschlossen ({total})");
+                        self.export_cancel = None;
                     }
+                }
+                Event::ExportCancelled { done, total } => {
+                    self.export_progress = None;
+                    self.export_cancel = None;
+                    self.status = format!("Verarbeitung abgebrochen ({done} von {total} fertig)");
                 }
                 Event::AiMask { generation, layer, result } => {
                     self.ai_busy = false;
@@ -1868,190 +1884,9 @@ impl App {
                 self.tab = tab;
             }
         }
+        // Everything else comes from the command list (see `commands`).
+        self.command_shortcuts(ctx);
         let pressed = |k: Key, m: Modifiers| ctx.input_mut(|i| i.consume_key(m, k));
-        if pressed(Key::Z, Modifiers::COMMAND | Modifiers::SHIFT) || pressed(Key::Y, Modifiers::COMMAND) {
-            self.redo();
-        }
-        if pressed(Key::Z, Modifiers::COMMAND) {
-            self.undo();
-        }
-        if pressed(Key::C, Modifiers::COMMAND | Modifiers::SHIFT) {
-            self.copy_adjustments();
-        }
-        if pressed(Key::V, Modifiers::COMMAND | Modifiers::SHIFT) {
-            self.paste_adjustments();
-        }
-        if pressed(Key::D, Modifiers::COMMAND) {
-            self.export_selection();
-        }
-        if pressed(Key::O, Modifiers::COMMAND | Modifiers::SHIFT) {
-            self.open_session_dialog();
-        }
-        if pressed(Key::O, Modifiers::COMMAND) {
-            self.open_folder_dialog();
-        }
-        if pressed(Key::N, Modifiers::COMMAND) {
-            self.session_ui.start_new(&self.folder);
-        }
-        if pressed(Key::J, Modifiers::COMMAND) {
-            self.move_to_session_folder(sk_core::session::SessionFolder::Selects);
-        }
-        if pressed(Key::Delete, Modifiers::COMMAND) || pressed(Key::Backspace, Modifiers::COMMAND) {
-            self.trash_selection();
-        }
-        if pressed(Key::F2, Modifiers::NONE) {
-            self.new_variant(false);
-        }
-        if pressed(Key::F3, Modifiers::NONE) {
-            self.new_variant(true);
-        }
-        if pressed(Key::F1, Modifiers::NONE) {
-            self.show_shortcuts = !self.show_shortcuts;
-        }
-        if pressed(Key::A, Modifiers::COMMAND) {
-            self.select_all();
-        }
-        if pressed(Key::F, Modifiers::COMMAND) {
-            self.tab = Tab::Library;
-        }
-        if pressed(Key::OpenBracket, Modifiers::COMMAND) {
-            self.rotate(3);
-        }
-        if pressed(Key::CloseBracket, Modifiers::COMMAND) {
-            self.rotate(1);
-        }
-        if pressed(Key::ArrowRight, Modifiers::NONE) {
-            self.step(1);
-        }
-        if pressed(Key::ArrowLeft, Modifiers::NONE) {
-            self.step(-1);
-        }
-        for (k, r) in [(Key::Num0, 0), (Key::Num1, 1), (Key::Num2, 2), (Key::Num3, 3), (Key::Num4, 4), (Key::Num5, 5)] {
-            if pressed(k, Modifiers::NONE) {
-                self.set_rating(r);
-            }
-        }
-        for (k, l) in [
-            (Key::Num6, ColorLabel::Red),
-            (Key::Num7, ColorLabel::Yellow),
-            (Key::Num8, ColorLabel::Green),
-            (Key::Num9, ColorLabel::Blue),
-        ] {
-            if pressed(k, Modifiers::NONE) {
-                self.set_color_label(l);
-            }
-        }
-        use crate::layers::LocalTool;
-        for (k, t) in [
-            (Key::B, LocalTool::Brush),
-            (Key::N, LocalTool::Eraser),
-            (Key::L, LocalTool::Linear),
-            (Key::R, LocalTool::Radial),
-            (Key::H, LocalTool::Heal),
-            (Key::S, LocalTool::Clone),
-            (Key::X, LocalTool::Remove),
-        ] {
-            if pressed(k, Modifiers::NONE) {
-                self.tab = Tab::Layers;
-                self.set_local_tool(t);
-            }
-        }
-        // First: `consume_key` with no modifiers also matches Shift.
-        if pressed(Key::R, Modifiers::COMMAND | Modifiers::SHIFT) {
-            self.open_rename();
-        }
-        if pressed(Key::A, Modifiers::SHIFT) {
-            self.auto_upright(sk_core::upright::UprightMode::Vertical);
-        }
-        if pressed(Key::O, Modifiers::SHIFT) {
-            self.toggle_overlay();
-        }
-        if pressed(Key::O, Modifiers::NONE) {
-            self.guides = self.guides.next();
-            self.save_settings();
-        }
-        if pressed(Key::U, Modifiers::SHIFT) {
-            self.toggle_side_by_side();
-        }
-        if pressed(Key::U, Modifiers::NONE) {
-            self.toggle_split();
-        }
-        if pressed(Key::J, Modifiers::NONE) {
-            self.tab = Tab::Layers;
-            self.set_local_tool(LocalTool::Magic);
-        }
-        if pressed(Key::M, Modifiers::NONE) {
-            self.show_mask = !self.show_mask;
-            self.request_render();
-        }
-        if pressed(Key::OpenBracket, Modifiers::NONE) {
-            let b = self.brushes.of(self.local_tool);
-            b.size = (b.size / 1.2).max(2.0);
-            self.brushes_changed_at = Some(Instant::now());
-        }
-        if pressed(Key::CloseBracket, Modifiers::NONE) {
-            let b = self.brushes.of(self.local_tool);
-            b.size = (b.size * 1.2).min(400.0);
-            self.brushes_changed_at = Some(Instant::now());
-        }
-        if pressed(Key::Delete, Modifiers::NONE) || pressed(Key::Backspace, Modifiers::NONE) {
-            self.delete_selected_spot();
-        }
-        if pressed(Key::G, Modifiers::COMMAND | Modifiers::SHIFT) {
-            self.run_stack_action(crate::stacks::StackAction::Dissolve);
-        }
-        if pressed(Key::G, Modifiers::COMMAND) {
-            self.run_stack_action(crate::stacks::StackAction::Create);
-        }
-        if pressed(Key::G, Modifiers::SHIFT) {
-            self.run_stack_action(crate::stacks::StackAction::Toggle);
-        }
-        if pressed(Key::G, Modifiers::NONE) {
-            self.grid_view = !self.grid_view;
-        }
-        if pressed(Key::K, Modifiers::NONE) {
-            self.toggle_focus_mask();
-        }
-        if pressed(Key::E, Modifiers::NONE) {
-            self.toggle_clip_warning();
-        }
-        if pressed(Key::Y, Modifiers::NONE) {
-            self.toggle_before();
-        }
-        if pressed(Key::W, Modifiers::NONE) {
-            self.toggle_wb_picker();
-        }
-        if pressed(Key::Z, Modifiers::SHIFT) {
-            self.toggle_print_zoom();
-        }
-        if pressed(Key::Z, Modifiers::NONE) {
-            self.toggle_zoom_100();
-        }
-        if pressed(Key::C, Modifiers::NONE) {
-            self.toggle_crop();
-        }
-        // Before plain Enter, which would also match with Shift held.
-        if pressed(Key::Enter, Modifiers::SHIFT) {
-            self.toggle_reference();
-        }
-        if pressed(Key::Enter, Modifiers::NONE) {
-            self.finish_crop_tool();
-        }
-        if pressed(Key::F11, Modifiers::SHIFT) {
-            self.toggle_viewer_window();
-        }
-        if pressed(Key::F11, Modifiers::NONE) || pressed(Key::F, Modifiers::COMMAND | Modifiers::SHIFT) {
-            self.toggle_fullscreen(ctx);
-        }
-        if pressed(Key::P, Modifiers::COMMAND) {
-            self.toggle_print_preview();
-        }
-        if pressed(Key::P, Modifiers::SHIFT) {
-            self.toggle_softproof();
-        }
-        if pressed(Key::P, Modifiers::NONE) {
-            self.toggle_proof();
-        }
         if pressed(Key::Escape, Modifiers::NONE) {
             // Esc first ends a tool; with none active it leaves full screen.
             let tool_active = self.picking_wb || self.picking_skin || self.local_tool.is_some() || self.straighten_tool.is_some() || self.crop_tool.is_some();
@@ -2063,6 +1898,60 @@ impl App {
     }
 
     // ---------------------------------------------------------------- layout
+
+    /// Closing while work is running (export, merge, denoising …) asks first; quitting then
+    /// cancels it.
+    fn confirm_quit(&mut self, ctx: &egui::Context) {
+        let busy: Vec<String> = self.activities().into_iter().filter(|a| a.cancel.is_some()).map(|a| a.label).collect();
+        if ctx.input(|i| i.viewport().close_requested()) && !busy.is_empty() && !self.quit_confirmed {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.quit_asked = true;
+        }
+        if !self.quit_asked {
+            return;
+        }
+        if busy.is_empty() {
+            self.quit_asked = false;
+            return;
+        }
+        let modal = egui::Modal::new(egui::Id::new("quit")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.label(egui::RichText::new("Silberkorn beenden?").size(16.0).strong());
+            ui.add_space(6.0);
+            ui.label("Noch nicht fertig:");
+            for b in &busy {
+                ui.label(format!("  •  {b}"));
+            }
+            ui.add_space(4.0);
+            ui.label("Beim Beenden wird abgebrochen; bereits fertige Dateien bleiben erhalten.");
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Abbrechen und beenden").clicked() {
+                    return Some(true);
+                }
+                if ui.button("Weiterarbeiten").clicked() {
+                    return Some(false);
+                }
+                None
+            })
+            .inner
+        });
+        match modal.inner {
+            Some(true) => {
+                for a in self.activities() {
+                    if let Some(c) = a.cancel {
+                        c.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                self.quit_confirmed = true;
+                self.quit_asked = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            Some(false) => self.quit_asked = false,
+            None if modal.should_close() => self.quit_asked = false,
+            None => {}
+        }
+    }
 
     /// End of every frame (also in full screen): pending actions, saving and rendering.
     fn finish_frame(&mut self, ctx: &egui::Context) {
@@ -2293,6 +2182,7 @@ impl eframe::App for App {
             self.speed_message = None;
         }
         self.handle_events(&ctx);
+        self.confirm_quit(&ctx);
         self.prune_view_caches();
         self.style_hovered = false;
         self.shortcuts(&ctx);

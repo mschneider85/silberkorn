@@ -85,7 +85,7 @@ fn decode_ext(path: &Path, dummy: bool) -> Result<Decoded> {
 }
 
 fn build_meta(path: &Path, raw: &RawImage, md: Option<&RawMetadata>) -> Result<RawMeta> {
-    let (_, matrix) = raw
+    let (illuminant, matrix) = raw
         .color_matrix_find_first([Illuminant::D65, Illuminant::D55, Illuminant::D50, Illuminant::Daylight, Illuminant::A])
         .ok_or_else(|| anyhow!("Keine Farbmatrix für {} {}", raw.clean_make, raw.clean_model))?;
     if matrix.len() != 9 {
@@ -97,7 +97,14 @@ fn build_meta(path: &Path, raw: &RawImage, md: Option<&RawMetadata>) -> Result<R
             xyz_to_cam[i][j] = matrix[i * 3 + j];
         }
     }
-    let color = CameraColor::new(xyz_to_cam);
+    let mut color = CameraColor::new(xyz_to_cam);
+    // A second matrix for tungsten light, when the first is a daylight one.
+    if illuminant != Illuminant::A
+        && let Some((_, a)) = raw.color_matrix_find_first([Illuminant::A])
+        && a.len() == 9
+    {
+        color.xyz_to_cam_a = Some([[a[0], a[1], a[2]], [a[3], a[4], a[5]], [a[6], a[7], a[8]]]);
+    }
 
     let wb = raw.wb_coeffs;
     let as_shot_wb = if wb[0].is_nan() || wb[1] <= 0.0 {
@@ -184,6 +191,9 @@ fn develop_full(raw: &RawImage, xtrans: XTransQuality) -> Result<LinearImage> {
     if let Some(img) = develop_xtrans(raw, xtrans)? {
         return Ok(img);
     }
+    if let Some(img) = develop_bayer(raw)? {
+        return Ok(img);
+    }
     let dev = RawDevelop::new_with(&[
         ProcessingStep::Rescale,
         ProcessingStep::Demosaic,
@@ -198,6 +208,51 @@ fn develop_full(raw: &RawImage, xtrans: XTransQuality) -> Result<LinearImage> {
         }
         Intermediate::FourColor(_) => bail!("Kameras mit 4-Farb-Sensor werden noch nicht unterstützt"),
     }
+}
+
+/// Bayer sensors with AHD (see `ahd`) instead of rawler's PPG, which leaves zipper edges and
+/// maze patterns along fine lines. `None` for every other sensor.
+fn develop_bayer(raw: &RawImage) -> Result<Option<LinearImage>> {
+    let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else { return Ok(None) };
+    if raw.cpp != 1
+        || config.sensor != rawler::imgop::sensor::SensorType::Bayer
+        || !config.cfa.is_rgb()
+        || config.cfa.width != 2
+        || config.cfa.height != 2
+        || raw.fuji_rotation_width.is_some()
+    {
+        return Ok(None);
+    }
+    let mut raw = raw.clone();
+    raw.apply_scaling().map_err(|e| anyhow!("Skalierung fehlgeschlagen: {e}"))?;
+    let RawImageData::Float(data) = &raw.data else { bail!("Unerwartetes Datenformat") };
+    let pixels = rawler::pixarray::PixF32::new_with(data.clone(), raw.width, raw.height);
+    let roi = raw.active_area.unwrap_or(pixels.rect());
+    let input = pixels.crop(roi);
+    let mut pattern = [[0usize; 2]; 2];
+    for (dy, row) in pattern.iter_mut().enumerate() {
+        for (dx, c) in row.iter_mut().enumerate() {
+            *c = match config.cfa.cfa_color_at(roi.p.y + dy, roi.p.x + dx) {
+                CFAColor::RED => 0,
+                CFAColor::GREEN => 1,
+                _ => 2,
+            };
+        }
+    }
+    // As-shot white balance relative to green (only while interpolating).
+    let wb = raw.wb_coeffs;
+    let wb = if wb[1].is_finite() && wb[1] > 0.0 { [wb[0] / wb[1], 1.0, wb[2] / wb[1]] } else { [1.0; 3] };
+    let mosaic = crate::ahd::Mosaic { data: &input.data, width: input.width, height: input.height, pattern };
+    let mut rgb = rawler::pixarray::Color2D::<f32, 3>::new_with(crate::ahd::demosaic(&mosaic, wb), input.width, input.height);
+    if let Some(mut crop) = raw.crop_area.or(raw.active_area) {
+        if let Some(active) = &raw.active_area {
+            crop = crop.adapt(active);
+        }
+        if crop.d != rgb.dim() {
+            rgb = rgb.crop(crop);
+        }
+    }
+    Ok(Some(LinearImage::new(rgb.width, rgb.height, rgb.data)))
 }
 
 /// X-Trans sensors with Markesteijn's demosaic instead of rawler's bilinear default, which
@@ -288,9 +343,21 @@ fn superpixel(raw: &RawImage, cfa: &rawler::CFA, k: usize) -> Result<LinearImage
     Ok(LinearImage::new(ow, oh, out))
 }
 
-/// Embedded JPEG preview (fast thumbnails), already oriented.
+/// Embedded JPEG preview (fast thumbnails), already oriented. Reads only the JPEG where the
+/// file's structure allows it (see `raw_preview`), else decodes the file's metadata with rawler.
 pub fn embedded_preview(path: &Path) -> Result<::image::DynamicImage> {
-    let source = RawSource::new(&crate::variant::file_of(path))?;
+    let file = crate::variant::file_of(path);
+    if let Some((jpeg, orientation)) = crate::raw_preview::read(&file)
+        && let Ok(img) = ::image::load_from_memory_with_format(&jpeg, ::image::ImageFormat::Jpeg)
+    {
+        return Ok(Orientation::from_exif(orientation).apply_dynamic(img));
+    }
+    embedded_preview_rawler(&file)
+}
+
+/// [`embedded_preview`] through rawler (reads the whole file).
+fn embedded_preview_rawler(path: &Path) -> Result<::image::DynamicImage> {
+    let source = RawSource::new(path)?;
     let decoder = rawler::get_decoder(&source).map_err(|e| anyhow!("{e}"))?;
     let params = RawDecodeParams::default();
     let img = decoder
@@ -306,4 +373,29 @@ pub fn embedded_preview(path: &Path) -> Result<::image::DynamicImage> {
         .map(Orientation::from_exif)
         .unwrap_or_default();
     Ok(orientation.apply_dynamic(img))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The fast preview reader finds the same embedded image as rawler (on the sample raws in
+    /// `samples/`, skipped without them).
+    #[test]
+    fn fast_embedded_preview_matches_rawler() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples");
+        let files: Vec<PathBuf> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|x| !x.eq_ignore_ascii_case("json")))
+            .collect();
+        for f in files {
+            let Some((jpeg, orientation)) = crate::raw_preview::read(&f) else { continue };
+            let fast = Orientation::from_exif(orientation).apply_dynamic(::image::load_from_memory(&jpeg).unwrap());
+            let slow = embedded_preview_rawler(&f).unwrap();
+            assert_eq!((fast.width(), fast.height()), (slow.width(), slow.height()), "{}", f.display());
+        }
+    }
 }

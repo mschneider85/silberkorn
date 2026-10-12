@@ -186,6 +186,9 @@ pub fn mat_inv(m: &Mat3) -> Option<Mat3> {
 #[derive(Clone, Debug)]
 pub struct CameraColor {
     pub xyz_to_cam: Mat3,
+    /// The camera's matrix for tungsten light (standard illuminant A, 2856 K), if known; renderings
+    /// under warm light interpolate towards it (see [`CameraColor::cam_to_working_at`]).
+    pub xyz_to_cam_a: Option<Mat3>,
     /// Maps white-balanced camera RGB to linear sRGB.
     pub cam_to_srgb: Mat3,
     /// Maps white-balanced camera RGB to the linear Rec.2020 working space.
@@ -211,9 +214,33 @@ impl CameraColor {
     pub fn new(xyz_to_cam: Mat3) -> Self {
         Self {
             xyz_to_cam,
+            xyz_to_cam_a: None,
             cam_to_srgb: cam_to_rgb(&xyz_to_cam, &SRGB_TO_XYZ),
             cam_to_working: cam_to_rgb(&xyz_to_cam, &REC2020_TO_XYZ),
         }
+    }
+
+    /// Camera RGB (white balanced) to working RGB for light of `kelvin`: between the daylight
+    /// and the tungsten matrix, weighted by inverse color temperature as in the DNG
+    /// specification. Without a tungsten matrix, or in daylight, the daylight one.
+    pub fn cam_to_working_at(&self, kelvin: f32) -> Mat3 {
+        const A: f32 = 2856.0;
+        const D65: f32 = 6504.0;
+        let Some(a) = self.xyz_to_cam_a else { return self.cam_to_working };
+        if !kelvin.is_finite() || kelvin <= 0.0 {
+            return self.cam_to_working;
+        }
+        let w = ((1.0 / kelvin - 1.0 / D65) / (1.0 / A - 1.0 / D65)).clamp(0.0, 1.0);
+        if w <= 0.0 {
+            return self.cam_to_working;
+        }
+        let mut m = self.xyz_to_cam;
+        for (i, row) in m.iter_mut().enumerate() {
+            for (j, v) in row.iter_mut().enumerate() {
+                *v = *v * (1.0 - w) + a[i][j] * w;
+            }
+        }
+        cam_to_rgb(&m, &REC2020_TO_XYZ)
     }
 
     /// Per-channel camera multipliers that neutralize the given illuminant (green = 1).
@@ -406,6 +433,27 @@ pub fn fast_cbrt(x: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn color_matrix_follows_the_light() {
+        use super::*;
+        let d65 = [[0.7, -0.1, -0.05], [-0.4, 1.2, 0.2], [-0.05, 0.15, 0.6]];
+        let a = [[0.8, -0.2, -0.05], [-0.35, 1.15, 0.2], [-0.1, 0.25, 0.45]];
+        let mut c = CameraColor::new(d65);
+        // Without a tungsten matrix: always the daylight one.
+        assert_eq!(c.cam_to_working_at(3000.0), c.cam_to_working);
+        c.xyz_to_cam_a = Some(a);
+        assert_eq!(c.cam_to_working_at(6504.0), c.cam_to_working);
+        assert_eq!(c.cam_to_working_at(9000.0), c.cam_to_working);
+        let tungsten = CameraColor::new(a).cam_to_working;
+        let at_a = c.cam_to_working_at(2856.0);
+        assert!(at_a.iter().flatten().zip(tungsten.iter().flatten()).all(|(x, y)| (x - y).abs() < 1e-5));
+        // In between, and neutral stays neutral.
+        let mid = c.cam_to_working_at(4000.0);
+        assert!(mid != at_a && mid != c.cam_to_working);
+        let white = mat_vec(&mid, [1.0, 1.0, 1.0]);
+        assert!(white.iter().all(|v| (v - 1.0).abs() < 1e-4), "{white:?}");
+    }
 
     #[test]
     fn gamut_map_keeps_luminance_and_hue() {

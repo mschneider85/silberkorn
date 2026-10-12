@@ -54,6 +54,8 @@ pub enum Event {
         focus: Option<Arc<Vec<u8>>>,
     },
     ExportProgress { done: usize, total: usize, last: Result<PathBuf, String> },
+    /// The export was cancelled after `done` of `total` outputs.
+    ExportCancelled { done: usize, total: usize },
     IndexProgress { done: usize, total: usize },
     LensDbDownloaded(Result<PathBuf, String>),
     AiMask { generation: u64, layer: usize, result: Result<sk_ai::MaskImage, String> },
@@ -196,6 +198,8 @@ pub struct ExportJob {
     pub recipes: Vec<ExportRecipe>,
     /// For name templates.
     pub session: String,
+    /// Set to stop after the image being processed.
+    pub cancel: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -885,6 +889,11 @@ impl Workers {
                     let total = job.items.len() * job.recipes.len();
                     let mut done = 0;
                     for (i, (path, adj)) in job.items.into_iter().enumerate() {
+                        if job.cancel.load(Ordering::Relaxed) {
+                            let _ = ev_tx.send(Event::ExportCancelled { done, total });
+                            ctx.request_repaint();
+                            break;
+                        }
                         // A bug on one image fails its outputs, not the whole export.
                         let results = crate::guard::catch(|| export::export_many(&path, &adj, &job.recipes, i as u32 + 1, &job.session))
                             .unwrap_or_else(|e| job.recipes.iter().map(|_| Err(anyhow::anyhow!("{e}"))).collect());

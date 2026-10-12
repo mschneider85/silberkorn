@@ -4,7 +4,7 @@
 //! Heal/clone areas and removals are applied on the CPU while resampling (only when there
 //! are any), soft proofing converts the developed result on the CPU (Little CMS).
 
-use std::sync::{LazyLock, OnceLock, Weak};
+use std::sync::{LazyLock, Weak};
 
 use anyhow::{Result, bail};
 use bytemuck::{Pod, Zeroable};
@@ -36,9 +36,10 @@ const SHARPEN: Kernel = kernel!("sharpen");
 const FINISH: Kernel = kernel!("finish");
 const DISPLAY: Kernel = kernel!("display");
 const OUTPUT: Kernel = kernel!("output");
+const MEDIAN: Kernel = kernel!("median");
 
-const ALL: [Kernel; 14] =
-    [RESAMPLE, BOX_H, BOX_V, PLANE_OP, IMG_PLANES, DOWNSAMPLE, UPSAMPLE_APPLY, NR_COMBINE, DARK_POOL, DEVELOP, SHARPEN, FINISH, DISPLAY, OUTPUT];
+const ALL: [Kernel; 15] =
+    [RESAMPLE, BOX_H, BOX_V, PLANE_OP, IMG_PLANES, DOWNSAMPLE, UPSAMPLE_APPLY, NR_COMBINE, DARK_POOL, DEVELOP, SHARPEN, FINISH, DISPLAY, OUTPUT, MEDIAN];
 
 /// Sets up the graphics card and compiles all kernels (takes a moment; call it early in
 /// the background so that the first rendering does not wait for it).
@@ -103,11 +104,34 @@ struct Ops<'a> {
     enc: Encoder<'a>,
     /// Bound to unused bindings.
     dummy: Buffer,
+    /// Buffers of this rendering, returned to the pool when it is done (unless kept).
+    temps: Vec<Buffer>,
+}
+
+impl Drop for Ops<'_> {
+    fn drop(&mut self) {
+        self.g.release(std::mem::take(&mut self.temps));
+    }
 }
 
 impl<'a> Ops<'a> {
     fn new(g: &'a Gpu) -> Self {
-        Self { g, enc: g.encoder(), dummy: g.buffer(16) }
+        Self { g, enc: g.encoder(), dummy: g.buffer(16), temps: Vec::new() }
+    }
+
+    /// A zeroed storage buffer, from the pool if possible.
+    fn alloc(&mut self, bytes: u64) -> Buffer {
+        let (b, reused) = self.g.pooled_buffer(bytes);
+        if reused {
+            self.enc.clear(&b);
+        }
+        self.temps.push(b.clone());
+        b
+    }
+
+    /// `b` outlives this rendering (kept in a cache): it must not go back to the pool.
+    fn keep(&mut self, b: &Buffer) {
+        self.temps.retain(|t| t != b);
     }
 
     /// Submits the recorded work and continues with a new encoder.
@@ -115,12 +139,12 @@ impl<'a> Ops<'a> {
         std::mem::replace(&mut self.enc, self.g.encoder()).submit();
     }
 
-    fn plane(&self, n: usize) -> Buffer {
-        self.g.buffer(n as u64 * 4)
+    fn plane(&mut self, n: usize) -> Buffer {
+        self.alloc(n as u64 * 4)
     }
 
-    fn image(&self, n: usize) -> Buffer {
-        self.g.buffer(n as u64 * 16)
+    fn image(&mut self, n: usize) -> Buffer {
+        self.alloc(n as u64 * 16)
     }
 
     fn args<T: Pod>(&self, a: &T) -> Buffer {
@@ -167,6 +191,17 @@ impl<'a> Ops<'a> {
         let tmp = self.plane(w * h);
         self.enc.run_1d(BOX_H, &[&a, from, &tmp], h);
         self.enc.run_1d(BOX_V, &[&a, &tmp, to], w);
+    }
+
+    /// detail::median_hv
+    fn median(&mut self, p: &Buffer, w: usize, h: usize, r: usize) -> Buffer {
+        let tmp = self.plane(w * h);
+        let out = self.plane(w * h);
+        let a = self.args(&[w as u32, h as u32, r as u32, 0]);
+        self.enc.run_1d(MEDIAN, &[&a, p, &tmp], w * h);
+        let a = self.args(&[w as u32, h as u32, r as u32, 1]);
+        self.enc.run_1d(MEDIAN, &[&a, &tmp, &out], w * h);
+        out
     }
 
     /// detail::box_blur
@@ -262,6 +297,7 @@ struct DevelopParams {
     balance_active: u32,
     bw_enabled: u32,
     base_curve: u32,
+    hue_preserve: u32,
     off_ev: u32,
     off_clarity: u32,
     off_structure: u32,
@@ -348,17 +384,19 @@ fn upload_window(g: &Gpu, img: &LinearImage, (x0, y0, w, h): (usize, usize, usiz
     g.upload(&data)
 }
 
-/// Rasterized masks on the graphics card (uploaded again only when the mask changes).
-static MASKS: LazyLock<Mutex<Vec<(Weak<MaskBitmap>, Arc<Buffer>)>>> = LazyLock::new(Default::default);
+/// Rasterized masks on the graphics card (uploaded again only when the mask changes), per
+/// device (identified by its address).
+static MASKS: LazyLock<Mutex<Vec<(usize, Weak<MaskBitmap>, Arc<Buffer>)>>> = LazyLock::new(Default::default);
 
 fn mask_buffer(g: &Gpu, bm: &Arc<MaskBitmap>) -> Arc<Buffer> {
+    let device = g as *const Gpu as usize;
     let mut masks = MASKS.lock().unwrap();
-    masks.retain(|(w, _)| w.strong_count() > 0);
-    if let Some((_, b)) = masks.iter().find(|(w, _)| std::ptr::eq(w.as_ptr(), Arc::as_ptr(bm))) {
+    masks.retain(|(_, w, _)| w.strong_count() > 0);
+    if let Some((_, _, b)) = masks.iter().find(|(d, w, _)| *d == device && std::ptr::eq(w.as_ptr(), Arc::as_ptr(bm))) {
         return b.clone();
     }
     let b = Arc::new(g.upload(&bm.data));
-    masks.push((Arc::downgrade(bm), b.clone()));
+    masks.push((device, Arc::downgrade(bm), b.clone()));
     if masks.len() > 16 {
         masks.remove(0);
     }
@@ -366,9 +404,8 @@ fn mask_buffer(g: &Gpu, bm: &Arc<MaskBitmap>) -> Arc<Buffer> {
 }
 
 /// Display tables (DISPLAY_DECODE, DISPLAY_ENCODE_U8) on the graphics card.
-fn display_tables(g: &Gpu) -> &'static (Buffer, Buffer) {
-    static TABLES: OnceLock<(Buffer, Buffer)> = OnceLock::new();
-    TABLES.get_or_init(|| {
+fn display_tables(g: &Gpu) -> &(Buffer, Buffer) {
+    g.display_tables.get_or_init(|| {
         let enc: Vec<u32> = DISPLAY_ENCODE_U8.iter().map(|&v| v as u32).collect();
         (g.upload(&DISPLAY_DECODE), g.upload(&enc))
     })
@@ -517,7 +554,13 @@ impl Processor {
         let n = w * h;
         let log_l = ops.img_planes(IMG_LOG_LUMA, working, n).0;
         let sub = ((plan.r_hdr.min(plan.r_clarity) / 8.0) as usize).clamp(1, 8);
-        let ev = plan.hdr_active.then(|| ops.fast_guided(&log_l, w, h, plan.r_hdr as usize, 0.5, sub));
+        let ev = plan.hdr_active.then(|| {
+            let base = match super::median_radius(plan.r_hdr) {
+                r if r > 0 && self.adj.process_3() => ops.median(&log_l, w, h, r),
+                _ => log_l.clone(),
+            };
+            ops.fast_guided(&base, w, h, plan.r_hdr as usize, 0.5, sub)
+        });
         let clarity = plan.clarity_active.then(|| {
             let base = ops.fast_guided(&log_l, w, h, plan.r_clarity as usize, 0.3, sub);
             ops.op(OP_DETAIL, 3.0, &log_l, &base, &base, n)
@@ -575,6 +618,7 @@ impl Processor {
             None => {
                 let b = Arc::new(self.early_gpu(ops, src, plan, cache));
                 if let Some(c) = cache {
+                    ops.keep(&b);
                     c.gpu.lock().unwrap().early = Some((stage_key, b.clone()));
                 }
                 b
@@ -583,13 +627,14 @@ impl Processor {
 
         let need_log = plan.hdr_active || plan.clarity_active || plan.structure_active || plan.dehaze_active;
         let local = if need_log {
-            let k = key(&format!("{stage_key}|{}|{}|{}|{}", plan.hdr_active, plan.clarity_active, plan.structure_active, plan.dehaze_active));
+            let k = key(&format!("{stage_key}|{}|{}|{}|{}|{}", plan.hdr_active, plan.clarity_active, plan.structure_active, plan.dehaze_active, self.adj.process_3()));
             let cached = cache.and_then(|c| c.gpu.lock().unwrap().local.as_ref().filter(|(ck, _)| *ck == k).map(|(_, l)| l.clone()));
             match cached {
                 Some(l) if global_dark.is_none() => Some(l),
                 _ => {
                     let l = Arc::new(self.local_gpu(ops, &working, plan, global_dark)?);
                     if let Some(c) = cache.filter(|_| global_dark.is_none()) {
+                        ops.keep(&l.buf);
                         c.gpu.lock().unwrap().local = Some((k, l.clone()));
                     }
                     Some(l)
@@ -687,6 +732,7 @@ impl Processor {
             balance_active: self.balance_active as u32,
             bw_enabled: bw.enabled as u32,
             base_curve: adj.base_curve as u32,
+            hue_preserve: adj.process_3() as u32,
             off_ev: off(0),
             off_clarity: off(1),
             off_structure: off(2),
@@ -742,8 +788,8 @@ impl Processor {
             geo: plan.geo.gpu(),
         };
         let p = ops.args(&params);
-        let local_buf = local.as_ref().map(|l| &l.buf).unwrap_or(&ops.dummy);
         let out = ops.image(n);
+        let local_buf = local.as_ref().map(|l| &l.buf).unwrap_or(&ops.dummy);
         ops.enc.run_2d(DEVELOP, &[&p, &working, local_buf, &luts, &layer_buf, &mask_buf, &out], ext.w, ext.h);
 
         let d = &adj.detail;
@@ -827,7 +873,16 @@ impl Processor {
         let out = ops.image(r.w * r.h);
         ops.enc.run_2d(OUTPUT, &[&a, developed, &out], r.w, r.h);
         ops.flush();
-        ops.g.read::<[f32; 4]>(&out, r.w * r.h)
+        #[allow(unused_mut)]
+        let mut data = ops.g.read::<[f32; 4]>(&out, r.w * r.h)?;
+        if space.is_some() {
+            #[cfg(test)]
+            if ops.g.inject_incomplete.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                data[0][3] = 0.0;
+            }
+            check_output(ops.g, &data)?;
+        }
+        Ok(data)
     }
 
     pub(super) fn render_gpu(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Result<Rendered> {
@@ -873,7 +928,13 @@ impl Processor {
             let hist = g.upload(&[0u32; 1024]);
             ops.enc.run_2d(DISPLAY, &[&a, &developed, decode, encode8, &rgba, &hist], r.w, r.h);
             ops.flush();
-            let rgba = g.read::<u8>(&rgba, r.w * r.h * 4)?;
+            #[allow(unused_mut)]
+            let mut rgba = g.read::<u8>(&rgba, r.w * r.h * 4)?;
+            #[cfg(test)]
+            if g.inject_incomplete.swap(false, std::sync::atomic::Ordering::Relaxed) {
+                rgba[3] = 0;
+            }
+            check_display(g, &rgba)?;
             let h = g.read::<u32>(&hist, 1024)?;
             timer.lap("gpu: develop + display");
             let histogram = Histogram { r: h[0..256].to_vec(), g: h[256..512].to_vec(), b: h[512..768].to_vec(), luma: h[768..1024].to_vec() };
@@ -933,6 +994,33 @@ impl Processor {
     }
 }
 
+/// Every displayed pixel is written with alpha 255 into a buffer that starts out zeroed: any
+/// other alpha means the card didn't finish the work (driver problem), and it is taken out of
+/// use. An all-black result is suspicious too; it is redone on the CPU once, without blaming
+/// the card (the image may simply be black).
+fn check_display(g: &Gpu, rgba: &[u8]) -> Result<()> {
+    if rgba.chunks_exact(4).any(|p| p[3] != 255) {
+        g.fail("Grafikkarte lieferte ein unvollständiges Bild");
+        bail!("Grafikkarte: unvollständiges Bild");
+    }
+    if rgba.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]) {
+        bail!("Grafikkarte: schwarzes Bild, wird auf dem Prozessor geprüft");
+    }
+    Ok(())
+}
+
+/// Like [`check_display`] for converted output: the kernel marks each written pixel with w = 1.
+fn check_output(g: &Gpu, data: &[[f32; 4]]) -> Result<()> {
+    if data.iter().any(|p| p[3] != 1.0 || !p[..3].iter().all(|v| v.is_finite())) {
+        g.fail("Grafikkarte lieferte ein unvollständiges Ergebnis");
+        bail!("Grafikkarte: unvollständiges Ergebnis");
+    }
+    if data.iter().all(|p| p[..3] == [0.0, 0.0, 0.0]) {
+        bail!("Grafikkarte: schwarzes Ergebnis, wird auf dem Prozessor geprüft");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -942,14 +1030,79 @@ mod tests {
     use crate::params::*;
     use crate::raw::CaptureInfo;
 
-    /// The graphics card, or `None` (the test is skipped). Without a real one, run with
-    /// `SILBERKORN_GPU=software` (lavapipe / WARP).
+    /// A device for the comparisons with the CPU: the graphics card, or a software adapter
+    /// (lavapipe / WARP) on machines without one. Only these tests use it; everything else in
+    /// the tests runs on the CPU, which is much faster than a software adapter. `None` (the
+    /// test is skipped) with `SILBERKORN_GPU=0` or without any adapter.
     fn gpu() -> Option<&'static Gpu> {
-        let g = crate::gpu::active();
+        static TEST_GPU: std::sync::OnceLock<Option<Gpu>> = std::sync::OnceLock::new();
+        let g = TEST_GPU.get_or_init(Gpu::new_for_test).as_ref();
         if g.is_none() {
-            eprintln!("keine Grafikkarte: Vergleich übersprungen (SILBERKORN_GPU=software verwendet den Software-Adapter)");
+            eprintln!("keine Grafikkarte: Vergleich übersprungen");
         }
         g
+    }
+
+    #[test]
+    fn incomplete_results_take_the_card_out_of_use() {
+        // A device of its own: the shared one stays usable for the other tests.
+        let Some(g) = Gpu::new_for_test() else { return };
+        let (w, h) = (120, 80);
+        let src = image(w, h);
+        let p = Processor::new(&meta(w, h), &Adjustments::default());
+        assert!(p.render_gpu(&g, &src, None, None).is_ok());
+        g.inject_incomplete.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(p.render_gpu(&g, &src, None, None).is_err());
+        assert!(g.problem().is_some_and(|why| why.contains("unvollständig")));
+        // Exports are checked the same way.
+        let Some(g) = Gpu::new_for_test() else { return };
+        g.inject_incomplete.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(p.process_gpu(&g, &src, None, OutputSpace::Srgb).is_err());
+        assert!(g.problem().is_some());
+    }
+
+    #[test]
+    fn median_matches_cpu() {
+        let Some(g) = gpu() else { return };
+        let (w, h) = (97, 61);
+        let p = Plane::new(w, h, (0..w * h).map(|i| hash_noise(i as i64, 2, 7) * 3.0 - 1.0).collect());
+        for r in [1, 3, 24] {
+            let mut ops = Ops::new(g);
+            let buf = ops.g.upload(&p.data);
+            let out = ops.median(&buf, w, h, r);
+            ops.flush();
+            let got = g.read::<f32>(&out, w * h).unwrap();
+            let want = crate::detail::median_hv(&p, r);
+            assert_eq!(got, want.data, "r {r}");
+        }
+    }
+
+    #[test]
+    fn reused_buffers_give_the_same_result() {
+        let Some(g) = Gpu::new_for_test() else { return };
+        let (w, h) = (420, 300);
+        let src = image(w, h);
+        let adj = Adjustments { highlights: -60.0, shadows: 40.0, detail: Detail { clarity: 30.0, ..Default::default() }, ..Default::default() };
+        let p = Processor::new(&meta(w, h), &adj);
+        let first = p.render_gpu(&g, &src, None, None).unwrap();
+        assert!(g.pooled_bytes() > 0, "nichts im Pool");
+        // Reused buffers hold old data until cleared: the result must not change.
+        let second = p.render_gpu(&g, &src, None, None).unwrap();
+        assert!(first.rgba == second.rgba);
+        let other = Processor::new(&meta(w, h), &Adjustments { exposure: 0.5, ..adj.clone() }).render_gpu(&g, &src, None, None).unwrap();
+        let cpu = Processor::new(&meta(w, h), &Adjustments { exposure: 0.5, ..adj }).render_cpu(&src, None, None);
+        let max = other.rgba.iter().zip(&cpu.rgba).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap_or(0);
+        assert!(max <= 4, "max {max}");
+    }
+
+    #[test]
+    fn black_results_are_redone_without_blaming_the_card() {
+        let Some(g) = Gpu::new_for_test() else { return };
+        let (w, h) = (64, 48);
+        let black = LinearImage::new(w, h, vec![[0.0; 3]; w * h]);
+        let p = Processor::new(&meta(w, h), &Adjustments::default());
+        assert!(p.render_gpu(&g, &black, None, None).is_err());
+        assert!(g.problem().is_none());
     }
 
     fn meta(w: usize, h: usize) -> RawMeta {

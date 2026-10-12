@@ -60,11 +60,17 @@ Vulkan, DirectX 12 oder Metal) und fällt ohne geeignete Karte oder bei einem Fe
 zurück. Der Prozessor-Pfad bleibt die Referenz: `pipeline::gpu`-Tests vergleichen beide Wege (höchstens
 1/255 Abweichung). Exporte großer Bilder werden in Kacheln gerechnet. Heilen/Klonen und Entfernen
 werden beim Resampling auf dem Prozessor angewendet, der Softproof (Little CMS) ebenfalls.
+Antwortet die Grafikkarte nicht (Zeitlimit 60 s), geht sie verloren oder liefert sie ein
+unvollständiges Bild, wird sie bis zum Neustart nicht mehr verwendet und der Prozessor übernimmt;
+der Dialog „Grafikkarte …“ nennt den Grund. Puffer werden zwischen Berechnungen wiederverwendet.
 Abschalten im Dialog „Grafikkarte …“ oder mit `SILBERKORN_GPU=0`; `SILBERKORN_GPU=software` erlaubt
-Software-Adapter (unter WSL zusätzlich `GALLIUM_DRIVER=llvmpipe`), z. B. für die Tests ohne Grafikkarte.
+Software-Adapter (unter WSL zusätzlich `GALLIUM_DRIVER=llvmpipe`) für die App selbst; die
+Vergleichstests holen sich ohne Grafikkarte von sich aus einen Software-Adapter.
 `cargo run --release -p sk-core --example gpu_info` zeigt die gefundenen Adapter.
 
-X-Trans-Sensoren (Fujifilm) werden mit dem Markesteijn-Verfahren entwickelt (drei Durchgänge für
+Bayer-Sensoren werden mit AHD entwickelt (jedes Pixel wird waagerecht und senkrecht interpoliert,
+genommen wird die gleichmäßigere Richtung; keine Reißverschluss-Kanten an feinen Linien),
+X-Trans-Sensoren (Fujifilm) mit dem Markesteijn-Verfahren (drei Durchgänge für
 volle Auflösung und Export, einer für Vorschauen); Vorschauen fassen wie bei Bayer-Sensoren Blöcke
 des Mosaiks zusammen (3×3 statt 2×2) und brauchen daher kein Demosaicing.
 
@@ -124,7 +130,8 @@ rechnet ONNX Runtime auf dem Prozessor (etwa doppelt so schnell wie ohne); ohne 
 bei Fehlern übernimmt tract. Zum Testen auf anderen Systemen: `SILBERKORN_ORT=<libonnxruntime.so>`.
 
 Alles, was länger dauert (KI, Zusammenfügen, Verarbeiten, Indexieren, Downloads), zeigt die
-Statusleiste mit Fortschritt an; worauf man im Viewer wartet (Maske, Entfernen, Angleichen),
+Statusleiste mit Fortschritt an; Verarbeiten, Zusammenfügen und Entrauschen lassen sich dort mit ✕
+abbrechen, und beim Beenden fragt Silberkorn nach, solange sie laufen; worauf man im Viewer wartet (Maske, Entfernen, Angleichen),
 erscheint zusätzlich oben im Bild.
 
 - **Entrauschen (KI)** (Bild-Menü): NAFNet (Breite 32, megvii-research, MIT), trainiert auf echtem
@@ -319,6 +326,12 @@ stellt die Auswahl um; Stile und eingefügte Anpassungen übernehmen die Version
 - **2:** Farben außerhalb des Ausgabefarbraums werden zu ihrer eigenen Helligkeit hin entsättigt,
   statt jeden Kanal abzuschneiden. Der Farbton bleibt so erhalten (gesättigtes Blau kippt nicht
   mehr ins Violette, Neon und LEDs nicht ins Gelbe).
+- **3:** Die Tonkurve wird auf den hellsten und den dunkelsten Farbkanal angewendet, der mittlere
+  folgt (wie die Referenz-Tonkurve der DNG-Spezifikation). Mehr Kontrast verschiebt so keine
+  Farbtöne mehr: Haut wird nicht orange, Himmel nicht cyan. Lichter/Schatten arbeiten auf einem
+  Median der Helligkeit (0,15 % der langen Kante), sodass Äste, Linien und feine Texturen ihren
+  Kontrast behalten. Die Farbmatrix folgt dem Licht: Hat die Kamera auch eine Matrix für
+  Glühlampenlicht, wird zwischen Tageslicht und Glühlampe nach der Farbtemperatur interpoliert.
 
 ### Varianten
 
@@ -396,6 +409,9 @@ beziehen sich aber nur auf die Bilder der Session.
 - **Keywords** im Tab „Metadaten“ (mit Vorschlägen aus dem Katalog); Bewertung, Label und
   Keywords wirken auf die ganze Auswahl.
 - **Stile:** Anpassungen als Preset speichern (`~/.config/silberkorn/styles`) und auf die Auswahl anwenden.
+- **Eingebettete Vorschauen** werden direkt gelesen: nur die TIFF-Struktur und das JPEG, nicht die
+  ganze RAW-Datei (ARW, NEF, CR2, DNG, ORF, RW2, PEF, RAF). Über Netzlaufwerke oder USB ein
+  Vielfaches schneller; andere Formate (z. B. CR3) wie bisher über die volle Datei.
 - **Thumbnail-Cache** unter `~/.cache/silberkorn/thumbs` (Vorschauen in `previews`). Zusammen
   höchstens 4 GB (`SILBERKORN_CACHE_MB` ändert das); beim Start werden die am längsten nicht
   genutzten entfernt. Session-Caches sind davon ausgenommen. Sichtbare Vorschaubilder werden vor
@@ -481,6 +497,22 @@ Daten aus der Zeit als „Capture Room“ werden übernommen: Ordner `capture-ro
 | Q / A / D / F / V / T + Mausrad | Speed Edit: Belichtung / Kontrast / Sättigung / Lichter / Tiefen / Temperatur (auf der aktiven Ebene, sonst global) |
 
 Doppelklick auf einen Reglernamen setzt den Regler zurück.
+
+## Tests
+
+```bash
+cargo t        # schnell: alles außer den langsamen Tests (etwa 1–2 Minuten)
+cargo t-slow   # nur die langsamen (volle Auflösung, Export, Vergleichsansicht …)
+cargo t-all    # alles
+```
+
+Die Aliase stehen in `.cargo/config.toml`. Langsame Tests tragen `#[ignore = "langsam: …"]`.
+Die App-Tests nutzen die Beispiel-RAWs in `samples/` und werden ohne sie übersprungen. Nur die
+Vergleichstests Grafikkarte/Prozessor (`pipeline::gpu`) rechnen auf der Grafikkarte, ohne eine
+echte über einen Software-Adapter; alle anderen Tests rechnen auf dem Prozessor, der viel schneller
+ist als ein Software-Adapter. `sk-core` wird auch in Debug-Builds optimiert übersetzt (`Cargo.toml`),
+weil die Tests echte RAWs durch die Pipeline schicken. Der Test gegen den echten NuGet-Server läuft
+nur mit `SK_NETWORK_TESTS=1 cargo t-all`.
 
 ## Bildnachweis
 

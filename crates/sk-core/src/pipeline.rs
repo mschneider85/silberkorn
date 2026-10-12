@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
 
 use crate::color::{Mat3, Oklab, OutputSpace, luminance, mat_vec, srgb_decode, srgb_encode};
-use crate::detail::{Plane, fast_guided_filter, gaussian_blur, guided_filter, value_noise};
+use crate::detail::{Plane, fast_guided_filter, gaussian_blur, guided_filter, median_hv, value_noise};
 use crate::geometry::{GeoMap, Region};
 use crate::image::LinearImage;
 use crate::mask::{MaskBitmap, apply_retouch, cached_bitmap};
@@ -288,7 +288,12 @@ impl Processor {
             base,
             layers,
             wb,
-            cam_to_working: meta.color.cam_to_working,
+            // Process 3: the color matrix follows the light (daylight to tungsten).
+            cam_to_working: match adj.white_balance.mode {
+                _ if !adj.process_3() || meta.color.xyz_to_cam_a.is_none() => meta.color.cam_to_working,
+                WbMode::Custom => meta.color.cam_to_working_at(adj.white_balance.kelvin),
+                WbMode::AsShot => meta.color.cam_to_working_at(meta.color.temp_tint_for_wb(meta.as_shot_wb).0),
+            },
             oklab: Oklab::default(),
             color_active,
             editor_active: !adj.color_editor.is_neutral(),
@@ -359,10 +364,12 @@ impl Processor {
             let g = gain_ev.exp2();
             rgb.iter_mut().for_each(|v| *v *= g);
         }
-        match &self.tone_luts.curve {
-            Some(lut) if tp.contrast == self.base.contrast => rgb.map(|v| curve_lookup(lut, v)),
-            _ => rgb.map(|v| contrast_and_base_curve(self.adj.base_curve, tp.contrast, v)),
-        }
+        let lut = self.tone_luts.curve.as_ref().filter(|_| tp.contrast == self.base.contrast);
+        let curve = |v: f32| match lut {
+            Some(lut) => curve_lookup(lut, v),
+            None => contrast_and_base_curve(self.adj.base_curve, tp.contrast, v),
+        };
+        if self.adj.process_3() { hue_preserving(rgb, curve) } else { rgb.map(curve) }
     }
 
     /// Color adjustments in Oklab on display-linear working RGB.
@@ -623,14 +630,17 @@ impl Processor {
         let need_log = hdr_active || clarity_active || structure_active || dehaze_active;
         let local = if need_log {
             let key = {
-                let k = format!("{}|{hdr_active}|{clarity_active}|{structure_active}|{dehaze_active}", self.stage_key(src, ext));
+                let k = format!("{}|{hdr_active}|{clarity_active}|{structure_active}|{dehaze_active}|{}", self.stage_key(src, ext), self.adj.process_3());
                 crate::cache::fnv1a(k.as_bytes())
             };
             let compute = || {
                 let log_l = Plane::new(w, h, working.data.par_iter().map(|p| dot(*p, LUMA).max(1e-6).log2() - MID_GREY.log2()).collect());
                 let sub = ((r_hdr.min(r_clarity) / 8.0) as usize).clamp(1, 8);
                 LocalPlanes {
-                    hdr_base: hdr_active.then(|| fast_guided_filter(&log_l, r_hdr as usize, 0.5, sub)),
+                    hdr_base: hdr_active.then(|| match median_radius(r_hdr) {
+                        r if r > 0 && self.adj.process_3() => fast_guided_filter(&median_hv(&log_l, r), r_hdr as usize, 0.5, sub),
+                        _ => fast_guided_filter(&log_l, r_hdr as usize, 0.5, sub),
+                    }),
                     clarity: clarity_active.then(|| {
                         let base = fast_guided_filter(&log_l, r_clarity as usize, 0.3, sub);
                         log_l.zip(&base, |a, b| (a - b).clamp(-3.0, 3.0))
@@ -916,6 +926,36 @@ impl Processor {
         timer.lap("histogram");
         Rendered { width: enc.width, height: enc.height, rgba, histogram, full_size: full }
     }
+}
+
+/// Applies a tone curve to the largest and smallest channel; the middle one keeps its relative
+/// position between them, so the hue stays (the DNG reference tone curve method). Applying the
+/// curve to each channel on its own shifts hues towards the primaries as contrast rises.
+#[inline]
+fn hue_preserving(rgb: [f32; 3], curve: impl Fn(f32) -> f32) -> [f32; 3] {
+    let [r, g, b] = rgb;
+    let (hi, mid, lo) = if r >= g {
+        if g >= b { (0, 1, 2) } else if r >= b { (0, 2, 1) } else { (2, 0, 1) }
+    } else if r >= b {
+        (1, 0, 2)
+    } else if g >= b {
+        (1, 2, 0)
+    } else {
+        (2, 1, 0)
+    };
+    let (h, l) = (curve(rgb[hi]), curve(rgb[lo]));
+    let span = rgb[hi] - rgb[lo];
+    let mut out = [0.0; 3];
+    out[hi] = h;
+    out[lo] = l;
+    out[mid] = if span > 1e-9 { l + (h - l) * (rgb[mid] - rgb[lo]) / span } else { h };
+    out
+}
+
+/// Radius of the median under the highlights/shadows base (process 3): 0.15 % of the long
+/// edge, from the base's own radius (2 %); at most 24 pixels.
+fn median_radius(r_hdr: f32) -> usize {
+    ((r_hdr * 0.075).round() as usize).min(24)
 }
 
 /// Size of the direct display tables.

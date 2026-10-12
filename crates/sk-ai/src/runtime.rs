@@ -374,13 +374,18 @@ impl Net {
 mod tests {
     use super::*;
 
-    /// Downloads one DLL from the real NuGet package (network; `cargo test -- --ignored`).
+    /// Downloads one DLL from the real NuGet package and checks it against the pinned hash
+    /// (network: only with `SK_NETWORK_TESTS=1 cargo t-all`).
     #[test]
-    #[ignore]
+    #[ignore = "Netzwerk: SK_NETWORK_TESTS=1 cargo t-all"]
     fn zip_entry_from_nuget() {
-        let [(url, inner, _, _), _] = gpu_files();
+        if std::env::var_os("SK_NETWORK_TESTS").is_none() {
+            return;
+        }
+        let [(url, inner, _, sha256), _] = gpu_files();
         let dll = zip_entry(&url, inner, &|_| {}).unwrap();
         assert!(dll.len() > 5_000_000 && dll.starts_with(b"MZ"), "{}", dll.len());
+        assert_eq!(crate::models::sha256(&dll), sha256);
     }
 
     #[test]

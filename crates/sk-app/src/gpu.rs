@@ -53,7 +53,10 @@ impl App {
                     "Wird eingerichtet …".to_string()
                 }
                 Some(None) => "Keine geeignete Grafikkarte gefunden; es rechnet der Prozessor.".to_string(),
-                Some(Some(name)) => format!("Aktiv: {name}"),
+                Some(Some(name)) => match sk_core::gpu::problem() {
+                    Some(why) => format!("{name}: {why}. Bis zum Neustart rechnet der Prozessor."),
+                    None => format!("Aktiv: {name}"),
+                },
             };
             ui.label(RichText::new(status).small().color(Color32::from_gray(170)));
             ui.add_space(10.0);

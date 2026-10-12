@@ -32,6 +32,8 @@ struct Params {
     balance_active: u32,
     bw_enabled: u32,
     base_curve: u32,
+    // Tone curve on the largest and smallest channel, the middle one follows (process 3).
+    hue_preserve: u32,
     // Offsets into the local planes buffer.
     off_ev: u32,
     off_clarity: u32,
@@ -238,10 +240,54 @@ fn tone(rgb0: vec3<f32>, has_ev: bool, local_ev: f32, detail: vec2<f32>, tp: Ton
         }
         rgb *= exp2(gain_ev);
     }
-    if P.lut_curve != NO_LUT && tp.contrast == P.contrast {
-        return vec3<f32>(curve_lookup(rgb.x), curve_lookup(rgb.y), curve_lookup(rgb.z));
+    if P.hue_preserve == 0u {
+        return vec3<f32>(tone_curve(tp, rgb.x), tone_curve(tp, rgb.y), tone_curve(tp, rgb.z));
     }
-    return vec3<f32>(contrast_and_base_curve(tp.contrast, rgb.x), contrast_and_base_curve(tp.contrast, rgb.y), contrast_and_base_curve(tp.contrast, rgb.z));
+    return hue_preserving(tp, rgb);
+}
+
+fn tone_curve(tp: Tone, v: f32) -> f32 {
+    if P.lut_curve != NO_LUT && tp.contrast == P.contrast {
+        return curve_lookup(v);
+    }
+    return contrast_and_base_curve(tp.contrast, v);
+}
+
+// pipeline::hue_preserving
+fn hue_preserving(tp: Tone, rgb: vec3<f32>) -> vec3<f32> {
+    var hi = 0u;
+    var mid = 1u;
+    var lo = 2u;
+    let r = rgb.x;
+    let g = rgb.y;
+    let b = rgb.z;
+    if r >= g {
+        if g >= b {
+            hi = 0u; mid = 1u; lo = 2u;
+        } else if r >= b {
+            hi = 0u; mid = 2u; lo = 1u;
+        } else {
+            hi = 2u; mid = 0u; lo = 1u;
+        }
+    } else if r >= b {
+        hi = 1u; mid = 0u; lo = 2u;
+    } else if g >= b {
+        hi = 1u; mid = 2u; lo = 0u;
+    } else {
+        hi = 2u; mid = 1u; lo = 0u;
+    }
+    let h = tone_curve(tp, rgb[hi]);
+    let l = tone_curve(tp, rgb[lo]);
+    let span = rgb[hi] - rgb[lo];
+    var out = vec3<f32>(0.0);
+    out[hi] = h;
+    out[lo] = l;
+    if span > 1e-9 {
+        out[mid] = l + (h - l) * (rgb[mid] - rgb[lo]) / span;
+    } else {
+        out[mid] = h;
+    }
+    return out;
 }
 
 // ------------------------------------------------------------------ color

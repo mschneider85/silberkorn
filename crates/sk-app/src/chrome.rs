@@ -252,17 +252,13 @@ impl App {
         let n_sel = self.selected_paths().len();
         self.session_file_menu(ui);
         ui.separator();
-        if item(ui, icon::FOLDER_OPEN, "Ordner öffnen …", "Strg+O", true) {
-            self.open_folder_dialog();
-        }
+        self.command_item(ui, "open-folder");
         let import = if self.session.is_some() { "In Session importieren …" } else { "Ordner in Katalog importieren …" };
         if item(ui, icon::FOLDER_PLUS, import, "", true) {
             self.import_folder_dialog();
         }
         ui.separator();
-        if item(ui, icon::EXPORT, &format!("Verarbeiten ({})", image_count(n_sel)), "Strg+D", n_sel > 0) {
-            self.export_selection();
-        }
+        self.command_item_labeled(ui, "export", &format!("Verarbeiten ({})", image_count(n_sel)));
         ui.separator();
         if item(ui, icon::X, "Beenden", "Alt+F4", true) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -270,65 +266,32 @@ impl App {
     }
 
     fn edit_menu(&mut self, ui: &mut Ui) {
-        let has = self.current.is_some();
-        if item(ui, icon::ARROW_U_UP_LEFT, "Rückgängig", "Strg+Z", self.can_undo()) {
-            self.undo();
-        }
-        if item(ui, icon::ARROW_U_UP_RIGHT, "Wiederholen", "Strg+Y", !self.redo.is_empty()) {
-            self.redo();
-        }
+        self.command_item(ui, "undo");
+        self.command_item(ui, "redo");
         ui.separator();
-        if item(ui, icon::COPY, "Anpassungen kopieren", "Strg+Umschalt+C", has) {
-            self.copy_adjustments();
-        }
-        if item(ui, icon::CLIPBOARD_TEXT, "Anpassungen anwenden", "Strg+Umschalt+V", self.clipboard.is_some()) {
-            self.paste_adjustments();
-        }
-        if item(ui, icon::ARROW_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", "", has) {
-            self.reset_adjustments();
-        }
+        self.command_item(ui, "copy-adjustments");
+        self.command_item_labeled(ui, "paste-adjustments", "Anpassungen anwenden");
+        self.command_item(ui, "reset");
         ui.separator();
-        if item(ui, icon::CHECK_SQUARE, "Alle auswählen", "Strg+A", !self.visible.is_empty()) {
-            self.select_all();
-        }
+        self.command_item(ui, "select-all");
         ui.separator();
-        if item(ui, icon::LIGHTNING, "Grafikkarte …", "", true) {
-            self.show_gpu_dialog = true;
-        }
+        self.command_item(ui, "gpu");
     }
 
     fn image_menu(&mut self, ui: &mut Ui) {
-        let has = self.current.is_some();
         let n_sel = self.selected_paths().len();
-        if item(ui, icon::ARROW_COUNTER_CLOCKWISE, "Links drehen", "Strg+[", has) {
-            self.rotate(3);
-        }
-        if item(ui, icon::ARROW_CLOCKWISE, "Rechts drehen", "Strg+]", has) {
-            self.rotate(1);
-        }
-        if item(ui, icon::CROP, "Zuschneiden", "C", has) {
-            self.toggle_crop();
-        }
-        if item(ui, icon::PERSPECTIVE, "Automatisch geraderichten", "Umschalt+A", has) {
-            self.auto_upright(sk_core::upright::UprightMode::Vertical);
-        }
-        if item(ui, icon::PENCIL_SIMPLE, "Umbenennen …", "Strg+Umschalt+R", n_sel > 0) {
-            self.open_rename();
-        }
+        self.command_item(ui, "rotate-left");
+        self.command_item(ui, "rotate-right");
+        self.command_item(ui, "crop");
+        self.command_item(ui, "auto-upright");
+        self.command_item(ui, "rename");
         let process = self.current.as_ref().map(|c| c.adjustments.process);
         let label = match process {
             Some(p) if p < sk_core::params::PROCESS_LATEST => format!("Auf aktuelle Prozessversion heben (dieses Bild: {p})"),
             _ => "Auf aktuelle Prozessversion heben".to_string(),
         };
-        if item(ui, icon::ARROW_CIRCLE_UP, &label, "", n_sel > 0) {
-            self.update_process_version();
-        }
-        if item(ui, icon::EYEDROPPER, "Weißabgleich aufnehmen", "W", has) {
-            self.tab = Tab::Color;
-            if !self.picking_wb {
-                self.toggle_wb_picker();
-            }
-        }
+        self.command_item_labeled(ui, "process-update", &label);
+        self.command_item_labeled(ui, "wb-picker", "Weißabgleich aufnehmen");
         ui.separator();
         ui.add_enabled_ui(n_sel > 0, |ui| {
             ui.menu_button(format!("{}  Bewertung", icon::STAR), |ui| {
@@ -373,14 +336,10 @@ impl App {
         self.variant_menu(ui);
         self.stack_menu(ui);
         self.merge_menu(ui);
-        if item(ui, icon::SPARKLE, "Entrauschen (KI) …", "", n_sel > 0) {
-            self.open_denoise();
-        }
+        self.command_item(ui, "denoise");
         ui.separator();
         let ref_text = if self.compare_ref.is_some() && self.compare_ref == self.primary_path() { "Referenzbild entfernen" } else { "Als Referenzbild festlegen" };
-        if item(ui, icon::PUSH_PIN, ref_text, "Umschalt+Enter", has) {
-            self.toggle_reference();
-        }
+        self.command_item_labeled(ui, "reference", ref_text);
         let can_match = self.can_match();
         ui.add_enabled_ui(can_match, |ui| {
             ui.menu_button(format!("{}  An Referenz angleichen", icon::SCALES), |ui| {
@@ -399,17 +358,12 @@ impl App {
         ui.separator();
         self.move_menu(ui);
         ui.separator();
-        if item(ui, icon::CARET_LEFT, "Vorheriges Bild", icon::ARROW_LEFT, !self.visible.is_empty()) {
-            self.step(-1);
-        }
-        if item(ui, icon::CARET_RIGHT, "Nächstes Bild", icon::ARROW_RIGHT, !self.visible.is_empty()) {
-            self.step(1);
-        }
+        self.command_item(ui, "previous");
+        self.command_item(ui, "next");
     }
 
     fn view_menu(&mut self, ui: &mut Ui) {
-        let has = self.current.is_some();
-        if check(ui, self.grid_view, "Raster", "G") {
+        if check(ui, self.grid_view, "Raster", &shortcut("grid")) {
             self.grid_view = !self.grid_view;
         }
         if check(ui, self.show_filmstrip, "Filmstreifen", "") {
@@ -429,18 +383,15 @@ impl App {
         if check(ui, self.zoom.is_none(), "Einpassen", "") {
             self.zoom_fit();
         }
-        if item(ui, icon::MAGNIFYING_GLASS_PLUS, "100 %", "Z", has) {
-            self.zoom = None;
-            self.toggle_zoom_100();
-        }
+        self.command_item_labeled(ui, "zoom-100", "100 %");
         ui.separator();
-        if check(ui, self.show_before, "Vorher anzeigen", "Y") {
+        if check(ui, self.show_before, "Vorher anzeigen", &shortcut("before")) {
             self.toggle_before();
         }
-        if check(ui, self.split_view && !self.split_side, "Geteilter Vergleich", "U") {
+        if check(ui, self.split_view && !self.split_side, "Geteilter Vergleich", &shortcut("split")) {
             self.toggle_split();
         }
-        if check(ui, self.split_view && self.split_side, "Vorher | Nachher nebeneinander", "Umschalt+U") {
+        if check(ui, self.split_view && self.split_side, "Vorher | Nachher nebeneinander", &shortcut("side-by-side")) {
             self.toggle_side_by_side();
         }
         if check(ui, self.multi_view, "Auswahl nebeneinander vergleichen", "") {
@@ -449,10 +400,10 @@ impl App {
         if self.compare_ref.is_some() && item(ui, icon::PUSH_PIN_SLASH, "Referenzbild entfernen", "", true) {
             self.compare_ref = None;
         }
-        if check(ui, self.clip_warning, "Belichtungswarnung", "E") {
+        if check(ui, self.clip_warning, "Belichtungswarnung", &shortcut("clip-warning")) {
             self.toggle_clip_warning();
         }
-        if check(ui, self.focus_mask, "Fokusmaske", "K") {
+        if check(ui, self.focus_mask, "Fokusmaske", &shortcut("focus-mask")) {
             self.toggle_focus_mask();
         }
         ui.horizontal(|ui| {
@@ -461,16 +412,16 @@ impl App {
             ui.add(egui::Slider::new(&mut self.focus_sensitivity, 0.0..=100.0).fixed_decimals(0))
                 .on_hover_text("Höher: auch weniger scharfe Bereiche markieren");
         });
-        if check(ui, self.proof_view, "Proof (Ausgabe-Rezept)", "P") {
+        if check(ui, self.proof_view, "Proof (Ausgabe-Rezept)", &shortcut("proof")) {
             self.toggle_proof();
         }
-        if check(ui, self.softproof.on, "Softproof (Profil im Tab „Ausgabe“)", "Umschalt+P") {
+        if check(ui, self.softproof.on, "Softproof (Profil im Tab „Ausgabe“)", &shortcut("softproof")) {
             self.toggle_softproof();
         }
-        if check(ui, self.print.on, "Druckvorschau (Format im Tab „Ausgabe“)", "Strg+P") {
+        if check(ui, self.print.on, "Druckvorschau (Format im Tab „Ausgabe“)", &shortcut("print-preview")) {
             self.toggle_print_preview();
         }
-        if check(ui, self.print.zoom, "Druckgröße", "Umschalt+Z") {
+        if check(ui, self.print.zoom, "Druckgröße", &shortcut("print-zoom")) {
             self.toggle_print_zoom();
         }
         ui.separator();
@@ -482,7 +433,7 @@ impl App {
                 }
             }
         });
-        if check(ui, self.overlay.shown, "Overlay anzeigen", "Umschalt+O") {
+        if check(ui, self.overlay.shown, "Overlay anzeigen", &shortcut("overlay")) {
             self.toggle_overlay();
         }
         if item(ui, icon::IMAGE, "Overlay wählen …", "", true) {
@@ -501,10 +452,10 @@ impl App {
             });
         }
         ui.separator();
-        if check(ui, self.viewer_window.open, "Viewer in eigenem Fenster (Zweitmonitor)", "Umschalt+F11") {
+        if check(ui, self.viewer_window.open, "Viewer in eigenem Fenster (Zweitmonitor)", &shortcut("viewer-window")) {
             self.toggle_viewer_window();
         }
-        if check(ui, self.fullscreen, "Vollbild ohne Ablenkung", "F11") {
+        if check(ui, self.fullscreen, "Vollbild ohne Ablenkung", &shortcut("fullscreen")) {
             self.toggle_fullscreen(&ui.ctx().clone());
         }
         ui.separator();
@@ -521,13 +472,9 @@ impl App {
         if item(ui, icon::MAGNIFYING_GLASS, "Befehl suchen …", "Strg+K", true) {
             self.palette.show();
         }
-        if item(ui, icon::KEYBOARD, "Tastenkürzel", "F1", true) {
-            self.show_shortcuts = true;
-        }
+        self.command_item(ui, "shortcuts");
         ui.separator();
-        if item(ui, icon::INFO, "Über Silberkorn", "", true) {
-            self.splash = Some(crate::splash::Splash::about());
-        }
+        self.command_item(ui, "about");
     }
 
     // ------------------------------------------------------------ toolbar
@@ -630,7 +577,7 @@ impl App {
                         }
                     }
                     ui.separator();
-                    if check(ui, self.overlay.shown, "Overlay anzeigen", "Umschalt+O") {
+                    if check(ui, self.overlay.shown, "Overlay anzeigen", &shortcut("overlay")) {
                         self.toggle_overlay();
                     }
                     if item(ui, icon::IMAGE, "Overlay wählen …", "", true) {
@@ -966,6 +913,11 @@ pub fn resize_edges(ui: &mut Ui) {
 }
 
 /// Menu entry with icon and shortcut; returns true when clicked.
+/// The shortcut of a command, as shown in menus.
+fn shortcut(id: &str) -> String {
+    crate::commands::get(id).map(|c| c.shortcut()).unwrap_or_default()
+}
+
 fn item(ui: &mut Ui, ic: &str, text: &str, shortcut: &str, enabled: bool) -> bool {
     ui.add_enabled(enabled, Button::new(format!("{ic}  {text}")).shortcut_text(shortcut)).clicked()
 }

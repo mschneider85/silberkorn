@@ -26,6 +26,53 @@ impl Plane {
     }
 }
 
+/// Separable median: a running median of 2r+1 values along each row, then along each column
+/// of that (edges clamped). Keeps lines and fine texture that a mean would spread out, while
+/// removing isolated outliers. O(n · r).
+pub fn median_hv(p: &Plane, r: usize) -> Plane {
+    if r == 0 || p.w == 0 || p.h == 0 {
+        return p.clone();
+    }
+    let (w, h) = (p.w, p.h);
+    let mut rows = vec![0.0f32; w * h];
+    rows.par_chunks_mut(w).zip(p.data.par_chunks(w)).for_each(|(out, row)| median_line(row, out, r));
+    // Columns: gathered into lines, filtered, written back.
+    let cols: Vec<Vec<f32>> = (0..w)
+        .into_par_iter()
+        .map(|x| {
+            let col: Vec<f32> = (0..h).map(|y| rows[y * w + x]).collect();
+            let mut out = vec![0.0f32; h];
+            median_line(&col, &mut out, r);
+            out
+        })
+        .collect();
+    let mut data = vec![0.0f32; w * h];
+    for (x, col) in cols.iter().enumerate() {
+        for (y, v) in col.iter().enumerate() {
+            data[y * w + x] = *v;
+        }
+    }
+    Plane::new(w, h, data)
+}
+
+/// Running median of `src` over 2r+1 values (edges clamped) into `out`: a sorted window, one
+/// value leaves and one enters per step.
+fn median_line(src: &[f32], out: &mut [f32], r: usize) {
+    let n = src.len();
+    let at = |i: isize| src[i.clamp(0, n as isize - 1) as usize];
+    let pos = |win: &[f32], v: f32| win.partition_point(|x| x.total_cmp(&v).is_lt());
+    let mut win: Vec<f32> = (-(r as isize)..=r as isize).map(at).collect();
+    win.sort_by(f32::total_cmp);
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = win[r];
+        let (leave, enter) = (at(i as isize - r as isize), at(i as isize + r as isize + 1));
+        let k = pos(&win, leave);
+        win.remove(k);
+        let k = pos(&win, enter);
+        win.insert(k, enter);
+    }
+}
+
 /// Raw pointer that may be shared across threads for writes to disjoint ranges.
 #[derive(Clone, Copy)]
 struct SyncPtr(*mut f32);
@@ -217,6 +264,34 @@ pub fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn median_hv_matches_a_direct_median() {
+        let (w, h) = (23, 17);
+        let p = Plane::new(w, h, (0..w * h).map(|i| hash_noise(i as i64, 5, 1) + if i % 7 == 0 { 4.0 } else { 0.0 }).collect());
+        let r = 3;
+        let med = |v: &mut Vec<f32>| {
+            v.sort_by(f32::total_cmp);
+            v[v.len() / 2]
+        };
+        let clamp = |i: isize, n: usize| i.clamp(0, n as isize - 1) as usize;
+        let mut rows = vec![0.0; w * h];
+        for y in 0..h {
+            for x in 0..w {
+                let mut v: Vec<f32> = (-3..=3).map(|d| p.data[y * w + clamp(x as isize + d, w)]).collect();
+                rows[y * w + x] = med(&mut v);
+            }
+        }
+        let got = median_hv(&p, r);
+        for y in 0..h {
+            for x in 0..w {
+                let mut v: Vec<f32> = (-3..=3).map(|d| rows[clamp(y as isize + d, h) * w + x]).collect();
+                assert_eq!(got.data[y * w + x], med(&mut v), "{x},{y}");
+            }
+        }
+        // Outliers (every 7th value +4) are gone (away from the edges, which clamping repeats).
+        assert!((3..h - 3).all(|y| (3..w - 3).all(|x| got.data[y * w + x] < 2.0)));
+    }
 
     #[test]
     fn box_blur_preserves_constant_and_mean() {

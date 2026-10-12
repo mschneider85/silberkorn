@@ -1,5 +1,6 @@
 //! Silberkorn core: raw decoding, development pipeline, sidecars and export.
 
+pub mod ahd;
 pub mod auto;
 pub mod brush;
 pub mod cache;
@@ -25,6 +26,7 @@ pub mod print;
 pub mod paths;
 pub mod pipeline;
 pub mod raw;
+pub mod raw_preview;
 pub mod safe_file;
 pub mod session;
 pub mod sidecar;

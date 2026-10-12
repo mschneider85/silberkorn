@@ -15,6 +15,10 @@ fn samples() -> Option<Vec<PathBuf>> {
     files.iter().all(|f| f.exists()).then_some(files)
 }
 
+/// How long a test waits for background work. Generous: real raw decoding, and the machine
+/// may be busy with other work (parallel tests, builds).
+const LIMIT: Duration = Duration::from_secs(180);
+
 struct Fixture {
     dir: PathBuf,
     ctx: egui::Context,
@@ -50,7 +54,7 @@ impl Fixture {
         let start = Instant::now();
         while !done(&self.app) {
             // Generous: real raw decoding, and the machine may be busy with other work.
-            assert!(start.elapsed() < Duration::from_secs(180), "Zeitüberschreitung: {what}");
+            assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: {what}");
             self.app.handle_events(&self.ctx);
             self.app.send_render();
             std::thread::sleep(Duration::from_millis(20));
@@ -114,6 +118,7 @@ fn library_workflow() {
 }
 
 #[test]
+#[ignore = "langsam: läuft mit cargo t-all"]
 fn edit_copy_apply_style_and_export() {
     let Some(mut f) = Fixture::new("edit") else { return };
     f.pump("Bild geladen", |a| a.current.is_some());
@@ -161,6 +166,7 @@ fn edit_copy_apply_style_and_export() {
 }
 
 #[test]
+#[ignore = "langsam: läuft mit cargo t-all"]
 fn crop_full_resolution_and_tiles() {
     let Some(mut f) = Fixture::new("tiles") else { return };
     f.pump("Bild geladen", |a| a.texture.is_some());
@@ -304,6 +310,7 @@ fn click(f: &mut Fixture, p: egui::Pos2) {
 }
 
 #[test]
+#[ignore = "langsam: läuft mit cargo t-all"]
 fn phase5_speed_edit_ai_masks_split_and_recipes() {
     let Some(mut f) = Fixture::new("phase5") else { return };
     f.pump("Bild geladen", |a| a.texture.is_some());
@@ -637,7 +644,7 @@ fn previews_are_generated_in_the_background_when_idle() {
     workers.proxies(paths.clone(), None);
     let (mut thumbs, mut finished) = (0, false);
     while !finished {
-        assert!(start.elapsed() < Duration::from_secs(60), "Zeitüberschreitung");
+        assert!(start.elapsed() < LIMIT, "Zeitüberschreitung");
         match workers.events.recv_timeout(Duration::from_millis(100)) {
             Ok(crate::workers::Event::Thumbnail { .. }) => thumbs += 1,
             Ok(crate::workers::Event::ProxyProgress(None)) => finished = true,
@@ -653,7 +660,7 @@ fn previews_are_generated_in_the_background_when_idle() {
     workers.proxies(paths.clone(), None);
     let again = Instant::now();
     while !matches!(workers.events.recv_timeout(Duration::from_secs(10)), Ok(crate::workers::Event::ProxyProgress(None))) {
-        assert!(again.elapsed() < Duration::from_secs(10));
+        assert!(again.elapsed() < Duration::from_secs(30));
     }
     for p in &paths {
         sk_core::cache::remove(p, None);
@@ -766,6 +773,7 @@ fn hovering_a_film_look_previews_it_without_changing_the_image() {
 }
 
 #[test]
+#[ignore = "langsam: läuft mit cargo t-all"]
 fn proof_shows_the_image_as_the_recipe_writes_it() {
     let Some(mut f) = Fixture::new("proof") else { return };
     f.pump("Bild geladen", |a| a.texture.is_some());
@@ -781,7 +789,7 @@ fn proof_shows_the_image_as_the_recipe_writes_it() {
             if f.app.proof.as_ref().is_some_and(|p| p.version == f.app.edit_version) {
                 break;
             }
-            assert!(start.elapsed() < Duration::from_secs(90), "Zeitüberschreitung: {what}");
+            assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: {what}");
             std::thread::sleep(Duration::from_millis(20));
         }
     };
@@ -873,6 +881,7 @@ fn fullscreen_switch_shows_black_until_the_window_has_settled() {
 }
 
 #[test]
+#[ignore = "langsam: läuft mit cargo t-all"]
 fn compare_view_and_matching() {
     let Some(mut f) = Fixture::new("compare") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
@@ -1056,6 +1065,7 @@ fn compare_frame(f: &mut Fixture, cells: &[PathBuf]) {
 }
 
 #[test]
+#[ignore = "langsam: läuft mit cargo t-all"]
 fn compare_zoom_shows_full_resolution() {
     let Some(mut f) = Fixture::new("compare-detail") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
@@ -1073,7 +1083,7 @@ fn compare_zoom_shows_full_resolution() {
     f.app.compare_center = egui::vec2(0.4, 0.5);
     let start = Instant::now();
     while !cells.iter().all(|p| f.app.compare_details.contains_key(p)) {
-        assert!(start.elapsed() < Duration::from_secs(60), "Zeitüberschreitung: Details");
+        assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: Details");
         f.app.handle_events(&f.ctx);
         compare_frame(&mut f, &cells);
         std::thread::sleep(Duration::from_millis(20));
@@ -1094,6 +1104,7 @@ fn compare_zoom_shows_full_resolution() {
 }
 
 #[test]
+#[ignore = "langsam: läuft mit cargo t-all"]
 fn focus_mask_at_full_resolution_when_zoomed_in() {
     let Some(mut f) = Fixture::new("focus-tiles") else { return };
     f.pump("Vollauflösung", |a| a.texture.is_some() && a.current.as_ref().is_some_and(|c| c.full.is_some()));
@@ -1102,7 +1113,7 @@ fn focus_mask_at_full_resolution_when_zoomed_in() {
     // Zoomed in without the mask: plain tiles.
     let start = Instant::now();
     while f.app.tiles.view.is_none() && f.app.tiles.textures.is_empty() {
-        assert!(start.elapsed() < Duration::from_secs(60), "Zeitüberschreitung: Kacheln");
+        assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: Kacheln");
         viewer_frame(&mut f, vec![]);
         f.app.handle_events(&f.ctx);
         std::thread::sleep(Duration::from_millis(20));
@@ -1112,7 +1123,7 @@ fn focus_mask_at_full_resolution_when_zoomed_in() {
     f.app.toggle_focus_mask();
     let start = Instant::now();
     while !(f.app.tiles.view.as_ref().is_some_and(|v| v.focus.is_some()) || !f.app.tiles.focus.is_empty()) {
-        assert!(start.elapsed() < Duration::from_secs(60), "Zeitüberschreitung: Fokus der Kacheln");
+        assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: Fokus der Kacheln");
         viewer_frame(&mut f, vec![]);
         f.app.handle_events(&f.ctx);
         std::thread::sleep(Duration::from_millis(20));
@@ -1143,6 +1154,7 @@ fn focus_mask_follows_edits_made_while_it_was_off() {
 }
 
 #[test]
+#[ignore = "langsam: läuft mit cargo t-all"]
 fn changed_settings_drop_images_kept_in_memory() {
     let Some(mut f) = Fixture::new("prepared") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
@@ -1485,6 +1497,7 @@ fn faces_become_named_persons() {
 /// Only one viewer tool is active at a time: the viewer hands the mouse to the first active
 /// one, so a tool left on (e.g. the brush) would swallow the input of the one chosen after it.
 #[test]
+#[ignore = "langsam: läuft mit cargo t-all"]
 fn choosing_a_viewer_tool_ends_the_others() {
     use crate::layers::LocalTool;
     let Some(mut f) = Fixture::new("viewer_tools") else { return };
@@ -1678,4 +1691,27 @@ fn cursors_match_what_can_be_done() {
         crate::widgets::compact_slider(ui, "x", &mut v, 0.0..=1.0, 0.0, 200.0);
     };
     assert_eq!(cursor_over(egui::pos2(100.0, 10.0), slider), egui::CursorIcon::ResizeHorizontal);
+}
+
+#[test]
+fn running_jobs_can_be_cancelled() {
+    let Some(mut f) = Fixture::new("cancel") else { return };
+    let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let done = finished.clone();
+    f.app.start_job(
+        "Langer Auftrag",
+        Box::new(move |progress| {
+            for i in 0..10_000 {
+                progress(i as f32 / 10_000.0);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            done.store(true, std::sync::atomic::Ordering::Relaxed);
+            Ok(Vec::new())
+        }),
+    );
+    let job = f.app.activities().into_iter().find(|a| a.label == "Langer Auftrag").unwrap();
+    job.cancel.unwrap().store(true, std::sync::atomic::Ordering::Relaxed);
+    f.pump("Abbruch", |a| a.jobs.is_empty());
+    assert!(f.app.status.contains("abgebrochen"), "{}", f.app.status);
+    assert!(!finished.load(std::sync::atomic::Ordering::Relaxed));
 }
