@@ -782,6 +782,7 @@ impl App {
             Ok("shortcuts") => app.show_shortcuts = true,
             Ok("about") => app.splash = Some(crate::splash::Splash::about()),
             Ok("gpu") => app.show_gpu_dialog = true,
+            Ok("calibrate") => app.print.calibrating = Some(96.0 / 25.4),
             Ok(d) if d.starts_with("palette") => app.palette.show_with(d.trim_start_matches("palette").trim_start_matches(':')),
             _ => {}
         }
@@ -2109,7 +2110,9 @@ impl App {
             self.proof_view |= std::env::var_os("SILBERKORN_PROOF").is_some();
             // `contain` or `fill`: print preview on 13 × 18 cm.
             if let Ok(fit) = std::env::var("SILBERKORN_PRINT") {
-                self.print.on = true;
+                if !self.print.on {
+                    self.toggle_print_preview();
+                }
                 self.print.settings.format = sk_core::print::PRESETS[2].1;
                 self.print.settings.fit = if fit == "fill" { sk_core::print::Fit::Fill } else { sk_core::print::Fit::Contain };
             }

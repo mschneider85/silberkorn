@@ -52,9 +52,9 @@ pub const PRESETS: [(&str, PrintFormat); 11] = [
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Fit {
     /// Whole image, white border where the aspect ratios differ.
-    #[default]
     Contain,
     /// Paper filled (borderless lab print), the image is cut where the aspect ratios differ.
+    #[default]
     Fill,
 }
 
@@ -72,6 +72,8 @@ impl Fit {
 #[serde(default)]
 pub struct PrintSettings {
     pub format: PrintFormat,
+    /// Stored under a new name: the old `fit` held the earlier default (`Contain`), not a choice.
+    #[serde(rename = "fit_mode")]
     pub fit: Fit,
     /// Physical screen pixels per millimeter, per monitor (see `monitor_key` in the app).
     pub calibration: Vec<(String, f32)>,
@@ -138,6 +140,16 @@ mod tests {
         assert!((fill.image[0] - 130.0).abs() < 1e-3 && fill.image[1] > 180.0);
         assert!(fill.ppi < c.ppi);
         assert!((fill.off - (1.0 - 180.0 / 195.0)).abs() < 1e-4, "{}", fill.off);
+    }
+
+    #[test]
+    fn fill_is_the_default_also_for_old_settings() {
+        assert_eq!(PrintSettings::default().fit, Fit::Fill);
+        let old: PrintSettings = serde_json::from_str(r#"{"fit":"Contain"}"#).unwrap();
+        assert_eq!(old.fit, Fit::Fill);
+        let s = PrintSettings { fit: Fit::Contain, ..Default::default() };
+        let back: PrintSettings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.fit, Fit::Contain);
     }
 
     #[test]

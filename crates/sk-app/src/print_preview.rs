@@ -22,6 +22,9 @@ pub struct PrintPreviewState {
 /// A credit card (ISO/IEC 7810 ID-1): something everyone has at hand to measure the screen.
 const CARD_MM: Vec2 = vec2(85.6, 53.98);
 
+/// Screen resolutions the calibration offers (physical pixels per inch).
+const DPI_RANGE: std::ops::RangeInclusive<f32> = 40.0..=320.0;
+
 /// Paper drawn around the image in the viewer.
 pub struct PaperFrame {
     /// Paper size relative to the image's size on screen, per axis (below 1 where filling cuts).
@@ -30,12 +33,13 @@ pub struct PaperFrame {
 }
 
 impl App {
-    /// Strg+P: print preview on or off.
+    /// Strg+P: print preview on (at the printed size) or off.
     pub fn toggle_print_preview(&mut self) {
         self.print.on = !self.print.on;
-        if !self.print.on && self.print.zoom {
-            self.print.zoom = false;
+        if self.print.zoom != self.print.on {
+            self.print.zoom = self.print.on;
             self.zoom = None;
+            self.pan = Vec2::ZERO;
         }
     }
 
@@ -137,7 +141,7 @@ impl App {
         let mut s = self.print.settings.clone();
         let (mut toggle, mut zoom, mut calibrate) = (false, false, false);
         section(ui, "Druckvorschau", None, |ui| {
-            if ui.checkbox(&mut self.print.on.clone(), "Druckformat im Viewer (Strg+P)").changed() {
+            if ui.checkbox(&mut self.print.on.clone(), "Druckvorschau in Druckgröße (Strg+P)").changed() {
                 toggle = true;
             }
             widgets::combo_field(ui, "Papierformat", s.format.label(), |ui| {
@@ -159,7 +163,7 @@ impl App {
                 ui.selectable_value(&mut s.fit, Fit::Fill, Fit::Fill.label()).on_hover_text("Randlos wie im Fotolabor, das Bild wird beschnitten");
             });
             ui.horizontal(|ui| {
-                if ui.selectable_label(self.print.zoom, "Druckgröße zeigen (Umschalt+Z)").clicked() {
+                if ui.selectable_label(self.print.zoom, "Druckgröße (Umschalt+Z)").clicked() {
                     zoom = true;
                 }
                 if ui.button("Bildschirm kalibrieren …").clicked() {
@@ -202,10 +206,12 @@ impl App {
             ui.painter().rect_stroke(r, 3.5 * px_per_mm / ppp, egui::Stroke::new(1.0, theme::ACCENT), egui::StrokeKind::Inside);
             ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "85,6 × 54 mm", egui::FontId::proportional(13.0), theme::TEXT);
             ui.add_space(6.0);
-            widgets::field(ui, "Größe", |ui| {
-                ui.add(egui::Slider::new(&mut px_per_mm, 1.5..=12.0).logarithmic(true).show_value(false));
-            });
-            ui.label(RichText::new(format!("{:.0} dpi", px_per_mm * 25.4)).small().color(theme::TEXT_FAINT));
+            // In dpi, like the other sliders: Shift while dragging for fine steps, the number to type.
+            let mut dpi = px_per_mm * 25.4;
+            let opts = widgets::SliderOpts { suffix: " dpi", ..Default::default() };
+            widgets::slider_row_with(ui, "Auflösung", &mut dpi, DPI_RANGE, 96.0 * ppp, 1, opts);
+            px_per_mm = dpi / 25.4;
+            ui.label(RichText::new("Fein: Umschalt beim Ziehen halten, oder den Wert eintippen.").small().color(theme::TEXT_FAINT));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 if ui.button("Übernehmen").clicked() {
