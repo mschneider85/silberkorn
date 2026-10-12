@@ -21,6 +21,7 @@ pub mod mask;
 pub mod naming;
 pub mod image;
 pub mod params;
+pub mod print;
 pub mod paths;
 pub mod pipeline;
 pub mod raw;

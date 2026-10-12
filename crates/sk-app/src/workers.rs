@@ -167,6 +167,8 @@ pub struct ProofJob {
     pub full: Arc<LinearImage>,
     pub adjustments: Adjustments,
     pub recipe: ExportRecipe,
+    /// Mark the colors the file clips (see `export::clipped_in`).
+    pub gamut_warning: bool,
     /// Largest texture the GPU takes (bigger proofs are reduced for display only).
     pub max_texture_side: usize,
 }
@@ -675,8 +677,15 @@ impl Workers {
             thread::spawn(move || {
                 while let Some(job) = recv_latest(&proof_rx) {
                     activity.touch();
-                    let processed = Processor::new(&job.meta, &job.adjustments).process(&job.full, None, job.recipe.output_space);
-                    let result = export::proof(&processed, &job.recipe, &job.meta.info).map_err(|e| format!("{e:#}")).map(|p| {
+                    let processor = Processor::new(&job.meta, &job.adjustments);
+                    let processed = processor.process(&job.full, None, job.recipe.output_space);
+                    // Clipping shows only in a wider space: ProPhoto holds nearly all working colors.
+                    let clipped = (job.gamut_warning && job.recipe.output_space != sk_core::color::OutputSpace::ProPhoto)
+                        .then(|| export::clipped_in(&processor.process(&job.full, None, sk_core::color::OutputSpace::ProPhoto), job.recipe.output_space))
+                        .transpose();
+                    let result = clipped
+                        .and_then(|c| export::proof(&processed, &job.recipe, &job.meta.info, c.as_deref()))
+                        .map_err(|e| format!("{e:#}")).map(|p| {
                         let mut image = ColorImage::from_rgba_unmultiplied([p.width, p.height], &p.rgba);
                         if p.width.max(p.height) > job.max_texture_side
                             && let Some(img) = ::image::RgbaImage::from_raw(p.width as u32, p.height as u32, p.rgba)

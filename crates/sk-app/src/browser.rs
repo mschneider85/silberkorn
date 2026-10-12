@@ -109,7 +109,16 @@ impl App {
         } else {
             20.0
         };
-        let fit = ((rect.width() - margin) / size.x).min((rect.height() - margin) / size.y).max(0.01);
+        // Fitted, the paper around the image stays in view too.
+        let paper = self.paper_frame(size);
+        let extent = size * paper.as_ref().map_or(Vec2::splat(1.0), |p| p.rel.max(Vec2::splat(1.0)));
+        let fit = ((rect.width() - margin) / extent.x).min((rect.height() - margin) / extent.y).max(0.01);
+        if self.print.zoom {
+            match self.print_size_scale(ui.ctx(), size) {
+                Some(s) => self.zoom = Some(s),
+                None => self.print.zoom = false,
+            }
+        }
         let scale = self.zoom.unwrap_or(fit);
 
         // Speed Edit: hold a key and scroll to change a value.
@@ -146,6 +155,7 @@ impl App {
                     self.pan = cursor - rect.center() - rel * new_scale;
                 }
                 self.zoom = Some(new_scale);
+                self.print.zoom = false;
             }
         }
         // Holding the space bar: dragging moves the image, whatever tool is active.
@@ -171,6 +181,10 @@ impl App {
         let proof_key = self.proof_key();
         let proof = self.proof.as_ref().filter(|p| self.proof_view && p.version == self.edit_version && Some(p.key) == proof_key);
         let shown = proof.map_or(tex_id, |p| p.texture.id());
+        let paper_rect = paper.as_ref().map(|p| Rect::from_center_size(img_rect.center(), img_rect.size() * p.rel));
+        if let (Some(p), Some(r)) = (&paper, paper_rect) {
+            painter.rect_filled(r, 0.0, p.color);
+        }
         painter.image(shown, img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         let proof_ready = proof.is_some();
 
@@ -272,6 +286,23 @@ impl App {
             }
         }
 
+        // Filling the paper: what the print cuts off is dimmed.
+        if let Some(paper) = paper_rect.filter(|r| !r.contains_rect(img_rect)) {
+            let cut = paper.intersect(img_rect);
+            let dim = Color32::from_black_alpha(170);
+            for r in [
+                Rect::from_min_max(img_rect.min, pos2(img_rect.max.x, cut.min.y)),
+                Rect::from_min_max(pos2(img_rect.min.x, cut.max.y), img_rect.max),
+                Rect::from_min_max(pos2(img_rect.min.x, cut.min.y), pos2(cut.min.x, cut.max.y)),
+                Rect::from_min_max(pos2(cut.max.x, cut.min.y), pos2(img_rect.max.x, cut.max.y)),
+            ] {
+                if r.is_positive() {
+                    painter.rect_filled(r, 0.0, dim);
+                }
+            }
+            painter.rect_stroke(cut, 0.0, egui::Stroke::new(1.0, Color32::from_white_alpha(140)), egui::StrokeKind::Outside);
+        }
+
         // Over the before image of the divider view as well.
         // The crop and straighten tools draw their own guides.
         if self.crop_tool.is_none() && self.straighten_tool.is_none() {
@@ -371,6 +402,7 @@ impl App {
         if self.loading.is_some() {
             painter.text(rect.right_top() + vec2(-10.0, 8.0), egui::Align2::RIGHT_TOP, "Lade…", egui::FontId::proportional(13.0), Color32::from_gray(200));
         }
+        let mut labels: Vec<(String, Color32)> = Vec::new();
         if self.proof_view {
             let text = match (&self.proof, self.recipes.get(self.selected_recipe)) {
                 (Some(p), Some(r)) if proof_ready => {
@@ -380,20 +412,25 @@ impl App {
                     };
                     // The recipe's name only if it says more than the format.
                     let name = if r.name.is_empty() || r.name.eq_ignore_ascii_case(r.format.label()) { String::new() } else { format!("{}  ·  ", r.name) };
-                    format!("PROOF  ·  {name}{format}  ·  {} × {} px  ·  {}  ·  {}", p.width, p.height, r.output_space.label(), file_size(p.file_size))
+                    let warn = if self.softproof.settings.gamut_warning && r.output_space != sk_core::color::OutputSpace::ProPhoto { "  ·  beschnitten: magenta" } else { "" };
+                    format!("PROOF  ·  {name}{format}  ·  {} × {} px  ·  {}  ·  {}{warn}", p.width, p.height, r.output_space.label(), file_size(p.file_size))
                 }
                 (_, Some(r)) => format!("PROOF  ·  {}  ·  wird berechnet …", r.name),
                 (_, None) => "PROOF  ·  kein Ausgabe-Rezept".into(),
             };
-            let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), Color32::WHITE);
-            let pos = rect.left_top() + vec2(14.0, 12.0);
-            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand2(vec2(8.0, 4.0)), 4.0, theme::ACCENT.gamma_multiply(0.85));
-            painter.galley(pos, galley, Color32::WHITE);
+            labels.push((text, theme::ACCENT.gamma_multiply(0.85)));
         }
         if let Some(text) = self.softproof_label() {
+            labels.push((text, Color32::from_rgb(150, 60, 150).gamma_multiply(0.9)));
+        }
+        if let Some(label) = self.print_label(ui.ctx(), size) {
+            labels.push(label);
+        }
+        // Active output previews, one below the other.
+        for (i, (text, fill)) in labels.into_iter().enumerate() {
             let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), Color32::WHITE);
-            let pos = rect.left_top() + vec2(14.0, if self.proof_view { 40.0 } else { 12.0 });
-            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand2(vec2(8.0, 4.0)), 4.0, Color32::from_rgb(150, 60, 150).gamma_multiply(0.9));
+            let pos = rect.left_top() + vec2(14.0, 12.0 + 28.0 * i as f32);
+            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand2(vec2(8.0, 4.0)), 4.0, fill);
             painter.galley(pos, galley, Color32::WHITE);
         }
         if let Some(until) = self.fullscreen_hint_until {
@@ -535,7 +572,7 @@ impl App {
         p.galley(lr.min, label, Color32::WHITE);
     }
 
-    fn full_output_width(&self) -> Option<f32> {
+    pub(crate) fn full_output_width(&self) -> Option<f32> {
         let cur = self.current.as_ref()?;
         let opts = sk_core::pipeline::RenderOptions { ignore_crop: self.crop_tool.is_some(), ..Default::default() };
         let p = sk_core::pipeline::Processor::with_options(&cur.meta, &cur.adjustments, opts);
@@ -551,6 +588,7 @@ impl App {
 
     /// Zoom to 100 % (one full-resolution pixel per physical screen pixel) or back to fit.
     pub fn toggle_zoom_100(&mut self) {
+        self.print.zoom = false;
         if self.zoom.is_some() {
             self.zoom = None;
         } else if let (Some(full_w), Some(size)) = (self.full_output_width(), self.image_size()) {

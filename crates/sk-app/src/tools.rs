@@ -24,6 +24,7 @@ impl App {
             Tab::Output => {
                 self.output_tab(ui);
                 self.softproof_section(ui);
+                self.print_section(ui);
             }
         });
     }

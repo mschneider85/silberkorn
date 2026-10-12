@@ -20,6 +20,8 @@ pub struct SoftProofState {
     /// Transform for `settings`, made when needed.
     pub transform: Option<Arc<SoftProof>>,
     pub error: Option<String>,
+    /// The target `transform` was made for (`Recipe` resolved to the recipe's color space).
+    pub resolved: Option<ProofTarget>,
     /// ICC profiles found in the system folders (searched once, when the controls are first shown).
     pub found: Option<Vec<(PathBuf, String)>>,
 }
@@ -32,17 +34,44 @@ impl App {
         self.request_render();
     }
 
+    /// Color space of the selected output recipe (what the target `Recipe` stands for).
+    fn recipe_space(&self) -> OutputSpace {
+        self.recipes.get(self.selected_recipe).map(|r| r.output_space).unwrap_or_default()
+    }
+
+    /// Follows the selected recipe while the target is `Recipe`: a changed color space makes a
+    /// new transform and rendering. Called every frame.
+    pub fn sync_softproof(&mut self) {
+        let want = self.softproof.settings.target.resolved(self.recipe_space());
+        if self.softproof.resolved.as_ref().is_some_and(|r| *r != want) {
+            self.softproof.transform = None;
+            self.softproof.error = None;
+            self.softproof.resolved = None;
+            if self.softproof.on {
+                self.request_render();
+            }
+        }
+    }
+
     /// Transform for the rendering, if soft proofing is on (made on first use).
     pub fn active_softproof(&mut self) -> Option<Arc<SoftProof>> {
-        let sp = &mut self.softproof;
-        if !sp.on {
+        if !self.softproof.on {
             return None;
         }
+        let space = self.recipe_space();
+        let sp = &mut self.softproof;
         if sp.transform.is_none() && sp.error.is_none() {
-            match SoftProof::new(&sp.settings) {
-                Ok(t) => sp.transform = Some(Arc::new(t)),
+            let target = sp.settings.target.resolved(space);
+            match SoftProof::new(&ProofSettings { target: target.clone(), ..sp.settings.clone() }) {
+                Ok(mut t) => {
+                    if sp.settings.target == ProofTarget::Recipe {
+                        t.name = format!("Rezept: {}", t.name);
+                    }
+                    sp.transform = Some(Arc::new(t));
+                }
                 Err(e) => sp.error = Some(format!("{e:#}")),
             }
+            sp.resolved = Some(target);
         }
         sp.transform.clone()
     }
@@ -53,6 +82,7 @@ impl App {
         if self.softproof.settings != before {
             self.softproof.transform = None;
             self.softproof.error = None;
+            self.softproof.resolved = None;
             self.save_settings();
             if self.softproof.on {
                 self.request_render();
@@ -72,8 +102,14 @@ impl App {
             if ui.checkbox(&mut self.softproof.on.clone(), "Softproof im Viewer (Umschalt+P)").changed() {
                 toggle = true;
             }
-            let name = sk_core::softproof::target_name(&s.target);
+            let name = match &s.target {
+                ProofTarget::Recipe => format!("Wie Ausgabe-Rezept ({})", self.recipe_space().label()),
+                t => sk_core::softproof::target_name(t),
+            };
             widgets::combo_field(ui, "Profil", name, |ui| {
+                ui.selectable_value(&mut s.target, ProofTarget::Recipe, "Wie Ausgabe-Rezept")
+                    .on_hover_text("Farbraum des gewählten Ausgabe-Rezepts");
+                ui.separator();
                 for sp in [OutputSpace::Srgb, OutputSpace::AdobeRgb, OutputSpace::DisplayP3] {
                     ui.selectable_value(&mut s.target, ProofTarget::Space(sp), sp.label());
                 }
@@ -99,7 +135,9 @@ impl App {
             ui.checkbox(&mut s.simulate_paper, "Papier und Druckfarbe simulieren")
                 .on_hover_text("Zeigt den Papierton und das tatsächliche Schwarz des Drucks (absolut farbmetrisch)");
             ui.checkbox(&mut s.gamut_warning, "Farbumfang-Warnung")
-                .on_hover_text("Farben, die das Profil nicht wiedergeben kann, erscheinen magenta");
+                .on_hover_text("Farben, die das Profil nicht wiedergeben kann, erscheinen magenta; im Proof: was die Datei beschneidet");
+            ui.checkbox(&mut s.paper_margin, "Papierrand zeigen")
+                .on_hover_text("Papier um das Bild, im Papierton, wenn er simuliert wird");
             if let Some(e) = &self.softproof.error {
                 ui.label(RichText::new(e).small().color(Color32::from_rgb(230, 110, 100)));
             }

@@ -21,6 +21,7 @@ mod layers;
 mod library;
 mod merge;
 mod palette;
+mod print_preview;
 mod remove;
 mod rename;
 mod session;

@@ -16,6 +16,18 @@ pub enum ProofTarget {
     Space(OutputSpace),
     /// An ICC profile file (printer/paper, other output devices).
     Icc(PathBuf),
+    /// The color space of the selected output recipe (see [`ProofTarget::resolved`]).
+    Recipe,
+}
+
+impl ProofTarget {
+    /// The target with [`ProofTarget::Recipe`] replaced by the recipe's color space.
+    pub fn resolved(&self, recipe_space: OutputSpace) -> ProofTarget {
+        match self {
+            ProofTarget::Recipe => ProofTarget::Space(recipe_space),
+            t => t.clone(),
+        }
+    }
 }
 
 impl Default for ProofTarget {
@@ -66,6 +78,8 @@ pub struct ProofSettings {
     /// Paper white and ink black as they are (the display shows the paper's color).
     pub simulate_paper: bool,
     pub gamut_warning: bool,
+    /// Paper around the image in the viewer (in the paper's color when it is simulated).
+    pub paper_margin: bool,
     /// ICC profiles chosen by the user (besides those found in the system folders).
     pub profiles: Vec<PathBuf>,
 }
@@ -78,6 +92,7 @@ impl Default for ProofSettings {
             black_point_compensation: true,
             simulate_paper: false,
             gamut_warning: true,
+            paper_margin: true,
             profiles: Vec::new(),
         }
     }
@@ -94,6 +109,8 @@ pub struct SoftProof {
     _context: KeepAlive,
     /// Name of the target for display.
     pub name: String,
+    /// The paper as the display shows it: white, or the paper's tone when it is simulated.
+    pub paper: [u8; 3],
 }
 
 /// Keeps the Little CMS context alive for the transform created in it. It is never used after
@@ -142,11 +159,25 @@ pub fn target_name(t: &ProofTarget) -> String {
     match t {
         ProofTarget::Space(s) => s.label().to_string(),
         ProofTarget::Icc(p) => profile_name(p),
+        ProofTarget::Recipe => "Wie Ausgabe-Rezept".into(),
     }
 }
 
 impl SoftProof {
+    /// `settings.target` must be resolved (see [`ProofTarget::resolved`]).
     pub fn new(settings: &ProofSettings) -> Result<Self> {
+        let mut sp = Self::build(settings)?;
+        // White paper in the working space: the brightest color the target reproduces.
+        let mut paper = [[0u8; 3]];
+        sp.apply(&[[1.0; 3]], &mut paper);
+        if paper[0] == GAMUT_ALARM && settings.gamut_warning {
+            Self::build(&ProofSettings { gamut_warning: false, ..settings.clone() })?.apply(&[[1.0; 3]], &mut paper);
+        }
+        sp.paper = paper[0];
+        Ok(sp)
+    }
+
+    fn build(settings: &ProofSettings) -> Result<Self> {
         let mut ctx = ThreadContext::new();
         let mut alarm = [0u16; 16];
         for (a, v) in alarm.iter_mut().zip(GAMUT_ALARM) {
@@ -161,6 +192,7 @@ impl SoftProof {
                 let data = std::fs::read(p).with_context(|| format!("{} nicht lesbar", p.display()))?;
                 Profile::new_icc_context(&ctx, &data).map_err(|e| anyhow!("{}: kein gültiges ICC-Profil ({e})", p.display()))?
             }
+            ProofTarget::Recipe => return Err(anyhow!("Softproof-Ziel „Rezept“ nicht aufgelöst")),
         };
         let mut flags = Flags::NO_CACHE | Flags::SOFT_PROOFING;
         if settings.gamut_warning {
@@ -183,7 +215,7 @@ impl SoftProof {
             flags,
         )
         .map_err(|e| anyhow!("Softproof nicht möglich: {e}"))?;
-        Ok(Self { transform, _context: KeepAlive(ctx), name: target_name(&settings.target) })
+        Ok(Self { transform, _context: KeepAlive(ctx), name: target_name(&settings.target), paper: [255; 3] })
     }
 
     /// Converts encoded working RGB (0..1) into display sRGB.
@@ -255,6 +287,22 @@ mod tests {
         let sp = SoftProof::new(&ProofSettings { target: ProofTarget::Space(OutputSpace::ProPhoto), ..Default::default() }).unwrap();
         sp.apply(&[[grey; 3], [0.0, 1.0, 0.0]], &mut out);
         assert_ne!(out[1], GAMUT_ALARM);
+    }
+
+    #[test]
+    fn recipe_target_resolves_to_its_space() {
+        let t = ProofTarget::Recipe.resolved(OutputSpace::AdobeRgb);
+        assert_eq!(t, ProofTarget::Space(OutputSpace::AdobeRgb));
+        assert_eq!(ProofTarget::Space(OutputSpace::Srgb).resolved(OutputSpace::AdobeRgb), ProofTarget::Space(OutputSpace::Srgb));
+        assert!(SoftProof::new(&ProofSettings { target: ProofTarget::Recipe, ..Default::default() }).is_err());
+        let sp = SoftProof::new(&ProofSettings { target: t, ..Default::default() }).unwrap();
+        assert!(sp.name.contains("Adobe"), "{}", sp.name);
+    }
+
+    #[test]
+    fn paper_is_white_unless_simulated() {
+        let sp = SoftProof::new(&ProofSettings::default()).unwrap();
+        assert!(sp.paper.iter().all(|&v| v >= 253), "{:?}", sp.paper);
     }
 
     #[test]

@@ -68,6 +68,8 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("K", "Fokusmaske (scharfe Bereiche grün)"),
             ("P", "Proof: Bild wie vom Ausgabe-Rezept geschrieben"),
             ("Umschalt+P", "Softproof: Bild wie im Farbraum oder auf dem Drucker, mit Farbumfang-Warnung"),
+            ("Strg+P", "Druckvorschau: Papierformat und Auflösung im Druck"),
+            ("Umschalt+Z", "Druckgröße: Bild so groß wie gedruckt (Bildschirm kalibrieren im Tab „Ausgabe“)"),
             ("O", "Hilfslinien wechseln (Drittel, Goldener Schnitt, Raster, Diagonalen)"),
             ("Umschalt+O", "Eigenes Overlay (Layout-PNG) ein/aus"),
             ("Umschalt+A", "Automatisch geraderichten (Drehung und stürzende Linien)"),
@@ -456,6 +458,12 @@ impl App {
         }
         if check(ui, self.softproof.on, "Softproof (Profil im Tab „Ausgabe“)", "Umschalt+P") {
             self.toggle_softproof();
+        }
+        if check(ui, self.print.on, "Druckvorschau (Format im Tab „Ausgabe“)", "Strg+P") {
+            self.toggle_print_preview();
+        }
+        if check(ui, self.print.zoom, "Druckgröße", "Umschalt+Z") {
+            self.toggle_print_zoom();
         }
         ui.separator();
         ui.menu_button("Hilfslinien", |ui| {

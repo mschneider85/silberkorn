@@ -227,9 +227,24 @@ pub struct Proof {
     pub file_size: usize,
 }
 
+/// Which pixels of a processing in ProPhoto RGB (`Processor::process(.., OutputSpace::ProPhoto)`)
+/// lie outside `space`, i.e. are clipped when written in it. Row-major, one entry per pixel.
+pub fn clipped_in(wide: &crate::image::LinearImage, space: OutputSpace) -> Result<Vec<bool>> {
+    if space == OutputSpace::ProPhoto {
+        return Ok(vec![false; wide.data.len()]);
+    }
+    let m = mat_mul(&mat_inv(&space.to_xyz_d50()).context("Farbraum-Matrix")?, &OutputSpace::ProPhoto.to_xyz_d50());
+    let trc = OutputSpace::ProPhoto.trc();
+    // Well beyond rounding, so that colors on the edge of the space aren't marked.
+    const EPS: f32 = 0.002;
+    Ok(wide.data.par_iter().map(|p| mat_vec(&m, p.map(|v| trc.decode(v))).iter().any(|&v| !(-EPS..=1.0 + EPS).contains(&v))).collect())
+}
+
 /// Proof of a full-resolution processing in the recipe's color space
 /// (`Processor::process(.., recipe.output_space)`): exactly the export path, without the file.
-pub fn proof(processed: &crate::image::LinearImage, recipe: &ExportRecipe, info: &CaptureInfo) -> Result<Proof> {
+/// With `clipped` (see [`clipped_in`], same size as `processed`), the colors the file clips are
+/// shown in [`crate::softproof::GAMUT_ALARM`].
+pub fn proof(processed: &crate::image::LinearImage, recipe: &ExportRecipe, info: &CaptureInfo, clipped: Option<&[bool]>) -> Result<Proof> {
     let buf = resized(processed, recipe)?;
     let bytes = encode(&buf, recipe, info)?;
     let (w, h) = buf.dimensions();
@@ -242,9 +257,22 @@ pub fn proof(processed: &crate::image::LinearImage, recipe: &ExportRecipe, info:
     let srgb_from_xyz = mat_inv(&OutputSpace::Srgb.to_xyz_d50()).context("sRGB-Matrix")?;
     let to_srgb = mat_mul(&srgb_from_xyz, &recipe.output_space.to_xyz_d50());
     let trc = recipe.output_space.trc();
+    // Proof pixel -> processed pixel (the proof may be reduced to the recipe's long edge).
+    let (pw, ph) = (processed.width.max(1), processed.height.max(1));
+    let is_clipped = |i: usize| {
+        clipped.is_some_and(|m| {
+            let (x, y) = (i % w as usize, i / w as usize);
+            m.get((y * ph / h.max(1) as usize).min(ph - 1) * pw + (x * pw / w.max(1) as usize).min(pw - 1)).copied().unwrap_or(false)
+        })
+    };
     let rgba = stored
         .par_chunks(3)
-        .flat_map_iter(|c| {
+        .enumerate()
+        .flat_map_iter(|(i, c)| {
+            if is_clipped(i) {
+                let [r, g, b] = crate::softproof::GAMUT_ALARM;
+                return [r, g, b, 255];
+            }
             let lin = mat_vec(&to_srgb, [trc.decode(c[0]), trc.decode(c[1]), trc.decode(c[2])]);
             let [r, g, b] = lin.map(|v| to_u8(&Trc::Srgb.encode(v.clamp(0.0, 1.0))));
             [r, g, b, 255]
@@ -292,15 +320,35 @@ mod tests {
         let (meta, linear) = raw::load_full(&sample).unwrap();
         let processor = Processor::new(&meta, &Adjustments::default());
         let srgb = processor.process(&linear, None, OutputSpace::Srgb);
-        let p = proof(&srgb, &recipes[0], &meta.info).unwrap();
+        let p = proof(&srgb, &recipes[0], &meta.info, None).unwrap();
         assert_eq!((p.width, p.height), (jpg.width() as usize, jpg.height() as usize));
         assert_eq!(p.file_size as u64, std::fs::metadata(&paths[0]).unwrap().len());
         let jpg = jpg.to_rgb8();
         let max_diff = p.rgba.chunks(4).zip(jpg.pixels()).flat_map(|(a, b)| (0..3).map(move |c| (a[c] as i32 - b[c] as i32).abs())).max().unwrap();
         assert!(max_diff <= 1, "Proof = Datei: {max_diff}");
         let adobe = processor.process(&linear, None, OutputSpace::AdobeRgb);
-        let p = proof(&adobe, &recipes[1], &meta.info).unwrap();
+        let p = proof(&adobe, &recipes[1], &meta.info, None).unwrap();
         assert_eq!(p.file_size as u64, std::fs::metadata(&paths[1]).unwrap().len());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn proof_marks_what_the_file_clips() {
+        let pp = OutputSpace::ProPhoto;
+        // ProPhoto: a neutral grey and a saturated green that sRGB can't hold.
+        let grey = pp.trc().encode(0.18);
+        let wide = crate::image::LinearImage::new(2, 1, vec![[grey; 3], [0.0, pp.trc().encode(0.6), 0.0]]);
+        let mask = clipped_in(&wide, OutputSpace::Srgb).unwrap();
+        assert_eq!(mask, vec![false, true]);
+        assert_eq!(clipped_in(&wide, OutputSpace::ProPhoto).unwrap(), vec![false, false]);
+
+        let srgb = crate::image::LinearImage::new(2, 1, vec![[0.5; 3], [0.0, 1.0, 0.0]]);
+        let recipe = ExportRecipe { format: ExportFormat::Png, ..Default::default() };
+        let p = proof(&srgb, &recipe, &CaptureInfo::default(), Some(&mask)).unwrap();
+        let alarm = crate::softproof::GAMUT_ALARM;
+        assert_eq!(&p.rgba[4..7], &alarm);
+        assert_ne!(&p.rgba[0..3], &alarm);
+        let p = proof(&srgb, &recipe, &CaptureInfo::default(), None).unwrap();
+        assert_ne!(&p.rgba[4..7], &alarm);
     }
 }

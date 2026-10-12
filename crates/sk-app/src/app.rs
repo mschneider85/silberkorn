@@ -255,6 +255,7 @@ struct Settings {
     write_xmp: bool,
     viewer_window: crate::viewer_window::ViewerWindow,
     softproof: sk_core::softproof::ProofSettings,
+    print: sk_core::print::PrintSettings,
     hdr_options: sk_core::hdr::HdrOptions,
     pano_options: sk_core::panorama::PanoramaOptions,
     denoise_strength: Option<f32>,
@@ -523,6 +524,7 @@ pub struct App {
     /// The viewer window was moved or resized at this time (saved once it rests).
     pub(crate) viewer_window_moved: Option<Instant>,
     pub softproof: crate::softproof::SoftProofState,
+    pub print: crate::print_preview::PrintPreviewState,
     /// Background jobs creating files (see `jobs.rs`).
     pub jobs: Vec<crate::jobs::RunningJob>,
     /// A created file to select once it is listed.
@@ -753,6 +755,7 @@ impl App {
             viewer_window_shown: false,
             viewer_window_moved: None,
             softproof: crate::softproof::SoftProofState { settings: settings.softproof.clone(), ..Default::default() },
+            print: crate::print_preview::PrintPreviewState { settings: settings.print.clone(), ..Default::default() },
             jobs: Vec::new(),
             select_when_listed: None,
             merge_dialog: None,
@@ -811,6 +814,7 @@ impl App {
             write_xmp: sk_core::xmp::write_enabled(),
             viewer_window: self.viewer_window,
             softproof: self.softproof.settings.clone(),
+            print: self.print.settings.clone(),
             hdr_options: self.hdr_options,
             pano_options: self.pano_options,
             denoise_strength: Some(self.denoise_strength),
@@ -1188,7 +1192,8 @@ impl App {
         let recipe = self.recipes.get(self.selected_recipe)?;
         // A logo replaced under the same name changes the proof as well.
         let stamp = recipe.watermark.file_stamp();
-        Some(sk_core::cache::fnv1a(format!("{}|{stamp:?}", serde_json::to_string(recipe).ok()?).as_bytes()))
+        let gamut = self.softproof.settings.gamut_warning;
+        Some(sk_core::cache::fnv1a(format!("{}|{stamp:?}|{gamut}", serde_json::to_string(recipe).ok()?).as_bytes()))
     }
 
     /// Requests a proof of the current state when the proof view is on.
@@ -1215,6 +1220,7 @@ impl App {
             full,
             adjustments: cur.adjustments.clone(),
             recipe: recipe.clone(),
+            gamut_warning: self.softproof.settings.gamut_warning,
             max_texture_side: ctx.input(|i| i.max_texture_side),
         });
     }
@@ -1973,6 +1979,9 @@ impl App {
         if pressed(Key::W, Modifiers::NONE) {
             self.toggle_wb_picker();
         }
+        if pressed(Key::Z, Modifiers::SHIFT) {
+            self.toggle_print_zoom();
+        }
         if pressed(Key::Z, Modifiers::NONE) {
             self.toggle_zoom_100();
         }
@@ -1991,6 +2000,9 @@ impl App {
         }
         if pressed(Key::F11, Modifiers::NONE) || pressed(Key::F, Modifiers::COMMAND | Modifiers::SHIFT) {
             self.toggle_fullscreen(ctx);
+        }
+        if pressed(Key::P, Modifiers::COMMAND) {
+            self.toggle_print_preview();
         }
         if pressed(Key::P, Modifiers::SHIFT) {
             self.toggle_softproof();
@@ -2024,6 +2036,7 @@ impl App {
         if !ctx.input(|i| i.pointer.any_down()) {
             self.commit_and_save();
         }
+        self.sync_softproof();
         self.send_render();
         self.update_proof(ctx);
         self.fade_in(ctx);
@@ -2094,6 +2107,12 @@ impl App {
                 r.watermark = sk_core::watermark::Watermark { enabled: true, text, size: 6.0, opacity: 0.8, ..Default::default() };
             }
             self.proof_view |= std::env::var_os("SILBERKORN_PROOF").is_some();
+            // `contain` or `fill`: print preview on 13 × 18 cm.
+            if let Ok(fit) = std::env::var("SILBERKORN_PRINT") {
+                self.print.on = true;
+                self.print.settings.format = sk_core::print::PRESETS[2].1;
+                self.print.settings.fit = if fit == "fill" { sk_core::print::Fit::Fill } else { sk_core::print::Fit::Contain };
+            }
             // Brush rendering check: a curved remove stroke and a soft mask stroke.
             if std::env::var_os("SILBERKORN_BRUSHDEMO").is_some() {
                 let curve = |y: f32, amp: f32| (0..60).map(|i| {
@@ -2254,6 +2273,7 @@ impl eframe::App for App {
             self.variant_dialogs(&ctx);
             self.stack_dialogs(&ctx);
             self.merge_dialogs(&ctx);
+            self.print_dialogs(&ctx);
             self.denoise_dialogs(&ctx);
             self.finish_frame(&ctx);
             return;
@@ -2299,6 +2319,7 @@ impl eframe::App for App {
         self.variant_dialogs(&ctx);
         self.stack_dialogs(&ctx);
         self.merge_dialogs(&ctx);
+        self.print_dialogs(&ctx);
         self.denoise_dialogs(&ctx);
         self.finish_frame(&ctx);
     }
