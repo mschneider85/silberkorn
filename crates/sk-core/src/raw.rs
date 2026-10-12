@@ -286,6 +286,64 @@ fn develop_bayer(raw: &RawImage) -> Result<Option<LinearImage>> {
     Ok(Some(LinearImage::new(rgb.width, rgb.height, rgb.data)))
 }
 
+/// The scaled (black level subtracted, 0..1) photosites of a Bayer sensor within the area that
+/// [`load_full`] returns, not oriented, for networks that work on the mosaic itself.
+pub struct BayerMosaic {
+    /// `width * height` photosites of the default crop.
+    pub data: Vec<f32>,
+    pub width: usize,
+    pub height: usize,
+    /// Color (0 red, 1 green, 2 blue) of the 2×2 pattern at the crop's corner.
+    pub pattern: [[usize; 2]; 2],
+}
+
+impl BayerMosaic {
+    /// Offset of the first red photosite, so that a 2×2 block from there is red, green, green, blue.
+    pub fn rggb_offset(&self) -> Option<(usize, usize)> {
+        (0..2).flat_map(|dy| (0..2).map(move |dx| (dx, dy))).find(|&(dx, dy)| {
+            let at = |x: usize, y: usize| self.pattern[(dy + y) % 2][(dx + x) % 2];
+            at(0, 0) == 0 && at(1, 0) == 1 && at(0, 1) == 1 && at(1, 1) == 2
+        })
+    }
+}
+
+/// The Bayer mosaic of a raw file (`None` for other sensors and for demosaiced data).
+pub fn load_bayer(path: &Path) -> Result<Option<(RawMeta, BayerMosaic)>> {
+    let Decoded { mut raw, meta } = decode(path)?;
+    let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else { return Ok(None) };
+    if raw.cpp != 1
+        || config.sensor != rawler::imgop::sensor::SensorType::Bayer
+        || !config.cfa.is_rgb()
+        || config.cfa.width != 2
+        || config.cfa.height != 2
+        || raw.fuji_rotation_width.is_some()
+    {
+        return Ok(None);
+    }
+    let cfa = config.cfa.clone();
+    raw.apply_scaling().map_err(|e| anyhow!("Skalierung fehlgeschlagen: {e}"))?;
+    let RawImageData::Float(data) = &raw.data else { bail!("Unerwartetes Datenformat") };
+    // The same area as the demosaic in `develop_bayer`: the default crop (absolute coordinates).
+    let crop = raw.crop_area.or(raw.active_area).unwrap_or(rawler::imgop::Rect::new(
+        rawler::imgop::Point::new(0, 0),
+        rawler::imgop::Dim2::new(raw.width, raw.height),
+    ));
+    let (x0, y0, w, h) = (crop.p.x, crop.p.y, crop.d.w, crop.d.h);
+    anyhow::ensure!(x0 + w <= raw.width && y0 + h <= raw.height && data.len() >= raw.width * raw.height, "Bildbereich ungültig");
+    let mut pattern = [[0usize; 2]; 2];
+    for (dy, row) in pattern.iter_mut().enumerate() {
+        for (dx, c) in row.iter_mut().enumerate() {
+            *c = match cfa.cfa_color_at(y0 + dy, x0 + dx) {
+                CFAColor::RED => 0,
+                CFAColor::GREEN => 1,
+                _ => 2,
+            };
+        }
+    }
+    let out = (0..h).flat_map(|y| data[(y0 + y) * raw.width + x0..(y0 + y) * raw.width + x0 + w].iter().copied()).collect();
+    Ok(Some((meta, BayerMosaic { data: out, width: w, height: h, pattern })))
+}
+
 /// X-Trans sensors with Markesteijn's demosaic instead of rawler's bilinear default, which
 /// leaves color moiré and soft detail. `None` for every other sensor.
 fn develop_xtrans(raw: &RawImage, quality: XTransQuality) -> Result<Option<LinearImage>> {

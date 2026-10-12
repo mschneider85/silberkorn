@@ -11,6 +11,7 @@ pub mod faces;
 pub mod inpaint;
 pub mod models;
 pub mod runtime;
+pub mod segment;
 
 use std::path::{Path, PathBuf};
 

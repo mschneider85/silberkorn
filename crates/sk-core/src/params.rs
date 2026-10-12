@@ -566,6 +566,8 @@ pub struct Detail {
     pub vignette_amount: f32,
     /// Haze removal (+) or added haze (-), -100..100.
     pub dehaze: f32,
+    /// AI denoising (see `ai_denoise`): how much of the cleaned raw data replaces the plain one, 0..100.
+    pub ai_denoise: f32,
 }
 
 impl Default for Detail {
@@ -582,6 +584,7 @@ impl Default for Detail {
             grain_size: 25.0,
             vignette_amount: 0.0,
             dehaze: 0.0,
+            ai_denoise: 0.0,
         }
     }
 }

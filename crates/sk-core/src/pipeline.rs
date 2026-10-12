@@ -245,6 +245,8 @@ pub struct Processor {
     /// Unclipped floating point data: no highlight reconstruction.
     hdr: bool,
     opts: RenderOptions,
+    /// Image and amount (0..1) of AI denoising (see `ai_denoise`).
+    ai_denoise: Option<(std::path::PathBuf, f32)>,
 }
 
 impl Processor {
@@ -306,6 +308,7 @@ impl Processor {
             sensor_long_edge: meta.info.width.max(meta.info.height).max(1) as f32,
             hdr: meta.hdr,
             opts,
+            ai_denoise: (adj.detail.ai_denoise > 0.0 && !meta.hdr).then(|| (meta.path.clone(), adj.detail.ai_denoise / 100.0)),
             adj: adj.clone(),
             camera_lens: meta.lens.clone(),
         }
@@ -836,19 +839,32 @@ impl Processor {
         w
     }
 
+    /// The source with the AI denoised data blended in, if wanted and available.
+    fn denoised(&self, src: &LinearImage) -> Option<Arc<LinearImage>> {
+        let (path, amount) = self.ai_denoise.as_ref()?;
+        crate::ai_denoise::blended(path, src, *amount)
+    }
+
     /// Full processing into an output color space (encoded 0..1 floats), for export.
     pub fn process(&self, src: &LinearImage, region: Option<Region>, space: OutputSpace) -> LinearImage {
+        let denoised = self.denoised(src);
+        let src = denoised.as_deref().unwrap_or(src);
         if let Some(g) = crate::gpu::active() {
             match self.process_gpu(g, src, region, space) {
                 Ok(img) => return img,
                 Err(e) => log::warn!("Export auf dem Prozessor: {e:#}"),
             }
         }
-        self.process_cpu(src, region, space)
+        self.process_source_cpu(src, region, space)
     }
 
     /// [`Self::process`] without the graphics card.
     pub fn process_cpu(&self, src: &LinearImage, region: Option<Region>, space: OutputSpace) -> LinearImage {
+        let denoised = self.denoised(src);
+        self.process_source_cpu(denoised.as_deref().unwrap_or(src), region, space)
+    }
+
+    fn process_source_cpu(&self, src: &LinearImage, region: Option<Region>, space: OutputSpace) -> LinearImage {
         let (enc, _, _) = self.process_encoded(src, region, None);
         let m = space.from_working();
         let trc = space.trc();
@@ -868,18 +884,22 @@ impl Processor {
 
     /// Display rendering (sRGB, 8-bit) with histogram.
     pub fn render(&self, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Rendered {
+        let denoised = self.denoised(src);
+        let src = denoised.as_deref().unwrap_or(src);
         if let Some(g) = crate::gpu::active() {
             match self.render_gpu(g, src, region, cache) {
                 Ok(r) => return r,
                 Err(e) => log::warn!("Darstellung auf dem Prozessor: {e:#}"),
             }
         }
-        self.render_cpu(src, region, cache)
+        let (enc, full, mask) = self.process_encoded(src, region, cache);
+        self.display(enc, full, mask)
     }
 
     /// [`Self::render`] without the graphics card.
     pub fn render_cpu(&self, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Rendered {
-        let (enc, full, mask) = self.process_encoded(src, region, cache);
+        let denoised = self.denoised(src);
+        let (enc, full, mask) = self.process_encoded(denoised.as_deref().unwrap_or(src), region, cache);
         self.display(enc, full, mask)
     }
 

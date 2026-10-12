@@ -206,6 +206,8 @@ pub fn zip_entry(url: &str, name: &str, progress: &dyn Fn(f32)) -> Result<Vec<u8
 pub enum Input {
     F32([usize; 4]),
     U8([usize; 4]),
+    /// f32 of any rank.
+    F32Shape(&'static [usize]),
 }
 
 /// Input data for a run (in the order of the network's inputs).
@@ -269,6 +271,12 @@ impl Net {
     /// Loads a network with fixed input shapes: on the graphics card if possible, else with
     /// ONNX Runtime on the processor, else with tract.
     pub fn load(path: &Path, inputs: &[Input]) -> Result<Net> {
+        Self::load_outputs(path, inputs, None)
+    }
+
+    /// [`Self::load`]; with tract only the outputs `keep` (by index) are computed, for networks
+    /// whose other outputs tract cannot handle. ONNX Runtime returns all of them.
+    pub fn load_outputs(path: &Path, inputs: &[Input], keep: Option<&[usize]>) -> Result<Net> {
         if gpu_enabled() && gpu_installed() {
             match ort_session(path) {
                 Ok((session, gpu)) => {
@@ -290,7 +298,12 @@ impl Net {
             model = match inp {
                 Input::F32(s) => model.with_input_fact(i, f32::fact(*s).into())?,
                 Input::U8(s) => model.with_input_fact(i, u8::fact(*s).into())?,
+                Input::F32Shape(s) => model.with_input_fact(i, f32::fact(*s).into())?,
             };
+        }
+        if let Some(keep) = keep {
+            let outlets: Vec<OutletId> = keep.iter().filter_map(|&i| model.outputs.get(i).copied()).collect();
+            model.select_output_outlets(&outlets)?;
         }
         let net = Net { backend: Backend::Cpu(model.into_optimized()?.into_runnable()?), inputs: inputs.to_vec() };
         *LAST_DEVICE.lock().unwrap() = Some(net.device());
@@ -326,6 +339,7 @@ impl Net {
                     let t = match (inp, d) {
                         (Input::F32(s), Data::F32(v)) => Tensor::from_shape(s, v)?,
                         (Input::U8(s), Data::U8(v)) => Tensor::from_shape(s, v)?,
+                        (Input::F32Shape(s), Data::F32(v)) => Tensor::from_shape(s, v)?,
                         _ => bail!("Falscher Eingabetyp"),
                     };
                     ins.push(t.into());
@@ -347,6 +361,7 @@ impl Net {
                     let v: ort::value::DynValue = match (inp, d) {
                         (Input::F32(s), Data::F32(v)) => ort::value::Tensor::from_array((s.to_vec(), v.to_vec())).map_err(|e| anyhow!("{e}"))?.into_dyn(),
                         (Input::U8(s), Data::U8(v)) => ort::value::Tensor::from_array((s.to_vec(), v.to_vec())).map_err(|e| anyhow!("{e}"))?.into_dyn(),
+                        (Input::F32Shape(s), Data::F32(v)) => ort::value::Tensor::from_array((s.to_vec(), v.to_vec())).map_err(|e| anyhow!("{e}"))?.into_dyn(),
                         _ => bail!("Falscher Eingabetyp"),
                     };
                     ins.push((name, v));

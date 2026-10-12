@@ -1,21 +1,166 @@
-//! AI denoising: a neural network trained on real camera noise
-//! (NAFNet, SIDD) cleans the demosaiced raw data; the result is a new linear DNG with the
-//! settings of the original, so that it is developed like the original, only without noise.
+//! AI denoising with RawNIND (UtNet2 by Benoit Brummer, UCLouvain, as published for darktable;
+//! weights GPL-3.0, downloaded only at the user's request). Computes the product that
+//! `sk_core::ai_denoise` keeps and blends into the image:
+//!
+//! - Bayer sensors: the network takes the mosaic itself (four planes R, G, G, B of 2×2 cells,
+//!   black level subtracted, not white balanced) and returns clean camera RGB at full resolution,
+//!   so it also replaces the demosaic.
+//! - Everything else (X-Trans, linear DNGs): a second network cleans demosaiced linear Rec.2020.
+//!
+//! Both work in overlapping tiles; the output's brightness is matched to the input per tile.
 
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use rayon::prelude::*;
-use sk_core::color::{srgb_decode, srgb_encode};
+use sk_core::color::{mat_inv, mat_vec};
 use sk_core::image::LinearImage;
 
-/// Network input size and overlap between neighbouring tiles.
-const TILE: usize = 256;
-const OVERLAP: usize = 16;
+use crate::models::{self, DENOISE_BAYER, DENOISE_LINEAR};
+use crate::runtime::{Data, Input, Net};
 
+/// Network input edge (cells for the Bayer network, pixels for the linear one) and overlap.
+const TILE: usize = 512;
+const OVERLAP: usize = 64;
+/// Input to output brightness of the networks, measured (the linear one even inverts the sign);
+/// used only for tiles too dark to measure it.
+const BAYER_GAIN: f32 = 1.0e-6;
+const LINEAR_GAIN: f32 = -3.2e-10;
+/// At most this many tiles at once on the processor (each needs several hundred MB).
+const PARALLEL_TILES: usize = 6;
+
+/// Identifies the models for the product cache.
+pub fn tag() -> String {
+    format!("rawnind-{}-{}", &DENOISE_BAYER.sha256[..12], &DENOISE_LINEAR.sha256[..12])
+}
+
+/// Both models are downloaded.
+pub fn available() -> bool {
+    models::available(&DENOISE_BAYER) && models::available(&DENOISE_LINEAR)
+}
+
+/// Downloads both models.
+pub fn download(progress: &dyn Fn(f32)) -> Result<()> {
+    for (i, m) in [DENOISE_BAYER, DENOISE_LINEAR].iter().enumerate() {
+        if !models::available(m) {
+            models::download(m, &|p| progress((i as f32 + p) / 2.0))?;
+        }
+    }
+    Ok(())
+}
+
+/// Download size of both models in MB.
+pub fn download_mb() -> u64 {
+    // Compressed in the archive they are about 7 % smaller.
+    (DENOISE_BAYER.bytes + DENOISE_LINEAR.bytes) * 93 / 100 / 1_000_000
+}
+
+/// A loaded network and the runtime configuration it was loaded with.
+type Loaded = Option<(u64, Arc<Net>)>;
+
+/// The loaded networks, kept between images (loaded again when the GPU setting changes).
+#[derive(Default)]
 pub struct Denoiser {
-    net: crate::runtime::Net,
+    nets: Mutex<[Loaded; 2]>,
+}
+
+impl Denoiser {
+    fn net(&self, bayer: bool) -> Result<Arc<Net>> {
+        let generation = crate::runtime::config_generation();
+        let mut nets = self.nets.lock().unwrap();
+        let slot = &mut nets[usize::from(!bayer)];
+        if let Some((g, n)) = slot
+            && *g == generation
+        {
+            return Ok(n.clone());
+        }
+        let (m, channels) = if bayer { (&DENOISE_BAYER, 4) } else { (&DENOISE_LINEAR, 3) };
+        anyhow::ensure!(models::available(m), "{} ist nicht geladen", m.label);
+        let net = Arc::new(Net::load(&models::path(m), &[Input::F32([1, channels, TILE, TILE])])?);
+        *slot = Some((generation, net.clone()));
+        Ok(net)
+    }
+
+    /// The product of a raw file: clean camera RGB, oriented, the size of `raw::load_full`.
+    pub fn product(&self, path: &Path, progress: &dyn Fn(f32)) -> Result<LinearImage> {
+        self.product_ext(path, false, progress)
+    }
+
+    /// [`Self::product`]; `linear` uses the linear network also for Bayer sensors (for comparisons).
+    pub fn product_ext(&self, path: &Path, linear: bool, progress: &dyn Fn(f32)) -> Result<LinearImage> {
+        let (meta, plain) = sk_core::raw::load_full(path).with_context(|| format!("{}", path.display()))?;
+        anyhow::ensure!(!meta.hdr, "Zusammengesetzte HDR-Bilder werden nicht entrauscht");
+        progress(0.05);
+        let progress = |p: f32| progress(0.05 + 0.95 * p);
+        let clean = match sk_core::raw::load_bayer(path)?.filter(|_| !linear) {
+            Some((_, mosaic)) => {
+                let img = self.bayer(&mosaic, &progress)?.oriented(meta.orientation);
+                anyhow::ensure!((img.width, img.height) == (plain.width, plain.height), "Bildgröße passt nicht ({}×{})", img.width, img.height);
+                img
+            }
+            None => self.linear(&meta, &plain, &progress)?,
+        };
+        // Pixels the network didn't produce (an odd border) and clipped highlights, which it knows
+        // nothing about, stay as they were.
+        let data = plain
+            .data
+            .par_iter()
+            .zip(&clean.data)
+            .map(|(p, c)| {
+                if c[0].is_nan() {
+                    return *p;
+                }
+                let keep = ((p.iter().copied().fold(0.0f32, f32::max) - 0.9) / 0.08).clamp(0.0, 1.0);
+                [0, 1, 2].map(|i| (c[i].max(0.0) + (p[i] - c[i].max(0.0)) * keep).min(1.0))
+            })
+            .collect();
+        Ok(LinearImage::new(plain.width, plain.height, data))
+    }
+
+    /// Bayer mosaic -> camera RGB of the mosaic's size (not oriented; NaN where not covered).
+    fn bayer(&self, m: &sk_core::raw::BayerMosaic, progress: &dyn Fn(f32)) -> Result<LinearImage> {
+        let (ox, oy) = m.rggb_offset().context("Unbekanntes Bayer-Muster")?;
+        let (cw, ch) = ((m.width - ox) / 2, (m.height - oy) / 2);
+        anyhow::ensure!(cw > 0 && ch > 0, "Bild zu klein");
+        let planes: Vec<Vec<f32>> = [(0, 0), (1, 0), (0, 1), (1, 1)]
+            .into_par_iter()
+            .map(|(dx, dy)| (0..cw * ch).map(|i| m.data[(oy + 2 * (i / cw) + dy) * m.width + ox + 2 * (i % cw) + dx]).collect())
+            .collect();
+        let out = run_tiled(&*self.net(true)?, &planes, cw, ch, 2, [0.25, 0.5, 0.25], BAYER_GAIN, progress)?;
+        let (w2, h2) = (2 * cw, 2 * ch);
+        let mut data = vec![[f32::NAN; 3]; m.width * m.height];
+        data.par_chunks_mut(m.width).enumerate().for_each(|(y, row)| {
+            if y < oy || y - oy >= h2 {
+                return;
+            }
+            for x in 0..w2 {
+                let i = (y - oy) * w2 + x;
+                row[ox + x] = [out[0][i], out[1][i], out[2][i]];
+            }
+        });
+        Ok(LinearImage::new(m.width, m.height, data))
+    }
+
+    /// Demosaiced camera RGB -> clean camera RGB, through the network for linear Rec.2020.
+    fn linear(&self, meta: &sk_core::raw::RawMeta, plain: &LinearImage, progress: &dyn Fn(f32)) -> Result<LinearImage> {
+        let wb = meta.as_shot_wb;
+        let m = meta.color.cam_to_working;
+        let inv = mat_inv(&m).context("Farbmatrix nicht umkehrbar")?;
+        let (w, h) = (plain.width, plain.height);
+        let rec2020: Vec<[f32; 3]> = plain.data.par_iter().map(|p| mat_vec(&m, [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]])).collect();
+        let planes: Vec<Vec<f32>> = (0..3).into_par_iter().map(|c| rec2020.iter().map(|p| p[c]).collect()).collect();
+        drop(rec2020);
+        let out = run_tiled(&*self.net(false)?, &planes, w, h, 1, [1.0 / 3.0; 3], LINEAR_GAIN, progress)?;
+        let data = (0..w * h)
+            .into_par_iter()
+            .map(|i| {
+                let c = mat_vec(&inv, [out[0][i], out[1][i], out[2][i]]);
+                [c[0] / wb[0], c[1] / wb[1], c[2] / wb[2]]
+            })
+            .collect();
+        Ok(LinearImage::new(w, h, data))
+    }
 }
 
 /// Tile origins along one axis: `0, step, …` with the last tile ending at the border.
@@ -29,158 +174,116 @@ fn origins(len: usize) -> Vec<usize> {
     v
 }
 
-/// Blending weight across a tile: 1 inside, falling linearly over the overlap towards
-/// neighbouring tiles (not at the image border).
-fn ramp(i: usize, at_start: bool, at_end: bool) -> f32 {
-    let r = (i as f32 + 0.5) / OVERLAP as f32;
-    let e = (TILE - i) as f32 / OVERLAP as f32 - 0.5 / OVERLAP as f32;
+/// Blending weight at position `i` (0..`len`) of a tile: 1 inside, falling linearly over the
+/// overlap towards neighbouring tiles (not at the image border).
+fn ramp(i: usize, len: usize, at_start: bool, at_end: bool) -> f32 {
+    let o = (OVERLAP * len / TILE) as f32;
     let mut w = 1.0f32;
     if !at_start {
-        w = w.min(r);
+        w = w.min((i as f32 + 0.5) / o);
     }
     if !at_end {
-        w = w.min(e);
+        w = w.min((len - i) as f32 / o - 0.5 / o);
     }
     w.clamp(1e-3, 1.0)
 }
 
-impl Denoiser {
-    pub fn load(path: &Path) -> Result<Self> {
-        Ok(Self { net: crate::runtime::Net::load(path, &[crate::runtime::Input::F32([1, 3, TILE, TILE])])? })
-    }
+/// Mirrors a position outside `0..len` back in (for images smaller than a tile).
+fn mirror(i: usize, len: usize) -> usize {
+    if i < len { i } else { (2 * len).saturating_sub(i + 2).min(len - 1) }
+}
 
-    fn run_tile(&self, tile: &[[f32; 3]]) -> Result<Vec<[f32; 3]>> {
-        let n = TILE * TILE;
-        let mut input = vec![0.0f32; 3 * n];
-        for (i, p) in tile.iter().enumerate() {
-            for c in 0..3 {
-                input[c * n + i] = p[c];
-            }
-        }
-        let out = self.net.run(&[crate::runtime::Data::F32(&input)])?;
-        let o = out.first().context("Keine Modellausgabe")?;
-        let d = &o.data;
-        anyhow::ensure!(d.len() == 3 * n, "Unerwartete Modellausgabe {:?}", o.shape);
-        Ok((0..n).map(|i| [d[i], d[n + i], d[2 * n + i]].map(|x| x.clamp(0.0, 1.0))).collect())
-    }
-
-    /// Denoises display-referred RGB (0..1, sRGB-like encoding), in overlapping tiles on all cores.
-    pub fn run(&self, w: usize, h: usize, rgb: &[[f32; 3]], progress: &dyn Fn(f32)) -> Result<Vec<[f32; 3]>> {
-        let (xs, ys) = (origins(w), origins(h));
-        let total = xs.len() * ys.len();
-        let done = AtomicUsize::new(0);
-        let mut acc = vec![[0.0f32; 3]; w * h];
-        let mut wsum = vec![0.0f32; w * h];
-        for (yi, &ty) in ys.iter().enumerate() {
-            // With ONNX Runtime one tile after the other (it uses the card or all cores itself),
-            // with tract a tile per core.
-            let tile_of = |&tx: &usize| -> Result<(usize, Vec<[f32; 3]>)> {
-                    // Mirrored at the border if the image is smaller than a tile.
-                    let tile: Vec<[f32; 3]> = (0..TILE * TILE)
-                        .map(|i| {
-                            let (x, y) = (tx + i % TILE, ty + i / TILE);
-                            let x = if x < w { x } else { (2 * w).saturating_sub(x + 2).min(w - 1) };
-                            let y = if y < h { y } else { (2 * h).saturating_sub(y + 2).min(h - 1) };
-                            rgb[y * w + x]
-                        })
-                        .collect();
-                    let out = self.run_tile(&tile);
-                    done.fetch_add(1, Ordering::Relaxed);
-                    out.map(|o| (tx, o))
-                };
-            let row: Vec<(usize, Vec<[f32; 3]>)> =
-                if self.net.prefers_serial() { xs.iter().map(tile_of).collect::<Result<_>>()? } else { xs.par_iter().map(tile_of).collect::<Result<_>>()? };
-            for (xi, (tx, out)) in row.into_iter().enumerate() {
-                for j in 0..TILE {
-                    let y = ty + j;
-                    if y >= h {
-                        break;
-                    }
-                    let wy = ramp(j, yi == 0, yi + 1 == ys.len());
-                    for i in 0..TILE {
-                        let x = tx + i;
-                        if x >= w {
-                            break;
-                        }
-                        let wt = wy * ramp(i, xi == 0, xi + 1 == xs.len());
-                        let o = out[j * TILE + i];
-                        let a = &mut acc[y * w + x];
-                        *a = [a[0] + o[0] * wt, a[1] + o[1] * wt, a[2] + o[2] * wt];
-                        wsum[y * w + x] += wt;
-                    }
+/// Runs a network over `planes` (`w` x `h` each) in overlapping tiles; returns three planes of
+/// `scale * w` x `scale * h`. Each tile's output is scaled so that its brightness (channels
+/// weighted by `weights`) matches the input's mean; `nominal` is the scale for black tiles.
+#[allow(clippy::too_many_arguments)]
+fn run_tiled(
+    net: &Net,
+    planes: &[Vec<f32>],
+    w: usize,
+    h: usize,
+    scale: usize,
+    weights: [f32; 3],
+    nominal: f32,
+    progress: &dyn Fn(f32),
+) -> Result<[Vec<f32>; 3]> {
+    let (xs, ys) = (origins(w), origins(h));
+    let tiles: Vec<(usize, usize, usize, usize)> =
+        ys.iter().enumerate().flat_map(|(yi, &ty)| xs.iter().enumerate().map(move |(xi, &tx)| (xi, yi, tx, ty))).collect();
+    let (ow, oh, ot) = (scale * w, scale * h, scale * TILE);
+    let acc = Mutex::new(([vec![0.0f32; ow * oh], vec![0.0f32; ow * oh], vec![0.0f32; ow * oh]], vec![0.0f32; ow * oh]));
+    let run = |&(xi, yi, tx, ty): &(usize, usize, usize, usize)| -> Result<()> {
+        let c = planes.len();
+        let mut input = vec![0.0f32; c * TILE * TILE];
+        for (p, plane) in planes.iter().enumerate() {
+            for j in 0..TILE {
+                let y = mirror(ty + j, h);
+                for i in 0..TILE {
+                    input[p * TILE * TILE + j * TILE + i] = plane[y * w + mirror(tx + i, w)];
                 }
             }
-            progress(done.load(Ordering::Relaxed) as f32 / total as f32);
         }
-        Ok(acc.iter().zip(&wsum).map(|(a, s)| a.map(|v| v / s.max(1e-6))).collect())
+        let out = net.run(&[Data::F32(&input)])?;
+        let o = out.first().context("Keine Modellausgabe")?;
+        let n = ot * ot;
+        anyhow::ensure!(o.data.len() == 3 * n, "Unerwartete Modellausgabe {:?}", o.shape);
+        let mean_in = input.iter().sum::<f32>() / input.len() as f32;
+        let mean_out = (0..3).map(|k| weights[k] * o.data[k * n..(k + 1) * n].iter().sum::<f32>() / n as f32).sum::<f32>();
+        let gain = mean_in / mean_out;
+        let gain = if mean_in > 1e-4 && gain.is_finite() && gain != 0.0 { gain } else { nominal };
+        let mut acc = acc.lock().unwrap();
+        let (sum, wsum) = &mut *acc;
+        for j in 0..ot {
+            let y = scale * ty + j;
+            if y >= oh {
+                break;
+            }
+            let wy = ramp(j, ot, yi == 0, yi + 1 == ys.len());
+            for i in 0..ot {
+                let x = scale * tx + i;
+                if x >= ow {
+                    break;
+                }
+                let wt = wy * ramp(i, ot, xi == 0, xi + 1 == xs.len());
+                for (k, plane) in sum.iter_mut().enumerate() {
+                    plane[y * ow + x] += o.data[k * n + j * ot + i] * gain * wt;
+                }
+                wsum[y * ow + x] += wt;
+            }
+        }
+        Ok(())
+    };
+    // Progress (and with it cancelling) is reported from this thread, after each round of tiles.
+    if net.prefers_serial() {
+        for (i, t) in tiles.iter().enumerate() {
+            run(t)?;
+            progress((i + 1) as f32 / tiles.len() as f32);
+        }
+    } else {
+        let threads = PARALLEL_TILES.min(rayon::current_num_threads()).max(1);
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build()?;
+        let mut done = 0;
+        for round in tiles.chunks(threads) {
+            pool.install(|| round.par_iter().try_for_each(run))?;
+            done += round.len();
+            progress(done as f32 / tiles.len() as f32);
+        }
     }
+    let (mut sum, wsum) = acc.into_inner().unwrap();
+    for plane in &mut sum {
+        plane.par_iter_mut().zip(&wsum).for_each(|(v, s)| *v /= s.max(1e-6));
+    }
+    if sum.iter().any(|p| p.iter().any(|v| !v.is_finite())) {
+        bail!("Das Modell lieferte ungültige Werte");
+    }
+    Ok(sum)
 }
 
-/// Camera data as the network expects it: white balanced, brought to a normal brightness and
-/// encoded; returns the encoded image and the brightness factor.
-fn to_network(img: &LinearImage, wb: [f32; 3]) -> (Vec<[f32; 3]>, f32) {
-    let mut lum: Vec<f32> = img.data.iter().step_by(31).map(|p| 0.25 * p[0] * wb[0] + 0.5 * p[1] * wb[1] + 0.25 * p[2] * wb[2]).collect();
-    let mid = lum.len() / 2;
-    let median = if lum.is_empty() { 0.18 } else { *lum.select_nth_unstable_by(mid, |a, b| a.total_cmp(b)).1 };
-    let scale = (0.18 / median.max(1e-5)).clamp(0.5, 16.0);
-    let enc = img.data.par_iter().map(|p| [0, 1, 2].map(|c| srgb_encode((p[c] * wb[c] * scale).clamp(0.0, 1.0)))).collect();
-    (enc, scale)
-}
-
-/// Denoises a raw file into `<name>-Entrauscht.dng` next to it. `strength` 0..1 blends with the
-/// original. The new file gets the original's settings (without its noise reduction).
-pub fn denoise_file(path: &Path, strength: f32, model: &Denoiser, progress: &dyn Fn(f32)) -> Result<PathBuf> {
-    let (meta, img) = sk_core::raw::load_full(path).with_context(|| format!("{}", path.display()))?;
-    progress(0.03);
-    let wb = meta.as_shot_wb;
-    let min_wb = wb.iter().copied().fold(f32::MAX, f32::min).max(1e-6);
-    let wb = wb.map(|v| v / min_wb);
-    let (enc, scale) = to_network(&img, wb);
-    let out = model.run(img.width, img.height, &enc, &|p| progress(0.03 + 0.9 * p))?;
-    let strength = strength.clamp(0.0, 1.0);
-    let data: Vec<[f32; 3]> = img
-        .data
-        .par_iter()
-        .zip(&out)
-        .zip(&enc)
-        .map(|((orig, den), e)| {
-            // Clipped highlights stay as they were (the network only knows 0..1).
-            let clip = e.iter().copied().fold(0.0f32, f32::max);
-            let keep = ((clip - 0.92) / 0.06).clamp(0.0, 1.0);
-            let t = strength * (1.0 - keep);
-            [0, 1, 2].map(|c| {
-                let d = srgb_decode(den[c]) / scale / wb[c];
-                (orig[c] + (d - orig[c]) * t).clamp(0.0, 1.0)
-            })
-        })
-        .collect();
-    let out_path = sk_core::hdr::output_path(path, "-Entrauscht");
-    let denoised = LinearImage::new(img.width, img.height, data);
-    let preview = sk_core::dng::quick_preview(&meta, &denoised, 1024);
-    sk_core::dng::write_linear_dng(
-        &out_path,
-        &sk_core::dng::LinearDng {
-            width: denoised.width,
-            height: denoised.height,
-            data: &denoised.data,
-            xyz_to_cam: meta.color.xyz_to_cam,
-            as_shot_wb: meta.as_shot_wb,
-            info: &meta.info,
-            baseline_exposure: 0.0,
-            preview: Some(&preview),
-        },
-    )?;
-    // Developed like the original.
-    let mut sc = sk_core::sidecar::load(path);
-    sc.adjustments.detail.nr_luma = 0.0;
-    sc.adjustments.detail.nr_color = 0.0;
-    sc.variants.clear();
-    sc.snapshots.clear();
-    sc.stack = None;
-    sc.xmp_mtime = None;
-    sk_core::sidecar::save(&out_path, &sc)?;
-    progress(1.0);
-    Ok(out_path)
+/// Registers RawNIND as the provider of `sk_core::ai_denoise` (whether or not it is downloaded:
+/// computing fails with a message until it is).
+pub fn register() {
+    let denoiser = Denoiser::default();
+    sk_core::ai_denoise::set_provider(&tag(), Box::new(move |path, progress| denoiser.product(path, progress)));
 }
 
 #[cfg(test)]
@@ -190,30 +293,44 @@ mod tests {
     #[test]
     fn tiles_cover_the_image_and_blend_to_one() {
         assert_eq!(origins(100), vec![0]);
-        assert_eq!(origins(256), vec![0]);
-        let o = origins(1000);
-        assert_eq!(*o.last().unwrap(), 1000 - TILE);
+        assert_eq!(origins(TILE), vec![0]);
+        let o = origins(3000);
+        assert_eq!(*o.last().unwrap(), 3000 - TILE);
         assert!(o.windows(2).all(|w| w[1] - w[0] <= TILE - OVERLAP));
         // Inside a tile the weight is 1; at a shared edge both tiles contribute.
-        assert_eq!(ramp(TILE / 2, false, false), 1.0);
-        assert!(ramp(0, false, false) < 0.1 && ramp(0, true, false) == 1.0);
+        assert_eq!(ramp(TILE / 2, TILE, false, false), 1.0);
+        assert!(ramp(0, TILE, false, false) < 0.1 && ramp(0, TILE, true, false) == 1.0);
+        // Scaled tiles (the Bayer network doubles the size) fall over a doubled overlap.
+        assert_eq!(ramp(2 * OVERLAP, 2 * TILE, false, false), 1.0);
+        assert!(ramp(OVERLAP, 2 * TILE, false, false) < 0.6);
+        assert_eq!((mirror(5, 10), mirror(10, 10), mirror(11, 10)), (5, 8, 7));
     }
 
+    /// With the downloaded model: a noisy flat mosaic comes out flat, at the same brightness.
     #[test]
-    fn denoises_with_model_if_available() {
-        let path = crate::models::path(&crate::models::DENOISE);
-        if !path.exists() {
+    fn denoises_a_noisy_mosaic_if_the_model_is_available() {
+        if !models::available(&DENOISE_BAYER) {
             return;
         }
-        let model = Denoiser::load(&path).unwrap();
-        // A flat grey patch with noise.
-        let (w, h) = (300, 280);
-        let noisy: Vec<[f32; 3]> = (0..w * h).map(|i| {
-            let n = sk_core::detail::hash_noise((i % w) as i64, (i / w) as i64, 1) * 0.08;
-            [0.5 + n; 3]
-        }).collect();
-        let out = model.run(w, h, &noisy, &|_| {}).unwrap();
-        let dev = |d: &[[f32; 3]]| (d.iter().map(|p| (p[1] - 0.5).powi(2)).sum::<f32>() / d.len() as f32).sqrt();
-        assert!(dev(&out) < dev(&noisy) * 0.5, "{} vs {}", dev(&out), dev(&noisy));
+        let d = Denoiser::default();
+        let (w, h) = (600, 520);
+        let data: Vec<f32> = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let base = match (x % 2, y % 2) {
+                    (0, 0) => 0.10,
+                    (1, 1) => 0.07,
+                    _ => 0.20,
+                };
+                base + sk_core::detail::hash_noise(x as i64, y as i64, 3) * 0.03
+            })
+            .collect();
+        let m = sk_core::raw::BayerMosaic { data, width: w, height: h, pattern: [[0, 1], [1, 2]] };
+        let out = d.bayer(&m, &|_| {}).unwrap();
+        let n = out.data.len() as f32;
+        let mean: [f32; 3] = std::array::from_fn(|c| out.data.iter().map(|p| p[c]).sum::<f32>() / n);
+        let dev = (out.data.iter().map(|p| (p[1] - mean[1]).powi(2)).sum::<f32>() / n).sqrt();
+        assert!((mean[0] - 0.10).abs() < 0.01 && (mean[1] - 0.20).abs() < 0.015 && (mean[2] - 0.07).abs() < 0.01, "{mean:?}");
+        assert!(dev < 0.03 * 0.5, "{dev}");
     }
 }

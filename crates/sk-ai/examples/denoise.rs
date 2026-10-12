@@ -1,17 +1,32 @@
-//! AI denoising from the command line: `denoise <raw> [strength 0..1]` (the model must be downloaded).
+//! AI denoising of one raw file: `denoise <raw> <out-dir> [amount] [--linear]`. Writes a crop at
+//! 100 % without and with denoising as PNG (`--linear`: with the network for demosaiced data,
+//! also for Bayer sensors). The models are downloaded if needed.
 
 fn main() -> anyhow::Result<()> {
-    let mut args = std::env::args().skip(1);
-    let path = std::path::PathBuf::from(args.next().expect("RAW-Datei"));
-    let strength: f32 = args.next().map(|s| s.parse()).transpose()?.unwrap_or(0.7);
-    let model_path = sk_ai::models::path(&sk_ai::models::DENOISE);
-    if !model_path.exists() {
-        eprintln!("Lade Modell …");
-        sk_ai::models::download(&sk_ai::models::DENOISE, &|p| eprint!("\r{:3.0} %", p * 100.0))?;
+    let args: Vec<String> = std::env::args().filter(|a| a != "--linear").collect();
+    let linear = std::env::args().any(|a| a == "--linear");
+    let (path, out) = (std::path::PathBuf::from(&args[1]), std::path::PathBuf::from(&args[2]));
+    let amount: f32 = args.get(3).and_then(|a| a.parse().ok()).unwrap_or(100.0);
+    if !sk_ai::denoise::available() {
+        sk_ai::denoise::download(&|p| eprint!("\rModelle laden {:3.0} %", p * 100.0))?;
+        eprintln!();
     }
-    let t = std::time::Instant::now();
-    let model = sk_ai::denoise::Denoiser::load(&model_path)?;
-    let out = sk_ai::denoise::denoise_file(&path, strength, &model, &|p| eprint!("\r{:3.0} %", p * 100.0))?;
-    eprintln!("\n{} in {:.1} s", out.display(), t.elapsed().as_secs_f32());
+    let denoiser = sk_ai::denoise::Denoiser::default();
+    let tag = format!("{}{}", sk_ai::denoise::tag(), if linear { "-linear" } else { "" });
+    sk_core::ai_denoise::set_provider(&tag, Box::new(move |p, progress| denoiser.product_ext(p, linear, progress)));
+    let start = std::time::Instant::now();
+    sk_core::ai_denoise::ensure(&path, &|p| eprint!("\r{:3.0} %", p * 100.0))?;
+    eprintln!("\nentrauscht in {:.1?}", start.elapsed());
+    let (meta, full) = sk_core::raw::load_full(&path)?;
+    let crop = |a: f32| {
+        let mut adj = sk_core::sidecar::load(&path).adjustments;
+        adj.detail.ai_denoise = a;
+        let p = sk_core::pipeline::Processor::new(&meta, &adj);
+        let (w, h) = p.output_size(full.width, full.height);
+        let r = p.render(&full, Some(sk_core::geometry::Region { x: w / 2 - 400, y: h / 2 - 300, w: 800, h: 600 }), None);
+        image::RgbaImage::from_raw(r.width as u32, r.height as u32, r.rgba).unwrap()
+    };
+    crop(0.0).save(out.join("ohne.png"))?;
+    crop(amount).save(out.join("mit.png"))?;
     Ok(())
 }

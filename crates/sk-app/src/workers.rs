@@ -208,6 +208,10 @@ pub enum AiKind {
     Sky,
     /// The points of a painted stroke.
     Magic { seeds: Vec<[f32; 2]>, tolerance: f32 },
+    /// The object at the clicks so far (MobileSAM).
+    Object { clicks: Vec<sk_ai::segment::Click> },
+    /// Analyzes the image for `Object` before the first click (no result event).
+    ObjectPrepare,
 }
 
 /// Computes a content-based mask for a layer.
@@ -500,6 +504,9 @@ impl Workers {
             let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
             crate::guard::spawn("KI-Maske", move || {
                 let mut model: Option<(sk_ai::SubjectModel, u64)> = None;
+                let mut object: Option<(sk_ai::segment::ObjectModel, u64)> = None;
+                // The encoder's result for the last image (by its guide), reused for every click.
+                let mut embedding: Option<(u64, sk_ai::segment::Embedding)> = None;
                 while let Ok(job) = ai_rx.recv() {
                     // Guide: the image in source orientation, only white balance and exposure applied.
                     let guide_adj = Adjustments {
@@ -510,7 +517,33 @@ impl Workers {
                     };
                     let r = Processor::new(&job.meta, &guide_adj).render(&job.preview, None, None);
                     let guide = sk_ai::guide_from_rgba(r.width, r.height, &r.rgba);
+                    let prepare = matches!(job.kind, AiKind::ObjectPrepare);
                     let result = match job.kind {
+                        AiKind::Object { .. } | AiKind::ObjectPrepare => {
+                            let generation = sk_ai::runtime::config_generation();
+                            if object.as_ref().is_none_or(|(_, g)| *g != generation) && sk_ai::segment::available() {
+                                object = sk_ai::segment::ObjectModel::load().map_err(|e| log::warn!("{e:#}")).ok().map(|m| (m, generation));
+                            }
+                            match &object {
+                                Some((m, _)) => {
+                                    let key = cache::fnv1a(format!("{}|{}x{}", job.meta.path.display(), r.width, r.height).as_bytes())
+                                        ^ cache::fnv1a(&r.rgba.iter().step_by(97).copied().collect::<Vec<u8>>());
+                                    if embedding.as_ref().is_none_or(|(k, _)| *k != key) {
+                                        embedding = None;
+                                        match m.embed(&guide) {
+                                            Ok(e) => embedding = Some((key, e)),
+                                            Err(e) => log::warn!("Objekt auswählen: {e:#}"),
+                                        }
+                                    }
+                                    match (&job.kind, &embedding) {
+                                        (AiKind::Object { clicks }, Some((_, e))) => m.mask(e, clicks).map_err(|e| format!("{e:#}")),
+                                        (AiKind::Object { .. }, None) => Err("Das Bild konnte nicht analysiert werden".into()),
+                                        _ => Err(String::new()),
+                                    }
+                                }
+                                None => Err("OBJECT_MODEL_MISSING".into()),
+                            }
+                        }
                         AiKind::Sky => Ok(sk_ai::sky_mask(&guide)),
                         AiKind::Magic { seeds, tolerance } => Ok(sk_ai::magic_mask(&guide, &seeds, tolerance)),
                         AiKind::Subject => {
@@ -524,6 +557,9 @@ impl Workers {
                             }
                         }
                     };
+                    if prepare {
+                        continue;
+                    }
                     let _ = ev_tx.send(Event::AiMask { generation: job.generation, layer: job.layer, result });
                     ctx.request_repaint();
                 }

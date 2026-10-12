@@ -89,6 +89,7 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Color, "Color Balance", "color grading farbräder tonung"),
     (Tab::Color, "Schwarzweiß", "black white monochrom sw"),
     (Tab::Details, "Schärfen", "sharpen schärfe"),
+    (Tab::Details, "KI-Entrauschen", "ki ai denoise rauschen entrauschen"),
     (Tab::Details, "Rauschreduzierung", "noise rauschen denoise"),
     (Tab::Details, "Klarheit", "clarity struktur"),
     (Tab::Details, "Dunst entfernen", "dehaze dunst nebel"),

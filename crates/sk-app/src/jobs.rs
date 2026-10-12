@@ -67,6 +67,9 @@ impl App {
     }
 
     pub(crate) fn job_done(&mut self, id: u64, label: String, result: Result<Vec<PathBuf>, String>) {
+        if self.denoise_job_done(id, &result) {
+            return;
+        }
         self.jobs.retain(|j| j.id != id);
         match result {
             Ok(files) => {

@@ -213,11 +213,25 @@ fn crop_full_resolution_and_tiles() {
 
 /// Runs one UI frame of the viewer with the given input events.
 fn viewer_frame(f: &mut Fixture, events: Vec<egui::Event>) {
+    run_viewer(f, egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
+        events,
+        ..Default::default()
+    });
+}
+
+/// [`viewer_frame`] with modifier keys held.
+fn viewer_frame_with(f: &mut Fixture, events: Vec<egui::Event>, modifiers: egui::Modifiers) {
+    let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))),
         events,
         ..Default::default()
     };
+    run_viewer(f, input);
+}
+
+fn run_viewer(f: &mut Fixture, input: egui::RawInput) {
     let app = &mut f.app;
     let out = f.ctx.run_ui(input, |ui| {
         app.pointer_down = ui.ctx().input(|i| i.pointer.any_down());
@@ -1621,6 +1635,68 @@ fn heal_clone_and_magic_brush_are_painted() {
     assert!(layers.iter().any(|l| l.mask.ai.is_some()));
 }
 
+
+/// Object selection (with the downloaded MobileSAM models): a click selects the object, an
+/// Alt+click takes part of it away, and "next object" keeps the result while starting anew.
+#[test]
+#[ignore = "langsam: läuft mit cargo t-all"]
+fn object_clicks_select_and_refine() {
+    if !sk_ai::segment::available() {
+        return;
+    }
+    let Some(mut f) = Fixture::new("object") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    viewer_frame(&mut f, vec![]);
+    let c = egui::pos2(600.0, 400.0);
+    f.app.set_local_tool(crate::layers::LocalTool::Object);
+    let mask = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.layers.first().and_then(|l| l.mask.ai.clone());
+    let covered = |m: &sk_core::params::AiMask| m.data.iter().filter(|v| **v > 128).count();
+
+    click(&mut f, c);
+    f.pump("Objekt", |a| !a.ai_busy && a.current.as_ref().is_some_and(|c| c.adjustments.layers.first().is_some_and(|l| l.mask.ai.is_some())));
+    let first = mask(&f).unwrap();
+    let n = covered(&first);
+    assert!(n > 0 && n < first.data.len(), "{n} von {}", first.data.len());
+    assert_eq!(f.app.object_session.as_ref().map(|s| s.clicks.len()), Some(1));
+    // What the app does each frame once the mouse is up: one undo step per click.
+    f.app.commit_and_save();
+
+    // Alt+click on the same spot: the object is computed anew from both clicks and replaces the
+    // first result instead of adding to it.
+    let alt = egui::Modifiers::ALT;
+    viewer_frame_with(&mut f, vec![egui::Event::PointerMoved(c)], alt);
+    viewer_frame_with(&mut f, vec![egui::Event::PointerButton { pos: c, button: egui::PointerButton::Primary, pressed: true, modifiers: alt }], alt);
+    viewer_frame_with(&mut f, vec![egui::Event::PointerButton { pos: c, button: egui::PointerButton::Primary, pressed: false, modifiers: alt }], alt);
+    viewer_frame_with(&mut f, vec![], egui::Modifiers::NONE);
+    assert_eq!(f.app.object_session.as_ref().map(|s| s.clicks.iter().filter(|c| !c.include).count()), Some(1));
+    f.pump("Objekt verfeinert", |a| !a.ai_busy);
+    let second = mask(&f).unwrap();
+    assert!(covered(&second) < n, "Alt+Klick nimmt etwas weg: {} vs {n}", covered(&second));
+
+    // Undo brings back the first result.
+    f.app.commit_and_save();
+    f.app.undo();
+    assert_eq!(mask(&f).map(|m| covered(&m)), Some(n));
+}
+
+/// "Staub und Flecken finden" runs in the background and adds heal spots once; searching
+/// again does not add the same spots twice.
+#[test]
+fn spot_search_adds_heal_spots_once() {
+    let Some(mut f) = Fixture::new("spots") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.spot_sensitivity = 1.0;
+    f.app.find_spots();
+    assert!(f.app.spot_search.is_some());
+    f.pump("Flecken", |a| a.spot_search.is_none());
+    let spots = f.app.current.as_ref().unwrap().adjustments.retouch.clone();
+    assert!(!spots.is_empty(), "{}", f.app.status);
+    assert!(spots.iter().all(|s| s.mode == sk_core::params::SpotMode::Heal));
+    assert_eq!(f.app.local_tool, Some(crate::layers::LocalTool::Heal), "Stellen zum Prüfen sichtbar");
+    f.app.find_spots();
+    f.pump("Flecken", |a| a.spot_search.is_none());
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.retouch.len(), spots.len());
+}
 
 #[test]
 fn wheel_zooms_while_cropping_and_space_pans() {

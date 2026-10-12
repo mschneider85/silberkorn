@@ -104,12 +104,27 @@ weiße verschiebt den Bereich, der gelbe (beim ausgewählten) die Quelle. Im Abs
 stehen alle Bereiche in einer Liste; dort lassen sich Art, Deckkraft und Weichheit ändern, eine neue Quelle
 suchen oder Bereiche löschen.
 
+**Staub und Flecken finden** (dort, oder über die Befehlssuche) macht Sensorstaub und Hautunreinheiten zu
+Reparieren-Stellen: gesucht werden kleine, runde Stellen, die rundum dunkler als ihre Umgebung sind, auf ruhigen
+Flächen (Himmel, Wände, Haut). Auf dem Logarithmus der Helligkeit misst eine Differenz zweier Weichzeichnungen
+in vier Größen, wie viel dunkler eine Stelle als ihr Ring ist; das muss die übliche Antwort der Umgebung
+(Struktur, Rauschen) deutlich übertreffen, und der Ring muss in allen zwölf Richtungen heller sein, sonst ist es
+eine Kante oder Linie. Die **Empfindlichkeit** senkt beide Schwellen. Die Suche läuft auf der Vorschau im
+Hintergrund (etwa 0,2 s), bereits reparierte Stellen werden übersprungen, und danach zeigt das
+Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --release -p sk-core --example spots -- <raw> <bild.png> [empfindlichkeit]`
+
 ### Auswahl aus Bildinhalt
 
 - **Motiv auswählen:** neuronales Netz U²-Net-p (Apache-2.0, 4,6 MB). Das Modell wird im Tab „Ebenen“
   auf Wunsch nach `~/.local/share/silberkorn/models/` geladen (oder `SILBERKORN_MODEL=<pfad>`).
 - **Himmel auswählen:** helle, strukturarme, blaue oder neutrale Bereiche, die mit dem oberen Rand verbunden sind.
 - **Magic Brush (J):** über den Bereich malen; gewählt wird, was zusammenhängt und einer der überstrichenen Farben ähnelt (Größe und Toleranz einstellbar).
+- **Objekt (Umschalt+J):** auf ein Objekt klicken, es wird ausgewählt; weitere Klicks verfeinern, Alt+Klick
+  nimmt Teile aus, „Nächstes Objekt“ wählt ein weiteres dazu. MobileSAM (Apache-2.0; Bild-Encoder und
+  Masken-Decoder von Segment Anything als ONNX, 45 MB, auf Wunsch geladen). Der Encoder analysiert das Bild
+  einmal, sobald das Werkzeug gewählt wird (etwa 4 s auf dem Prozessor); jeder Klick braucht dann nur noch
+  den Decoder (etwa 0,2 s). tract rechnet nur dessen 256er-Maske, Silberkorn skaliert sie selbst hoch und
+  verfeinert die Kanten am Bild. Jeder Klick ist ein Rückgängig-Schritt.
 - **Luma Range** und **Farbbereich** (mit Pipette) verfeinern jede Maske.
 - **Style Brushes:** Pinsel-Presets (Aufhellen, Abdunkeln, Wärmer, Haut glätten, Dunst entfernen, …).
 
@@ -134,13 +149,22 @@ Statusleiste mit Fortschritt an; Verarbeiten, Zusammenfügen und Entrauschen las
 abbrechen, und beim Beenden fragt Silberkorn nach, solange sie laufen; worauf man im Viewer wartet (Maske, Entfernen, Angleichen),
 erscheint zusätzlich oben im Bild.
 
-- **Entrauschen (KI)** (Bild-Menü): NAFNet (Breite 32, megvii-research, MIT), trainiert auf echtem
-  Kamerarauschen (SIDD), 117 MB. Die demosaicten RAW-Daten werden weißabgeglichen, auf normale
-  Helligkeit gebracht und in überlappenden 256er-Kacheln auf allen Kernen entrauscht. Übersteuerte
-  Lichter bleiben unverändert. Es entsteht ein lineares DNG `…-Entrauscht.dng` mit den Einstellungen
-  des Originals (ohne dessen Rauschreduzierung); **Stärke** mischt mit dem Original. Ein 24-MP-Bild
-  braucht auf einem 6-Kern-Laptop etwa 5 Minuten (läuft im Hintergrund).
-  Kommandozeile: `cargo run --release -p sk-ai --example denoise -- <raw> [stärke]`
+- **KI-Entrauschen** (Tab „Details“, für mehrere Bilder im Bild-Menü): RawNIND (UtNet2, Benoit
+  Brummer, UCLouvain) in der Fassung von darktable (darktable-ai 5.6.0). Die Gewichte stehen unter
+  **GPL-3.0**; sie werden nicht mitgeliefert, sondern erst geladen, nachdem man den Lizenzhinweis
+  bestätigt hat (etwa 57 MB, per Teil-Download nur die beiden ONNX-Dateien aus dem Archiv).
+  Bei Bayer-Sensoren bekommt das Netz das Mosaik selbst (R, G, G, B, schwarzwertbereinigt, nicht
+  weißabgeglichen) und liefert sauberes Kamera-RGB in voller Auflösung, ersetzt also auch das
+  Demosaicing; X-Trans und andere Sensoren laufen demosaict durch ein zweites Netz für lineares
+  Rec.2020. Kacheln zu 512 mit 64 Überlappung, die Helligkeit jeder Kachel wird an die Eingabe
+  angeglichen; übersteuerte Lichter bleiben unverändert.
+  Das Ergebnis wird je Bild einmal im Hintergrund berechnet (das Bild im Viewer zuerst; 24 MP etwa
+  30 s auf 12 Kernen, X-Trans deutlich länger) und als komprimierte Halbfloat-Datei in
+  `~/.cache/silberkorn/denoise/` gehalten (höchstens 20 GB, die ältesten fallen heraus;
+  `SILBERKORN_DENOISE_CACHE` überschreibt den Ort). **Stärke** mischt es vor allen anderen Stufen
+  in die RAW-Daten: nicht-destruktiv, rückgängig zu machen, gilt für Vorschau, Export und
+  Thumbnails. Fehlt es beim Export, wird es dort berechnet – nie wird stillschweigend ohne
+  exportiert. Kommandozeile: `cargo run --release -p sk-ai --example denoise -- <raw> <ordner> [stärke] [--linear]`
 - **Entfernen** (X, Tab „Ebenen & Retusche“): Über Störendes malen; beim Loslassen füllt MI-GAN
   (Picsart, MIT, 30 MB) die Stelle passend zur Umgebung. Gefüllt wird in voller Auflösung, bei
   größeren Markierungen in mehreren 512er-Fenstern nacheinander; erst sehr große Flächen werden

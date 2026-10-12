@@ -316,8 +316,17 @@ impl App {
             crate::widgets::no_image(ui);
             return;
         };
-        let d = &mut cur.adjustments.detail;
+        let (path, hdr) = (cur.meta.path.clone(), cur.meta.hdr);
+        let mut ai_amount = cur.adjustments.detail.ai_denoise;
+        let mut r_ai = false;
         let mut changed = false;
+        section(ui, "KI-Entrauschen", Some(&mut || r_ai = true), |ui| {
+            changed |= self.denoise_controls(ui, &mut ai_amount, &path, hdr);
+        });
+        let Some(cur) = self.current.as_mut() else { return };
+        cur.adjustments.detail.ai_denoise = if r_ai { 0.0 } else { ai_amount };
+        changed |= r_ai;
+        let d = &mut cur.adjustments.detail;
         let defaults = Detail::default();
 
         let (mut r_sharp, mut r_nr, mut r_clarity, mut r_vig, mut r_grain) = (false, false, false, false, false);

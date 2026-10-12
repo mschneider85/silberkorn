@@ -1,5 +1,6 @@
 //! Writes subject/sky/magic masks of a raw file as PNGs:
-//! `cargo run --release -p sk-ai --example masks -- <raw> <out_dir> [model.onnx]`
+//! `cargo run --release -p sk-ai --example masks -- <raw> <out_dir> [model.onnx] [--click u,v]`
+//! (`--click`: also the object at that point, with the downloaded MobileSAM models).
 
 use std::path::Path;
 
@@ -12,7 +13,12 @@ fn save(m: &MaskImage, path: &Path) -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
+    let all: Vec<String> = std::env::args().collect();
+    let click = all.iter().position(|a| a == "--click").and_then(|i| all.get(i + 1)).map(|v| {
+        let uv: Vec<f32> = v.split(',').filter_map(|x| x.parse().ok()).collect();
+        [uv[0], uv[1]]
+    });
+    let args: Vec<String> = all.iter().filter(|a| *a != "--click" && !a.contains(',')).cloned().collect();
     let out = Path::new(&args[2]);
     std::fs::create_dir_all(out)?;
     let (meta, preview) = raw::load_preview(Path::new(&args[1]), 1024)?;
@@ -29,6 +35,18 @@ fn main() -> anyhow::Result<()> {
         let m = SubjectModel::load(Path::new(model))?;
         save(&m.subject_mask(&guide)?, &out.join("subject.png"))?;
         println!("subject {:?}", t.elapsed());
+    }
+    if let Some(uv) = click {
+        let t = std::time::Instant::now();
+        let m = sk_ai::segment::ObjectModel::load()?;
+        println!("object: load {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let emb = m.embed(&guide)?;
+        println!("object: image {:?}", t.elapsed());
+        let t = std::time::Instant::now();
+        let mask = m.mask(&emb, &[sk_ai::segment::Click { uv, include: true }])?;
+        println!("object: click {:?}", t.elapsed());
+        save(&mask, &out.join("object.png"))?;
     }
     image::RgbaImage::from_raw(r.width as u32, r.height as u32, r.rgba)
         .unwrap()

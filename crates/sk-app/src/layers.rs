@@ -19,6 +19,8 @@ pub enum LocalTool {
     Clone,
     /// Region growing from a click (Magic Brush).
     Magic,
+    /// The object under the clicks (MobileSAM).
+    Object,
     /// Picks the color for the color range refinement.
     ColorPick,
     /// Generative removal (see `remove.rs`).
@@ -65,6 +67,7 @@ impl LocalTool {
             LocalTool::Heal => "\u{E0B2}  Reparieren (H)",
             LocalTool::Clone => "\u{EA48}  Klonen (S)",
             LocalTool::Magic => "\u{E6B6}  Magic Brush (J)",
+            LocalTool::Object => "\u{E7C8}  Objekt (Umschalt+J)",
             LocalTool::ColorPick => "\u{E568}  Farbe wählen",
             LocalTool::Remove => "\u{E6F0}  Entfernen (X)",
         }
@@ -81,13 +84,14 @@ impl LocalTool {
             LocalTool::Heal => (icon::BANDAIDS, "Reparieren", "H"),
             LocalTool::Clone => (icon::STAMP, "Klonen", "S"),
             LocalTool::Magic => (icon::MAGIC_WAND, "Magic Brush", "J"),
+            LocalTool::Object => (icon::CURSOR_CLICK, "Objekt", ""),
             LocalTool::ColorPick => (icon::EYEDROPPER, "Farbe", ""),
             LocalTool::Remove => (icon::SPARKLE, "Entfernen", "X"),
         }
     }
 
     pub fn is_mask_tool(self) -> bool {
-        matches!(self, LocalTool::Brush | LocalTool::Eraser | LocalTool::Linear | LocalTool::Radial | LocalTool::Magic)
+        matches!(self, LocalTool::Brush | LocalTool::Eraser | LocalTool::Linear | LocalTool::Radial | LocalTool::Magic | LocalTool::Object)
     }
 }
 
@@ -192,6 +196,19 @@ impl UvToScreen {
     }
 }
 
+/// The clicks of the object being selected: each click computes the object anew from all of
+/// them; the result replaces the previous one (added to what the mask held before the first click).
+pub struct ObjectSession {
+    pub path: std::path::PathBuf,
+    pub layer: usize,
+    /// The layer's AI mask before the first click.
+    pub base: Option<sk_core::params::AiMask>,
+    pub clicks: Vec<sk_ai::segment::Click>,
+}
+
+/// Label of the job that downloads the object selection models.
+const OBJECT_DOWNLOAD: &str = "Modell laden: Objekt auswählen (MobileSAM)";
+
 /// Drag state of the local tools.
 #[derive(Clone, Debug, Default)]
 pub enum LocalDrag {
@@ -259,10 +276,102 @@ impl App {
         let new = if self.local_tool == Some(tool) { None } else { Some(tool) };
         self.end_viewer_tools();
         self.local_tool = new;
+        self.object_session = None;
         if self.local_tool.is_some_and(|t| t.is_mask_tool()) {
             self.ensure_layer();
         }
+        if new == Some(LocalTool::Object) {
+            self.prepare_object();
+        }
         self.request_render();
+    }
+
+    /// Analyzes the image for object selection in the background, before the first click.
+    fn prepare_object(&mut self) {
+        if !sk_ai::segment::available() {
+            return;
+        }
+        let (Some(layer), Some(cur)) = (self.active_layer, &self.current) else { return };
+        self.workers.ai_mask(crate::workers::AiJob {
+            generation: self.generation(),
+            layer,
+            kind: crate::workers::AiKind::ObjectPrepare,
+            meta: cur.meta.clone(),
+            preview: cur.preview.clone(),
+            adjustments: cur.adjustments.clone(),
+        });
+    }
+
+    /// Settings of the object tool; returns whether the model download was asked for.
+    fn object_controls(&mut self, ui: &mut Ui) -> bool {
+        let faint = |t: &str| egui::RichText::new(t).small().color(crate::theme::TEXT_FAINT);
+        if !sk_ai::segment::available() {
+            if let Some(p) = self.jobs.iter().find(|j| j.label == OBJECT_DOWNLOAD).map(|j| j.progress) {
+                ui.add(egui::ProgressBar::new(p).text(format!("Modell wird geladen … {:.0} %", p * 100.0)));
+                return false;
+            }
+            ui.label(faint(&format!(
+                "Das Modell (MobileSAM, Apache-2.0, {} MB) wird einmalig heruntergeladen.",
+                sk_ai::segment::download_mb()
+            )));
+            return ui.button(format!("{}  Modell laden", crate::theme::icon::DOWNLOAD_SIMPLE)).clicked();
+        }
+        ui.label(faint("Klick: Objekt auswählen · weitere Klicks verfeinern · Alt+Klick: Teil ausnehmen"));
+        if self.object_session.is_some() && ui.button("Nächstes Objekt").on_hover_text("Der nächste Klick wählt ein weiteres Objekt dazu").clicked() {
+            self.object_session = None;
+        }
+        false
+    }
+
+    /// Downloads the object selection models in the background, then analyzes the image.
+    pub(crate) fn download_object_models(&mut self) {
+        if self.jobs.iter().any(|j| j.label == OBJECT_DOWNLOAD) {
+            return;
+        }
+        self.start_job(OBJECT_DOWNLOAD, Box::new(|p| {
+            sk_ai::segment::download(p)?;
+            Ok(Vec::new())
+        }));
+    }
+
+    /// Object selection: a click adds the object under it, Alt+click takes the part under it away.
+    fn object_interaction(&mut self, ui: &mut Ui, response: &Response, img_rect: Rect, scale: f32) {
+        let painter = ui.painter_at(response.rect);
+        if response.hover_pos().is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        }
+        if let Some(p) = pressed_on(ui, response)
+            && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
+            && let Some(layer) = self.ensure_layer()
+        {
+            if !sk_ai::segment::available() {
+                self.status = "Für „Objekt“ zuerst das Modell laden (Tab „Ebenen“)".into();
+                return;
+            }
+            let include = !ui.input(|i| i.modifiers.alt);
+            let path = self.current_path().unwrap_or_default();
+            let fresh = self.object_session.as_ref().is_none_or(|s| s.layer != layer || s.path != path);
+            if fresh {
+                if !include {
+                    self.status = "Zuerst auf das Objekt klicken; Alt+Klick nimmt danach Teile aus".into();
+                    return;
+                }
+                let base = self.current.as_ref().and_then(|c| c.adjustments.layers.get(layer)).and_then(|l| l.mask.ai.clone());
+                self.object_session = Some(ObjectSession { path, layer, base, clicks: Vec::new() });
+            }
+            let session = self.object_session.as_mut().unwrap();
+            session.clicks.push(sk_ai::segment::Click { uv, include });
+            let clicks = session.clicks.clone();
+            self.request_ai(crate::workers::AiKind::Object { clicks });
+        }
+        // The clicks so far: green adds, red takes away.
+        if let (Some(s), Some(map)) = (&self.object_session, self.uv_mapper(img_rect, scale)) {
+            for c in &s.clicks {
+                let p = map.map(c.uv);
+                let color = if c.include { Color32::from_rgb(70, 210, 110) } else { Color32::from_rgb(235, 80, 70) };
+                painter.circle(p, 5.0, color, Stroke::new(1.5, Color32::from_black_alpha(160)));
+            }
+        }
     }
 
     /// Viewer interaction and overlay drawing for the local tools.
@@ -360,6 +469,7 @@ impl App {
             }
             LocalTool::Remove => self.remove_interaction(ui, response, img_rect, scale),
             LocalTool::Magic => self.magic_interaction(ui, response, img_rect, scale),
+            LocalTool::Object => self.object_interaction(ui, response, img_rect, scale),
             LocalTool::ColorPick => {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
                 if let Some(p) = pressed_on(ui, response)
@@ -556,6 +666,9 @@ impl App {
     /// Starts a content-based mask computation for the active layer.
     pub fn request_ai(&mut self, kind: crate::workers::AiKind) {
         let Some(layer) = self.ensure_layer() else { return };
+        if !matches!(kind, crate::workers::AiKind::Object { .. }) {
+            self.object_session = None;
+        }
         let Some(cur) = &self.current else { return };
         self.ai_busy = true;
         self.status = "Berechne Maske…".into();
@@ -655,6 +768,9 @@ impl App {
                 if ui.selectable_label(tool == Some(LocalTool::Magic), LocalTool::Magic.label()).clicked() {
                     ai_action = Some(3);
                 }
+                if ui.selectable_label(tool == Some(LocalTool::Object), LocalTool::Object.label()).clicked() {
+                    ai_action = Some(5);
+                }
                 if busy {
                     ui.spinner();
                 }
@@ -707,6 +823,7 @@ impl App {
             Some(1) => self.request_ai(crate::workers::AiKind::Subject),
             Some(2) => self.request_ai(crate::workers::AiKind::Sky),
             Some(3) => self.set_local_tool(LocalTool::Magic),
+            Some(5) => self.set_local_tool(LocalTool::Object),
             Some(4) => {
                 self.model_downloading = true;
                 self.workers.download_model();
@@ -726,14 +843,30 @@ impl App {
             Delete,
             NewSource,
             Clear,
+            Find,
         }
         let mut act = None;
         let mut changed = false;
         let selected = self.selected_spot;
         let Some(cur) = self.current.as_mut() else { return };
         let spots = &mut cur.adjustments.retouch;
-        let help = "Mit Reparieren (H) oder Klonen (S) über eine Stelle malen; die Quelle wird automatisch gewählt. Pins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · Entf: löschen";
+        let help = "Mit Reparieren (H) oder Klonen (S) über eine Stelle malen; die Quelle wird automatisch gewählt. Pins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · Entf: löschen\n\nStaub und Flecken finden: kleine, runde, dunklere Stellen auf ruhigen Flächen (Sensorstaub im Himmel, Unreinheiten auf der Haut) werden zu Reparieren-Stellen. Höhere Empfindlichkeit findet auch schwächere.";
+        let searching = self.spot_search.is_some();
+        let sensitivity = &mut self.spot_sensitivity;
         crate::widgets::section_help(ui, "Reparieren & Klonen", help, None, |ui| {
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!searching, egui::Button::new(format!("{}  Staub und Flecken finden", crate::theme::icon::SPARKLE))).clicked() {
+                    act = Some(Act::Find);
+                }
+                if searching {
+                    ui.spinner();
+                }
+            });
+            let mut percent = *sensitivity * 100.0;
+            if slider_row(ui, "Empfindlichkeit", &mut percent, 0.0..=100.0, 50.0, 0) {
+                *sensitivity = percent / 100.0;
+            }
+            ui.add_space(4.0);
             if spots.is_empty() {
                 crate::widgets::hint(ui, "Noch keine.");
                 return;
@@ -804,7 +937,60 @@ impl App {
                 self.selected_spot = None;
                 self.edit(|a| a.retouch.clear());
             }
+            Some(Act::Find) => self.find_spots(),
             None => {}
+        }
+    }
+
+    /// Looks for dust and blemishes in the background (see `sk_core::spots`).
+    pub fn find_spots(&mut self) {
+        let Some(cur) = &self.current else { return };
+        if self.spot_search.is_some() {
+            return;
+        }
+        let (path, preview, wb, existing) = (cur.meta.path.clone(), cur.preview.clone(), cur.meta.as_shot_wb, cur.adjustments.retouch.clone());
+        let sensitivity = self.spot_sensitivity;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = self.workers.context();
+        // Once (a failure disconnects the channel, see `poll_spot_search`).
+        std::thread::spawn(move || {
+            let found = sk_core::spots::find(&preview, wb, sensitivity, 60);
+            let _ = tx.send((path, sk_core::spots::heal_spots(&preview, &found, &existing)));
+            ctx.request_repaint();
+        });
+        self.spot_search = Some(rx);
+        self.status = "Suche Staub und Flecken …".into();
+    }
+
+    /// Adds the spots found once the search is done (on the image it was made for).
+    pub(crate) fn poll_spot_search(&mut self) {
+        let Some(rx) = &self.spot_search else { return };
+        let (path, spots) = match rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.spot_search = None;
+                self.status = "Suche nach Flecken fehlgeschlagen".into();
+                return;
+            }
+        };
+        self.spot_search = None;
+        if self.current_path().as_ref() != Some(&path) {
+            return;
+        }
+        let n = spots.len();
+        self.status = match n {
+            0 => "Keine Flecken gefunden".into(),
+            1 => "1 Fleck gefunden – zum Prüfen sind die Stellen markiert".into(),
+            _ => format!("{n} Flecken gefunden – zum Prüfen sind die Stellen markiert"),
+        };
+        if n > 0 {
+            self.edit(|a| a.retouch.extend(spots));
+            self.selected_spot = None;
+            // The pins show where the spots are.
+            if !matches!(self.local_tool, Some(LocalTool::Heal | LocalTool::Clone)) {
+                self.set_local_tool(LocalTool::Heal);
+            }
         }
     }
 
@@ -983,14 +1169,16 @@ impl App {
         }
         let mut tool_click = None;
         let mut brushes_changed = false;
-        let help = "Pinsel, Radierer, Verläufe und Magic Brush malen die Maske der gewählten Ebene.\n\n[ und ] ändern die Pinselgröße · Doppelklick auf einen Regler: Standard.\n\nMagic Brush: ähnliche, zusammenhängende Farben werden ausgewählt; weitere Striche erweitern die Auswahl.";
+        let mut object_download = false;
+        let help = "Pinsel, Radierer, Verläufe und Magic Brush malen die Maske der gewählten Ebene.\n\n[ und ] ändern die Pinselgröße · Doppelklick auf einen Regler: Standard.\n\nMagic Brush: ähnliche, zusammenhängende Farben werden ausgewählt; weitere Striche erweitern die Auswahl.\n\nObjekt: auf ein Objekt klicken, es wird ausgewählt; weitere Klicks verfeinern, Alt+Klick nimmt Teile aus.";
         crate::widgets::section_help(ui, "Werkzeuge", help, None, |ui| {
             let tools = [
-                [LocalTool::Brush, LocalTool::Eraser, LocalTool::Linear, LocalTool::Radial],
-                [LocalTool::Magic, LocalTool::Heal, LocalTool::Clone, LocalTool::Remove],
+                [LocalTool::Brush, LocalTool::Eraser, LocalTool::Linear],
+                [LocalTool::Radial, LocalTool::Magic, LocalTool::Object],
+                [LocalTool::Heal, LocalTool::Clone, LocalTool::Remove],
             ];
             let gap = 4.0;
-            let w = ((ui.available_width() - 3.0 * gap) / 4.0).floor();
+            let w = ((ui.available_width() - 2.0 * gap) / 3.0).floor();
             for row in tools {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = gap;
@@ -1016,11 +1204,15 @@ impl App {
                     brushes_changed |= slider_row(ui, "Größe", &mut self.brushes.magic.size, 2.0..=400.0, d.size, 0);
                     slider_row(ui, "Toleranz", &mut self.magic_tolerance, 0.0..=1.0, 0.3, 2);
                 }
+                Some(LocalTool::Object) => object_download = self.object_controls(ui),
                 _ => {}
             }
         });
         if let Some(t) = tool_click {
             self.set_local_tool(t);
+        }
+        if object_download {
+            self.download_object_models();
         }
         if brushes_changed {
             self.brushes_changed_at = Some(std::time::Instant::now());

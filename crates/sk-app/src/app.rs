@@ -397,6 +397,12 @@ pub struct App {
     pub removal_progress: f32,
     pub show_gpu_dialog: bool,
     pub ai_busy: bool,
+    /// Clicks of the object tool on the active layer (see `layers::ObjectSession`).
+    pub object_session: Option<crate::layers::ObjectSession>,
+    /// Running search for dust and blemishes: the image and the heal spots found.
+    pub spot_search: Option<std::sync::mpsc::Receiver<(PathBuf, Vec<sk_core::params::Spot>)>>,
+    /// 0..1, see `sk_core::spots::find`.
+    pub spot_sensitivity: f32,
     pub model_missing: bool,
     pub model_downloading: bool,
     pub tiles: Tiles,
@@ -538,6 +544,8 @@ pub struct App {
     pub hdr_options: sk_core::hdr::HdrOptions,
     pub pano_options: sk_core::panorama::PanoramaOptions,
     pub denoise_dialog: Option<crate::denoise::DenoiseDialog>,
+    /// Images waiting for their AI denoised data.
+    pub denoise: crate::denoise::DenoiseQueue,
     /// 0..100
     pub denoise_strength: f32,
 }
@@ -574,6 +582,7 @@ impl App {
         // Without an explicit folder, reopen the session that was open last time.
         sk_core::xmp::set_write_enabled(settings.write_xmp && opts.persist_settings);
         sk_ai::runtime::set_gpu_enabled(settings.ai_gpu.unwrap_or(true));
+        sk_ai::denoise::register();
         sk_core::gpu::set_enabled(settings.develop_gpu.unwrap_or(true));
         // Sets up the graphics card and compiles the shaders while the window opens.
         std::thread::spawn(sk_core::pipeline::prepare_gpu);
@@ -686,6 +695,9 @@ impl App {
             before_texture: None,
             before_key: None,
             magic_tolerance: 0.3,
+            object_session: None,
+            spot_search: None,
+            spot_sensitivity: 0.5,
             remove_strokes: Vec::new(),
             inpaint_busy: false,
             removal_progress: 0.0,
@@ -779,6 +791,7 @@ impl App {
             hdr_options: settings.hdr_options,
             pano_options: settings.pano_options,
             denoise_dialog: None,
+            denoise: Default::default(),
             denoise_strength: settings.denoise_strength.unwrap_or(60.0).clamp(0.0, 100.0),
         };
         app.reload_styles();
@@ -1537,6 +1550,8 @@ impl App {
             self.status = format!("{panic} (Details in panic.log)");
         }
         self.load_full_when_due(ctx);
+        self.pump_denoise();
+        self.poll_spot_search();
         // The rendered preview must fit into a single GPU texture.
         let max_side = ctx.input(|i| i.max_texture_side).max(512);
         let fit_texture = |preview: Arc<LinearImage>| {
@@ -1708,12 +1723,21 @@ impl App {
                     match result {
                         Ok(m) => {
                             self.model_missing = false;
+                            // An object replaces its previous result (what the mask held before stays).
+                            let base = self.object_session.as_ref().filter(|s| s.layer == layer).map(|s| s.base.clone());
                             self.edit(|a| {
                                 if let Some(l) = a.layers.get_mut(layer) {
-                                    l.mask.ai = Some(merge_ai(l.mask.ai.take(), m));
+                                    let old = match base {
+                                        Some(b) => b,
+                                        None => l.mask.ai.take(),
+                                    };
+                                    l.mask.ai = Some(merge_ai(old, m));
                                 }
                             });
                             self.status = "Maske erstellt".into();
+                        }
+                        Err(e) if e == "OBJECT_MODEL_MISSING" => {
+                            self.status = "Für „Objekt“ zuerst das Modell laden (Tab „Ebenen“)".into();
                         }
                         Err(e) if e == "MODEL_MISSING" => {
                             self.model_missing = true;

@@ -57,8 +57,10 @@ pub fn thumb_key(path: &Path, adj: &Adjustments) -> String {
     let meta = std::fs::metadata(crate::variant::file_of(path)).ok();
     let mtime = meta.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
     let size = meta.map_or(0, |m| m.len());
+    // AI denoising shows once its data has been computed.
+    let denoised = if adj.detail.ai_denoise > 0.0 && crate::ai_denoise::is_ready(path) { "|dn" } else { "" };
     let adj = if *adj == Adjustments::default() { String::new() } else { serde_json::to_string(adj).unwrap_or_default() };
-    format!("{:016x}", fnv1a(format!("{mtime}|{size}|{adj}").as_bytes()))
+    format!("{:016x}", fnv1a(format!("{mtime}|{size}|{adj}{denoised}").as_bytes()))
 }
 
 /// Thumbnail file of an image (without extension). `session` is the root of the open session, if any.

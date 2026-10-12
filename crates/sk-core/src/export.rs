@@ -140,7 +140,14 @@ pub fn export(image: &Path, adj: &Adjustments, recipe: &ExportRecipe) -> Result<
 /// Develops `image` once and writes one file per recipe. `counter` and `session` are for
 /// recipes' name templates.
 pub fn export_many(image: &Path, adj: &Adjustments, recipes: &[ExportRecipe], counter: u32, session: &str) -> Vec<Result<PathBuf>> {
-    let (meta, linear) = match raw::load_full(image) {
+    let loaded = raw::load_full(image).and_then(|(meta, linear)| {
+        // Never silently without the denoising the image shows.
+        if adj.detail.ai_denoise > 0.0 && !meta.hdr {
+            crate::ai_denoise::ensure(image, &|_| {}).context("KI-Entrauschen")?;
+        }
+        Ok((meta, linear))
+    });
+    let (meta, linear) = match loaded {
         Ok(v) => v,
         Err(e) => {
             let msg = format!("{e:#}");

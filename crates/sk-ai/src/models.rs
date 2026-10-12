@@ -18,6 +18,9 @@ pub struct ModelInfo {
     pub bytes: u64,
     pub sha256: &'static str,
     pub license: &'static str,
+    /// The model is this file inside the ZIP archive at `url` (`bytes` and `sha256` are the
+    /// model's); only it is downloaded.
+    pub entry: Option<&'static str>,
 }
 
 impl ModelInfo {
@@ -27,16 +30,31 @@ impl ModelInfo {
     }
 }
 
-/// AI denoising: NAFNet (width 32, megvii-research) trained on SIDD real camera noise; about
-/// three times faster than the width-64 variant at nearly the same quality.
-pub const DENOISE: ModelInfo = ModelInfo {
-    label: "Entrauschen (NAFNet-SIDD)",
-    file: "nafnet_sidd_w32.onnx",
-    url: "https://github.com/AlfredWei/emulsion/releases/download/denoise-model-nafnet-sidd-w32-v1/nafnet_sidd_w32.onnx",
-    bytes: 117_316_644,
-    sha256: "5ff072283fe8c86b7c990aa7331cdb26183e20b08961769c70057b82260b133d",
-    license: "MIT",
+/// AI denoising for Bayer sensors: RawNIND's UtNet2 (Benoit Brummer, UCLouvain) as published
+/// for darktable; it takes the raw mosaic and returns demosaiced, clean camera RGB.
+pub const DENOISE_BAYER: ModelInfo = ModelInfo {
+    label: "KI-Entrauschen (RawNIND, Bayer)",
+    file: "rawnind_bayer.onnx",
+    url: RAWNIND_ARCHIVE,
+    bytes: 31_056_425,
+    sha256: "da27509dab6a2915da67e988acd86cf71f9d5bbc8d1aa0ed32933578a887b901",
+    license: "GPL-3.0",
+    entry: Some("rawdenoise-nind/model_bayer.onnx"),
 };
+
+/// The same network for demosaiced linear data (X-Trans, other sensors, linear DNGs).
+pub const DENOISE_LINEAR: ModelInfo = ModelInfo {
+    label: "KI-Entrauschen (RawNIND, linear)",
+    file: "rawnind_linear.onnx",
+    url: RAWNIND_ARCHIVE,
+    bytes: 31_053_823,
+    sha256: "df957efadcc152c007d5d3b0917bdff9e41c0d4a0efe56584ef30b36393cd181",
+    license: "GPL-3.0",
+    entry: Some("rawdenoise-nind/model_linear.onnx"),
+};
+
+/// darktable-ai's release archive with both RawNIND models (pinned release).
+const RAWNIND_ARCHIVE: &str = "https://github.com/darktable-org/darktable-ai/releases/download/release-5.6.0/rawdenoise-nind.dtmodel";
 
 /// Object removal: MI-GAN (Picsart), inpainting at 512 px.
 pub const INPAINT: ModelInfo = ModelInfo {
@@ -46,6 +64,7 @@ pub const INPAINT: ModelInfo = ModelInfo {
     bytes: 29_546_882,
     sha256: "593eba0b7e04730f1b61c0a3cbca68d97d8d6a7ff5c6a44a7b9d7fcd880fc5ae",
     license: "MIT",
+    entry: None,
 };
 
 /// Face detection: YuNet (OpenCV Zoo).
@@ -56,6 +75,7 @@ pub const FACE_DETECT: ModelInfo = ModelInfo {
     bytes: 232_589,
     sha256: "8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4",
     license: "MIT",
+    entry: None,
 };
 
 /// Face recognition: SFace (OpenCV Zoo), 128-d embeddings of aligned faces.
@@ -66,6 +86,7 @@ pub const FACE_EMBED: ModelInfo = ModelInfo {
     bytes: 38_696_353,
     sha256: "0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79",
     license: "Apache-2.0",
+    entry: None,
 };
 
 /// Eye state: open-closed-eye-0001 (Intel OpenVINO Training Extensions), 32 x 32 eye crops.
@@ -76,6 +97,7 @@ pub const EYE_STATE: ModelInfo = ModelInfo {
     bytes: 46_164,
     sha256: "4daa100034482525a26c9afb9297c16580a531189e66e3d2b2ac7d32becfd593",
     license: "Apache-2.0",
+    entry: None,
 };
 
 /// Subject selection: U²-Net-p (rembg's copy of the original weights).
@@ -86,6 +108,30 @@ pub const SUBJECT: ModelInfo = ModelInfo {
     bytes: 4_574_861,
     sha256: "309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8",
     license: "Apache-2.0",
+    entry: None,
+};
+
+/// Object selection by clicks: MobileSAM's image encoder (Chaoning Zhang et al., Apache-2.0),
+/// exported to ONNX with its preprocessing by Acly (krita-ai-diffusion).
+pub const OBJECT_ENCODER: ModelInfo = ModelInfo {
+    label: "Objekt auswählen (MobileSAM, Bild)",
+    file: "mobile_sam_image_encoder.onnx",
+    url: "https://huggingface.co/Acly/MobileSAM/resolve/0d3b403339b4674a82493d5e97964dd78089ddc8/mobile_sam_image_encoder.onnx",
+    bytes: 28_157_093,
+    sha256: "580f5fb648ea1062c0aabc26217aed56921985f03f0cbbd852bba81d760cc749",
+    license: "Apache-2.0",
+    entry: None,
+};
+
+/// The mask decoder of Segment Anything (Meta, Apache-2.0) for MobileSAM: one mask from clicks.
+pub const OBJECT_DECODER: ModelInfo = ModelInfo {
+    label: "Objekt auswählen (MobileSAM, Maske)",
+    file: "sam_mask_decoder_single.onnx",
+    url: "https://huggingface.co/Acly/MobileSAM/resolve/0d3b403339b4674a82493d5e97964dd78089ddc8/sam_mask_decoder_single.onnx",
+    bytes: 16_501_323,
+    sha256: "93915fc7c993ab9d59ab8c9ccd3bce37f7509c81ab4150a74abd4d2abbd8570d",
+    license: "Apache-2.0",
+    entry: None,
 };
 
 /// Folder of the downloaded models (`SILBERKORN_MODELS` overrides it).
@@ -113,6 +159,14 @@ pub fn download(m: &ModelInfo, progress: &dyn Fn(f32)) -> Result<PathBuf> {
 pub fn download_to(m: &ModelInfo, target: &Path, progress: &dyn Fn(f32)) -> Result<()> {
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir)?;
+    }
+    if let Some(entry) = m.entry {
+        let data = crate::runtime::zip_entry(m.url, entry, progress).with_context(|| format!("Download von {} fehlgeschlagen", m.label))?;
+        anyhow::ensure!(data.len() as u64 == m.bytes, "Download von {} unvollständig ({} von {} Bytes)", m.label, data.len(), m.bytes);
+        anyhow::ensure!(sha256(&data).eq_ignore_ascii_case(m.sha256), "{}: Prüfsumme stimmt nicht (die Datei wurde verändert oder beschädigt)", m.label);
+        sk_core::safe_file::write(target, &data)?;
+        progress(1.0);
+        return Ok(());
     }
     let mut name = target.file_name().unwrap_or_default().to_os_string();
     name.push(".part");
@@ -208,7 +262,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("sk-models-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("m.onnx");
-        let m = ModelInfo { label: "Test", file: "m.onnx", url: "", bytes: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", license: "" };
+        let m = ModelInfo { label: "Test", file: "m.onnx", url: "", bytes: 3, sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", license: "", entry: None };
         std::fs::write(&file, b"abc").unwrap();
         verify(&m, &file).unwrap();
         std::fs::write(&file, b"abd").unwrap();
@@ -220,7 +274,7 @@ mod tests {
 
     #[test]
     fn every_model_is_pinned() {
-        for m in [DENOISE, INPAINT, FACE_DETECT, FACE_EMBED, EYE_STATE, SUBJECT] {
+        for m in [DENOISE_BAYER, DENOISE_LINEAR, OBJECT_ENCODER, OBJECT_DECODER, INPAINT, FACE_DETECT, FACE_EMBED, EYE_STATE, SUBJECT] {
             assert!(m.bytes > 0 && m.sha256.len() == 64 && m.sha256.bytes().all(|b| b.is_ascii_hexdigit()), "{}", m.label);
             assert!(!m.url.contains("/resolve/main/"), "{}: nicht auf einen Stand festgelegt", m.label);
         }
