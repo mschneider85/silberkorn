@@ -46,6 +46,7 @@ impl App {
     pub fn viewer(&mut self, ui: &mut Ui) {
         let rect = ui.available_rect_before_wrap();
         self.viewer_rect = Some(rect);
+        self.max_texture_side = ui.ctx().input(|i| i.max_texture_side);
         self.viewer_content(ui);
         // What the user waits for here (mask, removal, matching).
         self.activity_overlay(ui, rect);
@@ -673,6 +674,9 @@ impl App {
             return;
         }
         let region = sk_core::geometry::Region { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+        // The view is one texture: reduced at least as far as the GPU requires. If it doesn't fit
+        // at full resolution, the tiles show it.
+        let min_level = region.w.max(region.h).div_ceil(self.max_texture_side.max(512));
         // Something was edited while the mouse is down (not just panning): no sharp rendering yet.
         let sharp = self.tiles.version == self.edit_version || self.tiles.view.as_ref().is_some_and(|v| v.version == self.edit_version && v.level == 1);
         if self.pointer_down && !sharp {
@@ -683,7 +687,7 @@ impl App {
                 None => {
                     let perf = ((region.w * region.h) as f32 / self.draft_budget()).sqrt().ceil();
                     let screen = (region.w as f32 / (vis.width() * self.pixels_per_point).max(1.0)).floor();
-                    let l = perf.max(screen).clamp(1.0, 16.0) as usize;
+                    let l = (perf.max(screen).clamp(1.0, 16.0) as usize).max(min_level);
                     self.drag_view_level = Some(l);
                     l
                 }
@@ -698,7 +702,7 @@ impl App {
         // Fitted on a high-density screen (the preview is magnified): first the view reduced to
         // about the screen resolution, which is quick, then the full resolution. Without this
         // step the magnified preview stays blurry until the whole image is rendered in full.
-        let screen_level = (region.w as f32 / (vis.width() * self.pixels_per_point).max(1.0)).floor().max(1.0) as usize;
+        let screen_level = ((region.w as f32 / (vis.width() * self.pixels_per_point).max(1.0)).floor().max(1.0) as usize).max(min_level);
         // A coarser draft left over from dragging doesn't count: it would stay on screen until
         // the full resolution is done.
         let have_view = self.tiles.view.as_ref().is_some_and(|v| v.version == self.edit_version && v.level <= screen_level);
@@ -720,7 +724,7 @@ impl App {
                 && r.x + r.w >= (b.x as usize).min(fw)
                 && r.y + r.h >= (b.y as usize).min(fh)
         });
-        let view_region = (zoomed && !covered_by_view && todo.iter().any(|&t| visible(t))).then_some((region, 1));
+        let view_region = (zoomed && min_level == 1 && !covered_by_view && todo.iter().any(|&t| visible(t))).then_some((region, 1));
         let key = (self.edit_version, view_region, todo);
         // Panning within the requested view region needs no new request.
         let contains = |r: &sk_core::geometry::Region, n: &sk_core::geometry::Region| r.x <= n.x && r.y <= n.y && r.x + r.w >= n.x + n.w && r.y + r.h >= n.y + n.h;

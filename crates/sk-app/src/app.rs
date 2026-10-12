@@ -526,6 +526,8 @@ pub struct App {
     pub zoom_pct: Option<f32>,
     /// Physical pixels per UI point (Windows display scaling), for true 100 % viewing.
     pub(crate) pixels_per_point: f32,
+    /// Largest texture side the GPU takes: a view rendering must fit into one texture.
+    pub(crate) max_texture_side: usize,
     /// Debug aid: `SILBERKORN_SCREENSHOT=<file.png>` saves a screenshot once the first image is shown, then quits.
     screenshot: Option<(PathBuf, Option<f64>)>,
     /// The viewer in a window of its own (see `viewer_window.rs`).
@@ -736,6 +738,8 @@ impl App {
             window_title: "Silberkorn".into(),
             zoom_pct: None,
             pixels_per_point: 1.0,
+            // egui's assumption until the viewer is first shown.
+            max_texture_side: 2048,
             sidecar_dirty: false,
             keyword_input: String::new(),
             zoom: None,

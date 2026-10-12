@@ -9,10 +9,48 @@ use sk_core::styles;
 
 use crate::app::{App, AppOptions};
 
+/// The test images: the sample raw files reduced to 2400 x 1600, as linear DNGs. Same scene,
+/// capture data and camera color, but a sixth of the pixels, so the tests spend their time on
+/// the app instead of on 24 megapixels. Still larger than the preview, so that full resolution
+/// and tiles are real. Made once, kept in `target/`.
 fn samples() -> Option<Vec<PathBuf>> {
-    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples");
-    let files: Vec<PathBuf> = ["_DSC0009.ARW", "_DSC0010.ARW"].iter().map(|f| dir.join(f)).collect();
-    files.iter().all(|f| f.exists()).then_some(files)
+    static FILES: std::sync::OnceLock<Option<Vec<PathBuf>>> = std::sync::OnceLock::new();
+    FILES.get_or_init(make_samples).clone()
+}
+
+fn make_samples() -> Option<Vec<PathBuf>> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    const EDGE: usize = 2400;
+    let dir = root.join(format!("target/test-samples/{EDGE}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    ["_DSC0009", "_DSC0010"]
+        .iter()
+        .map(|name| {
+            let raw = root.join("samples").join(format!("{name}.ARW"));
+            let dng = dir.join(format!("{name}.dng"));
+            let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+            if modified(&dng).is_none() || modified(&dng) < modified(&raw) {
+                let (meta, img) = sk_core::raw::load_preview(&raw, EDGE).ok()?;
+                let preview = sk_core::dng::quick_preview(&meta, &img, 1024);
+                let info = sk_core::raw::CaptureInfo { width: img.width, height: img.height, ..meta.info.clone() };
+                sk_core::dng::write_linear_dng(
+                    &dng,
+                    &sk_core::dng::LinearDng {
+                        width: img.width,
+                        height: img.height,
+                        data: &img.data,
+                        xyz_to_cam: meta.color.xyz_to_cam,
+                        as_shot_wb: meta.as_shot_wb,
+                        info: &info,
+                        baseline_exposure: 0.0,
+                        preview: Some(&preview),
+                    },
+                )
+                .unwrap();
+            }
+            Some(dng)
+        })
+        .collect()
 }
 
 /// How long a test waits for background work. Generous: real raw decoding, and the machine
@@ -27,7 +65,17 @@ struct Fixture {
 
 impl Fixture {
     fn new(name: &str) -> Option<Self> {
-        let files = samples()?;
+        Self::with(name, samples()?)
+    }
+
+    /// With the sample raw files at their full 24 megapixels.
+    fn full_size(name: &str) -> Option<Self> {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples");
+        let files: Vec<PathBuf> = ["_DSC0009.ARW", "_DSC0010.ARW"].iter().map(|f| dir.join(f)).collect();
+        Self::with(name, files.iter().all(|f| f.exists()).then_some(files)?)
+    }
+
+    fn with(name: &str, files: Vec<PathBuf>) -> Option<Self> {
         let dir = std::env::temp_dir().join(format!("sk-app-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("photos")).unwrap();
@@ -78,8 +126,8 @@ fn library_workflow() {
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
     f.pump("Indexiert", |a| a.lists.total == 2 && a.entries.iter().all(|e| e.capture_date.is_some()));
     assert_eq!(f.app.entries.len(), 2);
-    let a = f.photo("_DSC0009.ARW");
-    let b = f.photo("_DSC0010.ARW");
+    let a = f.photo("_DSC0009.dng");
+    let b = f.photo("_DSC0010.dng");
     assert_eq!(f.app.current_path().as_ref(), Some(&a));
 
     // Rating on the open image goes to its sidecar and the catalog.
@@ -122,8 +170,8 @@ fn library_workflow() {
 fn edit_copy_apply_style_and_export() {
     let Some(mut f) = Fixture::new("edit") else { return };
     f.pump("Bild geladen", |a| a.current.is_some());
-    let a = f.photo("_DSC0009.ARW");
-    let b = f.photo("_DSC0010.ARW");
+    let a = f.photo("_DSC0009.dng");
+    let b = f.photo("_DSC0010.dng");
 
     // Edit + commit writes the sidecar.
     f.app.edit(|adj| adj.exposure = 0.7);
@@ -193,7 +241,7 @@ fn crop_full_resolution_and_tiles() {
     f.pump("Kachel", |a| !a.tiles.textures.is_empty());
     let (fw, fh) = f.app.tiles.full_size;
     let full = f.app.current.as_ref().unwrap().full.as_ref().unwrap();
-    assert!(fw > 2000 && fw < full.width, "{fw}");
+    assert!(fw > w as usize && fw < full.width, "{fw} vs Vorschau {w}");
     // ... then the grid, starting with the tile under the view center ...
     let center = (fw / 2 / crate::workers::TILE, fh / 2 / crate::workers::TILE);
     assert!(f.app.tiles.textures.contains_key(&center), "{:?}", f.app.tiles.textures.keys().collect::<Vec<_>>());
@@ -386,7 +434,7 @@ fn phase5_speed_edit_ai_masks_split_and_recipes() {
             ..Default::default()
         },
     ];
-    f.app.selection = [f.photo("_DSC0009.ARW")].into_iter().collect();
+    f.app.selection = [f.photo("_DSC0009.dng")].into_iter().collect();
     f.app.export_selection();
     f.pump("Export", |a| a.export_progress.is_none() && a.export_log.len() == 2);
     assert!(out.join("_DSC0009.jpg").exists() && out.join("_DSC0009.png").exists(), "{:?}", f.app.export_log);
@@ -409,16 +457,16 @@ fn session_workflow() {
     f.app.import_folder(&photos);
     f.pump("Import", |a| a.scope == Scope::LastImport && a.entries.len() == 2);
     let capture = s.folder(SessionFolder::Capture);
-    let a = capture.join("_DSC0009.ARW");
-    let b = capture.join("_DSC0010.ARW");
-    assert!(a.exists() && b.exists() && photos.join("_DSC0009.ARW").exists());
+    let a = capture.join("_DSC0009.dng");
+    let b = capture.join("_DSC0010.dng");
+    assert!(a.exists() && b.exists() && photos.join("_DSC0009.dng").exists());
     assert_eq!(sidecar::load(&a).rating, 3, "Sidecar wird mitkopiert");
 
     // Move to Selects: file and sidecar move, the database follows, the next image opens.
     f.app.open_folder(capture.clone());
     f.app.selection = [a.clone()].into_iter().collect();
     f.app.move_to_session_folder(SessionFolder::Selects);
-    let a2 = s.folder(SessionFolder::Selects).join("_DSC0009.ARW");
+    let a2 = s.folder(SessionFolder::Selects).join("_DSC0009.dng");
     assert!(!a.exists() && a2.exists());
     assert_eq!(sidecar::load(&a2).rating, 3);
     assert_eq!(f.app.entries.len(), 1);
@@ -443,7 +491,7 @@ fn session_workflow() {
 
     // Trash, then empty it.
     f.app.move_to_session_folder(SessionFolder::Trash);
-    let b2 = s.folder(SessionFolder::Trash).join("_DSC0010.ARW");
+    let b2 = s.folder(SessionFolder::Trash).join("_DSC0010.dng");
     assert!(b2.exists() && f.app.entries.is_empty());
     f.app.empty_trash();
     assert!(!b2.exists() && !sidecar::sidecar_path(&b2).exists());
@@ -471,7 +519,7 @@ fn session_workflow() {
     assert_eq!(s2.name, "Shooting");
     assert_eq!(f.app.lists.favorites, vec![s2.root.join("Kunde")]);
     f.app.open_scope(Scope::Album(album));
-    let a3 = s2.folder(SessionFolder::Selects).join("_DSC0009.ARW");
+    let a3 = s2.folder(SessionFolder::Selects).join("_DSC0009.dng");
     assert_eq!(f.app.entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>(), vec![a3.clone()]);
     assert_eq!(f.app.entries[0].rating, 3);
     assert_eq!(f.app.lists.total, 1);
@@ -485,7 +533,7 @@ fn session_workflow() {
     f.app.close_session();
     let again = f.dir.join("Kopie");
     std::fs::rename(&s2.root, &again).unwrap();
-    let a4 = again.join("Selects").join("_DSC0009.ARW");
+    let a4 = again.join("Selects").join("_DSC0009.dng");
     assert!(sk_core::cache::load(&a4, &adj, Some(&again)).is_some(), "Cache wandert mit");
     f.app.open_session(&again);
     f.app.open_folder(again.clone());
@@ -591,7 +639,7 @@ fn menu_bar_behaves_like_native() {
 fn stepping_shows_prefetched_images_instantly() {
     let Some(mut f) = Fixture::new("prefetch") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
-    let (a, b) = (f.photo("_DSC0009.ARW"), f.photo("_DSC0010.ARW"));
+    let (a, b) = (f.photo("_DSC0009.dng"), f.photo("_DSC0010.dng"));
     assert_eq!(f.app.current_path().as_ref(), Some(&a));
 
     // The neighbour is loaded and rendered in the background ...
@@ -759,7 +807,7 @@ fn navigator_moves_the_zoomed_view() {
 fn hovering_a_film_look_previews_it_without_changing_the_image() {
     let Some(mut f) = Fixture::new("looks") else { return };
     f.pump("Bild geladen", |a| a.texture.is_some());
-    let a = f.photo("_DSC0009.ARW");
+    let a = f.photo("_DSC0009.dng");
     f.app.edit(|adj| adj.exposure = 0.5);
     f.app.commit_and_save();
     let before = f.app.current.as_ref().unwrap().adjustments.clone();
@@ -900,8 +948,8 @@ fn compare_view_and_matching() {
     let Some(mut f) = Fixture::new("compare") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
     f.pump("Indexiert", |a| a.entries.len() == 2);
-    let a = f.photo("_DSC0009.ARW");
-    let b = f.photo("_DSC0010.ARW");
+    let a = f.photo("_DSC0009.dng");
+    let b = f.photo("_DSC0010.dng");
     assert!(f.app.compare_cells().is_empty(), "ein Bild: Einzelansicht");
 
     // Ctrl+click adds the second image: both side by side, the first stays the one being edited.
@@ -970,7 +1018,7 @@ fn variants_workflow() {
     let Some(mut f) = Fixture::new("variants") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
     f.pump("Indexiert", |a| a.lists.total == 2);
-    let a = f.photo("_DSC0009.ARW");
+    let a = f.photo("_DSC0009.dng");
     f.app.edit(|adj| adj.exposure = 0.7);
     f.app.set_rating(3);
     f.app.commit_and_save();
@@ -980,7 +1028,7 @@ fn variants_workflow() {
     let v2 = sk_core::variant::path_for(&a, 2);
     assert_eq!(f.app.primary_path().as_ref(), Some(&v2));
     let names: Vec<String> = f.app.visible.iter().map(|&i| f.app.entries[i].name.clone()).collect();
-    assert_eq!(names, ["_DSC0009.ARW", "_DSC0009.ARW (2)", "_DSC0010.ARW"]);
+    assert_eq!(names, ["_DSC0009.dng", "_DSC0009.dng (2)", "_DSC0010.dng"]);
     f.pump("Variante geladen", |app| app.current.is_some() && app.texture.is_some());
     assert_eq!(f.app.current.as_ref().unwrap().adjustments.exposure, 0.7);
     assert_eq!(f.app.current.as_ref().unwrap().rating, 3);
@@ -1021,7 +1069,7 @@ fn variants_workflow() {
     let dest = f.dir.join("moved");
     f.app.select_path(&v2, egui::Modifiers::NONE);
     f.app.move_selection_to(&dest);
-    let moved = dest.canonicalize().unwrap().join("_DSC0009.ARW");
+    let moved = dest.canonicalize().unwrap().join("_DSC0009.dng");
     assert!(moved.exists());
     assert!(sidecar::load(&sk_core::variant::path_for(&moved, 2)).adjustments.black_white.enabled);
 }
@@ -1030,7 +1078,7 @@ fn variants_workflow() {
 fn focus_mask_marks_sharp_areas() {
     let Some(mut f) = Fixture::new("focus") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
-    let a = f.photo("_DSC0009.ARW");
+    let a = f.photo("_DSC0009.dng");
     f.app.toggle_focus_mask();
     // The viewer asks for a rendering whose sharpness then gets analysed.
     f.app.ensure_focus_of_current();
@@ -1056,10 +1104,10 @@ fn focus_mask_marks_sharp_areas() {
 fn focus_maps_of_images_out_of_view_are_dropped() {
     let Some(mut f) = Fixture::new("prune") else { return };
     f.pump("Bild geladen", |a| a.current.is_some());
-    let shown = f.photo("_DSC0009.ARW");
+    let shown = f.photo("_DSC0009.dng");
     f.app.focus_received(shown.clone(), None, [1, 1], std::sync::Arc::new(vec![0]));
     for i in 0..100 {
-        f.app.focus_received(f.dir.join(format!("weg{i}.ARW")), None, [1, 1], std::sync::Arc::new(vec![0]));
+        f.app.focus_received(f.dir.join(format!("weg{i}.dng")), None, [1, 1], std::sync::Arc::new(vec![0]));
     }
     f.app.prune_view_caches();
     assert!(f.app.focus_maps.len() < 30, "{}", f.app.focus_maps.len());
@@ -1084,7 +1132,7 @@ fn compare_zoom_shows_full_resolution() {
     let Some(mut f) = Fixture::new("compare-detail") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
     f.pump("Indexiert", |a| a.entries.len() == 2);
-    let (a, b) = (f.photo("_DSC0009.ARW"), f.photo("_DSC0010.ARW"));
+    let (a, b) = (f.photo("_DSC0009.dng"), f.photo("_DSC0010.dng"));
     f.app.select_path(&b, egui::Modifiers::COMMAND);
     let cells = f.app.compare_cells();
     assert_eq!(cells.len(), 2);
@@ -1105,7 +1153,7 @@ fn compare_zoom_shows_full_resolution() {
     for p in [&a, &b] {
         let d = &f.app.compare_details[p];
         assert!(d.full_res, "{}", p.display());
-        assert!(d.width > 5000.0, "Breite {}", d.width);
+        assert!(d.width > crate::workers::PREVIEW_EDGE as f32, "Breite {}", d.width);
         assert!(d.uv.contains(egui::pos2(0.4, 0.5)), "{:?}", d.uv);
         assert!(d.uv.width() < 0.5);
         assert!(d.focus.is_some());
@@ -1151,7 +1199,7 @@ fn focus_mask_at_full_resolution_when_zoomed_in() {
 fn focus_mask_follows_edits_made_while_it_was_off() {
     let Some(mut f) = Fixture::new("focus-stale") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
-    let a = f.photo("_DSC0009.ARW");
+    let a = f.photo("_DSC0009.dng");
     f.app.toggle_focus_mask();
     f.app.ensure_focus_of_current();
     f.pump("Fokusmaske", |app| app.focus_map_current(&a));
@@ -1173,7 +1221,7 @@ fn changed_settings_drop_images_kept_in_memory() {
     let Some(mut f) = Fixture::new("prepared") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
     f.pump("Indexiert", |a| a.entries.len() == 2);
-    let (a, b) = (f.photo("_DSC0009.ARW"), f.photo("_DSC0010.ARW"));
+    let (a, b) = (f.photo("_DSC0009.dng"), f.photo("_DSC0010.dng"));
     f.app.select_path(&b, egui::Modifiers::NONE);
     f.pump("zweites Bild", |app| app.current_path().as_ref() == Some(&b) && app.texture.is_some());
     assert!(f.app.prepared_texture(&a).is_some());
@@ -1187,7 +1235,7 @@ fn changed_settings_drop_images_kept_in_memory() {
 fn trashing_variants_deletes_only_them() {
     let Some(mut f) = Fixture::new("trash-variant") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
-    let a = f.photo("_DSC0009.ARW");
+    let a = f.photo("_DSC0009.dng");
     f.app.new_variant(true);
     let v2 = sk_core::variant::path_for(&a, 2);
     assert_eq!(f.app.primary_path().as_ref(), Some(&v2));
@@ -1218,7 +1266,7 @@ fn auto_upright_sets_geometry_as_one_undo_step() {
 fn batch_rename_keeps_settings_variants_and_selection() {
     let Some(mut f) = Fixture::new("rename") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
-    let a = f.photo("_DSC0009.ARW");
+    let a = f.photo("_DSC0009.dng");
     f.app.select_path(&a, egui::Modifiers::NONE);
     f.pump("A geladen", |app| app.current_path().as_ref() == Some(&a) && app.loading.is_none());
     f.app.edit(|adj| adj.exposure = 0.8);
@@ -1233,7 +1281,7 @@ fn batch_rename_keeps_settings_variants_and_selection() {
     let all: Vec<PathBuf> = sk_core::variant::files_of(&f.app.selected_paths());
     let (n, error) = f.app.rename_files(&all, "Test_{Zähler:2}", 1);
     assert_eq!((n, error), (2, None));
-    let new = f.dir.join("photos").join("Test_01.ARW").canonicalize().unwrap();
+    let new = f.dir.join("photos").join("Test_01.dng").canonicalize().unwrap();
     assert!(!a.exists() && new.exists());
     assert_eq!(sidecar::load(&new).adjustments.exposure, 0.8, "Einstellungen wandern mit");
     assert_eq!(sidecar::load(&sk_core::variant::path_for(&new, 2)).adjustments.exposure, 0.8, "Variante auch");
@@ -1298,7 +1346,7 @@ fn showing_a_mask_renders_preview_and_tiles_again() {
 fn last_selected_image_is_selected_again_after_starting() {
     let Some(mut f) = Fixture::new("restore") else { return };
     f.pump("Bild geladen", |a| a.current.is_some());
-    let (a, b) = (f.photo("_DSC0009.ARW"), f.photo("_DSC0010.ARW"));
+    let (a, b) = (f.photo("_DSC0009.dng"), f.photo("_DSC0010.dng"));
     assert_eq!(f.app.primary_path(), Some(a.clone()), "ohne Vorgabe das erste");
     // As if started with `last_image` = b in the settings.
     f.app.restore_image = Some(b.clone());
@@ -1315,8 +1363,8 @@ fn last_selected_image_is_selected_again_after_starting() {
 fn xmp_exchange() {
     let Some(mut f) = Fixture::new("xmp") else { return };
     f.pump("Indexiert", |a| a.lists.total == 2);
-    let a = f.photo("_DSC0009.ARW");
-    let b = f.photo("_DSC0010.ARW");
+    let a = f.photo("_DSC0009.dng");
+    let b = f.photo("_DSC0010.dng");
     // Written by another program: read on request and mirrored in catalog and browser.
     std::fs::write(f.dir.join("photos/_DSC0010.xmp"), sk_core::xmp::updated(None, 3, ColorLabel::Green, &["Lightroom".into()]).unwrap()).unwrap();
     f.app.selection = [b.clone()].into_iter().collect();
@@ -1338,8 +1386,8 @@ fn stacks_collapse_and_expand() {
     use crate::stacks::StackAction;
     let Some(mut f) = Fixture::new("stacks") else { return };
     f.pump("Indexiert", |a| a.lists.total == 2 && a.entries.iter().all(|e| e.capture_date.is_some()));
-    let a = f.photo("_DSC0009.ARW");
-    let b = f.photo("_DSC0010.ARW");
+    let a = f.photo("_DSC0009.dng");
+    let b = f.photo("_DSC0010.dng");
     f.app.selection = [a.clone(), b.clone()].into_iter().collect();
     f.app.make_primary(&b);
     f.app.run_stack_action(StackAction::Create);
@@ -1794,12 +1842,14 @@ fn running_jobs_can_be_cancelled() {
 
 #[test]
 fn released_drag_shows_screen_resolution_before_full_resolution() {
-    let Some(mut f) = Fixture::new("released") else { return };
-    // Fitted on a high-density screen: the 2048 px preview is magnified, the full resolution
-    // has more than twice the screen's pixels.
+    // Needs the full 24 megapixels: fitted on a high-density screen, the 2048 px preview is
+    // magnified and the full resolution has more than twice the screen's pixels. The GPU takes
+    // the whole view as one texture.
+    let Some(mut f) = Fixture::full_size("released") else { return };
     let step = |f: &mut Fixture, events: Vec<egui::Event>| {
         f.app.pixels_per_point = 2.0;
-        viewer_frame(f, events);
+        let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        run_viewer(f, egui::RawInput { screen_rect, max_texture_side: Some(8192), events, ..Default::default() });
         f.app.handle_events(&f.ctx.clone());
         f.app.send_render();
         std::thread::sleep(Duration::from_millis(20));
@@ -1834,4 +1884,28 @@ fn released_drag_shows_screen_resolution_before_full_resolution() {
         }
     }
     assert!(levels.contains(&2), "Stufen: {levels:?}");
+}
+
+/// A GPU whose textures are smaller than the view at full resolution: the tiles show it sharp
+/// (one texture of the whole view would be too large for the GPU).
+#[test]
+fn view_larger_than_the_gpu_texture_limit_is_shown_by_tiles() {
+    let Some(mut f) = Fixture::new("texture-limit") else { return };
+    let start = Instant::now();
+    loop {
+        assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: scharfe Ansicht");
+        f.app.pixels_per_point = 2.0;
+        // egui's default limit: 2048, smaller than the full resolution.
+        viewer_frame(&mut f, vec![]);
+        f.app.handle_events(&f.ctx.clone());
+        f.app.send_render();
+        let max = f.app.max_texture_side;
+        assert!(f.app.tiles.view.as_ref().is_none_or(|v| v.texture.size().iter().all(|&s| s <= max)));
+        let (fw, fh) = f.app.tiles.full_size;
+        let all = fw.div_ceil(crate::workers::TILE) * fh.div_ceil(crate::workers::TILE);
+        if f.app.tiles.version == f.app.edit_version && fw > max && f.app.tiles.textures.len() == all {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

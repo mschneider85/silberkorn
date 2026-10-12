@@ -554,7 +554,10 @@ cargo t-all    # alles
 ```
 
 Die Aliase stehen in `.cargo/config.toml`. Langsame Tests tragen `#[ignore = "langsam: …"]`.
-Die App-Tests nutzen die Beispiel-RAWs in `samples/` und werden ohne sie übersprungen. Nur die
+Die App-Tests nutzen die Beispiel-RAWs in `samples/` und werden ohne sie übersprungen. Sie arbeiten
+mit verkleinerten Kopien (2400 × 1600, lineare DNGs mit denselben Aufnahmedaten), die beim ersten
+Lauf in `target/test-samples/` entstehen; nur Tests, die 24 Megapixel brauchen, nehmen die
+Originale. Nur die
 Vergleichstests Grafikkarte/Prozessor (`pipeline::gpu`) rechnen auf der Grafikkarte, ohne eine
 echte über einen Software-Adapter; alle anderen Tests rechnen auf dem Prozessor, der viel schneller
 ist als ein Software-Adapter. `sk-core` wird auch in Debug-Builds optimiert übersetzt (`Cargo.toml`),
