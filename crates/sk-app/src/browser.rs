@@ -699,7 +699,9 @@ impl App {
         // about the screen resolution, which is quick, then the full resolution. Without this
         // step the magnified preview stays blurry until the whole image is rendered in full.
         let screen_level = (region.w as f32 / (vis.width() * self.pixels_per_point).max(1.0)).floor().max(1.0) as usize;
-        let have_view = self.tiles.view.as_ref().is_some_and(|v| v.version == self.edit_version);
+        // A coarser draft left over from dragging doesn't count: it would stay on screen until
+        // the full resolution is done.
+        let have_view = self.tiles.view.as_ref().is_some_and(|v| v.version == self.edit_version && v.level <= screen_level);
         if zoomed && !sharp && screen_level >= 2 && !have_view {
             let key = (self.edit_version, Some((region, screen_level)), Vec::new());
             if self.tiles_requested.as_ref() != Some(&key) {

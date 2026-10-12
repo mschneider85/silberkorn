@@ -1715,3 +1715,47 @@ fn running_jobs_can_be_cancelled() {
     assert!(f.app.status.contains("abgebrochen"), "{}", f.app.status);
     assert!(!finished.load(std::sync::atomic::Ordering::Relaxed));
 }
+
+#[test]
+fn released_drag_shows_screen_resolution_before_full_resolution() {
+    let Some(mut f) = Fixture::new("released") else { return };
+    // Fitted on a high-density screen: the 2048 px preview is magnified, the full resolution
+    // has more than twice the screen's pixels.
+    let step = |f: &mut Fixture, events: Vec<egui::Event>| {
+        f.app.pixels_per_point = 2.0;
+        viewer_frame(f, events);
+        f.app.handle_events(&f.ctx.clone());
+        f.app.send_render();
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let start = Instant::now();
+    while !f.app.tiles.view.as_ref().is_some_and(|v| v.level == 1 && v.version == f.app.edit_version) {
+        assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: scharfe Ansicht");
+        step(&mut f, vec![]);
+    }
+
+    // First drag without a measured speed: a coarse view draft.
+    f.app.workers.draft_speed = Default::default();
+    let p = egui::pos2(600.0, 400.0);
+    step(&mut f, vec![egui::Event::PointerMoved(p)]);
+    step(&mut f, vec![press(p, true)]);
+    f.app.edit(|adj| adj.exposure = 0.4);
+    while !f.app.tiles.view.as_ref().is_some_and(|v| v.version == f.app.edit_version) {
+        assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: Entwurf");
+        step(&mut f, vec![]);
+    }
+    assert!(f.app.tiles.view.as_ref().unwrap().level > 2);
+
+    // Released: the coarse draft doesn't stay until the full resolution is done.
+    step(&mut f, vec![press(p, false)]);
+    let mut levels = vec![];
+    while levels.last() != Some(&1) {
+        assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: nach dem Loslassen");
+        step(&mut f, vec![]);
+        let level = f.app.tiles.view.as_ref().unwrap().level;
+        if levels.last() != Some(&level) {
+            levels.push(level);
+        }
+    }
+    assert!(levels.contains(&2), "Stufen: {levels:?}");
+}
