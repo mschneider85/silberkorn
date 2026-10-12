@@ -216,6 +216,7 @@ struct Problem<'a> {
     segments: Vec<(&'a Segment, bool)>,
     geometry: Geometry,
     lens: &'a LensCorrection,
+    camera: Option<&'a crate::camera_lens::CameraLens>,
     turns: u8,
     src: (usize, usize),
     /// Weight of horizontal edges (verticals have weight 1).
@@ -230,7 +231,7 @@ impl Problem<'_> {
 
     /// Mean robust deviation of the edges from their axes, plus a little restraint on keystone.
     fn cost(&self, p: [f32; 3]) -> f32 {
-        let map = GeoMap::new(&self.geometry(p), self.lens, self.turns, self.src.0, self.src.1, true);
+        let map = GeoMap::new(&self.geometry(p), self.lens, self.camera, self.turns, self.src.0, self.src.1, true);
         let (mut sum, mut weight) = (0.0, 0.0);
         for &(s, vertical) in &self.segments {
             let a = map.output_point(s.a[0], s.a[1]);
@@ -251,10 +252,18 @@ impl Problem<'_> {
 
 /// Straighten angle and keystone values for `mode`, starting from the current geometry (only
 /// those three values change). `None` if the image has too few straight edges.
-pub fn solve(segments: &[Segment], geometry: &Geometry, lens: &LensCorrection, turns: u8, src: (usize, usize), mode: UprightMode) -> Option<Geometry> {
+pub fn solve(
+    segments: &[Segment],
+    geometry: &Geometry,
+    lens: &LensCorrection,
+    camera: Option<&crate::camera_lens::CameraLens>,
+    turns: u8,
+    src: (usize, usize),
+    mode: UprightMode,
+) -> Option<Geometry> {
     // Each edge's axis, from its direction without straighten and keystone.
     let plain = Geometry { straighten: 0.0, keystone_v: 0.0, keystone_h: 0.0, ..geometry.clone() };
-    let base = GeoMap::new(&plain, lens, turns, src.0, src.1, true);
+    let base = GeoMap::new(&plain, lens, camera, turns, src.0, src.1, true);
     let segments: Vec<(&Segment, bool)> = segments
         .iter()
         .filter_map(|s| {
@@ -276,6 +285,7 @@ pub fn solve(segments: &[Segment], geometry: &Geometry, lens: &LensCorrection, t
         segments,
         geometry: geometry.clone(),
         lens,
+        camera,
         turns,
         src,
         horizontal_weight: if mode == UprightMode::Vertical { 0.3 } else { 1.0 },
@@ -383,7 +393,7 @@ mod tests {
     /// A synthetic scene: dark vertical bars and horizontal bands on a light background,
     /// rendered through `geometry` (so the solver has to find its inverse).
     fn scene(geometry: &Geometry, w: usize, h: usize) -> LinearImage {
-        let map = GeoMap::new(&geometry.clone(), &LensCorrection::default(), 0, w, h, true);
+        let map = GeoMap::new(&geometry.clone(), &LensCorrection::default(), None, 0, w, h, true);
         let mut data = vec![[0.0f32; 3]; w * h];
         for y in 0..h {
             for x in 0..w {
@@ -404,7 +414,7 @@ mod tests {
         let img = scene(truth, w, h);
         let segments = detect_segments(&img);
         assert!(segments.len() >= 6, "Kanten: {}", segments.len());
-        solve(&segments, &Geometry::default(), &LensCorrection::default(), 0, (w, h), mode).expect("Lösung")
+        solve(&segments, &Geometry::default(), &LensCorrection::default(), None, 0, (w, h), mode).expect("Lösung")
     }
 
     #[test]
@@ -441,7 +451,7 @@ mod tests {
         let (meta, preview) = crate::raw::load_preview(&sample, 1600).unwrap();
         let t = std::time::Instant::now();
         let segments = detect_segments(&preview);
-        let g = solve(&segments, &Geometry::default(), &LensCorrection::default(), 0, (preview.width, preview.height), UprightMode::Full);
+        let g = solve(&segments, &Geometry::default(), &LensCorrection::default(), None, 0, (preview.width, preview.height), UprightMode::Full);
         let ms = t.elapsed().as_millis();
         eprintln!("{} Kanten, {g:?}, {ms} ms ({})", segments.len(), meta.info.model);
         if let Some(out) = std::env::var_os("SK_UPRIGHT_DEBUG") {
@@ -468,6 +478,6 @@ mod tests {
         let img = LinearImage::new(300, 200, vec![[0.3; 3]; 300 * 200]);
         let segments = detect_segments(&img);
         assert!(segments.is_empty());
-        assert!(solve(&segments, &Geometry::default(), &LensCorrection::default(), 0, (300, 200), UprightMode::Full).is_none());
+        assert!(solve(&segments, &Geometry::default(), &LensCorrection::default(), None, 0, (300, 200), UprightMode::Full).is_none());
     }
 }

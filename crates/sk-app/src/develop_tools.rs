@@ -220,12 +220,26 @@ impl App {
         let mut reset_lens = false;
         let lens_name = cur.meta.info.lens.clone();
         let focal = cur.meta.info.focal_length.clone();
+        let camera_source = cur.meta.lens.as_ref().map(|l| l.source);
         let mut profile_action: Option<bool> = None;
         let (db_missing, downloading) = (self.lens_db_missing, self.lens_db_downloading);
         let mut download = false;
         section(ui, "Objektivkorrektur", Some(&mut || reset_lens = true), |ui| {
             ui.label(RichText::new(lens_name.clone().unwrap_or_else(|| "Objektiv unbekannt".into())).color(Color32::from_gray(170)));
             let l = &mut adj.lens;
+            if let Some(source) = camera_source {
+                let r = ui
+                    .checkbox(&mut l.camera, format!("Korrektur aus den Kameradaten ({source})"))
+                    .on_hover_text("Verzeichnung, Farbsäume und Vignettierung, wie die Kamera sie für dieses Objektiv gespeichert hat");
+                if r.changed() {
+                    changed = true;
+                    // Never both: the profile would correct the same lens a second time.
+                    if l.camera {
+                        l.profile = None;
+                        l.profile_coeffs = None;
+                    }
+                }
+            }
             ui.horizontal(|ui| {
                 let label = l.profile.clone().unwrap_or_else(|| "Kein Profil".into());
                 ui.label(format!("Profil: {label}"));
@@ -532,6 +546,7 @@ impl App {
         self.edit(|a| {
             a.lens.profile = Some(name.clone());
             a.lens.profile_coeffs = Some(coeffs);
+            a.lens.camera = false;
         });
         self.status = format!("Objektivprofil: {name} @ {focal:.0} mm");
     }

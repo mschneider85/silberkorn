@@ -294,7 +294,7 @@ mod tests {
         assert!(c[3] > 0.95 && c[1] > 0.1, "{c:?}");
         assert!(r.rect[0] < 0.49 && r.rect[0] + r.rect[2] > 0.51);
         // Applied through the pipeline stage, the blob is gone.
-        let geo = sk_core::geometry::GeoMap::new(&Default::default(), &Default::default(), 0, w, h, true);
+        let geo = sk_core::geometry::GeoMap::new(&Default::default(), &Default::default(), None, 0, w, h, true);
         let region = sk_core::geometry::Region { x: 0, y: 0, w, h };
         let mut out = geo.resample(&img, region);
         sk_core::mask::apply_removals(&mut out, &img, &geo, region, &[r]);

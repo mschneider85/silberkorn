@@ -1,4 +1,4 @@
-//! Export ("process recipes"): full-resolution development to JPEG / TIFF / PNG.
+//! Export ("process recipes"): full-resolution development to JPEG / TIFF / PNG / WebP / AVIF.
 
 use std::path::{Path, PathBuf};
 
@@ -22,10 +22,13 @@ pub enum ExportFormat {
     Tiff16,
     Tiff8,
     Png,
+    WebP,
+    Avif,
 }
 
 impl ExportFormat {
-    pub const ALL: [ExportFormat; 4] = [ExportFormat::Jpeg, ExportFormat::Tiff16, ExportFormat::Tiff8, ExportFormat::Png];
+    pub const ALL: [ExportFormat; 6] =
+        [ExportFormat::Jpeg, ExportFormat::Tiff16, ExportFormat::Tiff8, ExportFormat::Png, ExportFormat::WebP, ExportFormat::Avif];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -33,7 +36,24 @@ impl ExportFormat {
             ExportFormat::Tiff16 => "TIFF 16 Bit",
             ExportFormat::Tiff8 => "TIFF 8 Bit",
             ExportFormat::Png => "PNG",
+            ExportFormat::WebP => "WebP",
+            ExportFormat::Avif => "AVIF",
         }
+    }
+
+    /// Lossy, with a quality setting.
+    pub fn has_quality(self) -> bool {
+        matches!(self, ExportFormat::Jpeg | ExportFormat::WebP | ExportFormat::Avif)
+    }
+
+    /// The file gets the EXIF block (capture data, author, copyright).
+    pub fn has_metadata(self) -> bool {
+        !matches!(self, ExportFormat::Tiff16 | ExportFormat::Tiff8)
+    }
+
+    /// Whether the format can hold `space` (AVIF is tagged without ICC profile).
+    pub fn supports(self, space: OutputSpace) -> bool {
+        self != ExportFormat::Avif || crate::web_formats::avif_supports(space)
     }
 
     pub fn extension(self) -> &'static str {
@@ -41,6 +61,8 @@ impl ExportFormat {
             ExportFormat::Jpeg => "jpg",
             ExportFormat::Tiff16 | ExportFormat::Tiff8 => "tif",
             ExportFormat::Png => "png",
+            ExportFormat::WebP => "webp",
+            ExportFormat::Avif => "avif",
         }
     }
 }
@@ -52,7 +74,7 @@ pub struct ExportRecipe {
     /// Included when processing.
     pub enabled: bool,
     pub format: ExportFormat,
-    /// JPEG quality 1..100
+    /// Quality 1..100 (JPEG, WebP, AVIF)
     pub quality: u8,
     /// Resize so that the long edge is at most this many pixels (None = original size).
     pub long_edge: Option<u32>,
@@ -64,7 +86,7 @@ pub struct ExportRecipe {
     pub suffix: String,
     pub output_space: OutputSpace,
     pub watermark: Watermark,
-    /// Camera, lens, exposure and capture date in the file's EXIF (JPEG, PNG). GPS is never written.
+    /// Camera, lens, exposure and capture date in the file's EXIF (not TIFF). GPS is never written.
     pub capture_metadata: bool,
     pub artist: String,
     pub copyright: String,
@@ -212,6 +234,13 @@ fn encode(buf: &ImageBuffer<Rgb<f32>, Vec<f32>>, recipe: &ExportRecipe, info: &C
             enc.set_icc_profile(profile).ok();
             enc.write_image(&bytes, w, h, image::ExtendedColorType::Rgb16)?;
         }
+        ExportFormat::WebP => {
+            let data: Vec<u8> = buf.as_raw().iter().map(to_u8).collect();
+            return crate::web_formats::encode_webp(&data, w, h, recipe.quality, &profile, &exif);
+        }
+        ExportFormat::Avif => {
+            return crate::web_formats::encode_avif(buf.as_raw(), w, h, recipe.quality, recipe.output_space, &exif);
+        }
     }
     Ok(file.into_inner())
 }
@@ -249,7 +278,8 @@ pub fn proof(processed: &crate::image::LinearImage, recipe: &ExportRecipe, info:
     let bytes = encode(&buf, recipe, info)?;
     let (w, h) = buf.dimensions();
     let stored: Vec<f32> = match recipe.format {
-        ExportFormat::Jpeg => image::load_from_memory(&bytes)?.to_rgb8().into_raw().into_iter().map(|v| v as f32 / 255.0).collect(),
+        // AVIF can't be decoded here: the proof shows the pixels before compression.
+        ExportFormat::Jpeg | ExportFormat::WebP => image::load_from_memory(&bytes)?.to_rgb8().into_raw().into_iter().map(|v| v as f32 / 255.0).collect(),
         ExportFormat::Tiff16 => buf.as_raw().iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0).round() / 65535.0).collect(),
         _ => buf.as_raw().iter().map(|v| to_u8(v) as f32 / 255.0).collect(),
     };

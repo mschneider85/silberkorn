@@ -115,6 +115,13 @@ struct Geo {
     identity_lens: u32,
     has_vig: u32,
     pixel_exact: u32,
+    // The camera's own correction (camera_lens::CameraLens): optical center offset and
+    // polynomials in r² (half diagonals) per channel, vignetting gain.
+    has_cam: u32,
+    cam_cx: f32,
+    cam_cy: f32,
+    cam_warp: array<f32, 12>,
+    cam_vig: array<f32, 5>,
 }
 
 fn geo_centered(g: Geo, ox: f32, oy: f32) -> vec2<f32> {
@@ -177,7 +184,29 @@ fn geo_lens(g: Geo, centered: vec2<f32>) -> vec2<f32> {
     return p;
 }
 
+fn cam_factor(g: Geo, c: u32, r2: f32) -> f32 {
+    let k = c * 4u;
+    return g.cam_warp[k] + r2 * (g.cam_warp[k + 1u] + r2 * (g.cam_warp[k + 2u] + r2 * g.cam_warp[k + 3u]));
+}
+
+fn cam_gain(g: Geo, r2: f32) -> f32 {
+    let v = g.cam_vig;
+    return 1.0 + r2 * (v[0] + r2 * (v[1] + r2 * (v[2] + r2 * (v[3] + r2 * v[4]))));
+}
+
+// Centered source position of channel `c` after the camera's correction (GeoMap::map), from the
+// lens-corrected centered position `p`; `ca` is the slider's scale for that channel.
+fn cam_point(g: Geo, p: vec2<f32>, c: u32, ca: f32) -> vec2<f32> {
+    let center = vec2<f32>(g.cam_cx, g.cam_cy);
+    let u = p / g.half_diag - center;
+    return (u * cam_factor(g, c, dot(u, u)) + center) * ca * g.half_diag;
+}
+
 // Output position -> source pixel position of the green channel (GeoMap::source_point).
 fn geo_source_point(g: Geo, ox: f32, oy: f32) -> vec2<f32> {
-    return geo_lens(g, geo_centered(g, ox, oy)) + vec2<f32>(g.src_w / 2.0 - 0.5, g.src_h / 2.0 - 0.5);
+    var p = geo_lens(g, geo_centered(g, ox, oy));
+    if g.has_cam != 0u {
+        p = cam_point(g, p, 1u, 1.0);
+    }
+    return p + vec2<f32>(g.src_w / 2.0 - 0.5, g.src_h / 2.0 - 0.5);
 }

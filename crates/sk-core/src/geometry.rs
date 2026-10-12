@@ -6,6 +6,7 @@
 
 use rayon::prelude::*;
 
+use crate::camera_lens::CameraLens;
 use crate::image::LinearImage;
 use crate::params::{CropRect, Geometry, LensCorrection};
 
@@ -42,6 +43,8 @@ pub struct GeoMap {
     lens_scale: f32,
     ca: [f32; 3],
     vig: [f32; 3],
+    /// The camera's own correction (see `camera_lens`), applied closest to the source.
+    camera: Option<CameraLens>,
     identity_lens: bool,
     /// Every output pixel is exactly one source pixel (only quarter turns, flips and a crop
     /// on whole pixels): resampling is a plain copy.
@@ -51,7 +54,8 @@ pub struct GeoMap {
 }
 
 impl GeoMap {
-    pub fn new(geom: &Geometry, lens: &LensCorrection, turns: u8, src_w: usize, src_h: usize, ignore_crop: bool) -> Self {
+    /// `camera`: the correction stored in the raw file (`RawMeta::lens`), used if `lens.camera` is on.
+    pub fn new(geom: &Geometry, lens: &LensCorrection, camera: Option<&CameraLens>, turns: u8, src_w: usize, src_h: usize, ignore_crop: bool) -> Self {
         let turns = turns % 4;
         let (src_w, src_h) = (src_w as f32, src_h as f32);
         let (frame_w, frame_h) = if turns % 2 == 1 { (src_h, src_w) } else { (src_w, src_h) };
@@ -69,14 +73,28 @@ impl GeoMap {
         // Scale so that the corners stay inside the source after barrel correction.
         let norm = src_w.min(src_h) / 2.0;
         let half_diag = (src_w * src_w + src_h * src_h).sqrt() / 2.0;
+        let camera = camera.filter(|c| lens.camera && (c.has_warp() || c.has_vignette())).cloned();
         let r_corner = half_diag / norm;
-        let corner = distortion_factor(k1, ptlens, poly5, r_corner * r_corner, r_corner);
+        let mut corner = distortion_factor(k1, ptlens, poly5, r_corner * r_corner, r_corner);
+        if let Some(cam) = camera.as_ref().filter(|c| c.has_warp()) {
+            // The farthest the four corners go (the optical center may be off the middle).
+            let (hx, hy) = (src_w / 2.0 / half_diag, src_h / 2.0 / half_diag);
+            corner = [(hx, hy), (-hx, hy), (hx, -hy), (-hx, -hy)]
+                .iter()
+                .map(|&(x, y)| {
+                    let (x, y) = (x * corner - cam.center[0], y * corner - cam.center[1]);
+                    let f = cam.factor(1, x * x + y * y);
+                    // Corner position after both corrections, relative to the frame's corner.
+                    ((x * f + cam.center[0]) / hx).abs().max(((y * f + cam.center[1]) / hy).abs())
+                })
+                .fold(0.0, f32::max);
+        }
         let lens_scale = if corner > 1.0 { 1.0 / corner } else { 1.0 };
         let ca = [1.0 + lens.ca_red / 100.0 * 0.003 + coeffs.tca_red, 1.0, 1.0 + lens.ca_blue / 100.0 * 0.003 + coeffs.tca_blue];
         let v = lens.vignetting / 100.0;
         let vig = [coeffs.vig_k1, coeffs.vig_k2, coeffs.vig_k3];
         let vig = [vig[0] - v, vig[1], vig[2]];
-        let identity_lens = k1 == 0.0 && ptlens.is_none() && poly5.is_none() && ca == [1.0; 3];
+        let identity_lens = k1 == 0.0 && ptlens.is_none() && poly5.is_none() && ca == [1.0; 3] && camera.as_ref().is_none_or(|c| !c.has_warp());
 
         // Tolerance for float noise (0.4 * 10.0 is not exactly 4 in f32).
         let whole = |v: f32| (v - v.round()).abs() < 1e-3;
@@ -85,6 +103,7 @@ impl GeoMap {
             && geom.keystone_h == 0.0
             && identity_lens
             && vig == [0.0; 3]
+            && camera.is_none()
             && whole(crop.x * frame_w)
             && whole(crop.y * frame_h);
 
@@ -112,6 +131,7 @@ impl GeoMap {
             lens_scale,
             ca,
             vig,
+            camera,
             identity_lens,
             pixel_exact,
             out_w,
@@ -160,7 +180,7 @@ impl GeoMap {
     #[inline]
     pub fn map(&self, ox: f32, oy: f32) -> ([[f32; 2]; 3], f32) {
         let (mut x, mut y) = self.to_source_centered(ox, oy);
-        let gain = self.vignetting_gain(x, y);
+        let mut gain = self.vignetting_gain(x, y);
         if !self.identity_lens {
             let rn = (x * x + y * y).sqrt() / self.norm;
             let f = distortion_factor(self.k1, self.ptlens, self.poly5, rn * rn, rn) * self.lens_scale;
@@ -168,8 +188,23 @@ impl GeoMap {
             y *= f;
         }
         let (cx, cy) = (self.src_w / 2.0 - 0.5, self.src_h / 2.0 - 0.5);
-        let p = |k: f32| [x * k + cx, y * k + cy];
-        ([p(self.ca[0]), p(self.ca[1]), p(self.ca[2])], gain)
+        let Some(cam) = &self.camera else {
+            let p = |k: f32| [x * k + cx, y * k + cy];
+            return ([p(self.ca[0]), p(self.ca[1]), p(self.ca[2])], gain);
+        };
+        // Around the optical center, in half diagonals.
+        let (ux, uy) = (x / self.half_diag - cam.center[0], y / self.half_diag - cam.center[1]);
+        let r2 = ux * ux + uy * uy;
+        let p = |c: usize| {
+            let f = cam.factor(c, r2);
+            let k = self.ca[c] * self.half_diag;
+            [(ux * f + cam.center[0]) * k + cx, (uy * f + cam.center[1]) * k + cy]
+        };
+        let pts = [p(0), p(1), p(2)];
+        // Vignetting where the light fell on the sensor.
+        let (gx, gy) = ((pts[1][0] - cx) / self.half_diag - cam.center[0], (pts[1][1] - cy) / self.half_diag - cam.center[1]);
+        gain *= cam.gain(gx * gx + gy * gy);
+        (pts, gain)
     }
 
     #[inline]
@@ -286,10 +321,17 @@ pub(crate) struct GeoGpu {
     identity_lens: u32,
     has_vig: u32,
     pixel_exact: u32,
+    has_cam: u32,
+    cam_cx: f32,
+    cam_cy: f32,
+    cam_warp: [f32; 12],
+    cam_vig: [f32; 5],
 }
 
 impl GeoMap {
     pub(crate) fn gpu(&self) -> GeoGpu {
+        let neutral = CameraLens { source: "", center: [0.0; 2], warp: [[1.0, 0.0, 0.0, 0.0]; 3], vignette: [0.0; 5] };
+        let cam = self.camera.as_ref().unwrap_or(&neutral);
         let (pt, has_pt) = self.ptlens.map_or(([0.0; 3], 0), |(a, b, c)| ([a, b, c], 1));
         let (p5, has_p5) = self.poly5.map_or(([0.0; 2], 0), |(a, b)| ([a, b], 1));
         GeoGpu {
@@ -321,6 +363,11 @@ impl GeoMap {
             identity_lens: self.identity_lens as u32,
             has_vig: (self.vig != [0.0; 3]) as u32,
             pixel_exact: self.pixel_exact as u32,
+            has_cam: self.camera.is_some() as u32,
+            cam_cx: cam.center[0],
+            cam_cy: cam.center[1],
+            cam_warp: bytemuck::cast(cam.warp),
+            cam_vig: cam.vignette,
         }
     }
 
@@ -399,7 +446,7 @@ mod tests {
                     crop: CropRect { x: 0.4, y: 0.2, w: 0.6, h: 0.6 },
                     ..Default::default()
                 };
-                let map = GeoMap::new(&geom, &LensCorrection::default(), turns, 10, 5, false);
+                let map = GeoMap::new(&geom, &LensCorrection::default(), None, turns, 10, 5, false);
                 assert!(map.pixel_exact, "Drehung {turns}");
                 let region = Region { x: 0, y: 0, w: map.out_w, h: map.out_h };
                 let fast = map.resample(&src, region);
@@ -409,7 +456,7 @@ mod tests {
             }
         }
         let tilted = Geometry { straighten: 1.0, ..Default::default() };
-        assert!(!GeoMap::new(&tilted, &LensCorrection::default(), 0, 10, 5, false).pixel_exact);
+        assert!(!GeoMap::new(&tilted, &LensCorrection::default(), None, 0, 10, 5, false).pixel_exact);
     }
 
     use super::*;
@@ -425,7 +472,7 @@ mod tests {
     #[test]
     fn identity_is_exact() {
         let src = gradient(8, 6);
-        let g = GeoMap::new(&Geometry::default(), &LensCorrection::default(), 0, 8, 6, false);
+        let g = GeoMap::new(&Geometry::default(), &LensCorrection::default(), None, 0, 8, 6, false);
         assert_eq!((g.out_w, g.out_h), (8, 6));
         assert_eq!(g.resample(&src, full(8, 6)).data, src.data);
     }
@@ -433,7 +480,7 @@ mod tests {
     #[test]
     fn quarter_turn_matches_orientation() {
         let src = gradient(8, 6);
-        let g = GeoMap::new(&Geometry::default(), &LensCorrection::default(), 1, 8, 6, false);
+        let g = GeoMap::new(&Geometry::default(), &LensCorrection::default(), None, 1, 8, 6, false);
         assert_eq!((g.out_w, g.out_h), (6, 8));
         let out = g.resample(&src, full(6, 8));
         let expected = src.clone().oriented(crate::image::Orientation::Rotate90);
@@ -444,20 +491,20 @@ mod tests {
     fn crop_selects_subregion() {
         let src = gradient(10, 10);
         let geom = Geometry { crop: CropRect { x: 0.2, y: 0.5, w: 0.5, h: 0.3 }, ..Default::default() };
-        let g = GeoMap::new(&geom, &LensCorrection::default(), 0, 10, 10, false);
+        let g = GeoMap::new(&geom, &LensCorrection::default(), None, 0, 10, 10, false);
         assert_eq!((g.out_w, g.out_h), (5, 3));
         let out = g.resample(&src, full(5, 3));
         assert_eq!(out.data[0][0], 2.0);
         assert_eq!(out.data[0][1], 5.0);
         // ignore_crop shows the full frame
-        assert_eq!(GeoMap::new(&geom, &LensCorrection::default(), 0, 10, 10, true).out_w, 10);
+        assert_eq!(GeoMap::new(&geom, &LensCorrection::default(), None, 0, 10, 10, true).out_w, 10);
     }
 
     #[test]
     fn straighten_keeps_frame_filled() {
         let src = LinearImage::new(40, 30, vec![[1.0; 3]; 1200]);
         let geom = Geometry { straighten: 10.0, ..Default::default() };
-        let g = GeoMap::new(&geom, &LensCorrection::default(), 0, 40, 30, false);
+        let g = GeoMap::new(&geom, &LensCorrection::default(), None, 0, 40, 30, false);
         let out = g.resample(&src, full(40, 30));
         assert!(out.data.iter().all(|p| p[0] > 0.99), "no black corners");
     }
@@ -466,7 +513,7 @@ mod tests {
     fn flip_mirrors() {
         let src = gradient(4, 2);
         let geom = Geometry { flip_h: true, ..Default::default() };
-        let out = GeoMap::new(&geom, &LensCorrection::default(), 0, 4, 2, false).resample(&src, full(4, 2));
+        let out = GeoMap::new(&geom, &LensCorrection::default(), None, 0, 4, 2, false).resample(&src, full(4, 2));
         assert_eq!(out.data[0][0], 3.0);
     }
 
@@ -474,7 +521,7 @@ mod tests {
     fn barrel_correction_keeps_corners_and_center() {
         let src = LinearImage::new(60, 40, vec![[1.0; 3]; 2400]);
         let lens = LensCorrection { distortion: -100.0, ..Default::default() };
-        let g = GeoMap::new(&Geometry::default(), &lens, 0, 60, 40, false);
+        let g = GeoMap::new(&Geometry::default(), &lens, None, 0, 60, 40, false);
         let out = g.resample(&src, full(60, 40));
         assert!(out.data.iter().all(|p| p[0] > 0.99), "corners stay inside the source");
         let (x, y) = g.source_point(30.0, 20.0);
@@ -485,7 +532,7 @@ mod tests {
     fn vignetting_correction_brightens_corners() {
         let src = LinearImage::new(20, 20, vec![[0.5; 3]; 400]);
         let lens = LensCorrection { vignetting: 50.0, ..Default::default() };
-        let out = GeoMap::new(&Geometry::default(), &lens, 0, 20, 20, false).resample(&src, full(20, 20));
+        let out = GeoMap::new(&Geometry::default(), &lens, None, 0, 20, 20, false).resample(&src, full(20, 20));
         assert!(out.data[0][0] > out.data[210][0]);
     }
 
@@ -500,7 +547,7 @@ mod tests {
         };
         let lens = LensCorrection { distortion: 40.0, ..Default::default() };
         for turns in 0..4 {
-            let g = GeoMap::new(&geom, &lens, turns, 300, 200, false);
+            let g = GeoMap::new(&geom, &lens, None, turns, 300, 200, false);
             for (ox, oy) in [(10.0, 20.0), (100.5, 60.25), (150.0, 100.0)] {
                 let (sx, sy) = g.source_point(ox, oy);
                 let (bx, by) = g.output_point(sx, sy);
@@ -513,7 +560,7 @@ mod tests {
     fn region_matches_full_render() {
         let src = gradient(30, 20);
         let geom = Geometry { straighten: 5.0, crop: CropRect { x: 0.1, y: 0.1, w: 0.8, h: 0.8 }, ..Default::default() };
-        let g = GeoMap::new(&geom, &LensCorrection::default(), 1, 30, 20, false);
+        let g = GeoMap::new(&geom, &LensCorrection::default(), None, 1, 30, 20, false);
         let fullimg = g.resample(&src, full(g.out_w, g.out_h));
         let part = g.resample(&src, Region { x: 3, y: 4, w: 5, h: 6 });
         for y in 0..6 {
@@ -521,5 +568,28 @@ mod tests {
                 assert_eq!(part.data[y * 5 + x], fullimg.data[(y + 4) * g.out_w + x + 3]);
             }
         }
+    }
+
+    #[test]
+    fn camera_correction_moves_the_corners_and_follows_the_switch() {
+        let cam = CameraLens { source: "Test", center: [0.0; 2], warp: [[1.0, -0.06, 0.0, 0.0]; 3], vignette: [0.2, 0.0, 0.0, 0.0, 0.0] };
+        let on = LensCorrection::default();
+        assert!(on.camera);
+        let off = LensCorrection { camera: false, ..Default::default() };
+        let (w, h) = (300, 200);
+        let plain = GeoMap::new(&Geometry::default(), &off, Some(&cam), 0, w, h, false);
+        assert!(plain.pixel_exact);
+        let g = GeoMap::new(&Geometry::default(), &on, Some(&cam), 0, w, h, false);
+        assert!(!g.pixel_exact);
+        // Barrel correction: the output's corner comes from inside the source, the center stays.
+        let (pts, gain) = g.map(0.5, 0.5);
+        assert!(pts[1][0] > 0.0 && pts[1][1] > 0.0);
+        assert!(gain > 1.1);
+        let ([_, c, _], center_gain) = g.map(150.0, 100.0);
+        assert!((c[0] - 149.5).abs() < 1e-3 && (c[1] - 99.5).abs() < 1e-3 && (center_gain - 1.0).abs() < 1e-6);
+        // Inverse mapping still works.
+        let (ox, oy) = g.output_point(40.0, 30.0);
+        let back = g.source_point(ox, oy);
+        assert!((back.0 - 40.0).abs() < 0.01 && (back.1 - 30.0).abs() < 0.01);
     }
 }

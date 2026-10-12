@@ -337,15 +337,19 @@ impl App {
             widgets::field(ui, "Name", |ui| ui.text_edit_singleline(&mut r.name));
             widgets::combo_field(ui, "Format", r.format.label(), |ui| {
                 for f in ExportFormat::ALL {
-                    ui.selectable_value(&mut r.format, f, f.label());
+                    if ui.selectable_value(&mut r.format, f, f.label()).changed() && !f.supports(r.output_space) {
+                        r.output_space = sk_core::color::OutputSpace::Srgb;
+                    }
                 }
             });
             widgets::combo_field(ui, "Farbraum", r.output_space.label(), |ui| {
                 for sp in sk_core::color::OutputSpace::ALL {
-                    ui.selectable_value(&mut r.output_space, sp, sp.label());
+                    ui.add_enabled_ui(r.format.supports(sp), |ui| ui.selectable_value(&mut r.output_space, sp, sp.label()))
+                        .response
+                        .on_disabled_hover_text("AVIF-Dateien kennzeichnen den Farbraum ohne ICC-Profil; das geht nur für sRGB und Display P3.");
                 }
             });
-            if r.format == ExportFormat::Jpeg {
+            if r.format.has_quality() {
                 let mut q = r.quality as f32;
                 if slider_row(ui, "Qualität", &mut q, 1.0..=100.0, 90.0, 0) {
                     r.quality = q.round() as _;
@@ -428,7 +432,7 @@ impl App {
             ui.checkbox(&mut r.capture_metadata, "Aufnahmedaten übernehmen").on_hover_text("Kamera, Objektiv, Belichtung und Aufnahmedatum");
             widgets::field(ui, "Fotograf", |ui| ui.text_edit_singleline(&mut r.artist));
             widgets::field(ui, "Copyright", |ui| ui.text_edit_singleline(&mut r.copyright));
-            let note = if r.format == ExportFormat::Jpeg || r.format == ExportFormat::Png {
+            let note = if r.format.has_metadata() {
                 "GPS-Daten werden nie übernommen."
             } else {
                 "TIFF-Dateien erhalten keine Metadaten."

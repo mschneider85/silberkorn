@@ -224,6 +224,8 @@ struct PreparedLayer {
 
 pub struct Processor {
     adj: Adjustments,
+    /// The camera's lens correction (applied if `adj.lens.camera`).
+    camera_lens: Option<crate::camera_lens::CameraLens>,
     base: ToneParams,
     layers: Vec<PreparedLayer>,
     wb: [f32; 3],
@@ -305,11 +307,12 @@ impl Processor {
             hdr: meta.hdr,
             opts,
             adj: adj.clone(),
+            camera_lens: meta.lens.clone(),
         }
     }
 
     pub fn geomap(&self, src_w: usize, src_h: usize) -> GeoMap {
-        GeoMap::new(&self.adj.geometry, &self.adj.lens, self.adj.rotation, src_w, src_h, self.opts.ignore_crop)
+        GeoMap::new(&self.adj.geometry, &self.adj.lens, self.camera_lens.as_ref(), self.adj.rotation, src_w, src_h, self.opts.ignore_crop)
     }
 
     /// Output size (at the resolution of a `src_w` x `src_h` source).
@@ -1248,7 +1251,7 @@ mod tests {
             color,
             as_shot_wb: [1.0, 1.0, 1.0],
             orientation: Orientation::Normal,
-            hdr: false,
+            hdr: false, lens: None,
         }
     }
 

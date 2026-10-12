@@ -416,7 +416,7 @@ impl App {
             let text = match (&self.proof, self.recipes.get(self.selected_recipe)) {
                 (Some(p), Some(r)) if proof_ready => {
                     let format = match r.format {
-                        sk_core::export::ExportFormat::Jpeg => format!("JPEG {}", r.quality),
+                        f if f.has_quality() => format!("{} {}", f.label(), r.quality),
                         f => f.label().to_string(),
                     };
                     // The recipe's name only if it says more than the format.

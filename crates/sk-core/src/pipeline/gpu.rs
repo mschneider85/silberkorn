@@ -510,7 +510,7 @@ impl Processor {
             let mut img = plan.geo.resample(src, ext);
             apply_removals(&mut img, src, &plan.geo, ext, &self.adj.removals);
             apply_retouch(&mut img, src, &plan.geo, ext, &self.adj.retouch);
-            let id = GeoMap::new(&Default::default(), &Default::default(), 0, ext.w, ext.h, false);
+            let id = GeoMap::new(&Default::default(), &Default::default(), None, 0, ext.w, ext.h, false);
             args.geo = id.gpu();
             args.region = [0, 0, ext.w as u32, ext.h as u32];
             args.win = [0, 0, ext.w as u32, ext.h as u32];
@@ -1114,7 +1114,7 @@ mod tests {
             color,
             as_shot_wb: [1.6, 1.0, 1.3],
             orientation: Orientation::Normal,
-            hdr: false,
+            hdr: false, lens: None,
         }
     }
 

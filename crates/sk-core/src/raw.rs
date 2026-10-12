@@ -57,6 +57,8 @@ pub struct RawMeta {
     /// Floating point linear data (merged HDR, panorama, denoised DNG): values above 1 are real,
     /// nothing is clipped.
     pub hdr: bool,
+    /// Lens correction stored by the camera (oriented like the image).
+    pub lens: Option<crate::camera_lens::CameraLens>,
 }
 
 struct Decoded {
@@ -75,13 +77,42 @@ fn decode_ext(path: &Path, dummy: bool) -> Result<Decoded> {
     let source = RawSource::new(&file).with_context(|| format!("Kann {} nicht öffnen", file.display()))?;
     let decoder: Box<dyn Decoder> = rawler::get_decoder(&source).map_err(|e| anyhow!("Unbekanntes RAW-Format: {e}"))?;
     let params = RawDecodeParams::default();
-    let raw = decoder.raw_image(&source, &params, dummy).map_err(|e| anyhow!("RAW-Dekodierung fehlgeschlagen: {e}"))?;
+    let mut raw = decoder.raw_image(&source, &params, dummy).map_err(|e| anyhow!("RAW-Dekodierung fehlgeschlagen: {e}"))?;
+    if !dummy {
+        apply_gain_maps(decoder.as_ref(), &mut raw)?;
+    }
     let md = decoder.raw_metadata(&source, &params).ok();
     let mut meta = build_meta(path, &raw, md.as_ref())?;
+    let size = raw.crop_area.or(raw.active_area).map_or((raw.width, raw.height), |r| (r.d.w, r.d.h));
+    meta.lens = crate::camera_lens::read(&file, size.0, size.1).map(|l| l.oriented(meta.orientation));
     // Merged HDR data goes beyond the white level; float data within it (e.g. denoised raws)
     // is clipped like any raw file.
     meta.hdr = raw.cpp == 3 && matches!(&raw.data, RawImageData::Float(d) if d.par_iter().any(|v| *v > 1.0001));
     Ok(Decoded { raw, meta })
+}
+
+/// DNG lens shading (GainMap opcodes in OpcodeList2), on the scaled data of the active area.
+fn apply_gain_maps(decoder: &dyn Decoder, raw: &mut RawImage) -> Result<()> {
+    let Ok(Some(ifd)) = decoder.ifd(rawler::decoders::WellKnownIFD::Raw) else { return Ok(()) };
+    let Some(rawler::formats::tiff::Value::Undefined(list)) = ifd.get_entry(0xC741u16).map(|e| &e.value) else { return Ok(()) };
+    let maps = crate::camera_lens::gain_maps(list);
+    if maps.is_empty() {
+        return Ok(());
+    }
+    raw.apply_scaling().map_err(|e| anyhow!("Skalierung fehlgeschlagen: {e}"))?;
+    let (w, h, cpp) = (raw.width, raw.height, raw.cpp);
+    let area = raw.active_area.map_or((0, 0, w, h), |r| (r.p.x, r.p.y, r.d.w, r.d.h));
+    let RawImageData::Float(data) = &mut raw.data else { return Ok(()) };
+    // The maps address the active area: work on a copy of it.
+    let mut active: Vec<f32> = (0..area.3).flat_map(|y| data[((area.1 + y) * w + area.0) * cpp..((area.1 + y) * w + area.0 + area.2) * cpp].to_vec()).collect();
+    for m in &maps {
+        m.apply(&mut active, area.2, area.3, cpp);
+    }
+    for (y, row) in active.chunks_exact(area.2 * cpp).enumerate() {
+        let start = ((area.1 + y) * w + area.0) * cpp;
+        data[start..start + row.len()].copy_from_slice(row);
+    }
+    Ok(())
 }
 
 fn build_meta(path: &Path, raw: &RawImage, md: Option<&RawMetadata>) -> Result<RawMeta> {
@@ -144,7 +175,7 @@ fn build_meta(path: &Path, raw: &RawImage, md: Option<&RawMetadata>) -> Result<R
             orientation = Orientation::from_exif(o);
         }
     }
-    Ok(RawMeta { path: path.to_path_buf(), info, color, as_shot_wb, orientation, hdr: false })
+    Ok(RawMeta { path: path.to_path_buf(), info, color, as_shot_wb, orientation, hdr: false, lens: None })
 }
 
 /// Reads only the metadata, without decoding pixel data.

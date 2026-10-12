@@ -899,7 +899,7 @@ pub fn stitch_files(paths: &[PathBuf], opts: &PanoramaOptions, progress: &dyn Fn
         let (meta, mut img) = raw::load_full(path).with_context(|| format!("{}", path.display()))?;
         if opts.lens_correction {
             let lens = crate::sidecar::load(path).adjustments.lens;
-            let geo = crate::geometry::GeoMap::new(&Default::default(), &lens, 0, img.width, img.height, true);
+            let geo = crate::geometry::GeoMap::new(&Default::default(), &lens, meta.lens.as_ref(), 0, img.width, img.height, true);
             if (geo.out_w, geo.out_h) != (0, 0) {
                 img = geo.resample(&img, crate::geometry::Region { x: 0, y: 0, w: geo.out_w, h: geo.out_h });
             }

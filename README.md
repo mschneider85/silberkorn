@@ -43,7 +43,7 @@ SK_ADJ='{"exposure":0.5,"shadows":40}' cargo run --release -p sk-core --example 
 Pipeline (Arbeitsfarbraum: lineares Rec.2020):
 
 1. Geometrie: Zuschnitt, Geraderichten, Spiegeln, Drehen, Keystone, Objektivkorrektur
-   (Verzeichnung, CA, Vignettierung – manuell oder per Lensfun-Profil)
+   (Verzeichnung, CA, Vignettierung – manuell, aus den Kameradaten oder per Lensfun-Profil)
 2. Weißabgleich mit Highlight-Rekonstruktion, Kameramatrix
 3. Rauschreduzierung (Luminanz: Guided Filter, Farbe: Chroma-Glättung)
 4. Belichtung, lokales HDR, Klarheit/Struktur, Kontrast, Basiskurve
@@ -284,9 +284,13 @@ als **Dateiname** der verarbeiteten Bilder (der Zähler zählt dort die Bilder e
 - **Wasserzeichen:** Text (weiß oder schwarz) oder Logo (PNG mit Transparenz), in neun Positionen,
   Größe und Randabstand in % der kurzen Bildkante, Deckkraft einstellbar. Die Proof-Ansicht (P)
   zeigt es so, wie es geschrieben wird.
-- **Metadaten:** JPEG und PNG erhalten EXIF mit Kamera, Objektiv, Belichtung und Aufnahmedatum
-  (abschaltbar) sowie Fotograf und Copyright. GPS-Daten werden nie übernommen. TIFF-Dateien
-  erhalten keine Metadaten.
+- **Formate:** JPEG, TIFF (8/16 Bit), PNG, WebP (verlustbehaftet, libwebp) und AVIF (10 Bit,
+  4:4:4, rav1e). AVIF kennzeichnet den Farbraum ohne ICC-Profil und gibt es deshalb nur in sRGB
+  und Display P3; ein 24-MP-Bild braucht rund 12 s. Die Proof-Ansicht zeigt bei WebP die
+  komprimierten Pixel, bei AVIF die Pixel vor der Kompression (mit der echten Dateigröße).
+- **Metadaten:** JPEG, PNG, WebP und AVIF erhalten EXIF mit Kamera, Objektiv, Belichtung und
+  Aufnahmedatum (abschaltbar) sowie Fotograf und Copyright. GPS-Daten werden nie übernommen.
+  TIFF-Dateien erhalten keine Metadaten.
 
 ### Softproof
 
@@ -302,6 +306,25 @@ auf einem Drucker herauskommt. Eingestellt wird im Tab **„Ausgabe“ → Softp
 
 Die Umrechnung übernimmt Little CMS (statisch eingebunden). Der Softproof betrifft nur die
 Anzeige, nicht den Export.
+
+### Objektivkorrektur aus den Kameradaten
+
+Viele Kameras speichern die Korrektur für das angesetzte Objektiv im RAW. Silberkorn liest sie und
+wendet sie bei neuen Bildern automatisch an (Tab „Objektiv“, „Korrektur aus den Kameradaten“;
+Einstellungen von vor dieser Funktion behalten ihr Aussehen):
+
+- **Sony ARW:** Verzeichnung, Farbsäume und Vignettierung (Tags 0x7032/0x7035/0x7037).
+- **Fujifilm RAF:** Verzeichnung, Farbsäume und Vignettierung (Tags 0xF00B/0xF00F/0xF010). Der
+  1,25×-Ausschnitt (Sportsucher, elektronischer Verschluss) wird noch nicht berücksichtigt.
+- **Panasonic RW2:** Verzeichnung (Tag 0x0119); Vignettierung korrigiert die Kamera schon im RAW.
+- **DNG:** WarpRectilinear und FixVignetteRadial (OpcodeList3) sowie die GainMaps der OpcodeList2
+  (Helligkeitsausgleich von Smartphones). Die GainMaps gehören zu den Rohdaten und werden immer
+  angewendet. Tangentiale Verzeichnung wird ignoriert.
+
+Die Formate der Hersteller sind nicht dokumentiert; Silberkorn folgt dem Reverse Engineering von
+darktable und ExifTool (eigene Umsetzung). Alle Modelle werden in eine gemeinsame Form gebracht
+(gerade Polynome im Radius je Farbkanal) und laufen über dieselbe Geometrie wie lensfun-Profile;
+Kameradaten und lensfun-Profil schließen sich gegenseitig aus.
 
 ### Objektivprofile
 

@@ -497,9 +497,13 @@ pub struct Geometry {
     pub keystone_h: f32,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LensCorrection {
+    /// Apply the correction the camera stored in the raw file (`RawMeta::lens`), if any. On for
+    /// new images; settings saved before it existed keep their look.
+    #[serde(default)]
+    pub camera: bool,
     /// Lensfun profile name, if one is used.
     pub profile: Option<String>,
     /// Barrel (+) / pincushion (-) correction, -100..100.
@@ -511,6 +515,12 @@ pub struct LensCorrection {
     pub vignetting: f32,
     /// Profile coefficients (filled in from the lens profile, applied on top of the sliders).
     pub profile_coeffs: Option<LensCoefficients>,
+}
+
+impl Default for LensCorrection {
+    fn default() -> Self {
+        Self { camera: true, profile: None, distortion: 0.0, ca_red: 0.0, ca_blue: 0.0, vignetting: 0.0, profile_coeffs: None }
+    }
 }
 
 /// Lens model coefficients in lensfun conventions. Distortion and TCA radii are

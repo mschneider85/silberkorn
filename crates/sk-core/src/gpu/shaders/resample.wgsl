@@ -84,7 +84,16 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let c = geo_centered(g, ox, oy);
         let gain = vignetting_gain(g, c.x, c.y);
         let p = geo_lens(g, c);
-        if g.ca_r == g.ca_b {
+        if g.has_cam != 0u {
+            let pg = cam_point(g, p, 1u, 1.0);
+            let pr = cam_point(g, p, 0u, g.ca_r);
+            let pb = cam_point(g, p, 2u, g.ca_b);
+            v.x = bilinear(pr.x + cx, pr.y + cy).x;
+            v.y = bilinear(pg.x + cx, pg.y + cy).y;
+            v.z = bilinear(pb.x + cx, pb.y + cy).z;
+            let u = pg / g.half_diag - vec2<f32>(g.cam_cx, g.cam_cy);
+            v *= cam_gain(g, dot(u, u));
+        } else if g.ca_r == g.ca_b {
             // Red and blue at the same position as green (as on the CPU).
             v = bilinear(p.x + cx, p.y + cy);
         } else {

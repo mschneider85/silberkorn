@@ -716,7 +716,7 @@ mod tests {
         // Left half dark, right half bright; clone a bright spot onto the dark side.
         let (w, h) = (40, 20);
         let src = LinearImage::new(w, h, (0..w * h).map(|i| if i % w < w / 2 { [0.1; 3] } else { [0.8; 3] }).collect());
-        let geo = GeoMap::new(&Default::default(), &Default::default(), 0, w, h, false);
+        let geo = GeoMap::new(&Default::default(), &Default::default(), None, 0, w, h, false);
         let region = Region { x: 0, y: 0, w, h };
         let mut img = geo.resample(&src, region);
         let spot = Spot { mode: SpotMode::Clone, target: [0.25, 0.5], source: [0.75, 0.5], radius: 0.1, feather: 0.2, opacity: 1.0, path: Vec::new() };
@@ -745,7 +745,7 @@ mod tests {
                 })
                 .collect(),
         );
-        let geo = GeoMap::new(&Default::default(), &Default::default(), 0, w, h, false);
+        let geo = GeoMap::new(&Default::default(), &Default::default(), None, 0, w, h, false);
         let region = Region { x: 0, y: 0, w, h };
         let mut img = geo.resample(&src, region);
         let spot = Spot { mode: SpotMode::Heal, target: [15.5 / 60.0, 15.5 / 30.0], source: [45.5 / 60.0, 15.5 / 30.0], radius: 0.06, feather: 0.3, opacity: 1.0, path: Vec::new() };
@@ -774,7 +774,7 @@ mod tests {
                 })
                 .collect(),
         );
-        let geo = GeoMap::new(&Default::default(), &Default::default(), 0, w, h, false);
+        let geo = GeoMap::new(&Default::default(), &Default::default(), None, 0, w, h, false);
         let region = Region { x: 0, y: 0, w, h };
         let mut img = geo.resample(&src, region);
         let spot = Spot { mode: SpotMode::Heal, target: [30.5 / 120.0, 30.5 / 60.0], source: [90.5 / 120.0, 30.5 / 60.0], radius: 10.0 / 120.0, feather: 0.1, opacity: 1.0, path: Vec::new() };
@@ -795,7 +795,7 @@ mod tests {
         let data = (0..w * h).map(|i| if i % w < 40 { [0.1f32; 3] } else { [0.8; 3] }).collect();
         let src = LinearImage::new(w, h, data);
         let mut img = src.clone();
-        let geo = GeoMap::new(&Default::default(), &Default::default(), 0, w, h, false);
+        let geo = GeoMap::new(&Default::default(), &Default::default(), None, 0, w, h, false);
         let region = Region { x: 0, y: 0, w, h };
         let y = 20.5 / h as f32;
         let spot = Spot {

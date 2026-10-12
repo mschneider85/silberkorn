@@ -39,7 +39,7 @@ impl App {
         let segments = sk_core::upright::detect_segments(&cur.preview);
         let adj = &cur.adjustments;
         let src = (cur.preview.width, cur.preview.height);
-        let Some(g) = sk_core::upright::solve(&segments, &adj.geometry, &adj.lens, adj.rotation, src, mode) else {
+        let Some(g) = sk_core::upright::solve(&segments, &adj.geometry, &adj.lens, cur.meta.lens.as_ref(), adj.rotation, src, mode) else {
             self.status = "Automatisch geraderichten: keine geraden Kanten gefunden".into();
             return;
         };
