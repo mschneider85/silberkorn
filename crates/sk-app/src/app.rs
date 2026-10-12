@@ -782,7 +782,10 @@ impl App {
             Ok("shortcuts") => app.show_shortcuts = true,
             Ok("about") => app.splash = Some(crate::splash::Splash::about()),
             Ok("gpu") => app.show_gpu_dialog = true,
-            Ok("calibrate") => app.print.calibrating = Some(96.0 / 25.4),
+            // `calibrate` or `calibrate:<dpi>`.
+            Ok(d) if d.starts_with("calibrate") => {
+                app.print.calibrating = Some(d.trim_start_matches("calibrate").trim_start_matches(':').parse().unwrap_or(96.0) / 25.4);
+            }
             Ok(d) if d.starts_with("palette") => app.palette.show_with(d.trim_start_matches("palette").trim_start_matches(':')),
             _ => {}
         }

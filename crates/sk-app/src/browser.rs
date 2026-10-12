@@ -55,10 +55,15 @@ impl App {
         let rect = ui.available_rect_before_wrap();
         let response = ui.allocate_rect(rect, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, if self.fullscreen { Color32::from_gray(10) } else { theme::VIEWER });
-
         // Several selected images and/or the reference side by side.
         let cells = self.compare_cells();
+        // The print preview judges the image against the paper, as it will be seen.
+        let bg = match self.print_background().filter(|_| cells.is_empty()) {
+            Some(c) => c,
+            None if self.fullscreen => Color32::from_gray(10),
+            None => theme::VIEWER,
+        };
+        painter.rect_filled(rect, 0.0, bg);
         if !cells.is_empty() {
             self.compare_view(ui, rect, &cells);
             return;
@@ -184,6 +189,10 @@ impl App {
         let paper_rect = paper.as_ref().map(|p| Rect::from_center_size(img_rect.center(), img_rect.size() * p.rel));
         if let (Some(p), Some(r)) = (&paper, paper_rect) {
             painter.rect_filled(r, 0.0, p.color);
+            // On a background in the paper's color, a fine line shows the format.
+            if p.color == bg {
+                painter.rect_stroke(r, 0.0, egui::Stroke::new(1.0, Color32::from_gray(185)), egui::StrokeKind::Outside);
+            }
         }
         painter.image(shown, img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         let proof_ready = proof.is_some();

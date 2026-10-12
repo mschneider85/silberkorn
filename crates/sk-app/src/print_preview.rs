@@ -24,6 +24,8 @@ const CARD_MM: Vec2 = vec2(85.6, 53.98);
 
 /// Screen resolutions the calibration offers (physical pixels per inch).
 const DPI_RANGE: std::ops::RangeInclusive<f32> = 40.0..=320.0;
+/// Space around the largest card in the calibration dialog.
+const CAL_PAD: f32 = 12.0;
 
 /// Paper drawn around the image in the viewer.
 pub struct PaperFrame {
@@ -85,7 +87,7 @@ impl App {
             return None;
         }
         let soft = self.softproof.transform.as_ref().filter(|_| self.softproof.on);
-        let color = soft.map_or(Color32::WHITE, |t| Color32::from_rgb(t.paper[0], t.paper[1], t.paper[2]));
+        let color = self.print_background().unwrap_or_else(|| soft.map_or(Color32::WHITE, |t| Color32::from_rgb(t.paper[0], t.paper[1], t.paper[2])));
         if let Some(l) = self.print_layout(size) {
             return Some(PaperFrame { rel: vec2(l.paper[0] / l.image[0], l.paper[1] / l.image[1]), color });
         }
@@ -94,6 +96,15 @@ impl App {
             return Some(PaperFrame { rel: (size + Vec2::splat(2.0 * m)) / size, color });
         }
         None
+    }
+
+    /// Background of the viewer in the print preview: the paper's color.
+    pub(crate) fn print_background(&self) -> Option<Color32> {
+        if !self.print.on || self.current.is_none() || self.crop_tool.is_some() || self.straighten_tool.is_some() {
+            return None;
+        }
+        let soft = self.softproof.transform.as_ref().filter(|_| self.softproof.on);
+        Some(soft.map_or(Color32::WHITE, |t| Color32::from_rgb(t.paper[0], t.paper[1], t.paper[2])))
     }
 
     /// Scale (points per image texture pixel) at which the image appears at its printed size.
@@ -193,24 +204,39 @@ impl App {
         let Some(mut px_per_mm) = self.print.calibrating else { return };
         let ppp = self.pixels_per_point;
         let (mut save, mut cancel) = (false, false);
+        // A fixed measuring area, made for the largest card the slider offers, so the dialog keeps
+        // its size: up to twice the resolution the system scaling suggests, as far as the screen allows.
+        let screen = ctx.content_rect().size();
+        let fit_dpi = |pt: f32, mm: f32| pt * ppp * 25.4 / mm;
+        let max_dpi = (96.0 * ppp * 2.0)
+            .min(*DPI_RANGE.end())
+            .min(fit_dpi(screen.x - 2.0 * CAL_PAD - 120.0, CARD_MM.x))
+            .min(fit_dpi(screen.y - 2.0 * CAL_PAD - 280.0, CARD_MM.y))
+            .max(*DPI_RANGE.start() + 1.0);
+        let range = *DPI_RANGE.start()..=max_dpi;
+        let area = CARD_MM * max_dpi / 25.4 / ppp + Vec2::splat(2.0 * CAL_PAD);
+        px_per_mm = px_per_mm.clamp(*range.start() / 25.4, max_dpi / 25.4);
         let modal = egui::Modal::new(egui::Id::new("print-calibration")).show(ctx, |ui| {
-            ui.set_width(460.0);
+            ui.set_width(area.x.max(460.0));
             ui.label(RichText::new("Bildschirm kalibrieren").size(17.0).strong().color(Color32::WHITE));
             ui.add_space(6.0);
             ui.label("Halte eine Scheckkarte (EC- oder Kreditkarte) an den Bildschirm und ändere die Größe, bis das Rechteck genau so groß ist wie die Karte.");
             ui.add_space(10.0);
+            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), area.y), egui::Sense::hover());
+            let painter = ui.painter_at(rect);
+            painter.rect_filled(rect, 6.0, theme::VIEWER);
             let card = CARD_MM * px_per_mm / ppp;
-            let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), card.y + 16.0), egui::Sense::hover());
             let r = egui::Rect::from_center_size(rect.center(), card);
-            ui.painter().rect_filled(r, 3.5 * px_per_mm / ppp, theme::ACCENT_SOFT);
-            ui.painter().rect_stroke(r, 3.5 * px_per_mm / ppp, egui::Stroke::new(1.0, theme::ACCENT), egui::StrokeKind::Inside);
-            ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "85,6 × 54 mm", egui::FontId::proportional(13.0), theme::TEXT);
+            let rounding = 3.18 * px_per_mm / ppp;
+            painter.rect_filled(r, rounding, theme::ACCENT_SOFT);
+            painter.rect_stroke(r, rounding, egui::Stroke::new(1.0, theme::ACCENT), egui::StrokeKind::Inside);
+            painter.text(r.center(), egui::Align2::CENTER_CENTER, "85,6 × 54 mm", egui::FontId::proportional(13.0), theme::TEXT);
             ui.add_space(6.0);
             // In dpi, like the other sliders: Shift while dragging for fine steps, the number to type.
             let mut dpi = px_per_mm * 25.4;
             let opts = widgets::SliderOpts { suffix: " dpi", ..Default::default() };
-            widgets::slider_row_with(ui, "Auflösung", &mut dpi, DPI_RANGE, 96.0 * ppp, 1, opts);
-            px_per_mm = dpi / 25.4;
+            widgets::slider_row_with(ui, "Auflösung", &mut dpi, range.clone(), (96.0 * ppp).clamp(*range.start(), *range.end()), 1, opts);
+            px_per_mm = dpi.clamp(*range.start(), *range.end()) / 25.4;
             ui.label(RichText::new("Fein: Umschalt beim Ziehen halten, oder den Wert eintippen.").small().color(theme::TEXT_FAINT));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
