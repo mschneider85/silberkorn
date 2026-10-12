@@ -196,11 +196,12 @@ pub struct ExportJob {
     pub session: String,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum AiKind {
     Subject,
     Sky,
-    Magic { seed: [f32; 2], tolerance: f32 },
+    /// The points of a painted stroke.
+    Magic { seeds: Vec<[f32; 2]>, tolerance: f32 },
 }
 
 /// Computes a content-based mask for a layer.
@@ -479,7 +480,7 @@ impl Workers {
                     let guide = sk_ai::guide_from_rgba(r.width, r.height, &r.rgba);
                     let result = match job.kind {
                         AiKind::Sky => Ok(sk_ai::sky_mask(&guide)),
-                        AiKind::Magic { seed, tolerance } => Ok(sk_ai::magic_mask(&guide, seed, tolerance)),
+                        AiKind::Magic { seeds, tolerance } => Ok(sk_ai::magic_mask(&guide, &seeds, tolerance)),
                         AiKind::Subject => {
                             let generation = sk_ai::runtime::config_generation();
                             if model.as_ref().is_none_or(|(_, g)| *g != generation) {

@@ -247,9 +247,10 @@ pub fn sky_mask(guide: &Guide) -> MaskImage {
 
 // ------------------------------------------------------------------ magic brush
 
-/// Region growing from `seed` (normalized coordinates): connected pixels whose Oklab color is
-/// within `tolerance` (0..1) of the seed color.
-pub fn magic_mask(guide: &Guide, seed: [f32; 2], tolerance: f32) -> MaskImage {
+/// Magic Brush: selects the connected region around the painted `seeds` (normalized points)
+/// whose color resembles that under any of them, so a stroke across several tones takes all
+/// of them. `tolerance` 0..1.
+pub fn magic_mask(guide: &Guide, seeds: &[[f32; 2]], tolerance: f32) -> MaskImage {
     let g = guide.at_mask_resolution();
     let (w, h) = (g.width, g.height);
     let ok = Oklab::default();
@@ -259,30 +260,52 @@ pub fn magic_mask(guide: &Guide, seed: [f32; 2], tolerance: f32) -> MaskImage {
         .map(|c| sk_core::detail::gaussian_blur(&Plane::new(w, h, lab_raw.iter().map(|v| v[c]).collect()), 2.0))
         .collect();
     let lab: Vec<[f32; 3]> = (0..w * h).map(|i| [ch[0].data[i], ch[1].data[i], ch[2].data[i]]).collect();
-    let sx = ((seed[0] * w as f32) as usize).min(w - 1);
-    let sy = ((seed[1] * h as f32) as usize).min(h - 1);
-    // Seed color averaged over a 5x5 window.
-    let mut sc = [0.0f32; 3];
-    let mut n = 0.0;
-    for y in sy.saturating_sub(2)..(sy + 3).min(h) {
-        for x in sx.saturating_sub(2)..(sx + 3).min(w) {
-            let v = lab[y * w + x];
-            sc = [sc[0] + v[0], sc[1] + v[1], sc[2] + v[2]];
-            n += 1.0;
-        }
+    // Seed pixels, and the seed colors (averaged over 5x5) from up to 48 of them.
+    let pixels: Vec<usize> = seeds
+        .iter()
+        .map(|s| ((s[1] * h as f32) as usize).min(h - 1) * w + ((s[0] * w as f32) as usize).min(w - 1))
+        .collect();
+    if pixels.is_empty() {
+        return to_mask(&Plane::new(w, h, vec![0.0; w * h]));
     }
-    let sc = sc.map(|v| v / n);
+    let step = pixels.len().div_ceil(48);
+    let colors: Vec<[f32; 3]> = pixels
+        .iter()
+        .step_by(step)
+        .map(|&i| {
+            let (sx, sy) = (i % w, i / w);
+            let mut sc = [0.0f32; 3];
+            let mut n = 0.0;
+            for y in sy.saturating_sub(2)..(sy + 3).min(h) {
+                for x in sx.saturating_sub(2)..(sx + 3).min(w) {
+                    let v = lab[y * w + x];
+                    sc = [sc[0] + v[0], sc[1] + v[1], sc[2] + v[2]];
+                    n += 1.0;
+                }
+            }
+            sc.map(|v| v / n)
+        })
+        .collect();
     let tol = 0.015 + tolerance.clamp(0.0, 1.0) * 0.12;
-    let dist = |v: [f32; 3]| ((v[0] - sc[0]).powi(2) + (v[1] - sc[1]).powi(2) * 2.0 + (v[2] - sc[2]).powi(2) * 2.0).sqrt();
+    let dist = |v: [f32; 3]| {
+        colors
+            .iter()
+            .map(|sc| ((v[0] - sc[0]).powi(2) + (v[1] - sc[1]).powi(2) * 2.0 + (v[2] - sc[2]).powi(2) * 2.0).sqrt())
+            .fold(f32::MAX, f32::min)
+    };
     let mut val = vec![0.0f32; w * h];
     let mut seen = vec![false; w * h];
-    let mut stack = vec![sy * w + sx];
+    let mut is_seed = vec![false; w * h];
+    for &i in &pixels {
+        is_seed[i] = true;
+    }
+    let mut stack = pixels.clone();
     while let Some(i) = stack.pop() {
         if seen[i] {
             continue;
         }
         seen[i] = true;
-        let d = if i == sy * w + sx { 0.0 } else { dist(lab[i]) };
+        let d = if is_seed[i] { 0.0 } else { dist(lab[i]) };
         if d > tol * 1.5 {
             continue;
         }
@@ -339,13 +362,26 @@ mod tests {
     }
 
     #[test]
+    fn magic_stroke_across_two_colors_selects_both() {
+        // Three vertical bands: red | green | blue. A stroke over red and green takes both.
+        let g = guide(240, 80, |x, _| match x {
+            0..80 => [0.8, 0.1, 0.1],
+            80..160 => [0.1, 0.7, 0.1],
+            _ => [0.1, 0.1, 0.8],
+        });
+        let m = magic_mask(&g, &[[0.15, 0.5], [0.5, 0.5]], 0.3);
+        assert!(at(&m, 0.1, 0.5) > 200 && at(&m, 0.5, 0.5) > 200, "rot und grün gewählt");
+        assert!(at(&m, 0.9, 0.5) < 50, "blau nicht");
+    }
+
+    #[test]
     fn magic_mask_selects_connected_region() {
         // Red disc on grey, plus a separate red square that must not be selected.
         let g = guide(200, 200, |x, y| {
             let d = ((x as f32 - 60.0).powi(2) + (y as f32 - 100.0).powi(2)).sqrt();
             if d < 30.0 || (x > 150 && x < 180 && y > 20 && y < 50) { [0.8, 0.15, 0.1] } else { [0.5, 0.5, 0.5] }
         });
-        let m = magic_mask(&g, [0.3, 0.5], 0.3);
+        let m = magic_mask(&g, &[[0.3, 0.5]], 0.3);
         assert!(at(&m, 0.3, 0.5) > 200);
         assert!(at(&m, 0.8, 0.5) < 20);
         assert!(at(&m, 0.82, 0.17) < 20, "unconnected region");

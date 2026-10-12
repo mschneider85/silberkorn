@@ -1471,3 +1471,130 @@ fn faces_become_named_persons() {
     let kw = sidecar::load(&f.photo("p1.dng")).keywords;
     assert!(kw.contains(&"Obama".to_string()) && !kw.contains(&"Barack".to_string()), "{kw:?}");
 }
+
+/// Only one viewer tool is active at a time: the viewer hands the mouse to the first active
+/// one, so a tool left on (e.g. the brush) would swallow the input of the one chosen after it.
+#[test]
+fn choosing_a_viewer_tool_ends_the_others() {
+    use crate::layers::LocalTool;
+    let Some(mut f) = Fixture::new("viewer_tools") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let active = |a: &App| {
+        [a.local_tool.is_some(), a.crop_tool.is_some(), a.straighten_tool.is_some(), a.picking_wb, a.picking_skin]
+            .iter()
+            .filter(|on| **on)
+            .count()
+    };
+    type Switch = (&'static str, fn(&mut App), fn(&App) -> bool);
+    let tools: [Switch; 6] = [
+        ("Pinsel", |a| a.set_local_tool(LocalTool::Brush), |a| a.local_tool == Some(LocalTool::Brush)),
+        ("Verlauf", |a| a.set_local_tool(LocalTool::Linear), |a| a.local_tool == Some(LocalTool::Linear)),
+        ("Zuschneiden", |a| a.start_crop_tool(), |a| a.crop_tool.is_some()),
+        ("Geraderichten", |a| a.toggle_straighten(), |a| a.straighten_tool.is_some()),
+        ("WB-Pipette", |a| a.toggle_wb_picker(), |a| a.picking_wb),
+        ("Hautton-Pipette", |a| a.toggle_skin_picker(), |a| a.picking_skin),
+    ];
+    for (first, on_first, _) in &tools {
+        for (second, on_second, is_on) in &tools {
+            if first == second {
+                continue;
+            }
+            f.app.end_viewer_tools();
+            on_first(&mut f.app);
+            on_second(&mut f.app);
+            assert!(is_on(&f.app), "{second} nach {first} sollte aktiv sein");
+            assert_eq!(active(&f.app), 1, "nach {first} → {second} ist mehr als ein Werkzeug aktiv");
+        }
+    }
+    // Choosing the active tool again turns it off.
+    f.app.end_viewer_tools();
+    f.app.toggle_straighten();
+    f.app.toggle_straighten();
+    assert_eq!(active(&f.app), 0);
+}
+
+/// One frame of the whole window (all panels), `t` seconds after the start.
+fn window_frame(f: &mut Fixture, frame: &mut eframe::Frame, t: f64, events: Vec<egui::Event>) {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1500.0, 950.0))),
+        time: Some(t),
+        events,
+        ..Default::default()
+    };
+    let app = &mut f.app;
+    let out = f.ctx.run_ui(input, |ui| eframe::App::ui(app, ui, frame));
+    let mut delta = out.textures_delta;
+    delta.clear();
+}
+
+/// Presses at `a`, moves to `b` over `hold` seconds (frames every 40 ms) and releases.
+fn window_stroke(f: &mut Fixture, frame: &mut eframe::Frame, t: &mut f64, a: egui::Pos2, b: egui::Pos2, hold: f64) {
+    *t += 0.05;
+    window_frame(f, frame, *t, vec![egui::Event::PointerMoved(a)]);
+    *t += 0.05;
+    window_frame(f, frame, *t, vec![press(a, true)]);
+    let steps = (hold / 0.04).ceil().max(1.0) as usize;
+    for i in 1..=steps {
+        *t += 0.04;
+        window_frame(f, frame, *t, vec![egui::Event::PointerMoved(a + (b - a) * (i as f32 / steps as f32))]);
+    }
+    window_frame(f, frame, *t, vec![press(b, false)]);
+    *t += 0.05;
+    window_frame(f, frame, *t, vec![]);
+}
+
+/// Heal, clone and the Magic Brush are painted like brushes, and they
+/// respond to a press even when the mouse moves a little or the button is held (which egui
+/// does not count as a click).
+#[test]
+fn heal_clone_and_magic_brush_are_painted() {
+    use crate::layers::LocalTool;
+    use sk_core::params::SpotMode;
+    let Some(mut f) = Fixture::new("painted_tools") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut t = 10.0;
+    f.app.splash = None;
+    f.app.tab = crate::app::Tab::Layers;
+    window_frame(&mut f, &mut frame, t, vec![]);
+    let spots = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.retouch.clone();
+
+    // A painted heal stroke becomes one area along the stroke, with a source elsewhere.
+    f.app.set_local_tool(LocalTool::Heal);
+    window_stroke(&mut f, &mut frame, &mut t, egui::pos2(700.0, 250.0), egui::pos2(850.0, 300.0), 0.4);
+    let s = spots(&f);
+    assert_eq!(s.len(), 1);
+    assert_eq!(s[0].mode, SpotMode::Heal);
+    assert!(s[0].path.len() >= 3, "Pfad: {:?}", s[0].path);
+    assert_ne!(s[0].source, s[0].target);
+    assert_eq!(f.app.selected_spot, Some(0));
+
+    // A held click with a little jitter still makes a (round) clone spot.
+    f.app.set_local_tool(LocalTool::Clone);
+    window_stroke(&mut f, &mut frame, &mut t, egui::pos2(1000.0, 500.0), egui::pos2(1002.0, 501.0), 1.0);
+    let s = spots(&f);
+    assert_eq!(s.len(), 2);
+    assert_eq!(s[1].mode, SpotMode::Clone);
+
+    // Dragging the first area's pin moves the whole area (path and source alike).
+    f.app.selected_spot = Some(0);
+    let before = spots(&f)[0].clone();
+    let pin = before.target;
+    let start = egui::pos2(700.0, 250.0);
+    window_stroke(&mut f, &mut frame, &mut t, start, start + egui::vec2(60.0, 40.0), 0.3);
+    let after = spots(&f)[0].clone();
+    assert_eq!(spots(&f).len(), 2, "Pin ziehen malt keinen neuen Bereich");
+    let d = [after.target[0] - pin[0], after.target[1] - pin[1]];
+    assert!(d[0] > 0.0 && d[1] > 0.0, "verschoben: {d:?}");
+    let moved = |a: [f32; 2], b: [f32; 2]| ((a[0] - b[0] - d[0]).abs() < 1e-4) && ((a[1] - b[1] - d[1]).abs() < 1e-4);
+    assert!(moved(after.source, before.source) && moved(after.path[0], before.path[0]));
+
+    // Magic Brush: a painted stroke selects on the active layer.
+    f.app.set_local_tool(LocalTool::Magic);
+    window_stroke(&mut f, &mut frame, &mut t, egui::pos2(600.0, 650.0), egui::pos2(680.0, 660.0), 0.9);
+    assert!(f.app.ai_busy, "Magic Brush sollte die Auswahl anstoßen");
+    f.pump("Magic Brush", |a| !a.ai_busy);
+    let layers = &f.app.current.as_ref().unwrap().adjustments.layers;
+    assert!(layers.iter().any(|l| l.mask.ai.is_some()));
+}
+

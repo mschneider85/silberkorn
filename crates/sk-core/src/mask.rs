@@ -239,7 +239,17 @@ fn ring_mean(src: &LinearImage, c: (f32, f32), r0: f32, r1: f32) -> [f32; 3] {
 }
 
 struct PreparedSpot {
-    target: (f32, f32),
+    /// The area's segments in source pixels (a round spot is one of zero length), each with
+    /// its bounding box grown by the radius, (x0, y0, x1, y1): a pixel only needs the few
+    /// segments whose box contains it.
+    segments: Vec<((f32, f32), (f32, f32), (f32, f32, f32, f32))>,
+    /// Grid over `bounds` with cells of `cell` pixels, listing the segments whose box
+    /// overlaps each cell.
+    grid: Vec<Vec<u32>>,
+    grid_w: usize,
+    cell: f32,
+    /// Bounding box of the area including the radius: (x0, y0, x1, y1).
+    bounds: (f32, f32, f32, f32),
     offset: (f32, f32),
     r: f32,
     inner: f32,
@@ -247,7 +257,48 @@ struct PreparedSpot {
     opacity: f32,
 }
 
-/// Applies heal/clone spots to a resampled region (camera space).
+impl PreparedSpot {
+    /// Distance of `p` from the area's center line (`f32::MAX` when farther than the radius).
+    fn distance(&self, p: (f32, f32)) -> f32 {
+        let gx = ((p.0 - self.bounds.0) / self.cell) as usize;
+        let gy = ((p.1 - self.bounds.1) / self.cell) as usize;
+        let Some(list) = self.grid.get(gy * self.grid_w + gx.min(self.grid_w - 1)) else { return f32::MAX };
+        let mut best = f32::MAX;
+        for &(a, b, (x0, y0, x1, y1)) in list.iter().map(|&i| &self.segments[i as usize]) {
+            if p.0 < x0 || p.0 > x1 || p.1 < y0 || p.1 > y1 {
+                continue;
+            }
+            let q = closest_on_segment(p, a, b);
+            best = best.min((p.0 - q.0).powi(2) + (p.1 - q.1).powi(2));
+        }
+        if best == f32::MAX { best } else { best.sqrt() }
+    }
+}
+
+fn closest_on_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> (f32, f32) {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = dx * dx + dy * dy;
+    if len2 < 1e-9 {
+        return a;
+    }
+    let t = (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / len2).clamp(0.0, 1.0);
+    (a.0 + dx * t, a.1 + dy * t)
+}
+
+/// Up to `n` points spread evenly over `points`.
+fn sample_points(points: &[(f32, f32)], n: usize) -> Vec<(f32, f32)> {
+    if points.len() <= n {
+        return points.to_vec();
+    }
+    (0..n).map(|i| points[i * (points.len() - 1) / (n - 1)]).collect()
+}
+
+/// The area's points (target, then the path) in source pixels.
+fn spot_points(s: &Spot, sw: f32, sh: f32) -> Vec<(f32, f32)> {
+    std::iter::once(&s.target).chain(&s.path).map(|p| (p[0] * sw - 0.5, p[1] * sh - 0.5)).collect()
+}
+
+/// Applies heal/clone areas to a resampled region (camera space).
 pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, region: Region, spots: &[Spot]) {
     if spots.is_empty() {
         return;
@@ -257,26 +308,44 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
     let prepared: Vec<PreparedSpot> = spots
         .iter()
         .map(|s| {
-            let target = (s.target[0] * sw - 0.5, s.target[1] * sh - 0.5);
+            let points = spot_points(s, sw, sh);
+            let target = points[0];
             let source = (s.source[0] * sw - 0.5, s.source[1] * sh - 0.5);
+            let offset = (source.0 - target.0, source.1 - target.1);
             let r = (s.radius * long).max(1.0);
             let gain = match s.mode {
                 SpotMode::Clone => [1.0; 3],
-                // Heal: take texture from the source but brightness/color from the target surroundings.
+                // Heal: take texture from the source but brightness/color from the target
+                // surroundings (averaged along a stroke).
                 SpotMode::Heal => {
-                    let t = ring_mean(src, target, r * 1.05, r * 1.4);
-                    let q = ring_mean(src, source, r * 1.05, r * 1.4);
+                    let samples = sample_points(&points, 8);
+                    let mean = |shift: (f32, f32)| {
+                        let sum = samples.iter().fold([0.0f32; 3], |acc, p| {
+                            let m = ring_mean(src, (p.0 + shift.0, p.1 + shift.1), r * 1.05, r * 1.4);
+                            [acc[0] + m[0], acc[1] + m[1], acc[2] + m[2]]
+                        });
+                        sum.map(|v| v / samples.len() as f32)
+                    };
+                    let (t, q) = (mean((0.0, 0.0)), mean(offset));
                     std::array::from_fn(|c| if q[c] > 1e-5 { (t[c] / q[c]).clamp(0.25, 4.0) } else { 1.0 })
                 }
             };
-            PreparedSpot {
-                target,
-                offset: (source.0 - target.0, source.1 - target.1),
-                r,
-                inner: r * (1.0 - s.feather.clamp(0.0, 1.0)),
-                gain,
-                opacity: s.opacity.clamp(0.0, 1.0),
+            let bounds = points.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |b, p| (b.0.min(p.0 - r), b.1.min(p.1 - r), b.2.max(p.0 + r), b.3.max(p.1 + r)));
+            let pairs: Vec<((f32, f32), (f32, f32))> = if points.len() == 1 { vec![(points[0], points[0])] } else { points.windows(2).map(|w| (w[0], w[1])).collect() };
+            let segments: Vec<_> = pairs.into_iter().map(|(a, b)| (a, b, (a.0.min(b.0) - r, a.1.min(b.1) - r, a.0.max(b.0) + r, a.1.max(b.1) + r))).collect();
+            let cell = (2.0 * r).max(4.0);
+            let grid_w = ((bounds.2 - bounds.0) / cell).ceil().max(1.0) as usize;
+            let grid_h = ((bounds.3 - bounds.1) / cell).ceil().max(1.0) as usize;
+            let mut grid = vec![Vec::new(); grid_w * grid_h];
+            let to_cell = |v: f32, o: f32, n: usize| (((v - o) / cell).max(0.0) as usize).min(n - 1);
+            for (i, (_, _, (x0, y0, x1, y1))) in segments.iter().enumerate() {
+                for gy in to_cell(*y0, bounds.1, grid_h)..=to_cell(*y1, bounds.1, grid_h) {
+                    for gx in to_cell(*x0, bounds.0, grid_w)..=to_cell(*x1, bounds.0, grid_w) {
+                        grid[gy * grid_w + gx].push(i as u32);
+                    }
+                }
             }
+            PreparedSpot { segments, grid, grid_w, cell, bounds, offset, r, inner: r * (1.0 - s.feather.clamp(0.0, 1.0)), gain, opacity: s.opacity.clamp(0.0, 1.0) }
         })
         .collect();
     img.data.par_chunks_mut(region.w).enumerate().for_each(|(ry, line)| {
@@ -286,7 +355,11 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
             let mut pt: Option<(f32, f32)> = None;
             for s in &prepared {
                 let (sx, sy) = *pt.get_or_insert_with(|| geo.source_point(ox, oy));
-                let d = ((sx - s.target.0).powi(2) + (sy - s.target.1).powi(2)).sqrt();
+                let (x0, y0, x1, y1) = s.bounds;
+                if sx < x0 || sx > x1 || sy < y0 || sy > y1 {
+                    continue;
+                }
+                let d = s.distance((sx, sy));
                 if d >= s.r {
                     continue;
                 }
@@ -306,9 +379,31 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
 pub fn auto_source(src: &LinearImage, target: [f32; 2], radius: f32) -> [f32; 2] {
     let (sw, sh) = (src.width as f32, src.height as f32);
     let r = (radius * sw.max(sh)).max(2.0);
-    let t = (target[0] * sw, target[1] * sh);
+    let best = best_source_px(src, (target[0] * sw, target[1] * sh), r);
+    [best.0 / sw, best.1 / sh]
+}
+
+/// Source position for a painted area (`points`, normalized; the first is the target): the
+/// area as a whole is treated like one large spot around its center.
+pub fn auto_source_area(src: &LinearImage, points: &[[f32; 2]], radius: f32) -> [f32; 2] {
+    if points.len() < 2 {
+        return auto_source(src, points.first().copied().unwrap_or([0.5, 0.5]), radius);
+    }
+    let (sw, sh) = (src.width as f32, src.height as f32);
+    let px: Vec<(f32, f32)> = points.iter().map(|p| (p[0] * sw, p[1] * sh)).collect();
+    let n = px.len() as f32;
+    let c = (px.iter().map(|p| p.0).sum::<f32>() / n, px.iter().map(|p| p.1).sum::<f32>() / n);
+    let extent = px.iter().map(|p| ((p.0 - c.0).powi(2) + (p.1 - c.1).powi(2)).sqrt()).fold(0.0, f32::max);
+    let r = (radius * sw.max(sh)).max(2.0) + extent;
+    let best = best_source_px(src, c, r);
+    [points[0][0] + (best.0 - c.0) / sw, points[0][1] + (best.1 - c.1) / sh]
+}
+
+/// Center (pixels) of the best source circle of radius `r` for the circle around `t`.
+fn best_source_px(src: &LinearImage, t: (f32, f32), r: f32) -> (f32, f32) {
+    let (sw, sh) = (src.width as f32, src.height as f32);
     let ring = ring_mean(src, t, r * 1.05, r * 1.4);
-    let mut best = (f32::MAX, target);
+    let mut best = (f32::MAX, t);
     for dist in [2.2f32, 3.0] {
         for k in 0..12 {
             let a = k as f32 / 12.0 * std::f32::consts::TAU;
@@ -322,7 +417,7 @@ pub fn auto_source(src: &LinearImage, target: [f32; 2], radius: f32) -> [f32; 2]
             let texture = (0..3).map(|i| (m[i] - e[i]).abs() / m[i].max(1e-3)).sum::<f32>();
             let score = color + texture * 0.5 + dist * 0.05;
             if score < best.0 {
-                best = (score, [c.0 / sw, c.1 / sh]);
+                best = (score, c);
             }
         }
     }
@@ -529,7 +624,7 @@ mod tests {
         let geo = GeoMap::new(&Default::default(), &Default::default(), 0, w, h, false);
         let region = Region { x: 0, y: 0, w, h };
         let mut img = geo.resample(&src, region);
-        let spot = Spot { mode: SpotMode::Clone, target: [0.25, 0.5], source: [0.75, 0.5], radius: 0.1, feather: 0.2, opacity: 1.0 };
+        let spot = Spot { mode: SpotMode::Clone, target: [0.25, 0.5], source: [0.75, 0.5], radius: 0.1, feather: 0.2, opacity: 1.0, path: Vec::new() };
         apply_retouch(&mut img, &src, &geo, region, &[spot]);
         assert!(img.data[10 * w + 10][0] > 0.7);
         assert!(img.data[10 * w + 2][0] < 0.15);
@@ -558,10 +653,38 @@ mod tests {
         let geo = GeoMap::new(&Default::default(), &Default::default(), 0, w, h, false);
         let region = Region { x: 0, y: 0, w, h };
         let mut img = geo.resample(&src, region);
-        let spot = Spot { mode: SpotMode::Heal, target: [15.5 / 60.0, 15.5 / 30.0], source: [45.5 / 60.0, 15.5 / 30.0], radius: 0.06, feather: 0.3, opacity: 1.0 };
+        let spot = Spot { mode: SpotMode::Heal, target: [15.5 / 60.0, 15.5 / 30.0], source: [45.5 / 60.0, 15.5 / 30.0], radius: 0.06, feather: 0.3, opacity: 1.0, path: Vec::new() };
         apply_retouch(&mut img, &src, &geo, region, &[spot]);
         let v = img.data[15 * w + 15][0];
         assert!((v - 0.1).abs() < 0.03, "healed value {v}");
+    }
+
+    #[test]
+    fn painted_clone_area_follows_the_stroke() {
+        // Left half dark, right half bright; a horizontal stroke in the dark half clones from
+        // the bright half. Pixels along the stroke change, those beside it do not.
+        let (w, h) = (80usize, 40usize);
+        let data = (0..w * h).map(|i| if i % w < 40 { [0.1f32; 3] } else { [0.8; 3] }).collect();
+        let src = LinearImage::new(w, h, data);
+        let mut img = src.clone();
+        let geo = GeoMap::new(&Default::default(), &Default::default(), 0, w, h, false);
+        let region = Region { x: 0, y: 0, w, h };
+        let y = 20.5 / h as f32;
+        let spot = Spot {
+            mode: SpotMode::Clone,
+            target: [5.5 / w as f32, y],
+            source: [45.5 / w as f32, y],
+            path: vec![[15.5 / w as f32, y], [25.5 / w as f32, y]],
+            radius: 3.0 / w as f32,
+            feather: 0.0,
+            opacity: 1.0,
+        };
+        apply_retouch(&mut img, &src, &geo, region, &[spot]);
+        let at = |x: usize, y: usize| img.data[y * w + x][0];
+        for x in [6, 12, 20, 25] {
+            assert!(at(x, 20) > 0.7, "x={x}: {}", at(x, 20));
+        }
+        assert!(at(15, 30) < 0.2 && at(33, 20) < 0.2, "außerhalb unverändert");
     }
 
     #[test]
@@ -590,3 +713,4 @@ mod tests {
         assert!(diff < 1e-5, "{diff}");
     }
 }
+

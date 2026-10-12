@@ -166,7 +166,9 @@ impl App {
         add(icon::PERSPECTIVE, "Automatisch geraderichten", g, "Umschalt+A", has, "upright", Run(|a, _| a.auto_upright(sk_core::upright::UprightMode::Vertical)));
         add(icon::EYEDROPPER, "Weißabgleich-Pipette", g, "W", has, "white balance wb", Run(|a, _| {
             a.tab = Tab::Color;
-            a.picking_wb = true;
+            if !a.picking_wb {
+                a.toggle_wb_picker();
+            }
         }));
         add(icon::PENCIL_SIMPLE, "Umbenennen …", g, "Strg+Umschalt+R", n_sel > 0, "rename", Run(|a, _| a.open_rename()));
         for r in 0..=5u8 {

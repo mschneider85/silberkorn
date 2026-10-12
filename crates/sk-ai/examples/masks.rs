@@ -22,7 +22,7 @@ fn main() -> anyhow::Result<()> {
     save(&sky_mask(&guide), &out.join("sky.png"))?;
     println!("sky {:?}", t.elapsed());
     let t = std::time::Instant::now();
-    save(&magic_mask(&guide, [0.2, 0.85], 0.3), &out.join("magic.png"))?;
+    save(&magic_mask(&guide, &[[0.2, 0.85]], 0.3), &out.join("magic.png"))?;
     println!("magic {:?}", t.elapsed());
     if let Some(model) = args.get(3) {
         let t = std::time::Instant::now();

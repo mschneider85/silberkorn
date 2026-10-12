@@ -122,7 +122,8 @@ impl App {
     }
 
     fn color_tab(&mut self, ui: &mut Ui) {
-        let picking = &mut self.picking_wb;
+        let picking = self.picking_wb;
+        let mut toggle_picker = false;
         let Some(cur) = self.current.as_mut() else {
             crate::widgets::no_image(ui);
             return;
@@ -162,8 +163,8 @@ impl App {
                 changed = true;
             }
             ui.horizontal(|ui| {
-                if ui.selectable_label(*picking, "\u{E568}  Weißabgleich-Pipette").on_hover_text("Auf eine neutrale (graue) Stelle im Bild klicken").clicked() {
-                    *picking = !*picking;
+                if ui.selectable_label(picking, "\u{E568}  Weißabgleich-Pipette").on_hover_text("Auf eine neutrale (graue) Stelle im Bild klicken").clicked() {
+                    toggle_picker = true;
                 }
             });
         });
@@ -171,6 +172,12 @@ impl App {
             adj.white_balance = Default::default();
             changed = true;
         }
+        if toggle_picker {
+            // Ends the other viewer tools; needs `self`, the adjustments are borrowed again below.
+            self.toggle_wb_picker();
+        }
+        let Some(cur) = self.current.as_mut() else { return };
+        let adj = &mut cur.adjustments;
 
         let mut reset_color = false;
         section(ui, "Farbe", Some(&mut || reset_color = true), |ui| {

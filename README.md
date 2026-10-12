@@ -74,15 +74,19 @@ Radius gerastert; Masken haben 3072 Pixel an der langen Kante. Beim Malen wird n
 Strich neu gerastert. Striche aus älteren Sidecars sehen aus wie zuvor. Sie werden in Quellkoordinaten gespeichert und bleiben deshalb nach Zuschnitt,
 Drehen oder Objektivkorrektur am Bildinhalt.
 
-„Reparieren“ übernimmt Struktur von einer automatisch gewählten Quelle und gleicht Farbe/Helligkeit an
-die Umgebung an; „Klonen“ kopiert 1:1. Quelle und Ziel lassen sich verschieben.
+„Reparieren“ und „Klonen“ werden wie ein Pinsel über die Stelle gemalt (ein Klick ergibt einen runden
+Punkt). „Reparieren“ übernimmt Struktur von einer automatisch gewählten Quelle und gleicht Farbe/Helligkeit an
+die Umgebung an; „Klonen“ kopiert 1:1. Mit aktivem Werkzeug zeigt der Viewer alle Bereiche mit Pins: der
+weiße verschiebt den Bereich, der gelbe (beim ausgewählten) die Quelle. Im Abschnitt „Reparieren & Klonen“
+stehen alle Bereiche in einer Liste; dort lassen sich Art, Deckkraft und Weichheit ändern, eine neue Quelle
+suchen oder Bereiche löschen.
 
 ### Auswahl aus Bildinhalt
 
 - **Motiv auswählen:** neuronales Netz U²-Net-p (Apache-2.0, 4,6 MB). Das Modell wird im Tab „Ebenen“
   auf Wunsch nach `~/.local/share/silberkorn/models/` geladen (oder `SILBERKORN_MODEL=<pfad>`).
 - **Himmel auswählen:** helle, strukturarme, blaue oder neutrale Bereiche, die mit dem oberen Rand verbunden sind.
-- **Magic Brush (J):** Klick wählt zusammenhängende, farbähnliche Bereiche (Toleranz einstellbar).
+- **Magic Brush (J):** über den Bereich malen; gewählt wird, was zusammenhängt und einer der überstrichenen Farben ähnelt (Größe und Toleranz einstellbar).
 - **Luma Range** und **Farbbereich** (mit Pipette) verfeinern jede Maske.
 - **Style Brushes:** Pinsel-Presets (Aufhellen, Abdunkeln, Wärmer, Haut glätten, Dunst entfernen, …).
 

@@ -1395,6 +1395,7 @@ mod tests {
             radius: 0.1,
             feather: 0.3,
             opacity: 1.0,
+            path: Vec::new(),
         });
         let base = Processor::new(&meta(), &plain()).render(&src, None, None);
         let r = Processor::new(&meta(), &adj).render(&src, None, None);

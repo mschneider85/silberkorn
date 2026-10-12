@@ -295,7 +295,7 @@ impl App {
     pub fn color_advanced(&mut self, ui: &mut Ui) {
         let band = &mut self.color_band;
         let picking_skin = &mut self.picking_skin;
-        let picking_wb = &mut self.picking_wb;
+        let mut toggle_skin = false;
         let Some(cur) = self.current.as_mut() else { return };
         let adj = &mut cur.adjustments;
         let mut changed = false;
@@ -330,8 +330,7 @@ impl App {
                 ui.painter().rect_stroke(rect, 3.0, egui::Stroke::new(1.0, Color32::from_gray(90)), egui::StrokeKind::Inside);
                 let pipette = format!("{}  Hautton aufnehmen", crate::theme::icon::EYEDROPPER);
                 if ui.selectable_label(*picking_skin, pipette).on_hover_text("Auf eine typische Hautstelle im Bild klicken").clicked() {
-                    *picking_skin = !*picking_skin;
-                    *picking_wb = false;
+                    toggle_skin = true;
                 }
             });
             changed |= slider_row(ui, "Bereich", &mut st.range, 10.0..=60.0, SkinTone::default().range, 0);
@@ -384,6 +383,9 @@ impl App {
         }
         if changed {
             self.request_render();
+        }
+        if toggle_skin {
+            self.toggle_skin_picker();
         }
     }
 

@@ -111,7 +111,8 @@ impl App {
         // A quad through the mapped corners (follows rotation and straightening).
         let [x, y, w, h] = *rect;
         let corners = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
-        let screen: Vec<Option<egui::Pos2>> = corners.iter().map(|c| self.uv_to_screen(*c, img_rect, scale)).collect();
+        let Some(map) = self.uv_mapper(img_rect, scale) else { return };
+        let screen: Vec<Option<egui::Pos2>> = corners.iter().map(|c| Some(map.map(*c))).collect();
         if screen.iter().any(|p| p.is_none()) {
             return;
         }

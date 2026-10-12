@@ -87,16 +87,47 @@ impl App {
         g.aspect.value(frame.x / frame.y, g.aspect_portrait)
     }
 
+    /// Ends every tool that takes the mouse in the viewer (layer tools, crop, straighten,
+    /// pipettes). Only one may be active: the viewer hands the mouse to the first active one
+    /// (see `viewer_content`), so a tool left on would swallow the input of the new one.
+    pub fn end_viewer_tools(&mut self) {
+        if self.local_tool.take().is_some() {
+            self.request_render();
+        }
+        self.straighten_tool = None;
+        self.picking_wb = false;
+        self.picking_skin = false;
+        self.local_drag = Default::default();
+        self.finish_crop_tool();
+    }
+
     /// The straighten tool (draw a line along the horizon) on or off.
     pub fn toggle_straighten(&mut self) {
-        self.straighten_tool = if self.straighten_tool.is_some() { None } else { Some(Default::default()) };
-        self.finish_crop_tool();
+        let on = self.straighten_tool.is_none();
+        self.end_viewer_tools();
+        if on {
+            self.straighten_tool = Some(Default::default());
+        }
+    }
+
+    /// The white balance pipette on or off.
+    pub fn toggle_wb_picker(&mut self) {
+        let on = !self.picking_wb;
+        self.end_viewer_tools();
+        self.picking_wb = on;
+    }
+
+    /// The skin tone pipette on or off.
+    pub fn toggle_skin_picker(&mut self) {
+        let on = !self.picking_skin;
+        self.end_viewer_tools();
+        self.picking_skin = on;
     }
 
     pub fn start_crop_tool(&mut self) {
         if self.crop_tool.is_none() {
+            self.end_viewer_tools();
             self.crop_tool = Some(CropTool::default());
-            self.straighten_tool = None;
             self.zoom = None;
             self.request_render();
         }

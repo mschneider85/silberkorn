@@ -370,12 +370,18 @@ pub enum SpotMode {
     Clone,
 }
 
-/// Retouch spot in normalized source coordinates.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+/// Retouch area in normalized source coordinates: a round spot, or a painted stroke when
+/// `path` has points.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Spot {
     pub mode: SpotMode,
+    /// Start of the area (the spot's center, or the first point of a stroke).
     pub target: [f32; 2],
+    /// Where `target` takes its pixels from; the whole area is shifted by the same offset.
     pub source: [f32; 2],
+    /// Further points of a painted stroke after `target`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<[f32; 2]>,
     /// Radius relative to the long image edge.
     pub radius: f32,
     /// 0..1

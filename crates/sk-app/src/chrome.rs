@@ -319,7 +319,9 @@ impl App {
         }
         if item(ui, icon::EYEDROPPER, "Weißabgleich aufnehmen", "W", has) {
             self.tab = Tab::Color;
-            self.picking_wb = true;
+            if !self.picking_wb {
+                self.toggle_wb_picker();
+            }
         }
         ui.separator();
         ui.add_enabled_ui(n_sel > 0, |ui| {
@@ -554,7 +556,7 @@ impl App {
                 self.toggle_straighten();
             }
             if tool(ui, icon::EYEDROPPER, "Weißabgleich-Pipette: auf eine neutrale Stelle klicken (W)", self.picking_wb, has).clicked() {
-                self.picking_wb = !self.picking_wb;
+                self.toggle_wb_picker();
                 if self.picking_wb {
                     self.tab = Tab::Color;
                 }

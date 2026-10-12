@@ -1921,7 +1921,7 @@ impl App {
             self.toggle_before();
         }
         if pressed(Key::W, Modifiers::NONE) {
-            self.picking_wb = !self.picking_wb;
+            self.toggle_wb_picker();
         }
         if pressed(Key::Z, Modifiers::NONE) {
             self.toggle_zoom_100();
@@ -1954,11 +1954,7 @@ impl App {
             if !tool_active && self.fullscreen {
                 self.toggle_fullscreen(ctx);
             }
-            self.picking_wb = false;
-            self.picking_skin = false;
-            self.local_tool = None;
-            self.straighten_tool = None;
-            self.finish_crop_tool();
+            self.end_viewer_tools();
         }
     }
 
