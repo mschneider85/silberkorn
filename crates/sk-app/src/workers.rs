@@ -3,7 +3,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -237,7 +237,7 @@ pub struct Workers {
     tile_tx: Sender<Option<TileRequest>>,
     render_tx: Sender<RenderJob>,
     /// Image and the root of the open session (whose images are cached inside it).
-    thumb_tx: Sender<(PathBuf, Option<PathBuf>)>,
+    thumb_queue: crate::thumb_queue::ThumbQueue,
     export_tx: Sender<ExportJob>,
     index_tx: Sender<IndexJob>,
     ai_tx: Sender<AiJob>,
@@ -319,7 +319,7 @@ impl Workers {
         let (index_tx, index_rx) = channel::<IndexJob>();
         {
             let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Index", move || {
                 // The indexer owns its own connection (SQLite in WAL mode allows concurrent readers);
                 // it is reopened when the app switches between catalog and session.
                 let mut open: Option<(PathBuf, Catalog)> = None;
@@ -378,7 +378,7 @@ impl Workers {
         let (load_tx, load_rx) = channel::<(u64, PathBuf)>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Vorschau laden", move || {
                 while let Some((generation, path)) = recv_latest(&load_rx) {
                     activity.touch();
                     let result = raw::load_preview(&path, PREVIEW_EDGE)
@@ -393,7 +393,7 @@ impl Workers {
         let (full_tx, full_rx) = channel::<(u64, PathBuf)>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Volle Auflösung laden", move || {
                 while let Some((generation, path)) = recv_latest(&full_rx) {
                     activity.touch();
                     match raw::load_full(&path) {
@@ -410,7 +410,7 @@ impl Workers {
         let (tile_tx, tile_rx) = channel::<Option<TileRequest>>();
         {
             let (ev_tx, ctx, activity, speed) = (ev_tx.clone(), ctx.clone(), activity.clone(), draft_speed.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Kacheln", move || {
                 let cache = StageCache::default();
                 // Reduced copy of the full resolution for view drafts: (source, level, copy).
                 let mut reduced: Option<(Arc<LinearImage>, usize, Arc<LinearImage>)> = None;
@@ -494,7 +494,7 @@ impl Workers {
         let (ai_tx, ai_rx) = channel::<AiJob>();
         {
             let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("KI-Maske", move || {
                 let mut model: Option<(sk_ai::SubjectModel, u64)> = None;
                 while let Ok(job) = ai_rx.recv() {
                     // Guide: the image in source orientation, only white balance and exposure applied.
@@ -530,7 +530,7 @@ impl Workers {
         let (before_tx, before_rx) = channel::<RenderJob>();
         {
             let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Vorher", move || {
                 while let Some(job) = recv_latest(&before_rx) {
                     let mut adj = Adjustments::default();
                     adj.keep_framing_from(&job.adjustments);
@@ -545,7 +545,7 @@ impl Workers {
         let (render_tx, render_rx) = channel::<RenderJob>();
         {
             let (ev_tx, ctx, activity, speed) = (ev_tx.clone(), ctx.clone(), activity.clone(), draft_speed.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Rendern", move || {
                 let cache = StageCache::default();
                 // Drafts: reduced copy of the preview (made once per image and level) with its own stage cache.
                 let draft_cache = StageCache::default();
@@ -639,7 +639,7 @@ impl Workers {
         let (quick_tx, quick_rx) = channel::<(u64, PathBuf, Option<PathBuf>)>();
         {
             let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Schnellvorschau", move || {
                 while let Some((generation, path, session)) = recv_latest(&quick_rx) {
                     if let Some(img) = quick_preview(&path, session.as_deref()) {
                         let _ = ev_tx.send(Event::Quick { generation, image: to_color_image(&img) });
@@ -652,7 +652,7 @@ impl Workers {
         let (prefetch_tx, prefetch_rx) = channel::<(Vec<PathBuf>, Option<PathBuf>)>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Vorladen", move || {
                 while let Some((mut queue, mut session)) = recv_latest(&prefetch_rx) {
                     queue.reverse();
                     while let Some(path) = queue.pop() {
@@ -674,7 +674,7 @@ impl Workers {
         let (proof_tx, proof_rx) = channel::<ProofJob>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Softproof", move || {
                 while let Some(job) = recv_latest(&proof_rx) {
                     activity.touch();
                     let processor = Processor::new(&job.meta, &job.adjustments);
@@ -704,7 +704,7 @@ impl Workers {
         let (proxy_tx, proxy_rx) = channel::<(Vec<PathBuf>, Option<PathBuf>)>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Proxys", move || {
                 while let Some(mut job) = recv_latest(&proxy_rx) {
                     'list: loop {
                         let (paths, session) = &job;
@@ -746,13 +746,11 @@ impl Workers {
             });
         }
 
-        let (thumb_tx, thumb_rx) = channel::<(PathBuf, Option<PathBuf>)>();
-        let thumb_rx = Arc::new(Mutex::new(thumb_rx));
+        let (thumb_queue, thumb_source) = crate::thumb_queue::queue();
         for _ in 0..thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 4)) {
-            let (ev_tx, ctx, rx) = (ev_tx.clone(), ctx.clone(), thumb_rx.clone());
-            thread::spawn(move || {
-                loop {
-                    let Ok((path, session)) = rx.lock().unwrap().recv() else { break };
+            let (ev_tx, ctx, source) = (ev_tx.clone(), ctx.clone(), thumb_source.clone());
+            crate::guard::spawn("Thumbnails", move || {
+                while let Some((path, session)) = source.next() {
                     if let Some(image) = make_thumbnail(&path, session.as_deref()) {
                         let _ = ev_tx.send(Event::Thumbnail { path, image });
                         ctx.request_repaint();
@@ -764,7 +762,7 @@ impl Workers {
         let (compare_tx, compare_rx) = channel::<(Vec<PathBuf>, Option<PathBuf>)>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Vergleich", move || {
                 while let Some((mut queue, mut session)) = recv_latest(&compare_rx) {
                     queue.reverse();
                     while let Some(path) = queue.pop() {
@@ -792,7 +790,7 @@ impl Workers {
         let (detail_tx, detail_rx) = channel::<Vec<DetailJob>>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Vergleichsdetails", move || {
                 // Recently decoded full resolutions (the newest last), as panning needs them again.
                 let mut fulls: Vec<(PathBuf, Arc<RawMeta>, Arc<LinearImage>)> = Vec::new();
                 while let Some(mut queue) = recv_latest(&detail_rx) {
@@ -816,7 +814,7 @@ impl Workers {
         let (focus_tx, focus_rx) = channel::<(PathBuf, Arc<ColorImage>, Option<u64>)>();
         {
             let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Fokus", move || {
                 while let Ok(first) = focus_rx.recv() {
                     // Only the newest rendering of each image is worth analysing.
                     let mut jobs = vec![first];
@@ -837,7 +835,7 @@ impl Workers {
         let (match_tx, match_rx) = channel::<MatchJob>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Angleichen", move || {
                 while let Ok(job) = match_rx.recv() {
                     activity.touch();
                     let load = |path: &std::path::Path| {
@@ -864,7 +862,7 @@ impl Workers {
         let (inpaint_tx, inpaint_rx) = channel::<InpaintJob>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
-            thread::spawn(move || {
+            crate::guard::spawn("Entfernen", move || {
                 let mut model: Option<(sk_ai::inpaint::Inpainter, u64)> = None;
                 while let Ok(job) = inpaint_rx.recv() {
                     activity.touch();
@@ -882,12 +880,15 @@ impl Workers {
         let (export_tx, export_rx) = channel::<ExportJob>();
         {
             let (ev_tx, ctx) = (ev_tx, ctx);
-            thread::spawn(move || {
+            crate::guard::spawn("Export", move || {
                 while let Ok(job) = export_rx.recv() {
                     let total = job.items.len() * job.recipes.len();
                     let mut done = 0;
                     for (i, (path, adj)) in job.items.into_iter().enumerate() {
-                        for r in export::export_many(&path, &adj, &job.recipes, i as u32 + 1, &job.session) {
+                        // A bug on one image fails its outputs, not the whole export.
+                        let results = crate::guard::catch(|| export::export_many(&path, &adj, &job.recipes, i as u32 + 1, &job.session))
+                            .unwrap_or_else(|e| job.recipes.iter().map(|_| Err(anyhow::anyhow!("{e}"))).collect());
+                        for r in results {
                             done += 1;
                             let last = r.map_err(|e| format!("{}: {e:#}", path.display()));
                             let _ = ev_tx.send(Event::ExportProgress { done, total, last });
@@ -906,7 +907,7 @@ impl Workers {
             full_tx,
             tile_tx,
             render_tx,
-            thumb_tx,
+            thumb_queue,
             export_tx,
             index_tx,
             ai_tx,
@@ -1002,7 +1003,8 @@ impl Workers {
     }
 
     pub fn thumbnail(&self, path: PathBuf, session: Option<PathBuf>) {
-        let _ = self.thumb_tx.send((path, session));
+        // Newest first: cells just scrolled into view before those scrolled past.
+        self.thumb_queue.request(self.ctx.cumulative_pass_nr(), path, session);
     }
 
     pub fn export(&self, job: ExportJob) {
@@ -1020,7 +1022,7 @@ impl Workers {
     pub fn download_model(&self) {
         let (tx, ctx) = (self.ev_tx.clone(), self.ctx.clone());
         thread::spawn(move || {
-            let r = sk_ai::download_model().map_err(|e| format!("{e:#}"));
+            let r = crate::guard::catch(sk_ai::download_model).and_then(|r| r.map_err(|e| format!("{e:#}")));
             let _ = tx.send(Event::ModelDownloaded(r));
             ctx.request_repaint();
         });
@@ -1030,7 +1032,7 @@ impl Workers {
     pub fn download_lens_db(&self) {
         let (tx, ctx) = (self.ev_tx.clone(), self.ctx.clone());
         thread::spawn(move || {
-            let r = sk_core::lensfun::download_database().map_err(|e| format!("{e:#}"));
+            let r = crate::guard::catch(sk_core::lensfun::download_database).and_then(|r| r.map_err(|e| format!("{e:#}")));
             let _ = tx.send(Event::LensDbDownloaded(r));
             ctx.request_repaint();
         });

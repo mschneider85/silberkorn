@@ -171,6 +171,7 @@ impl App {
             }
         }));
         add(icon::PENCIL_SIMPLE, "Umbenennen …", g, "Strg+Umschalt+R", n_sel > 0, "rename", Run(|a, _| a.open_rename()));
+        add(icon::ARROW_CIRCLE_UP, "Auf aktuelle Prozessversion heben", g, "", n_sel > 0, "prozessversion engine update", Run(|a, _| a.update_process_version()));
         for r in 0..=5u8 {
             let label = if r == 0 { "Bewertung entfernen".to_string() } else { format!("Bewertung {}", "★".repeat(r as usize)) };
             add(icon::STAR, &label, g, &r.to_string(), n_sel > 0, "sterne rating", Action::Rating(r));

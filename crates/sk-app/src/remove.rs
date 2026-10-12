@@ -188,8 +188,8 @@ impl App {
                         ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
                     }
                     None => {
-                        let hover = format!("Lädt das Modell {} ({} MB, Lizenz {}).", models::INPAINT.label, models::INPAINT.size_mb, models::INPAINT.license);
-                        if ui.button(format!("{}  Modell laden ({} MB)", icon::DOWNLOAD_SIMPLE, models::INPAINT.size_mb)).on_hover_text(hover).clicked() {
+                        let hover = format!("Lädt das Modell {} ({} MB, Lizenz {}).", models::INPAINT.label, models::INPAINT.size_mb(), models::INPAINT.license);
+                        if ui.button(format!("{}  Modell laden ({} MB)", icon::DOWNLOAD_SIMPLE, models::INPAINT.size_mb())).on_hover_text(hover).clicked() {
                             download = true;
                         }
                     }

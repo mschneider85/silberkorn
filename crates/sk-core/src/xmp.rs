@@ -247,9 +247,7 @@ pub fn write(image: &Path, rating: u8, label: ColorLabel, keywords: &[String]) -
     let old = std::fs::read_to_string(&path).ok();
     let text = updated(old.as_deref(), rating, label, keywords)?;
     if old.as_deref() != Some(text.as_str()) {
-        let tmp = path.with_extension("xmp.tmp");
-        std::fs::write(&tmp, &text).with_context(|| format!("{} kann nicht geschrieben werden", path.display()))?;
-        std::fs::rename(&tmp, &path)?;
+        crate::safe_file::write(&path, &text)?;
     }
     Ok(mtime(image))
 }

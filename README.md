@@ -64,6 +64,14 @@ Abschalten im Dialog „Grafikkarte …“ oder mit `SILBERKORN_GPU=0`; `SILBERK
 Software-Adapter (unter WSL zusätzlich `GALLIUM_DRIVER=llvmpipe`), z. B. für die Tests ohne Grafikkarte.
 `cargo run --release -p sk-core --example gpu_info` zeigt die gefundenen Adapter.
 
+X-Trans-Sensoren (Fujifilm) werden mit dem Markesteijn-Verfahren entwickelt (drei Durchgänge für
+volle Auflösung und Export, einer für Vorschauen); Vorschauen fassen wie bei Bayer-Sensoren Blöcke
+des Mosaiks zusammen (3×3 statt 2×2) und brauchen daher kein Demosaicing.
+
+Ein Fehler in einem Hintergrund-Thread (etwa bei einer beschädigten RAW-Datei) beendet den Thread
+nicht: der betroffene Auftrag schlägt fehl, die Statusleiste meldet ihn, Details stehen in
+`~/.local/share/silberkorn/panic.log`.
+
 `SK_TRACE=1` gibt die Zeiten der einzelnen Stufen aus; `cargo run --release -p sk-core --example bench -- <raw>`
 misst die Pipeline auf Prozessor und Grafikkarte.
 
@@ -103,6 +111,8 @@ suchen oder Bereiche löschen.
 
 Die neuronalen Netze werden nicht mitgeliefert, sondern beim ersten Gebrauch auf Wunsch nach
 `~/.local/share/silberkorn/models/` geladen (`SILBERKORN_MODELS=<ordner>` überschreibt den Ort).
+Jede Datei wird gegen Größe und SHA-256 geprüft (Hugging-Face-Links auf einen festen Stand
+festgelegt); ein abgebrochener Download wird beim nächsten Versuch fortgesetzt.
 
 **KI-Beschleunigung** (Bearbeiten → „KI-Beschleunigung …“, Windows): Die Netze rechnen dann über
 ONNX Runtime mit DirectML auf der Grafikkarte (jede DirectX-12-Karte). ONNX Runtime wird nicht
@@ -293,6 +303,22 @@ Lensfun-XML-Dateien werden aus `~/.local/share/silberkorn/lensfun`, `~/.local/sh
 (Quelle: lensfun auf GitHub, Lizenz CC BY-SA 3.0; sie wird nicht mit Silberkorn ausgeliefert).
 
 Einstellungen werden nicht-destruktiv als `<Bild>.sk.json` neben dem RAW gespeichert.
+Sidecars, XMP-Dateien, Stile und Einstellungen werden atomar geschrieben (erst vollständig in eine
+eigene temporäre Datei, dann ersetzt), sodass ein Absturz oder eine volle Platte nie eine halbe
+Datei hinterlässt. Ein Sidecar oder Katalog, den eine neuere Silberkorn-Version geschrieben hat,
+wird gelesen, aber nicht überschrieben.
+
+### Prozessversionen
+
+Jede Bearbeitung merkt sich die Version des Renderers
+(`process` in den Anpassungen). Bearbeitungen aus älteren Versionen sehen deshalb unverändert aus,
+neue und zurückgesetzte Bilder nutzen die aktuelle. **Bild → „Auf aktuelle Prozessversion heben“**
+stellt die Auswahl um; Stile und eingefügte Anpassungen übernehmen die Version des Zielbilds.
+
+- **1:** ursprünglicher Renderer.
+- **2:** Farben außerhalb des Ausgabefarbraums werden zu ihrer eigenen Helligkeit hin entsättigt,
+  statt jeden Kanal abzuschneiden. Der Farbton bleibt so erhalten (gesättigtes Blau kippt nicht
+  mehr ins Violette, Neon und LEDs nicht ins Gelbe).
 
 ### Varianten
 
@@ -370,7 +396,10 @@ beziehen sich aber nur auf die Bilder der Session.
 - **Keywords** im Tab „Metadaten“ (mit Vorschlägen aus dem Katalog); Bewertung, Label und
   Keywords wirken auf die ganze Auswahl.
 - **Stile:** Anpassungen als Preset speichern (`~/.config/silberkorn/styles`) und auf die Auswahl anwenden.
-- **Thumbnail-Cache** unter `~/.cache/silberkorn/thumbs`.
+- **Thumbnail-Cache** unter `~/.cache/silberkorn/thumbs` (Vorschauen in `previews`). Zusammen
+  höchstens 4 GB (`SILBERKORN_CACHE_MB` ändert das); beim Start werden die am längsten nicht
+  genutzten entfernt. Session-Caches sind davon ausgenommen. Sichtbare Vorschaubilder werden vor
+  denen berechnet, an denen man schon vorbeigescrollt ist.
 
 Sidecars bleiben die maßgebliche Quelle; der Katalog ist ein Index und kann jederzeit neu aufgebaut werden.
 

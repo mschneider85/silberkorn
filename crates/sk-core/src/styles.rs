@@ -36,7 +36,7 @@ pub fn list_in(dir: &Path) -> Vec<Style> {
 
 pub fn save_in(dir: &Path, style: &Style) -> Result<()> {
     std::fs::create_dir_all(dir)?;
-    std::fs::write(dir.join(file_name(&style.name)), serde_json::to_string_pretty(style)?)?;
+    crate::safe_file::write(&dir.join(file_name(&style.name)), serde_json::to_string_pretty(style)?)?;
     Ok(())
 }
 

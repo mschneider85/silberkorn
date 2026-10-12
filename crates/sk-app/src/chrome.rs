@@ -315,6 +315,14 @@ impl App {
         if item(ui, icon::PENCIL_SIMPLE, "Umbenennen …", "Strg+Umschalt+R", n_sel > 0) {
             self.open_rename();
         }
+        let process = self.current.as_ref().map(|c| c.adjustments.process);
+        let label = match process {
+            Some(p) if p < sk_core::params::PROCESS_LATEST => format!("Auf aktuelle Prozessversion heben (dieses Bild: {p})"),
+            _ => "Auf aktuelle Prozessversion heben".to_string(),
+        };
+        if item(ui, icon::ARROW_CIRCLE_UP, &label, "", n_sel > 0) {
+            self.update_process_version();
+        }
         if item(ui, icon::EYEDROPPER, "Weißabgleich aufnehmen", "W", has) {
             self.tab = Tab::Color;
             if !self.picking_wb {

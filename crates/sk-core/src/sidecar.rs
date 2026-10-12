@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::params::Adjustments;
 
+/// Format version of the sidecar files written by this build. A file with a higher version was
+/// written by a newer Silberkorn: it is read as far as understood, but never overwritten, since
+/// that would silently drop what this build doesn't know.
+pub const VERSION: u32 = 1;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ColorLabel {
     #[default]
@@ -117,7 +122,7 @@ pub struct Variant {
 impl Variant {
     fn to_sidecar(&self) -> Sidecar {
         Sidecar {
-            version: 1,
+            version: VERSION,
             rating: self.rating,
             color_label: self.color_label,
             keywords: self.keywords.clone(),
@@ -227,7 +232,14 @@ fn load_file(image: &Path) -> Sidecar {
 fn read_file(image: &Path) -> Result<Option<Sidecar>> {
     for path in json_files_for(image) {
         match std::fs::read_to_string(&path) {
-            Ok(text) => return Ok(Some(serde_json::from_str(&text).with_context(|| format!("{} ist beschädigt", path.display()))?)),
+            Ok(text) => {
+                let mut sc: Sidecar = serde_json::from_str(&text).with_context(|| format!("{} ist beschädigt", path.display()))?;
+                sc.adjustments = sc.adjustments.normalized();
+                for v in &mut sc.variants {
+                    v.adjustments = std::mem::take(&mut v.adjustments).normalized();
+                }
+                return Ok(Some(sc));
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e).with_context(|| format!("{} kann nicht gelesen werden", path.display())),
         }
@@ -236,9 +248,14 @@ fn read_file(image: &Path) -> Result<Option<Sidecar>> {
 }
 
 /// The sidecar file before changing it. One that can't be parsed is kept as `.bak` (it may hold
-/// the settings of all variants) instead of being overwritten without notice.
+/// the settings of all variants) instead of being overwritten without notice; one from a newer
+/// Silberkorn is an error (see [`VERSION`]).
 fn load_for_update(image: &Path) -> Result<Sidecar> {
     match read_file(image) {
+        Ok(Some(sc)) if sc.version > VERSION => anyhow::bail!(
+            "{} wurde von einer neueren Silberkorn-Version gespeichert und wird nicht überschrieben. Bitte Silberkorn aktualisieren.",
+            sidecar_path(image).display()
+        ),
         Ok(sc) => Ok(sc.unwrap_or_default()),
         Err(e) if e.chain().any(|c| c.is::<serde_json::Error>()) => {
             let _ = e;
@@ -343,10 +360,7 @@ fn write_file(image: &Path, sidecar: &Sidecar) -> Result<()> {
         }
         return Ok(());
     }
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_string_pretty(&Sidecar { version: 1, ..sidecar.clone() })?)?;
-    std::fs::rename(tmp, path)?;
-    Ok(())
+    crate::safe_file::write(&path, serde_json::to_string_pretty(&Sidecar { version: VERSION, ..sidecar.clone() })?)
 }
 
 #[cfg(test)]
@@ -448,6 +462,38 @@ mod tests {
         assert_eq!(load(&img).rating, 3);
         let backup = dir.join("d.ARW.sk.json.bak");
         assert!(std::fs::read_to_string(backup).unwrap().contains("kaputt"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn newer_sidecar_is_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("sk-newer-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("n.ARW");
+        let text = format!(r#"{{"version":{},"rating":4,"zukunft":{{"a":1}}}}"#, VERSION + 1);
+        std::fs::write(sidecar_path(&img), &text).unwrap();
+        // Read as far as understood ...
+        assert_eq!(load(&img).rating, 4);
+        // ... but every change is refused and the file stays as it is.
+        let err = save(&img, &Sidecar { rating: 1, ..Default::default() }).unwrap_err();
+        assert!(format!("{err:#}").contains("neueren Silberkorn-Version"));
+        assert!(add_variant(&img, &Sidecar::default()).is_err());
+        assert!(set_stack(&img, None).is_err());
+        assert_eq!(std::fs::read_to_string(sidecar_path(&img)).unwrap(), text);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn failed_write_keeps_the_old_sidecar() {
+        let dir = std::env::temp_dir().join(format!("sk-fullsc-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("f.ARW");
+        save(&img, &Sidecar { rating: 2, ..Default::default() }).unwrap();
+        crate::safe_file::fail_writes_after(Some(10));
+        let result = save(&img, &Sidecar { rating: 5, ..Default::default() });
+        crate::safe_file::fail_writes_after(None);
+        assert!(result.is_err());
+        assert_eq!(load(&img).rating, 2);
         std::fs::remove_dir_all(dir).ok();
     }
 

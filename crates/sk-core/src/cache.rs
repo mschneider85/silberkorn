@@ -110,7 +110,64 @@ fn load_kind(path: &Path, adj: &Adjustments, session: Option<&Path>, kind: Kind)
     if std::fs::read_to_string(key).ok()? != thumb_key(path, adj) {
         return None;
     }
-    ::image::open(jpg).ok()
+    let img = ::image::open(&jpg).ok()?;
+    // Used now: the size limit of the per-user cache removes it last (see `trim_user_cache`).
+    if session.is_none() {
+        let _ = std::fs::File::options().write(true).open(&jpg).and_then(|f| f.set_modified(std::time::SystemTime::now()));
+    }
+    Some(img)
+}
+
+/// Default size limit of the per-user cache (thumbnails and previews of images outside sessions);
+/// `SILBERKORN_CACHE_MB` overrides it.
+pub const USER_CACHE_LIMIT: u64 = 4 << 30;
+
+pub fn user_cache_limit() -> u64 {
+    std::env::var("SILBERKORN_CACHE_MB").ok().and_then(|v| v.parse::<u64>().ok()).map_or(USER_CACHE_LIMIT, |mb| mb << 20)
+}
+
+/// Keeps the per-user cache within `limit` bytes: if it is larger, the images used longest ago
+/// are removed until it is at 80 % of the limit. Session caches are left alone (they belong to
+/// their session). Returns the bytes removed.
+pub fn trim_user_cache(limit: u64) -> u64 {
+    trim(&Kind::ALL.map(Kind::user_dir), limit)
+}
+
+fn trim(dirs: &[PathBuf], limit: u64) -> u64 {
+    // (last use, bytes, files) per cached image; only files this cache writes are touched.
+    let mut entries: Vec<(std::time::SystemTime, u64, [PathBuf; 2])> = Vec::new();
+    let mut total = 0u64;
+    for dir in dirs {
+        let Ok(list) = std::fs::read_dir(dir) else { continue };
+        for e in list.flatten() {
+            let jpg = e.path();
+            let name = jpg.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+            if jpg.extension().is_none_or(|x| x != "jpg") || name.len() != 16 || !name.bytes().all(|b| b.is_ascii_hexdigit()) {
+                continue;
+            }
+            let Ok(meta) = e.metadata() else { continue };
+            let key = jpg.with_extension("key");
+            let bytes = meta.len() + std::fs::metadata(&key).map_or(0, |m| m.len());
+            total += bytes;
+            entries.push((meta.modified().unwrap_or(UNIX_EPOCH), bytes, [jpg, key]));
+        }
+    }
+    if total <= limit {
+        return 0;
+    }
+    entries.sort_by_key(|e| e.0);
+    let goal = limit / 5 * 4;
+    let mut removed = 0;
+    for (_, bytes, files) in entries {
+        if total - removed <= goal {
+            break;
+        }
+        if std::fs::remove_file(&files[0]).is_ok() {
+            let _ = std::fs::remove_file(&files[1]);
+            removed += bytes;
+        }
+    }
+    removed
 }
 
 fn store_kind(path: &Path, adj: &Adjustments, session: Option<&Path>, img: &::image::DynamicImage, kind: Kind) {
@@ -119,11 +176,10 @@ fn store_kind(path: &Path, adj: &Adjustments, session: Option<&Path>, img: &::im
     if std::fs::create_dir_all(dir).is_err() {
         return;
     }
-    let tmp = jpg.with_extension("tmp");
-    let Ok(file) = std::fs::File::create(&tmp) else { return };
-    let mut enc = ::image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(file), kind.quality());
-    if enc.encode_image(&img.to_rgb8()).is_ok() && std::fs::rename(&tmp, &jpg).is_ok() {
-        let _ = std::fs::write(key, thumb_key(path, adj));
+    let mut bytes = Vec::new();
+    let mut enc = ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, kind.quality());
+    if enc.encode_image(&img.to_rgb8()).is_ok() && crate::safe_file::write_nosync(&jpg, &bytes).is_ok() {
+        let _ = crate::safe_file::write_nosync(&key, thumb_key(path, adj));
     }
 }
 
@@ -149,6 +205,31 @@ pub fn remove(path: &Path, session: Option<&Path>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trimming_removes_the_least_recently_used() {
+        let dir = std::env::temp_dir().join(format!("sk-trim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Ten cached images of 1000 bytes (with key), used one after the other.
+        for i in 0..10u64 {
+            let jpg = dir.join(format!("{i:016x}.jpg"));
+            std::fs::write(&jpg, vec![0u8; 990]).unwrap();
+            std::fs::write(jpg.with_extension("key"), vec![0u8; 10]).unwrap();
+            let t = UNIX_EPOCH + std::time::Duration::from_secs(1_000_000 + i);
+            std::fs::File::options().write(true).open(&jpg).unwrap().set_modified(t).unwrap();
+        }
+        // Not ours: never removed.
+        std::fs::write(dir.join("notizen.txt"), vec![0u8; 5000]).unwrap();
+        assert_eq!(trim(&[dir.clone()], 20_000), 0);
+        // Over the limit: down to 80 % of it, oldest first.
+        assert_eq!(trim(&[dir.clone()], 5_000), 6_000);
+        let left: Vec<u64> = (0..10).filter(|i| dir.join(format!("{i:016x}.jpg")).exists()).collect();
+        assert_eq!(left, [6, 7, 8, 9]);
+        assert!(!dir.join(format!("{:016x}.key", 0)).exists());
+        assert!(dir.join("notizen.txt").exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
 
     #[test]
     fn key_changes_with_adjustments() {

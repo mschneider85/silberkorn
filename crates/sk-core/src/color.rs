@@ -125,6 +125,27 @@ pub fn mat_mul(a: &Mat3, b: &Mat3) -> Mat3 {
     r
 }
 
+/// Brings a linear color with luminance `y` (0..1) into the 0..1 cube of its color space by
+/// desaturating it towards the gray of the same luminance, just as far as needed. Unlike clipping
+/// each channel, this keeps the hue (a saturated blue stays blue instead of turning purple).
+#[inline]
+pub fn gamut_map(c: [f32; 3], y: f32) -> [f32; 3] {
+    if c.iter().all(|v| (0.0..=1.0).contains(v)) {
+        return c;
+    }
+    let y = y.clamp(0.0, 1.0);
+    let mut t = 1.0f32;
+    for v in c {
+        if v > 1.0 {
+            t = t.min((1.0 - y) / (v - y).max(1e-9));
+        } else if v < 0.0 {
+            t = t.min(y / (y - v).max(1e-9));
+        }
+    }
+    let t = t.clamp(0.0, 1.0);
+    c.map(|v| (y + t * (v - y)).clamp(0.0, 1.0))
+}
+
 #[inline]
 pub fn mat_vec(m: &Mat3, v: [f32; 3]) -> [f32; 3] {
     [
@@ -385,6 +406,25 @@ pub fn fast_cbrt(x: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn gamut_map_keeps_luminance_and_hue() {
+        use super::gamut_map;
+        let luma = [0.2126, 0.7152, 0.0722];
+        let y_of = |c: [f32; 3]| c[0] * luma[0] + c[1] * luma[1] + c[2] * luma[2];
+        // In gamut: unchanged.
+        assert_eq!(gamut_map([0.2, 0.5, 0.9], 0.4), [0.2, 0.5, 0.9]);
+        for c in [[-0.3f32, 0.2, 1.4], [1.6, 0.3, -0.1], [0.1, 1.2, 0.05]] {
+            let y = y_of(c);
+            let m = gamut_map(c, y);
+            assert!(m.iter().all(|v| (0.0..=1.0).contains(v)), "{m:?}");
+            assert!((y_of(m) - y).abs() < 1e-4, "{c:?} -> {m:?}");
+            // Same direction away from gray: the differences keep their ratios.
+            let (d, e) = (c.map(|v| v - y), m.map(|v| v - y));
+            let k = e[0] / d[0];
+            assert!((e[1] - d[1] * k).abs() < 1e-4 && (e[2] - d[2] * k).abs() < 1e-4, "{c:?} -> {m:?}");
+        }
+    }
 
     #[test]
     fn fast_cbrt_is_accurate() {

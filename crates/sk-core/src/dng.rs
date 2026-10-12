@@ -8,7 +8,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rayon::prelude::*;
 
 use crate::color::{Mat3, mat_inv};
@@ -296,9 +296,7 @@ pub fn write_linear_dng(path: &Path, d: &LinearDng) -> Result<()> {
     out.buf[4..8].copy_from_slice(&ifd0_at.to_le_bytes());
     anyhow::ensure!(mat_inv(&m).is_some(), "Farbmatrix nicht invertierbar");
 
-    let tmp = path.with_extension("dng.part");
-    std::fs::write(&tmp, &out.buf).with_context(|| format!("{} kann nicht geschrieben werden", path.display()))?;
-    std::fs::rename(&tmp, path)?;
+    crate::safe_file::write_nosync(path, &out.buf)?;
     Ok(())
 }
 

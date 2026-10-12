@@ -806,6 +806,7 @@ impl Processor {
             off_y: u32,
             convert: u32,
             gamma: f32,
+            gamut: u32,
             m: [f32; 9],
         }
         let (r, ext) = (plan.region, plan.ext);
@@ -820,6 +821,7 @@ impl Processor {
                 Some(crate::color::Trc::Gamma(g)) => g,
                 _ => 0.0,
             },
+            gamut: self.adj.gamut_mapping() as u32,
             m: flat(&space.unwrap_or_default().from_working()),
         });
         let out = ops.image(r.w * r.h);
@@ -852,6 +854,7 @@ impl Processor {
                 off_y: u32,
                 clip: u32,
                 mask: u32,
+                gamut: u32,
                 to_srgb: [f32; 9],
             }
             let a = ops.args(&Args {
@@ -862,6 +865,7 @@ impl Processor {
                 off_y: (r.y - ext.y) as u32,
                 clip: self.opts.clip_warning as u32,
                 mask: has_mask as u32,
+                gamut: self.adj.gamut_mapping() as u32,
                 to_srgb: flat(&OutputSpace::Srgb.from_working()),
             });
             let (decode, encode8) = display_tables(g);

@@ -98,7 +98,7 @@ impl App {
                         ui.label(format!(
                             "Das Modell ({}, {} MB, Lizenz {}) wird einmalig heruntergeladen.",
                             models::DENOISE.label,
-                            models::DENOISE.size_mb,
+                            models::DENOISE.size_mb(),
                             models::DENOISE.license
                         ));
                         if ui.button(format!("{}  Modell laden", icon::DOWNLOAD_SIMPLE)).clicked() {

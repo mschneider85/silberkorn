@@ -151,11 +151,11 @@ pub fn load_preview(path: &Path, max_edge: usize) -> Result<(RawMeta, LinearImag
     let Decoded { mut raw, meta } = decode(path)?;
     raw.apply_scaling().map_err(|e| anyhow!("Skalierung fehlgeschlagen: {e}"))?;
     let img = match (&raw.photometric, raw.cpp) {
-        (RawPhotometricInterpretation::Cfa(cfg), 1) if cfg.cfa.is_rgb() && cfg.cfa.width == 2 && cfg.cfa.height == 2 => {
-            superpixel(&raw, &cfg.cfa)?
+        (RawPhotometricInterpretation::Cfa(cfg), 1) if let Some(k) = superpixel_size(&cfg.cfa) && raw.fuji_rotation_width.is_none() => {
+            superpixel(&raw, &cfg.cfa, k)?
         }
-        // X-Trans and other layouts: fall back to the full demosaic.
-        (RawPhotometricInterpretation::Cfa(_), 1) => develop_full(&raw)?,
+        // Other layouts: full demosaic (one Markesteijn pass is enough for a preview).
+        (RawPhotometricInterpretation::Cfa(_), 1) => develop_full(&raw, XTransQuality::Fast)?,
         (_, 3) => {
             let RawImageData::Float(d) = &raw.data else { bail!("Unerwartetes Datenformat") };
             LinearImage::new(raw.width, raw.height, d.as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2]]).collect())
@@ -169,11 +169,21 @@ pub fn load_preview(path: &Path, max_edge: usize) -> Result<(RawMeta, LinearImag
 /// Full-resolution demosaic (PPG) in camera space, oriented.
 pub fn load_full(path: &Path) -> Result<(RawMeta, LinearImage)> {
     let Decoded { raw, meta } = decode(path)?;
-    let img = develop_full(&raw)?.oriented(meta.orientation);
+    let img = develop_full(&raw, XTransQuality::Best)?.oriented(meta.orientation);
     Ok((meta, img))
 }
 
-fn develop_full(raw: &RawImage) -> Result<LinearImage> {
+/// Passes of the Markesteijn demosaic for X-Trans sensors.
+#[derive(Clone, Copy)]
+enum XTransQuality {
+    Fast = 1,
+    Best = 3,
+}
+
+fn develop_full(raw: &RawImage, xtrans: XTransQuality) -> Result<LinearImage> {
+    if let Some(img) = develop_xtrans(raw, xtrans)? {
+        return Ok(img);
+    }
     let dev = RawDevelop::new_with(&[
         ProcessingStep::Rescale,
         ProcessingStep::Demosaic,
@@ -190,37 +200,84 @@ fn develop_full(raw: &RawImage) -> Result<LinearImage> {
     }
 }
 
-fn superpixel(raw: &RawImage, cfa: &rawler::CFA) -> Result<LinearImage> {
+/// X-Trans sensors with Markesteijn's demosaic instead of rawler's bilinear default, which
+/// leaves color moiré and soft detail. `None` for every other sensor.
+fn develop_xtrans(raw: &RawImage, quality: XTransQuality) -> Result<Option<LinearImage>> {
+    use rawler::imgop::sensor::Demosaic;
+    use rawler::imgop::sensor::xtrans::markesteijn::XTransMarkesteijnDemosaic;
+    let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else { return Ok(None) };
+    // Rotated (SuperCCD) layouts stay with rawler.
+    if raw.cpp != 1 || config.sensor != rawler::imgop::sensor::SensorType::Xtrans || !config.cfa.is_rgb() || raw.fuji_rotation_width.is_some() {
+        return Ok(None);
+    }
+    let mut raw = raw.clone();
+    raw.apply_scaling().map_err(|e| anyhow!("Skalierung fehlgeschlagen: {e}"))?;
+    let RawImageData::Float(data) = raw.data else { bail!("Unerwartetes Datenformat") };
+    let pixels = rawler::pixarray::PixF32::new_with(data, raw.width, raw.height);
+    let roi = raw.active_area.unwrap_or(pixels.rect());
+    let mut rgb = XTransMarkesteijnDemosaic::new(quality as usize).demosaic(&pixels, &config.cfa, &config.colors, roi);
+    // Default crop, relative to the active area the demosaic already cut out.
+    if let Some(mut crop) = raw.crop_area.or(raw.active_area) {
+        if let Some(active) = &raw.active_area {
+            crop = crop.adapt(active);
+        }
+        if crop.d != rgb.dim() {
+            rgb = rgb.crop(crop);
+        }
+    }
+    Ok(Some(LinearImage::new(rgb.width, rgb.height, rgb.data)))
+}
+
+/// Block size for [`superpixel`]: 2 for Bayer, 3 for X-Trans (each 3×3 block of its 6×6 pattern
+/// holds all three colors); `None` for other layouts.
+fn superpixel_size(cfa: &rawler::CFA) -> Option<usize> {
+    let k = match (cfa.width, cfa.height) {
+        (2, 2) => 2,
+        (6, 6) => 3,
+        _ => return None,
+    };
+    let all_colors = (0..cfa.height / k).all(|by| {
+        (0..cfa.width / k).all(|bx| {
+            let colors: Vec<CFAColor> = (0..k * k).map(|i| cfa.cfa_color_at(by * k + i / k, bx * k + i % k)).collect();
+            [CFAColor::RED, CFAColor::GREEN, CFAColor::BLUE].iter().all(|c| colors.contains(c))
+                && colors.iter().all(|c| matches!(*c, CFAColor::RED | CFAColor::GREEN | CFAColor::BLUE))
+        })
+    });
+    (cfa.is_rgb() && all_colors).then_some(k)
+}
+
+/// Fast preview without demosaic: each k×k block of the mosaic becomes one pixel holding the
+/// mean of its red, green and blue photosites.
+fn superpixel(raw: &RawImage, cfa: &rawler::CFA, k: usize) -> Result<LinearImage> {
     let RawImageData::Float(data) = &raw.data else { bail!("Unerwartetes Datenformat") };
     let area = raw.crop_area.or(raw.active_area);
     let (x0, y0, w, h) = match area {
         Some(r) => (r.p.x, r.p.y, r.d.w, r.d.h),
         None => (0, 0, raw.width, raw.height),
     };
-    let (ow, oh) = (w / 2, h / 2);
+    anyhow::ensure!(x0 + w <= raw.width && y0 + h <= raw.height && data.len() >= raw.width * raw.height, "Bildbereich ungültig");
+    let (ow, oh) = (w / k, h / k);
     let stride = raw.width;
-    // Channel index for each position of the 2x2 block.
-    let mut chan = [[0usize; 2]; 2];
-    for (dy, row) in chan.iter_mut().enumerate() {
-        for (dx, c) in row.iter_mut().enumerate() {
-            *c = match cfa.cfa_color_at(y0 + dy, x0 + dx) {
-                CFAColor::RED => 0,
-                CFAColor::GREEN => 1,
-                CFAColor::BLUE => 2,
-                other => bail!("Nicht unterstützte CFA-Farbe {other:?}"),
-            };
-        }
-    }
+    // Channel of every position of one repetition of the pattern, starting at the area's corner.
+    let (pw, ph) = (cfa.width, cfa.height);
+    let chan: Vec<usize> = (0..ph * pw)
+        .map(|i| match cfa.cfa_color_at(y0 + i / pw, x0 + i % pw) {
+            CFAColor::RED => 0,
+            CFAColor::GREEN => 1,
+            _ => 2,
+        })
+        .collect();
     let mut out = vec![[0.0f32; 3]; ow * oh];
-    out.par_chunks_mut(ow).enumerate().for_each(|(oy, line)| {
-        let y = y0 + oy * 2;
+    out.par_chunks_mut(ow.max(1)).enumerate().for_each(|(oy, line)| {
+        let y = y0 + oy * k;
         for (ox, px) in line.iter_mut().enumerate() {
-            let x = x0 + ox * 2;
+            let x = x0 + ox * k;
             let mut acc = [0.0f32; 3];
             let mut cnt = [0.0f32; 3];
-            for dy in 0..2 {
-                for dx in 0..2 {
-                    let c = chan[dy][dx];
+            for dy in 0..k {
+                let row = (oy * k + dy) % ph * pw;
+                for dx in 0..k {
+                    let c = chan[row + (ox * k + dx) % pw];
                     acc[c] += data[(y + dy) * stride + x + dx];
                     cnt[c] += 1.0;
                 }

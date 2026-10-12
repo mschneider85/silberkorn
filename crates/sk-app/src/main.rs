@@ -14,6 +14,7 @@ mod denoise;
 mod develop_tools;
 mod focus;
 mod gpu;
+mod guard;
 mod guides;
 mod history;
 mod jobs;
@@ -30,6 +31,7 @@ mod softproof;
 mod splash;
 mod stacks;
 mod theme;
+mod thumb_queue;
 mod tools;
 mod variants;
 mod viewer_window;
@@ -41,6 +43,7 @@ use std::path::PathBuf;
 
 fn main() -> eframe::Result {
     env_logger::init();
+    guard::install_hook();
     // The argument is a folder to browse, or a session (its `.sksession` file or folder).
     let arg = std::env::args().nth(1).map(PathBuf::from);
     let is_session = arg.as_ref().is_some_and(|p| sk_core::session::is_session_file(p) || (p.is_dir() && sk_core::session::find_session_file(p).is_some()));

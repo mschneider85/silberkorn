@@ -88,20 +88,10 @@ pub fn default_model_path() -> PathBuf {
     sk_core::catalog::default_catalog_path().with_file_name("models").join("u2netp.onnx")
 }
 
-pub const MODEL_URL: &str = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/u2netp.onnx";
-
 /// Downloads the subject model (U²-Net-p, Apache-2.0, ~4.6 MB).
 pub fn download_model() -> Result<PathBuf> {
     let path = default_model_path();
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let mut resp = ureq::get(MODEL_URL).call().context("Download fehlgeschlagen")?;
-    let bytes = resp.body_mut().with_config().limit(64 << 20).read_to_vec()?;
-    anyhow::ensure!(bytes.len() > 1_000_000, "Unerwartete Modellgröße");
-    let tmp = path.with_extension("part");
-    std::fs::write(&tmp, &bytes)?;
-    std::fs::rename(&tmp, &path)?;
+    models::download_to(&models::SUBJECT, &path, &|_| {})?;
     Ok(path)
 }
 

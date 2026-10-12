@@ -131,6 +131,14 @@ fn edit_copy_apply_style_and_export() {
     f.app.paste_adjustments();
     assert_eq!(sidecar::load(&b).adjustments.exposure, 0.7);
 
+    // An edit saved before process versions keeps the original renderer until lifted.
+    std::fs::write(sidecar::sidecar_path(&b), r#"{"version":1,"adjustments":{"exposure":0.3}}"#).unwrap();
+    assert_eq!(sidecar::load(&b).adjustments.process, sk_core::params::PROCESS_LEGACY);
+    f.app.update_process_version();
+    let lifted = sidecar::load(&b).adjustments;
+    assert_eq!((lifted.process, lifted.exposure), (sk_core::params::PROCESS_LATEST, 0.3));
+    assert!(f.app.status.contains("1 Bild"), "{}", f.app.status);
+
     // Styles round-trip through a style directory.
     let style_dir = f.dir.join("styles");
     let style = styles::Style { name: "Kontrast".into(), adjustments: sk_core::params::Adjustments { contrast: 30.0, ..Default::default() } };

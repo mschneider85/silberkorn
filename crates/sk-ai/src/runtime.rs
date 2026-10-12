@@ -39,21 +39,24 @@ pub fn gpu_enabled() -> bool {
 }
 
 /// ONNX Runtime with DirectML, and DirectML itself, from Microsoft's NuGet packages: (package
-/// URL, file inside, file name on disk).
+/// URL, file inside, file name on disk, SHA-256 of the file). The libraries are loaded into the
+/// process, so only exactly these files are accepted.
 const ORT_VERSION: &str = "1.24.4";
 const DIRECTML_VERSION: &str = "1.15.4";
 
-fn gpu_files() -> [(String, &'static str, &'static str); 2] {
+fn gpu_files() -> [(String, &'static str, &'static str, &'static str); 2] {
     [
         (
             format!("https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/{ORT_VERSION}/microsoft.ml.onnxruntime.directml.{ORT_VERSION}.nupkg"),
             "runtimes/win-x64/native/onnxruntime.dll",
             "onnxruntime.dll",
+            "e7eedec6a6f26dc39dc948276a75ef6d2bee3fff944d874ceed0bbd3b97bff40",
         ),
         (
             format!("https://api.nuget.org/v3-flatcontainer/microsoft.ai.directml/{DIRECTML_VERSION}/microsoft.ai.directml.{DIRECTML_VERSION}.nupkg"),
             "bin/x64-win/DirectML.dll",
             "DirectML.dll",
+            "9c9e6d822561c6c41b90e6994b3e8857cf1d66dbfb1e0c4c799c7c89b4e92da1",
         ),
     ]
 }
@@ -131,11 +134,10 @@ pub fn install_gpu(progress: &dyn Fn(f32)) -> Result<()> {
     std::fs::create_dir_all(&dir)?;
     let files = gpu_files();
     let n = files.len() as f32;
-    for (i, (url, inner, name)) in files.iter().enumerate() {
+    for (i, (url, inner, name, sha256)) in files.iter().enumerate() {
         let data = zip_entry(url, inner, &|p| progress((i as f32 + p) / n))?;
-        let tmp = dir.join(format!("{name}.part"));
-        std::fs::write(&tmp, &data)?;
-        std::fs::rename(&tmp, dir.join(name))?;
+        anyhow::ensure!(crate::models::sha256(&data) == *sha256, "{name}: Prüfsumme stimmt nicht, die Datei wird nicht verwendet");
+        sk_core::safe_file::write(&dir.join(name), &data)?;
     }
     CONFIG.fetch_add(1, Ordering::Relaxed);
     Ok(())
@@ -376,7 +378,7 @@ mod tests {
     #[test]
     #[ignore]
     fn zip_entry_from_nuget() {
-        let [(url, inner, _), _] = gpu_files();
+        let [(url, inner, _, _), _] = gpu_files();
         let dll = zip_entry(&url, inner, &|_| {}).unwrap();
         assert!(dll.len() > 5_000_000 && dll.starts_with(b"MZ"), "{}", dll.len());
     }

@@ -145,9 +145,26 @@ pub struct Curves {
     pub blue: Curve,
 }
 
+/// Process versions of the renderer: edits keep the look
+/// they were made with, also when a later Silberkorn renders differently.
+///
+/// 1. Original renderer.
+/// 2. Colors outside the output space are desaturated towards their own luminance (hue kept)
+///    instead of clipped per channel, which shifted the hue of saturated light.
+pub const PROCESS_LATEST: u32 = 2;
+/// Version of settings saved before process versions existed.
+pub const PROCESS_LEGACY: u32 = 1;
+
+fn process_legacy() -> u32 {
+    PROCESS_LEGACY
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Adjustments {
+    /// Process version (see [`PROCESS_LATEST`]); new and reset images get the latest one.
+    #[serde(default = "process_legacy")]
+    pub process: u32,
     pub white_balance: WhiteBalance,
     pub base_curve: BaseCurve,
     /// Exposure in EV, -4..4
@@ -675,6 +692,7 @@ pub struct BlackWhite {
 impl Default for Adjustments {
     fn default() -> Self {
         Self {
+            process: PROCESS_LATEST,
             white_balance: WhiteBalance::default(),
             base_curve: BaseCurve::default(),
             exposure: 0.0,
@@ -706,13 +724,30 @@ impl Default for Adjustments {
 impl Adjustments {
     /// Copies only the framing (rotation, crop, straighten, ...), e.g. for the before view.
     pub fn keep_framing_from(&mut self, other: &Adjustments) {
+        self.process = other.process;
         self.rotation = other.rotation;
         self.geometry = other.geometry.clone();
+    }
+
+    /// Settings without any edit count as made with the latest process version (an older file
+    /// that only holds a rating is not an edit to preserve).
+    pub fn normalized(mut self) -> Self {
+        if (Adjustments { process: PROCESS_LATEST, ..self.clone() }) == Adjustments::default() {
+            self.process = PROCESS_LATEST;
+        }
+        self
+    }
+
+    /// Colors outside the output space are mapped instead of clipped (process version 2).
+    pub fn gamut_mapping(&self) -> bool {
+        self.process >= 2
     }
 
     /// Copies the image-specific settings (rotation, crop, layers, retouching) from `other`.
     /// Used when pasting adjustments or applying styles, which should not change framing or masks.
     pub fn keep_geometry_from(&mut self, other: &Adjustments) {
+        // The process version belongs to the image, a pasted look is rendered with it.
+        self.process = other.process;
         self.rotation = other.rotation;
         self.geometry = other.geometry.clone();
         // Masks and retouching are tied to image content.
@@ -725,6 +760,25 @@ impl Adjustments {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_version_of_old_and_new_settings() {
+        // Saved before process versions: the original renderer, unless nothing was edited.
+        let old: Adjustments = serde_json::from_str(r#"{"exposure":0.5}"#).unwrap();
+        assert_eq!(old.process, PROCESS_LEGACY);
+        assert_eq!(old.clone().normalized().process, PROCESS_LEGACY);
+        let untouched: Adjustments = serde_json::from_str(r#"{"exposure":0.0}"#).unwrap();
+        assert_eq!(untouched.normalized(), Adjustments::default());
+        // New settings get the latest one and keep it through a save.
+        let new = Adjustments { exposure: 0.5, ..Default::default() };
+        assert_eq!(new.process, PROCESS_LATEST);
+        let back: Adjustments = serde_json::from_str(&serde_json::to_string(&new).unwrap()).unwrap();
+        assert_eq!(back.process, PROCESS_LATEST);
+        // A pasted look is rendered with the image's version.
+        let mut pasted = new.clone();
+        pasted.keep_geometry_from(&old);
+        assert_eq!(pasted.process, PROCESS_LEGACY);
+    }
 
     #[test]
     fn identity_curve_lut() {

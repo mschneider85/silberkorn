@@ -148,7 +148,7 @@ fn write_output(f: &NameFields, out: &crate::image::LinearImage, recipe: &Export
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("Kann Ordner {} nicht anlegen", dir.display()))?;
     }
-    std::fs::write(&path, bytes)?;
+    crate::safe_file::write_nosync(&path, bytes)?;
     Ok(path)
 }
 

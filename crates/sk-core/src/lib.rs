@@ -25,6 +25,7 @@ pub mod print;
 pub mod paths;
 pub mod pipeline;
 pub mod raw;
+pub mod safe_file;
 pub mod session;
 pub mod sidecar;
 pub mod softproof;

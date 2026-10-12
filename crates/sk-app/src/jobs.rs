@@ -28,7 +28,7 @@ impl crate::workers::Workers {
                 let _ = tx.send(Event::JobProgress { id, progress: p });
                 ctx.request_repaint();
             };
-            let result = f(&progress).map_err(|e| format!("{e:#}"));
+            let result = crate::guard::catch(|| f(&progress)).and_then(|r| r.map_err(|e| format!("{e:#}")));
             let _ = tx.send(Event::JobDone { id, label, result });
             ctx.request_repaint();
         });

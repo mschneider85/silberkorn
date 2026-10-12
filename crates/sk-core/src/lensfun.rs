@@ -206,7 +206,7 @@ pub fn download_database() -> Result<PathBuf> {
             && let Ok(body) = resp.body_mut().read_to_string()
             && parse(&body).is_ok()
         {
-            std::fs::write(dir.join(f), body)?;
+            crate::safe_file::write_nosync(&dir.join(f), body)?;
             ok += 1;
         }
     }

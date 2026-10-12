@@ -11,6 +11,7 @@ flate2 = "1"
 log = "0.4"
 ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic", "directml", "api-17"] }
 rayon = "1.12.0"
+sha2 = "0.10"
 tract-onnx = "0.23"
 ureq = "3"
 

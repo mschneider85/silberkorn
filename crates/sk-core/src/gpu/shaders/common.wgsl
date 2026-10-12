@@ -32,6 +32,25 @@ fn mat_vec(m: array<f32, 9>, v: vec3<f32>) -> vec3<f32> {
     );
 }
 
+// Desaturates a color towards the gray of luminance y until it fits the 0..1 cube (color::gamut_map).
+fn gamut_map(c: vec3<f32>, y_in: f32) -> vec3<f32> {
+    if all(c >= vec3<f32>(0.0)) && all(c <= vec3<f32>(1.0)) {
+        return c;
+    }
+    let y = clamp(y_in, 0.0, 1.0);
+    var t = 1.0;
+    for (var i = 0u; i < 3u; i++) {
+        let v = c[i];
+        if v > 1.0 {
+            t = min(t, (1.0 - y) / max(v - y, 1e-9));
+        } else if v < 0.0 {
+            t = min(t, y / max(y - v, 1e-9));
+        }
+    }
+    t = clamp(t, 0.0, 1.0);
+    return clamp(vec3<f32>(y) + t * (c - vec3<f32>(y)), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 fn srgb_encode(v: f32) -> f32 {
     if v <= 0.0031308 {
         return v * 12.92;

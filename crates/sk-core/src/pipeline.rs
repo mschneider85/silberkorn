@@ -839,12 +839,15 @@ impl Processor {
         let (enc, _, _) = self.process_encoded(src, region, None);
         let m = space.from_working();
         let trc = space.trc();
+        let map = self.adj.gamut_mapping();
         let data = enc
             .data
             .par_iter()
             .map(|p| {
                 let lin = p.map(srgb_decode);
-                mat_vec(&m, lin).map(|v| trc.encode(v.clamp(0.0, 1.0)))
+                let out = mat_vec(&m, lin);
+                let out = if map { crate::color::gamut_map(out, dot(lin, LUMA)) } else { out };
+                out.map(|v| trc.encode(v.clamp(0.0, 1.0)))
             })
             .collect();
         LinearImage::new(enc.width, enc.height, data)
@@ -874,6 +877,7 @@ impl Processor {
         // Direct (not interpolated) tables: fine enough for 8-bit output and much faster.
         let (dec, enc8) = (&*DISPLAY_DECODE, &*DISPLAY_ENCODE_U8);
         let clip = self.opts.clip_warning;
+        let map = self.adj.gamut_mapping();
         let w = enc.width;
         // Soft proof: through the proofing profile instead of straight to sRGB.
         let proofed: Option<Vec<[u8; 3]>> = self.opts.softproof.as_ref().map(|sp| {
@@ -886,7 +890,12 @@ impl Processor {
             for (x, (out, p)) in row.as_chunks_mut::<4>().0.iter_mut().zip(src).enumerate() {
                 let mut px = match &proofed {
                     Some(pr) => pr[y * w + x],
-                    None => mat_vec(&to_srgb, p.map(|v| dec[display_index(v)])).map(|v| enc8[display_index(v)]),
+                    None => {
+                        let lin = p.map(|v| dec[display_index(v)]);
+                        let out = mat_vec(&to_srgb, lin);
+                        let out = if map { crate::color::gamut_map(out, dot(lin, LUMA)) } else { out };
+                        out.map(|v| enc8[display_index(v)])
+                    }
                 };
                 if let Some(m) = &mask {
                     let a = (m[y * w + x] * 0.6).clamp(0.0, 0.6);

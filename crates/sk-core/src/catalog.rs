@@ -208,6 +208,11 @@ pub struct Album {
     pub count: usize,
 }
 
+/// Format of the databases written by this build (`PRAGMA user_version`; older databases are
+/// upgraded on opening, newer ones are refused). Raise it when an upgrade an older build
+/// can't cope with is added to [`Catalog::init`].
+pub const SCHEMA_VERSION: u32 = 1;
+
 pub struct Catalog {
     conn: Connection,
     pub path: PathBuf,
@@ -305,6 +310,12 @@ impl Catalog {
 
     fn init(conn: Connection, path: PathBuf, base: Option<PathBuf>) -> Result<Self> {
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        let version: u32 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        anyhow::ensure!(
+            version <= SCHEMA_VERSION,
+            "{} wurde von einer neueren Silberkorn-Version angelegt (Format {version}, unterstützt bis {SCHEMA_VERSION}). Bitte Silberkorn aktualisieren.",
+            path.display()
+        );
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
              PRAGMA foreign_keys=ON;
@@ -370,6 +381,7 @@ impl Catalog {
                 conn.execute_batch(&format!("ALTER TABLE images ADD COLUMN {name} {def}"))?;
             }
         }
+        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
         let catalog = Self { conn, path, base };
         if catalog.base.is_some() {
             catalog.make_paths_relative()?;
@@ -937,6 +949,24 @@ mod tests {
             orientation: Orientation::Normal,
             hdr: false,
         }
+    }
+
+    #[test]
+    fn newer_database_is_refused_older_one_upgraded() {
+        let dir = std::env::temp_dir().join(format!("sk-schema-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("c.sqlite");
+        let _ = std::fs::remove_file(&path);
+        // A database from before the version was recorded.
+        Connection::open(&path).unwrap().execute_batch("CREATE TABLE images (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, folder TEXT NOT NULL, name TEXT NOT NULL)").unwrap();
+        drop(Catalog::open(&path).unwrap());
+        let version = |p: &Path| Connection::open(p).unwrap().query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0)).unwrap();
+        assert_eq!(version(&path), SCHEMA_VERSION);
+        Connection::open(&path).unwrap().execute_batch(&format!("PRAGMA user_version = {}", SCHEMA_VERSION + 1)).unwrap();
+        let err = Catalog::open(&path).err().unwrap();
+        assert!(format!("{err:#}").contains("neueren Silberkorn-Version"));
+        assert_eq!(version(&path), SCHEMA_VERSION + 1);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     fn catalog() -> Catalog {

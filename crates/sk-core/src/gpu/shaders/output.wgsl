@@ -10,6 +10,8 @@ struct Args {
     convert: u32,
     // 0: sRGB curve, otherwise a gamma.
     gamma: f32,
+    // Gamut mapping instead of clipping (process version 2).
+    gamut: u32,
     m: array<f32, 9>,
 }
 
@@ -33,7 +35,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     var o = s;
     if a.convert != 0u {
         let lin = vec3<f32>(srgb_decode(s.x), srgb_decode(s.y), srgb_decode(s.z));
-        let c = clamp(mat_vec(a.m, lin), vec3<f32>(0.0), vec3<f32>(1.0));
+        var c = mat_vec(a.m, lin);
+        if a.gamut != 0u {
+            c = gamut_map(c, dot(lin, LUMA));
+        }
+        c = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0));
         o = vec4<f32>(trc_encode(c.x), trc_encode(c.y), trc_encode(c.z), 0.0);
     }
     out[gid.y * a.w + gid.x] = o;

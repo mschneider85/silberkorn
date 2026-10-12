@@ -9,6 +9,8 @@ struct Args {
     off_y: u32,
     clip: u32,
     mask: u32,
+    // Gamut mapping instead of clipping (process version 2).
+    gamut: u32,
     to_srgb: array<f32, 9>,
 }
 
@@ -37,7 +39,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation
     workgroupBarrier();
     if gid.x < a.w && gid.y < a.h {
         let s = img[(gid.y + a.off_y) * a.ext_w + gid.x + a.off_x];
-        let lin = mat_vec(a.to_srgb, vec3<f32>(decode[index(s.x)], decode[index(s.y)], decode[index(s.z)]));
+        let work = vec3<f32>(decode[index(s.x)], decode[index(s.y)], decode[index(s.z)]);
+        var lin = mat_vec(a.to_srgb, work);
+        if a.gamut != 0u {
+            lin = gamut_map(lin, dot(work, LUMA));
+        }
         var px = vec3<u32>(encode8[index(lin.x)], encode8[index(lin.y)], encode8[index(lin.z)]);
         if a.mask != 0u {
             let al = clamp(s.w * 0.6, 0.0, 0.6);

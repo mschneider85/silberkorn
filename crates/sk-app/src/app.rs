@@ -572,6 +572,15 @@ impl App {
         sk_core::gpu::set_enabled(settings.develop_gpu.unwrap_or(true));
         // Sets up the graphics card and compiles the shaders while the window opens.
         std::thread::spawn(sk_core::pipeline::prepare_gpu);
+        // Keeps the per-user preview cache within its size limit (not in tests: it is the user's cache).
+        if opts.persist_settings {
+            std::thread::spawn(|| {
+                let removed = sk_core::cache::trim_user_cache(sk_core::cache::user_cache_limit());
+                if removed > 0 {
+                    log::info!("Vorschau-Cache: {} MB alter Vorschauen entfernt", removed >> 20);
+                }
+            });
+        }
         let session = opts.session.or_else(|| settings.last_session.clone().filter(|p| p.exists() && opts.start_folder.is_none()));
         let folder = opts
             .start_folder
@@ -831,7 +840,9 @@ impl App {
             let _ = std::fs::create_dir_all(dir);
         }
         if let Ok(json) = serde_json::to_string_pretty(&s) {
-            let _ = std::fs::write(path, json);
+            if let Err(e) = sk_core::safe_file::write(&path, json) {
+                log::warn!("{e:#}");
+            }
         }
     }
 
@@ -1388,6 +1399,30 @@ impl App {
         self.status = format!("Anpassungen auf {} Bild(er) angewendet", targets.len());
     }
 
+    /// Renders the selected images with the latest process version (see
+    /// `sk_core::params::PROCESS_LATEST`); their look may change slightly.
+    pub(crate) fn update_process_version(&mut self) {
+        let latest = sk_core::params::PROCESS_LATEST;
+        let targets = self.selected_paths();
+        let current = self.current.as_ref().map(|c| (c.meta.path.clone(), c.adjustments.process));
+        let old = targets
+            .iter()
+            .filter(|p| match &current {
+                Some((c, process)) if c == *p => *process < latest,
+                _ => sidecar::load(p).adjustments.process < latest,
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        self.status.clear();
+        self.set_adjustments_on(&old, |a| Adjustments { process: latest, ..a.clone() });
+        if self.status.is_empty() {
+            self.status = match old.len() {
+                0 => format!("Alle ausgewählten Bilder nutzen schon Prozessversion {latest}"),
+                n => format!("{n} Bild(er) auf Prozessversion {latest} gehoben"),
+            };
+        }
+    }
+
     pub fn export_selection(&mut self) {
         self.commit_and_save();
         let current = self.current.as_ref().map(|c| (c.meta.path.clone(), c.committed.clone()));
@@ -1488,6 +1523,9 @@ impl App {
     // ---------------------------------------------------------------- events
 
     pub(crate) fn handle_events(&mut self, ctx: &egui::Context) {
+        if let Some(panic) = crate::guard::take_panics().pop() {
+            self.status = format!("{panic} (Details in panic.log)");
+        }
         self.load_full_when_due(ctx);
         // The rendered preview must fit into a single GPU texture.
         let max_side = ctx.input(|i| i.max_texture_side).max(512);

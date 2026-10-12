@@ -342,7 +342,9 @@ impl App {
             } else {
                 let mut sc = sidecar::load(path);
                 sc.adjustments = f(&sc.adjustments);
-                let _ = sidecar::save(path, &sc);
+                if let Err(e) = sidecar::save(path, &sc) {
+                    self.status = format!("Speichern fehlgeschlagen: {e:#}");
+                }
                 self.thumb_requested.remove(path);
                 self.compare_textures.remove(path);
                 self.compare_requested.remove(path);
