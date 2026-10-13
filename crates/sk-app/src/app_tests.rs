@@ -405,7 +405,7 @@ fn phase5_speed_edit_ai_masks_split_and_recipes() {
     // Magic brush click -> AI mask on a new layer.
     f.app.set_local_tool(crate::layers::LocalTool::Magic);
     click(&mut f, c + egui::vec2(-300.0, 250.0));
-    f.pump("Magic Brush", |a| !a.ai_busy && a.current.as_ref().is_some_and(|c| c.adjustments.layers.first().is_some_and(|l| l.mask.ai.is_some())));
+    f.pump("Zauberpinsel", |a| !a.ai_busy && a.current.as_ref().is_some_and(|c| c.adjustments.layers.first().is_some_and(|l| l.mask.ai.is_some())));
     let ai = f.app.current.as_ref().unwrap().adjustments.layers[0].mask.ai.clone().unwrap();
     assert!(ai.data.iter().any(|v| *v > 200) && ai.data.iter().any(|v| *v < 20));
 
@@ -1691,8 +1691,8 @@ fn heal_clone_and_magic_brush_are_painted() {
     // Magic Brush: a painted stroke selects on the active layer.
     f.app.set_local_tool(LocalTool::Magic);
     window_stroke(&mut f, &mut frame, &mut t, egui::pos2(600.0, 650.0), egui::pos2(680.0, 660.0), 0.9);
-    assert!(f.app.ai_busy, "Magic Brush sollte die Auswahl anstoßen");
-    f.pump("Magic Brush", |a| !a.ai_busy);
+    assert!(f.app.ai_busy, "Zauberpinsel sollte die Auswahl anstoßen");
+    f.pump("Zauberpinsel", |a| !a.ai_busy);
     let layers = &f.app.current.as_ref().unwrap().adjustments.layers;
     assert!(layers.iter().any(|l| l.mask.ai.is_some()));
 }

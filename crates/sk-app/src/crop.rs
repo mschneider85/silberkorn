@@ -44,7 +44,7 @@ impl App {
             return;
         };
         let keystone = if g.keystone_v != 0.0 || g.keystone_h != 0.0 {
-            format!(", Keystone {:.0} / {:.0}", g.keystone_v, g.keystone_h)
+            format!(", Perspektive {:.0} / {:.0}", g.keystone_v, g.keystone_h)
         } else {
             String::new()
         };

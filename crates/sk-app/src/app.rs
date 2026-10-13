@@ -113,7 +113,7 @@ impl Tab {
             Tab::Layers => icon::STACK,
             Tab::Retouch => icon::BANDAIDS,
             Tab::Metadata => icon::INFO,
-            Tab::Styles => icon::SPARKLE,
+            Tab::Styles => icon::SWATCHES,
             Tab::History => icon::CLOCK_COUNTER_CLOCKWISE,
             Tab::Output => icon::EXPORT,
         }
@@ -1490,7 +1490,7 @@ impl App {
             return;
         }
         self.export_progress = Some((0, items.len()));
-        self.status = format!("Verarbeite {} Bild(er)…", items.len());
+        self.status = format!("Exportiere {}…", crate::widgets::image_count(items.len()));
         self.save_settings();
         let mut recipes: Vec<ExportRecipe> = self.recipes.iter().filter(|r| r.enabled).cloned().collect();
         // In a session, relative output folders belong to the session (default: its Output folder).
@@ -1551,7 +1551,7 @@ impl App {
         let wb = [avg[1] / avg[0], 1.0, avg[1] / avg[2]];
         let (kelvin, tint) = cur.meta.color.temp_tint_for_wb(wb);
         cur.adjustments.white_balance = WhiteBalance { mode: WbMode::Custom, kelvin, tint };
-        self.status = format!("Weißabgleich: {kelvin:.0} K, Tint {tint:.1}");
+        self.status = format!("Weißabgleich: {kelvin:.0} K, Tönung {tint:.1}");
         self.picking_wb = false;
         self.request_render();
     }
@@ -1680,7 +1680,7 @@ impl App {
                             let texture = ctx.load_texture("proof", p.image, TextureOptions::LINEAR);
                             self.proof = Some(ProofView { version, key, texture, width: p.width, height: p.height, file_size: p.file_size });
                         }
-                        Err(e) => self.status = format!("Proof fehlgeschlagen: {e}"),
+                        Err(e) => self.status = format!("Ausgabevorschau fehlgeschlagen: {e}"),
                     }
                 }
                 Event::FullLoaded { generation, image } => {
@@ -1743,7 +1743,7 @@ impl App {
                         Err(e) => self.export_log.push(format!("✖ {e}")),
                     }
                     if done == total {
-                        self.status = format!("Verarbeitung abgeschlossen ({total})");
+                        self.status = format!("Export abgeschlossen ({total})");
                         self.export_cancel = None;
                     }
                 }
@@ -1751,7 +1751,7 @@ impl App {
                     self.export_progress = None;
                     self.export_step = None;
                     self.export_cancel = None;
-                    self.status = format!("Verarbeitung abgebrochen ({done} von {total} fertig)");
+                    self.status = format!("Export abgebrochen ({done} von {total} fertig)");
                 }
                 Event::AiMask { generation, layer, result } => {
                     self.ai_busy = false;

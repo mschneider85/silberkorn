@@ -400,7 +400,7 @@ impl App {
                 let selected = matches!(&self.scope, Scope::Folder { path, .. } if *path == dir);
                 let mut resp = ui.selectable_label(selected, text);
                 if f == SessionFolder::Output {
-                    resp = resp.on_hover_text("Verarbeitete Bilder im Dateimanager zeigen");
+                    resp = resp.on_hover_text("Exportierte Bilder im Dateimanager zeigen");
                 }
                 if resp.clicked() {
                     if f == SessionFolder::Output {

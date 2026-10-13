@@ -66,7 +66,7 @@ impl LocalTool {
             LocalTool::Radial => "\u{E602}  Radial (R)",
             LocalTool::Heal => "\u{E0B2}  Reparieren (H)",
             LocalTool::Clone => "\u{EA48}  Klonen (S)",
-            LocalTool::Magic => "\u{E6B6}  Magic Brush (J)",
+            LocalTool::Magic => "\u{E6B6}  Zauberpinsel (J)",
             LocalTool::Object => "\u{E7C8}  Objekt (Umschalt+J)",
             LocalTool::ColorPick => "\u{E568}  Farbe wählen",
             LocalTool::Remove => "\u{E6F0}  Entfernen (X)",
@@ -83,7 +83,7 @@ impl LocalTool {
             LocalTool::Radial => (icon::CIRCLE_DASHED, "Radial", "R"),
             LocalTool::Heal => (icon::BANDAIDS, "Reparieren", "H"),
             LocalTool::Clone => (icon::STAMP, "Klonen", "S"),
-            LocalTool::Magic => (icon::MAGIC_WAND, "Magic Brush", "J"),
+            LocalTool::Magic => (icon::MAGIC_WAND, "Zauberpinsel", "J"),
             LocalTool::Object => (icon::CURSOR_CLICK, "Objekt", ""),
             LocalTool::ColorPick => (icon::EYEDROPPER, "Farbe", ""),
             LocalTool::Remove => (icon::SPARKLE, "Entfernen", "X"),
@@ -811,7 +811,7 @@ impl App {
         section(ui, "Maske verfeinern", None, |ui| {
             let m = &mut layer.mask;
             let mut luma_on = m.luma_range.is_some();
-            if ui.checkbox(&mut luma_on, "Luma Range").changed() {
+            if ui.checkbox(&mut luma_on, "Helligkeitsbereich").changed() {
                 m.luma_range = luma_on.then(Default::default);
                 *changed = true;
             }
@@ -873,7 +873,7 @@ impl App {
         let sensitivity = &mut self.spot_sensitivity;
         crate::widgets::section_help(ui, "Reparieren & Klonen", help, None, |ui| {
             ui.horizontal(|ui| {
-                if ui.add_enabled(!searching, egui::Button::new(format!("{}  Staub und Flecken finden", crate::theme::icon::SPARKLE))).clicked() {
+                if ui.add_enabled(!searching, egui::Button::new(format!("{}  Staub und Flecken finden", crate::theme::icon::BROOM))).clicked() {
                     act = Some(Act::Find);
                 }
                 if searching {
@@ -1029,7 +1029,7 @@ impl App {
         let layers = &cur.adjustments.layers;
         let mut action = None;
         let title = if layers.is_empty() { "Ebenen".to_string() } else { format!("Ebenen ({})", layers.len()) };
-        let help = "Oberste Ebene zuerst. Auge: ein-/ausblenden · Papierkorb: löschen · Klick: Ebene wählen, ihre Einstellungen erscheinen darunter.\n\nPinsel, Verlauf und Magic Brush legen automatisch eine Ebene an, wenn keine gewählt ist.";
+        let help = "Oberste Ebene zuerst. Auge: ein-/ausblenden · Papierkorb: löschen · Klick: Ebene wählen, ihre Einstellungen erscheinen darunter.\n\nPinsel, Verlauf und Zauberpinsel legen automatisch eine Ebene an, wenn keine gewählt ist.";
         crate::widgets::section_help(ui, &title, help, None, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
             let w = ui.available_width();
@@ -1134,7 +1134,7 @@ impl App {
             return;
         }
         let action = self.layer_list(ui);
-        let help = "Pinsel, Radierer, Verläufe und Magic Brush malen die Maske der gewählten Ebene.\n\n[ und ] ändern die Pinselgröße · Doppelklick auf einen Regler: Standard.\n\nMagic Brush: ähnliche, zusammenhängende Farben werden ausgewählt; weitere Striche erweitern die Auswahl.\n\nObjekt: auf ein Objekt klicken, es wird ausgewählt; weitere Klicks verfeinern, Alt+Klick nimmt Teile aus.";
+        let help = "Pinsel, Radierer, Verläufe und Zauberpinsel malen die Maske der gewählten Ebene.\n\n[ und ] ändern die Pinselgröße · Doppelklick auf einen Regler: Standard.\n\nZauberpinsel: ähnliche, zusammenhängende Farben werden ausgewählt; weitere Striche erweitern die Auswahl.\n\nObjekt: auf ein Objekt klicken, es wird ausgewählt; weitere Klicks verfeinern, Alt+Klick nimmt Teile aus.";
         self.tools_section(ui, help, &[LocalTool::Brush, LocalTool::Eraser, LocalTool::Linear, LocalTool::Radial, LocalTool::Magic, LocalTool::Object]);
         // Options of the active layer directly below the list.
         let Some(cur) = self.current.as_mut() else { return };
@@ -1174,7 +1174,7 @@ impl App {
                 changed |= slider_row(ui, "Klarheit", &mut a.clarity, -100.0..=100.0, 0.0, 0);
                 changed |= slider_row(ui, "Struktur", &mut a.structure, -100.0..=100.0, 0.0, 0);
                 changed |= crate::widgets::slider_row_with(ui, "Temperatur", &mut a.temperature, -100.0..=100.0, 0.0, 0, crate::widgets::SliderOpts { rail: Some(crate::widgets::RAIL_KELVIN), ..Default::default() });
-                changed |= crate::widgets::slider_row_with(ui, "Tint", &mut a.tint, -100.0..=100.0, 0.0, 0, crate::widgets::SliderOpts { rail: Some(crate::widgets::RAIL_TINT), ..Default::default() });
+                changed |= crate::widgets::slider_row_with(ui, "Tönung", &mut a.tint, -100.0..=100.0, 0.0, 0, crate::widgets::SliderOpts { rail: Some(crate::widgets::RAIL_TINT), ..Default::default() });
                 changed |= slider_row(ui, "Dunst", &mut a.dehaze, -100.0..=100.0, 0.0, 0);
             });
             if reset {
@@ -1188,7 +1188,7 @@ impl App {
             self.request_render();
         }
         let mut style = None;
-        crate::widgets::section_full(ui, "Style Brushes", false, Some("Neue Ebene mit fertigen Einstellungen, dann malen"), None, |ui| {
+        crate::widgets::section_full(ui, "Stilpinsel", false, Some("Neue Ebene mit fertigen Einstellungen, dann malen"), None, |ui| {
             ui.horizontal_wrapped(|ui| {
                 for (name, adj) in STYLE_BRUSHES {
                     if ui.button(*name).clicked() {

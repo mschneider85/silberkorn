@@ -74,7 +74,7 @@ pub const COMMANDS: &[Command] = &[
         a.session_ui.start_new(&folder);
     }),
     cmd!("open-session", icon::FOLDER_OPEN, "Session öffnen …", "Datei", [CTRL_SHIFT => Key::O], "session", always, |a, _| a.open_session_dialog()),
-    cmd!("export", icon::EXPORT, "Verarbeiten (exportieren)", "Datei", [CTRL => Key::D], "export ausgabe speichern", has_selection, |a, _| a.export_selection()),
+    cmd!("export", icon::EXPORT, "Exportieren", "Datei", [CTRL => Key::D], "export ausgabe speichern verarbeiten", has_selection, |a, _| a.export_selection()),
     // Bearbeiten
     cmd!("undo", icon::ARROW_U_UP_LEFT, "Rückgängig", "Bearbeiten", [CTRL => Key::Z], "undo", |a| a.can_undo(), |a, _| a.undo()),
     cmd!("redo", icon::ARROW_U_UP_RIGHT, "Wiederholen", "Bearbeiten", [CTRL => Key::Y, CTRL_SHIFT => Key::Z], "redo", |a| !a.redo.is_empty(), |a, _| a.redo()),
@@ -130,9 +130,9 @@ pub const COMMANDS: &[Command] = &[
     cmd!("tool-eraser", icon::ERASER, "Radierer", "Ebenen", [NONE => Key::N], "eraser maske", has_image, |a, _| tool(a, LocalTool::Eraser)),
     cmd!("tool-linear", icon::GRADIENT, "Linearer Verlauf", "Ebenen", [NONE => Key::L], "gradient verlaufsfilter", has_image, |a, _| tool(a, LocalTool::Linear)),
     cmd!("tool-radial", icon::CIRCLE_DASHED, "Radialer Verlauf", "Ebenen", [NONE => Key::R], "radial", has_image, |a, _| tool(a, LocalTool::Radial)),
-    cmd!("tool-magic", icon::MAGIC_WAND, "Magic Brush", "Ebenen", [NONE => Key::J], "zauberstab auswahl", has_image, |a, _| tool(a, LocalTool::Magic)),
+    cmd!("tool-magic", icon::MAGIC_WAND, "Zauberpinsel", "Ebenen", [NONE => Key::J], "zauberstab magic brush auswahl", has_image, |a, _| tool(a, LocalTool::Magic)),
     cmd!("tool-object", icon::CURSOR_CLICK, "Objekt auswählen", "Ebenen", [SHIFT => Key::J], "objekt auswahl klick sam maske", has_image, |a, _| tool(a, LocalTool::Object)),
-    cmd!("find-spots", icon::SPARKLE, "Staub und Flecken finden", "Retusche", [], "sensorstaub flecken unreinheiten pickel retusche reparieren", has_image, |a, _| a.find_spots()),
+    cmd!("find-spots", icon::BROOM, "Staub und Flecken finden", "Retusche", [], "sensorstaub flecken unreinheiten pickel retusche reparieren", has_image, |a, _| a.find_spots()),
     cmd!("tool-heal", icon::BANDAIDS, "Reparieren", "Retusche", [NONE => Key::H], "heal flecken", has_image, |a, _| tool(a, LocalTool::Heal)),
     cmd!("tool-clone", icon::STAMP, "Klonen", "Retusche", [NONE => Key::S], "clone stempel", has_image, |a, _| tool(a, LocalTool::Clone)),
     cmd!("tool-remove", icon::SPARKLE, "Entfernen (KI)", "Retusche", [NONE => Key::X], "remove objekt", has_image, |a, _| tool(a, LocalTool::Remove)),
@@ -144,7 +144,7 @@ pub const COMMANDS: &[Command] = &[
     }),
     cmd!("delete-spot", icon::TRASH, "Retuschepunkt löschen", "Retusche", [NONE => Key::Delete, NONE => Key::Backspace], "spot", always, |a, _| a.delete_selected_spot()),
     // Ansicht
-    cmd!("grid", icon::SQUARES_FOUR, "Raster / Viewer umschalten", "Ansicht", [NONE => Key::G], "grid browser übersicht", always, |a, _| a.grid_view = !a.grid_view),
+    cmd!("grid", icon::SQUARES_FOUR, "Raster / Einzelbild umschalten", "Ansicht", [NONE => Key::G], "grid browser übersicht viewer", always, |a, _| a.grid_view = !a.grid_view),
     cmd!("filmstrip", icon::FILM_STRIP, "Filmstreifen ein/aus", "Ansicht", [], "filmstrip", always, |a, _| a.show_filmstrip = !a.show_filmstrip),
     cmd!("navigator", icon::MAP_TRIFOLD, "Navigator beim Zoomen", "Ansicht", [], "minimap", always, |a, _| {
         a.show_navigator = !a.show_navigator;
@@ -169,7 +169,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("multi-view", icon::SQUARES_FOUR, "Auswahl nebeneinander vergleichen", "Ansicht", [], "compare mehrere", always, |a, _| a.multi_view = !a.multi_view),
     cmd!("clip-warning", icon::WARNING, "Belichtungswarnung", "Ansicht", [NONE => Key::E], "clipping überbelichtet", has_image, |a, _| a.toggle_clip_warning()),
     cmd!("focus-mask", icon::CROSSHAIR, "Fokusmaske", "Ansicht", [NONE => Key::K], "schärfe focus peaking", has_image, |a, _| a.toggle_focus_mask()),
-    cmd!("proof", icon::FILE_MAGNIFYING_GLASS, "Proof (Ausgabe-Rezept)", "Ansicht", [NONE => Key::P], "vorschau export", has_image, |a, _| a.toggle_proof()),
+    cmd!("proof", icon::FILE_MAGNIFYING_GLASS, "Ausgabevorschau", "Ansicht", [NONE => Key::P], "vorschau export proof rezept", has_image, |a, _| a.toggle_proof()),
     cmd!("softproof", icon::PRINTER, "Softproof", "Ansicht", [SHIFT => Key::P], "drucker profil gamut", has_image, |a, _| a.toggle_softproof()),
     cmd!("print-preview", icon::PRINTER, "Druckvorschau", "Ansicht", [CTRL => Key::P], "drucken papier", has_image, |a, _| a.toggle_print_preview()),
     cmd!("guides-next", icon::GRID_NINE, "Hilfslinien wechseln", "Ansicht", [NONE => Key::O], "guides raster drittel", always, |a, _| {
@@ -178,7 +178,7 @@ pub const COMMANDS: &[Command] = &[
     }),
     cmd!("overlay", icon::IMAGE, "Overlay ein/aus", "Ansicht", [SHIFT => Key::O], "layout png", always, |a, _| a.toggle_overlay()),
     cmd!("overlay-choose", icon::IMAGE, "Overlay wählen …", "Ansicht", [], "layout png", always, |a, _| a.choose_overlay()),
-    cmd!("viewer-window", icon::MONITOR, "Viewer in eigenem Fenster", "Ansicht", [SHIFT => Key::F11], "zweitmonitor", always, |a, _| a.toggle_viewer_window()),
+    cmd!("viewer-window", icon::MONITOR, "Bild in eigenem Fenster", "Ansicht", [SHIFT => Key::F11], "zweitmonitor viewer", always, |a, _| a.toggle_viewer_window()),
     cmd!("fullscreen", icon::ARROWS_OUT, "Vollbild ohne Ablenkung", "Ansicht", [NONE => Key::F11, CTRL_SHIFT => Key::F], "fullscreen", always, |a, ctx| a.toggle_fullscreen(ctx)),
     cmd!("find", icon::MAGNIFYING_GLASS, "Suchen (Bibliothek)", "Ansicht", [CTRL => Key::F], "filter suche", always, |a, _| a.tab = Tab::Library),
     // Hilfe

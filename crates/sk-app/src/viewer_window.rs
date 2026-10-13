@@ -40,7 +40,7 @@ impl App {
         }
         let w = self.viewer_window;
         let mut builder = ViewportBuilder::default()
-            .with_title(format!("{} – Viewer", self.window_title))
+            .with_title(format!("{} – Bild", self.window_title))
             .with_inner_size(w.size.unwrap_or([1200.0, 800.0]))
             .with_min_inner_size([320.0, 240.0]);
         if let Some(p) = w.pos {

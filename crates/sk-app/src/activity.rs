@@ -38,8 +38,8 @@ impl App {
         if let Some((done, total)) = self.export_progress {
             v.push(Activity {
                 label: match self.export_step {
-                    Some(p) => format!("Verarbeiten {done} / {total} · KI-Vergrößern {:.0} %", p * 100.0),
-                    None => format!("Verarbeiten {done} / {total}"),
+                    Some(p) => format!("Exportieren {done} / {total} · KI-Vergrößern {:.0} %", p * 100.0),
+                    None => format!("Exportieren {done} / {total}"),
                 },
                 progress: self.export_fraction(),
                 in_viewer: false,

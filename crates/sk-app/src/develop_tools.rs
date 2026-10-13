@@ -193,14 +193,14 @@ impl App {
         }
 
         let mut reset_key = false;
-        section(ui, "Keystone (Perspektive)", Some(&mut || reset_key = true), |ui| {
+        section(ui, "Perspektive", Some(&mut || reset_key = true), |ui| {
             use sk_core::upright::UprightMode;
             ui.horizontal(|ui| {
                 ui.label("Automatisch");
                 for (mode, label, tip) in [
                     (UprightMode::Vertical, "Auto", "Drehung und stürzende Linien (Umschalt+A)"),
-                    (UprightMode::Level, "Nur Drehung", "Horizont und Kanten waagerecht, ohne Keystone"),
-                    (UprightMode::Full, "Voll", "Drehung, vertikaler und horizontaler Keystone"),
+                    (UprightMode::Level, "Nur Drehung", "Horizont und Kanten waagerecht, ohne Perspektivkorrektur"),
+                    (UprightMode::Full, "Voll", "Drehung, vertikale und horizontale Perspektive"),
                 ] {
                     if ui.button(label).on_hover_text(tip).clicked() {
                         upright = Some(mode);
@@ -376,7 +376,7 @@ impl App {
         let mut changed = false;
 
         let mut reset_ed = false;
-        section(ui, "Color Editor", Some(&mut || reset_ed = true), |ui| {
+        section(ui, "Farbeditor", Some(&mut || reset_ed = true), |ui| {
             ui.horizontal(|ui| {
                 for v in ColorView::ALL {
                     if ui.selectable_label(*view == v, v.label()).clicked() {
@@ -443,7 +443,7 @@ impl App {
         }
 
         let mut reset_cb = false;
-        section(ui, "Color Balance", Some(&mut || reset_cb = true), |ui| {
+        section(ui, "Farbbalance", Some(&mut || reset_cb = true), |ui| {
             let cb = &mut adj.color_balance;
             changed |= wheel_ui(ui, "Master", &mut cb.master, false);
             changed |= wheel_ui(ui, "Schatten", &mut cb.shadows, true);
@@ -486,9 +486,9 @@ impl App {
         let mut action = None;
         ui.horizontal(|ui| {
             for (kind, text, hover) in [
-                (Auto::Exposure, "Auto Belichtung", "Belichtung so setzen, dass die Mitteltöne stimmen"),
-                (Auto::Levels, "Auto Levels", "Schwarz- und Weißpunkt aus dem Histogramm"),
-                (Auto::WhiteBalance, "Auto WB", "Weißabgleich aus dem Bildinhalt schätzen"),
+                (Auto::Exposure, "Auto-Belichtung", "Belichtung so setzen, dass die Mitteltöne stimmen"),
+                (Auto::Levels, "Auto-Tonwerte", "Schwarz- und Weißpunkt aus dem Histogramm"),
+                (Auto::WhiteBalance, "Auto-Weißabgleich", "Weißabgleich aus dem Bildinhalt schätzen"),
             ] {
                 if ui.add_enabled(self.current.is_some(), egui::Button::new(format!("{}  {text}", icon::MAGIC_WAND))).on_hover_text(hover).clicked() {
                     action = Some(kind);

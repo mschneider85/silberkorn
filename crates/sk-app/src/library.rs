@@ -453,8 +453,8 @@ impl App {
                     action = Some(AlbumAction::Create(name.clone(), false));
                 }
                 if ui
-                    .add_enabled(!name.is_empty() && !self.filter.is_empty(), egui::Button::new("+ Smart"))
-                    .on_hover_text("Smart-Album aus dem aktuellen Filter erstellen")
+                    .add_enabled(!name.is_empty() && !self.filter.is_empty(), egui::Button::new("+ Filteralbum"))
+                    .on_hover_text("Album, das immer die Bilder des aktuellen Filters zeigt")
                     .clicked()
                 {
                     action = Some(AlbumAction::Create(name, true));

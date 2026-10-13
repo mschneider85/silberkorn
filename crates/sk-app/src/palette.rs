@@ -70,23 +70,23 @@ struct Command {
 /// Tool sections per tab with search terms; titles as passed to `widgets::section`.
 const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Library, "Gesichter & Sichtung", "culling augen geschlossen unscharf personen faces"),
-    (Tab::Library, "Alben", "album smart sammlung"),
+    (Tab::Library, "Alben", "album smart filteralbum sammlung"),
     (Tab::Library, "Ordner", "folder verzeichnis"),
     (Tab::Library, "Filter & Suche", "suchen filter sterne bewertung sortieren sort"),
     (Tab::Lens, "Zuschnitt", "crop beschneiden seitenverhältnis format"),
     (Tab::Lens, "Drehen & Spiegeln", "rotate flip geraderichten horizont straighten"),
-    (Tab::Lens, "Keystone (Perspektive)", "perspektive stürzende linien upright"),
+    (Tab::Lens, "Perspektive", "perspektive stürzende linien upright keystone"),
     (Tab::Lens, "Objektivkorrektur", "lens verzeichnung chromatische aberration ca vignette lensfun profil"),
     (Tab::Exposure, "Belichtung", "exposure kontrast helligkeit sättigung"),
-    (Tab::Exposure, "High Dynamic Range", "hdr lichter tiefen weiß schwarz highlights shadows"),
-    (Tab::Exposure, "Tonwerte (Levels)", "levels schwarzpunkt weißpunkt"),
+    (Tab::Exposure, "Lichter und Tiefen", "hdr lichter tiefen weiß schwarz highlights shadows"),
+    (Tab::Exposure, "Tonwerte", "levels schwarzpunkt weißpunkt"),
     (Tab::Exposure, "Gradationskurve", "curve kurve tonkurve"),
     (Tab::Color, "Basismerkmale", "basiskurve kameraprofil"),
     (Tab::Color, "Weißabgleich", "white balance wb kelvin temperatur tint"),
     (Tab::Color, "Farbe", "sättigung dynamik vibrance saturation"),
-    (Tab::Color, "Color Editor", "hsl farbbereich farbton"),
+    (Tab::Color, "Farbeditor", "hsl farbbereich farbton color editor"),
     (Tab::Color, "Hauttöne", "skin haut porträt"),
-    (Tab::Color, "Color Balance", "color grading farbräder tonung"),
+    (Tab::Color, "Farbbalance", "color grading color balance farbräder tonung"),
     (Tab::Color, "Schwarzweiß", "black white monochrom sw"),
     (Tab::Details, "Schärfen", "sharpen schärfe"),
     (Tab::Details, "Rauschen", "noise denoise ki ai entrauschen rauschreduzierung luminanz farbrauschen"),
@@ -137,9 +137,9 @@ impl App {
         let import = if self.session.is_some() { "In Session importieren …" } else { "Ordner in Katalog importieren …" };
         add(icon::FOLDER_PLUS, import, "Datei", "", true, "import", Run(|a, _| a.import_folder_dialog()));
         let g = "Bild";
-        add(icon::MAGIC_WAND, "Auto Belichtung", g, "", has, "automatisch exposure", Action::Auto(Auto::Exposure));
-        add(icon::MAGIC_WAND, "Auto Levels", g, "", has, "automatisch tonwerte", Action::Auto(Auto::Levels));
-        add(icon::MAGIC_WAND, "Auto Weißabgleich", g, "", has, "automatisch wb white balance", Action::Auto(Auto::WhiteBalance));
+        add(icon::MAGIC_WAND, "Auto-Belichtung", g, "", has, "automatisch exposure", Action::Auto(Auto::Exposure));
+        add(icon::MAGIC_WAND, "Auto-Tonwerte", g, "", has, "automatisch tonwerte", Action::Auto(Auto::Levels));
+        add(icon::MAGIC_WAND, "Auto-Weißabgleich", g, "", has, "automatisch wb white balance", Action::Auto(Auto::WhiteBalance));
         for gd in Guides::ALL {
             let label = if gd == Guides::Off { "Hilfslinien aus".to_string() } else { format!("Hilfslinien: {}", gd.label()) };
             add(icon::GRID_NINE, &label, "Ansicht", "", true, "guides raster drittel", Action::Guides(gd));

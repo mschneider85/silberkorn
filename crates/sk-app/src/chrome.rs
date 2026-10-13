@@ -21,7 +21,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Strg+N", "Neue Session"),
             ("Strg+Umschalt+O", "Session öffnen"),
             ("Strg+O", "Ordner öffnen"),
-            ("Strg+D", "Auswahl verarbeiten (exportieren)"),
+            ("Strg+D", "Auswahl exportieren"),
             ("Strg+K", "Befehl oder Werkzeug suchen"),
             ("Strg+1 – Strg+0", "Werkzeug-Tabs"),
             ("F1", "Diese Übersicht"),
@@ -57,7 +57,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
     (
         "Ansicht",
         &[
-            ("G", "Raster / Viewer"),
+            ("G", "Raster / Einzelbild"),
             ("Z", "100 % / Einpassen (auch Doppelklick)"),
             ("Y", "Vorher / Nachher"),
             ("U", "Geteilter Vergleich"),
@@ -66,7 +66,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Strg/Umschalt+Klick", "Mehrere Bilder nebeneinander vergleichen"),
             ("E", "Belichtungswarnung"),
             ("K", "Fokusmaske (scharfe Bereiche grün)"),
-            ("P", "Proof: Bild wie vom Ausgabe-Rezept geschrieben"),
+            ("P", "Ausgabevorschau: Bild wie vom Ausgabe-Rezept geschrieben"),
             ("Umschalt+P", "Softproof: Bild wie im Farbraum oder auf dem Drucker, mit Farbumfang-Warnung"),
             ("Strg+P", "Druckvorschau: Papierformat und Auflösung im Druck"),
             ("Umschalt+Z", "Druckgröße: Bild so groß wie gedruckt (Bildschirm kalibrieren im Tab „Ausgabe“)"),
@@ -75,7 +75,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
             ("Umschalt+A", "Automatisch geraderichten (Drehung und stürzende Linien)"),
             ("Strg+Umschalt+R", "Auswahl umbenennen (mit Platzhaltern)"),
             ("F11 / Strg+Umschalt+F", "Vollbild ohne Ablenkung (Esc beendet)"),
-            ("Umschalt+F11", "Viewer in eigenem Fenster, z. B. auf dem Zweitmonitor (dort F11: Vollbild)"),
+            ("Umschalt+F11", "Bild in eigenem Fenster, z. B. auf dem Zweitmonitor (dort F11: Vollbild)"),
         ],
     ),
     (
@@ -83,13 +83,13 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
         &[
             ("B / N", "Pinsel / Radierer"),
             ("L / R", "Linearer / radialer Verlauf"),
-            ("J", "Magic Brush"),
+            ("J", "Zauberpinsel"),
             ("H / S", "Reparieren / Klonen"),
             ("X", "Entfernen (KI): übermalen, die Stelle wird passend gefüllt"),
             ("[ / ]", "Pinselgröße"),
             ("M", "Maske anzeigen"),
             ("Entf", "Retuschepunkt löschen"),
-            ("Taste halten + Mausrad", "Speed Edit (Q, A, S, D …)"),
+            ("Taste halten + Mausrad", "Schnellbearbeitung (Q, A, S, D …)"),
         ],
     ),
 ];
@@ -259,7 +259,7 @@ impl App {
             self.import_folder_dialog();
         }
         ui.separator();
-        self.command_item_labeled(ui, "export", &format!("Verarbeiten ({})", image_count(n_sel)));
+        self.command_item_labeled(ui, "export", &format!("Exportieren ({})", image_count(n_sel)));
         ui.separator();
         if item(ui, icon::X, "Beenden", "Alt+F4", true) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -422,7 +422,7 @@ impl App {
             ui.add(egui::Slider::new(&mut self.focus_sensitivity, 0.0..=100.0).fixed_decimals(0))
                 .on_hover_text("Höher: auch weniger scharfe Bereiche markieren");
         });
-        if check(ui, self.proof_view, "Proof (Ausgabe-Rezept)", &shortcut("proof")) {
+        if check(ui, self.proof_view, "Ausgabevorschau", &shortcut("proof")) {
             self.toggle_proof();
         }
         if check(ui, self.softproof.on, "Softproof (Profil im Tab „Ausgabe“)", &shortcut("softproof")) {
@@ -462,7 +462,7 @@ impl App {
             });
         }
         ui.separator();
-        if check(ui, self.viewer_window.open, "Viewer in eigenem Fenster (Zweitmonitor)", &shortcut("viewer-window")) {
+        if check(ui, self.viewer_window.open, "Bild in eigenem Fenster (Zweitmonitor)", &shortcut("viewer-window")) {
             self.toggle_viewer_window();
         }
         if check(ui, self.fullscreen, "Vollbild ohne Ablenkung", &shortcut("fullscreen")) {
@@ -500,7 +500,7 @@ impl App {
             group_gap(ui);
             let modes = [
                 Seg { icon: icon::SQUARES_FOUR, label: "Raster", hover: "Raster: alle Bilder im Überblick (G)", active: self.grid_view, enabled: true },
-                Seg { icon: icon::IMAGE, label: "Viewer", hover: "Viewer: ein Bild groß bearbeiten (G)", active: !self.grid_view, enabled: true },
+                Seg { icon: icon::IMAGE, label: "Einzelbild", hover: "Einzelbild: ein Bild groß bearbeiten (G)", active: !self.grid_view, enabled: true },
             ];
             if let Some(i) = segmented(ui, &modes) {
                 self.grid_view = i == 0;
@@ -522,7 +522,7 @@ impl App {
             if labeled_tool(ui, wide, icon::CROP, "Zuschneiden", "Zuschneiden (C, Enter übernimmt)", self.crop_tool.is_some(), has).clicked() {
                 self.toggle_crop();
             }
-            if labeled_tool(ui, wide, icon::RULER, "Ausrichten", "Geraderichten: eine Linie entlang des Horizonts ziehen", self.straighten_tool.is_some(), has).clicked() {
+            if labeled_tool(ui, wide, icon::RULER, "Geraderichten", "Geraderichten: eine Linie entlang des Horizonts ziehen", self.straighten_tool.is_some(), has).clicked() {
                 self.toggle_straighten();
             }
             if labeled_tool(ui, wide, icon::EYEDROPPER, "Weißabgleich", "Weißabgleich-Pipette: auf eine neutrale Stelle klicken (W)", self.picking_wb, has).clicked() {
@@ -545,7 +545,7 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
                 let n = self.selected_paths().len();
-                let text = RichText::new(format!("{}  Verarbeiten", icon::EXPORT)).color(Color32::WHITE).strong();
+                let text = RichText::new(format!("{}  Exportieren", icon::EXPORT)).color(Color32::WHITE).strong();
                 let button = Button::new(text).fill(theme::ACCENT).corner_radius(6).min_size(vec2(0.0, 28.0));
                 if ui.add_enabled(n > 0, button).on_hover_text(format!("{} mit den gewählten Rezepten exportieren (Strg+D)", image_count(n))).clicked() {
                     self.export_selection();
@@ -586,7 +586,7 @@ impl App {
                         self.choose_overlay();
                     }
                 });
-                if tool(ui, icon::FILE_MAGNIFYING_GLASS, "Proof: so, wie das Ausgabe-Rezept das Bild schreibt (P)", self.proof_view, has).clicked() {
+                if tool(ui, icon::FILE_MAGNIFYING_GLASS, "Ausgabevorschau: so, wie das Ausgabe-Rezept das Bild schreibt (P)", self.proof_view, has).clicked() {
                     self.toggle_proof();
                 }
                 if tool(ui, icon::CROSSHAIR, "Fokusmaske: scharfe Bereiche markieren (K)", self.focus_mask, has).clicked() {

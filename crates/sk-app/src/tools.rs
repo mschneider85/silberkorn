@@ -67,7 +67,7 @@ impl App {
         }
 
         let mut reset_hdr = false;
-        section(ui, "High Dynamic Range", Some(&mut || reset_hdr = true), |ui| {
+        section(ui, "Lichter und Tiefen", Some(&mut || reset_hdr = true), |ui| {
             changed |= slider_row(ui, "Lichter", &mut adj.highlights, -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Tiefen", &mut adj.shadows, -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Weiß", &mut adj.whites, -100.0..=100.0, 0.0, 0);
@@ -82,7 +82,7 @@ impl App {
         }
 
         let mut reset_levels = false;
-        section(ui, "Tonwerte (Levels)", Some(&mut || reset_levels = true), |ui| {
+        section(ui, "Tonwerte", Some(&mut || reset_levels = true), |ui| {
             let lv = &mut adj.levels;
             changed |= slider_row(ui, "Eingang Schwarz", &mut lv.in_black, 0.0..=0.5, 0.0, 3);
             changed |= slider_row(ui, "Eingang Weiß", &mut lv.in_white, 0.5..=1.0, 1.0, 3);
@@ -165,7 +165,7 @@ impl App {
             // In as-shot mode the sliders show the estimated values; moving one switches to custom.
             let (mut kelvin, mut tint) = if wb.mode == WbMode::AsShot { as_shot } else { (wb.kelvin, wb.tint) };
             let mut wb_changed = widgets::slider_row_with(ui, "Kelvin", &mut kelvin, 2000.0..=15000.0, as_shot.0, 0, widgets::SliderOpts { suffix: " K", rail: Some(widgets::RAIL_KELVIN) });
-            wb_changed |= widgets::slider_row_with(ui, "Tint", &mut tint, -150.0..=150.0, as_shot.1, 1, widgets::SliderOpts { rail: Some(widgets::RAIL_TINT), ..Default::default() });
+            wb_changed |= widgets::slider_row_with(ui, "Tönung", &mut tint, -150.0..=150.0, as_shot.1, 1, widgets::SliderOpts { rail: Some(widgets::RAIL_TINT), ..Default::default() });
             if wb_changed {
                 *wb = WhiteBalance { mode: WbMode::Custom, kelvin, tint };
                 changed = true;
@@ -306,7 +306,7 @@ impl App {
         section(ui, "Ausgaberezepte", None, |ui| {
             for (i, r) in self.recipes.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut r.enabled, "").on_hover_text("Beim Verarbeiten verwenden");
+                    ui.checkbox(&mut r.enabled, "").on_hover_text("Beim Exportieren verwenden");
                     if ui.selectable_label(self.selected_recipe == i, &r.name).clicked() {
                         self.selected_recipe = i;
                     }
@@ -456,7 +456,7 @@ impl App {
             if widgets::slider_row_with(ui, "Deckkraft", &mut opacity, 5.0..=100.0, d.opacity * 100.0, 0, pct) {
                 wm.opacity = opacity / 100.0;
             }
-            ui.label(RichText::new("Größe und Abstand in % der kurzen Bildkante. Vorschau mit P (Proof).").small().color(crate::theme::TEXT_FAINT));
+            ui.label(RichText::new("Größe und Abstand in % der kurzen Bildkante. Vorschau mit P (Ausgabevorschau).").small().color(crate::theme::TEXT_FAINT));
         });
         section(ui, "Metadaten", None, |ui| {
             ui.checkbox(&mut r.capture_metadata, "Aufnahmedaten übernehmen").on_hover_text("Kamera, Objektiv, Belichtung und Aufnahmedatum");
@@ -469,10 +469,10 @@ impl App {
             };
             ui.label(RichText::new(note).small().color(crate::theme::TEXT_FAINT));
         });
-        section(ui, "Verarbeiten", None, |ui| {
+        section(ui, "Exportieren", None, |ui| {
             let n = self.selected_paths().len();
             let k = self.recipes.iter().filter(|r| r.enabled).count();
-            let text = RichText::new(format!("{}  {} × {} verarbeiten", crate::theme::icon::EXPORT, widgets::image_count(n), if k == 1 { "1 Rezept".to_string() } else { format!("{k} Rezepte") })).color(Color32::WHITE);
+            let text = RichText::new(format!("{}  {} × {} exportieren", crate::theme::icon::EXPORT, widgets::image_count(n), if k == 1 { "1 Rezept".to_string() } else { format!("{k} Rezepte") })).color(Color32::WHITE);
             let button = egui::Button::new(text).fill(crate::theme::ACCENT).corner_radius(6).min_size(egui::vec2(ui.available_width(), 30.0));
             if ui.add_enabled(n > 0 && k > 0, button).clicked() {
                 self.export_selection();

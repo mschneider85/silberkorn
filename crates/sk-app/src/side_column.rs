@@ -309,17 +309,17 @@ impl App {
 fn tool_of(name: &'static str) -> Option<(Tab, Option<&'static str>)> {
     let t = match name {
         "Belichtung" | "Kontrast" | "Helligkeit" | "Sättigung" => (Tab::Exposure, Some("Belichtung")),
-        "Lichter" | "Tiefen" | "Weiß" | "Schwarz" => (Tab::Exposure, Some("High Dynamic Range")),
-        "Tonwerte" => (Tab::Exposure, Some("Tonwerte (Levels)")),
+        "Lichter" | "Tiefen" | "Weiß" | "Schwarz" => (Tab::Exposure, Some("Lichter und Tiefen")),
+        "Tonwerte" => (Tab::Exposure, Some("Tonwerte")),
         "Gradationskurve" => (Tab::Exposure, Some("Gradationskurve")),
         "Weißabgleich" => (Tab::Color, Some("Weißabgleich")),
         "Basiskurve" => (Tab::Color, Some("Basismerkmale")),
         "Dynamik" => (Tab::Color, Some("Farbe")),
         // These sections are named like the tool.
-        "Color Editor" | "Hauttöne" | "Color Balance" | "Schwarzweiß" => (Tab::Color, Some(name)),
+        "Farbeditor" | "Hauttöne" | "Farbbalance" | "Schwarzweiß" => (Tab::Color, Some(name)),
         "Zuschnitt" => (Tab::Lens, Some("Zuschnitt")),
         "Drehen" | "Geraderichten" | "Spiegeln" => (Tab::Lens, Some("Drehen & Spiegeln")),
-        "Keystone" => (Tab::Lens, Some("Keystone (Perspektive)")),
+        "Perspektive" => (Tab::Lens, Some("Perspektive")),
         "Objektivkorrektur" => (Tab::Lens, Some("Objektivkorrektur")),
         "Schärfen" | "Körnung" | "Dunst entfernen" => (Tab::Details, Some(name)),
         "Rauschreduzierung" | "KI-Entrauschen" => (Tab::Details, Some(crate::denoise::NOISE_SECTION)),

@@ -99,7 +99,7 @@ impl App {
         let mut toggle = false;
         let mut pick = false;
         section(ui, "Softproof", None, |ui| {
-            if ui.checkbox(&mut self.softproof.on.clone(), "Softproof im Viewer (Umschalt+P)").changed() {
+            if ui.checkbox(&mut self.softproof.on.clone(), "Softproof anzeigen (Umschalt+P)").changed() {
                 toggle = true;
             }
             let name = match &s.target {
@@ -135,7 +135,7 @@ impl App {
             ui.checkbox(&mut s.simulate_paper, "Papier und Druckfarbe simulieren")
                 .on_hover_text("Zeigt den Papierton und das tatsächliche Schwarz des Drucks (absolut farbmetrisch)");
             ui.checkbox(&mut s.gamut_warning, "Farbumfang-Warnung")
-                .on_hover_text("Farben, die das Profil nicht wiedergeben kann, erscheinen magenta; im Proof: was die Datei beschneidet");
+                .on_hover_text("Farben, die das Profil nicht wiedergeben kann, erscheinen magenta; in der Ausgabevorschau: was die Datei beschneidet");
             ui.checkbox(&mut s.paper_margin, "Papierrand zeigen")
                 .on_hover_text("Papier um das Bild, im Papierton, wenn er simuliert wird");
             if let Some(e) = &self.softproof.error {
