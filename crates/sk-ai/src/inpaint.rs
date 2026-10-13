@@ -147,7 +147,7 @@ pub fn make_removal(full: &LinearImage, wb: [f32; 3], strokes: &[BrushStroke], m
     let guide = strokes.iter().any(|s| s.auto_mask).then(|| sk_core::brush::AutoGuide::from_image(full, 1024));
     let cover = rasterize_strokes_in(strokes, norm, w, h, aspect, guide.as_ref());
     let mut work = Work { rect, w, h, rgb, cover };
-    fill_windows(&mut work, model, progress)?;
+    fill_windows(&mut work, &|rgb, hole| model.fill(rgb, hole), progress)?;
     let opacity = strokes.iter().filter(|s| !s.erase).map(|s| s.opacity).fold(0.0f32, f32::max).clamp(0.0, 1.0);
     let mut removal = finish(work, full, wb, opacity)?;
     removal.strokes = strokes.to_vec();
@@ -155,8 +155,8 @@ pub fn make_removal(full: &LinearImage, wb: [f32; 3], strokes: &[BrushStroke], m
 }
 
 /// Fills the marked area window by window (each NET x NET, with the surroundings and what
-/// earlier windows filled as context).
-fn fill_windows(work: &mut Work, model: &Inpainter, progress: &dyn Fn(f32)) -> Result<()> {
+/// earlier windows filled as context); `fill` is the network.
+fn fill_windows(work: &mut Work, fill: &dyn Fn(&[[u8; 3]], &[bool]) -> Result<Vec<[u8; 3]>>, progress: &dyn Fn(f32)) -> Result<()> {
     let (w, h) = (work.w, work.h);
     let hole0: Vec<bool> = work.cover.iter().map(|c| *c > 0.05).collect();
     let hole = dilate(&hole0, w, h, 4);
@@ -193,8 +193,12 @@ fn fill_windows(work: &mut Work, model: &Inpainter, progress: &dyn Fn(f32)) -> R
     }
     let mut done = vec![false; w * h];
     let total = centers.len();
-    for (k, (cx, cy)) in centers.into_iter().enumerate() {
-        progress(0.1 + 0.85 * k as f32 / total as f32);
+    let mut centers = centers.into_iter();
+    for k in 0.. {
+        // After the grid: a window on each marked pixel still left (a cell's window reaches only
+        // half a window around the middle of its marks; the window always contains the pixel).
+        let Some((cx, cy)) = centers.next().or_else(|| (0..w * h).find(|&i| hole[i] && !done[i]).map(|i| (i % w, i / w))) else { break };
+        progress((0.1 + 0.85 * k as f32 / total as f32).min(0.95));
         // Window origin (may extend beyond the area: those pixels are mirrored inside).
         let ox = cx as i64 - NET as i64 / 2;
         let oy = cy as i64 - NET as i64 / 2;
@@ -214,7 +218,7 @@ fn fill_windows(work: &mut Work, model: &Inpainter, progress: &dyn Fn(f32)) -> R
             continue;
         }
         let rgb8: Vec<[u8; 3]> = (0..NET * NET).map(|i| work.rgb[idx(i)].map(|v| (srgb_encode((v * gain).clamp(0.0, 1.0)) * 255.0 + 0.5) as u8)).collect();
-        let filled = model.fill(&rgb8, &todo)?;
+        let filled = fill(&rgb8, &todo)?;
         for i in (0..NET * NET).filter(|&i| todo[i]) {
             let k = idx(i);
             work.rgb[k] = filled[i].map(|v| srgb_decode(v as f32 / 255.0) / gain);
@@ -269,6 +273,33 @@ fn finish(work: Work, full: &LinearImage, wb: [f32; 3], opacity: f32) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_marked_pixel_is_filled() {
+        // In one grid cell: a dense stroke at its right edge and a dot far from it, beyond the
+        // reach of the window around the middle of the cell's marks.
+        let (w, h) = (1200, 700);
+        let mut cover = vec![0.0f32; w * h];
+        for y in 0..320 {
+            for x in 300..320 {
+                cover[y * w + x] = 1.0;
+            }
+        }
+        for y in 4..8 {
+            for x in 4..8 {
+                cover[y * w + x] = 1.0;
+            }
+        }
+        let mut work = Work { rect: [0.0, 0.0, w as f32, h as f32], w, h, rgb: vec![[0.0; 3]; w * h], cover: cover.clone() };
+        let windows = std::cell::Cell::new(0);
+        let fill = |rgb: &[[u8; 3]], _: &[bool]| {
+            windows.set(windows.get() + 1);
+            Ok(vec![[255u8; 3]; rgb.len()])
+        };
+        fill_windows(&mut work, &fill, &|_| {}).unwrap();
+        let missed = (0..w * h).filter(|&i| cover[i] > 0.05 && work.rgb[i][0] == 0.0).count();
+        assert_eq!(missed, 0, "{} Fenster", windows.get());
+    }
 
     #[test]
     fn removes_a_dark_spot_with_model_if_available() {
