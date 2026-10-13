@@ -59,7 +59,9 @@ pub enum Event {
     /// The export was cancelled after `done` of `total` outputs.
     ExportCancelled { done: usize, total: usize },
     IndexProgress { done: usize, total: usize },
-    LensDbDownloaded(Result<PathBuf, String>),
+    /// The lensfun database was read (again after a download).
+    LensDb(Arc<Vec<sk_core::lensfun::LensProfile>>),
+    LensDbDownloading(bool),
     AiMask { generation: u64, layer: usize, result: Result<sk_ai::MaskImage, String> },
     /// An image of the compare view, rendered with its saved adjustments.
     CompareImage { path: PathBuf, image: ColorImage },
@@ -1080,13 +1082,31 @@ impl Workers {
         let _ = self.before_tx.send(job);
     }
 
-    /// Downloads the lensfun database in the background.
-    pub fn download_lens_db(&self) {
+    /// Reads the lensfun database in the background and downloads it first if it is missing or
+    /// older than 30 days. Without network the existing copy is used.
+    pub fn load_lens_db(&self) {
         let (tx, ctx) = (self.ev_tx.clone(), self.ctx.clone());
         thread::spawn(move || {
-            let r = crate::guard::catch(sk_core::lensfun::download_database).and_then(|r| r.map_err(|e| format!("{e:#}")));
-            let _ = tx.send(Event::LensDbDownloaded(r));
-            ctx.request_repaint();
+            let send = |ev| {
+                let _ = tx.send(ev);
+                ctx.request_repaint();
+            };
+            let db = crate::guard::catch(sk_core::lensfun::load_database).unwrap_or_default();
+            let download = sk_core::lensfun::needs_download(&db);
+            let had_db = !db.is_empty();
+            if !db.is_empty() || !download {
+                send(Event::LensDb(Arc::new(db)));
+            }
+            if download {
+                send(Event::LensDbDownloading(true));
+                let ok = crate::guard::catch(|| sk_core::lensfun::download_database().is_ok()).unwrap_or(false);
+                send(Event::LensDbDownloading(false));
+                // Also without network: an empty database ends the waiting in the panel.
+                let db = if ok { sk_core::lensfun::load_database() } else { Vec::new() };
+                if ok || !had_db {
+                    send(Event::LensDb(Arc::new(db)));
+                }
+            }
         });
     }
 

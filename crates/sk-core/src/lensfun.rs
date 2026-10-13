@@ -189,7 +189,31 @@ pub fn load_database() -> Vec<LensProfile> {
     all
 }
 
-/// Downloads the lensfun XML files for common mounts into the Silberkorn data folder.
+/// Silberkorn's own copy of the database, kept up to date by [`download_database`].
+pub fn own_dir() -> PathBuf {
+    search_dirs().remove(0)
+}
+
+/// Age after which [`needs_download`] asks for a fresh copy, so that new lenses arrive.
+const MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30 * 24 * 3600);
+
+/// Whether to download the database: none was found, or Silberkorn's copy is older than 30 days.
+pub fn needs_download(db: &[LensProfile]) -> bool {
+    let newest = std::fs::read_dir(own_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "xml"))
+        .filter_map(|e| e.metadata().ok()?.modified().ok())
+        .max();
+    match newest {
+        Some(t) => t.elapsed().is_ok_and(|age| age > MAX_AGE),
+        // A system-wide lensfun installation is enough.
+        None => db.is_empty(),
+    }
+}
+
+/// Downloads the lensfun XML files for common mounts into Silberkorn's data folder.
 pub fn download_database() -> Result<PathBuf> {
     const FILES: &[&str] = &[
         "mil-sony.xml", "slr-sony.xml", "mil-canon.xml", "slr-canon.xml", "mil-nikon.xml", "slr-nikon.xml",
@@ -197,20 +221,27 @@ pub fn download_database() -> Result<PathBuf> {
         "mil-tamron.xml", "slr-tamron.xml", "mil-samyang.xml", "slr-samyang.xml", "mil-zeiss.xml", "slr-zeiss.xml",
         "mil-tokina.xml", "slr-tokina.xml", "mil-leica.xml", "compact-sony.xml", "mil-viltrox.xml", "mil-7artisans.xml",
     ];
-    let dir = search_dirs().remove(0);
+    let dir = own_dir();
     std::fs::create_dir_all(&dir)?;
-    let mut ok = 0;
-    for f in FILES {
-        let url = format!("https://raw.githubusercontent.com/lensfun/lensfun/master/data/db/{f}");
-        if let Ok(mut resp) = ureq::get(&url).call()
-            && let Ok(body) = resp.body_mut().read_to_string()
-            && parse(&body).is_ok()
-        {
-            crate::safe_file::write_nosync(&dir.join(f), body)?;
-            ok += 1;
-        }
+    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(30))).build().into();
+    let bodies: Vec<_> = std::thread::scope(|s| {
+        let jobs: Vec<_> = FILES
+            .iter()
+            .map(|f| {
+                let agent = agent.clone();
+                s.spawn(move || {
+                    let url = format!("https://raw.githubusercontent.com/lensfun/lensfun/master/data/db/{f}");
+                    let body = agent.get(&url).call().ok()?.body_mut().read_to_string().ok()?;
+                    parse(&body).is_ok().then_some((f, body))
+                })
+            })
+            .collect();
+        jobs.into_iter().filter_map(|j| j.join().ok().flatten()).collect()
+    });
+    anyhow::ensure!(!bodies.is_empty(), "Download der Objektivdatenbank fehlgeschlagen");
+    for (f, body) in bodies {
+        crate::safe_file::write_nosync(&dir.join(f), body)?;
     }
-    anyhow::ensure!(ok > 0, "Download der Objektivdatenbank fehlgeschlagen");
     Ok(dir)
 }
 

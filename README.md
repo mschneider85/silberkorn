@@ -405,8 +405,17 @@ Kameradaten und lensfun-Profil schließen sich gegenseitig aus.
 ### Objektivprofile
 
 Lensfun-XML-Dateien werden aus `~/.local/share/silberkorn/lensfun`, `~/.local/share/lensfun` und
-`/usr/share/lensfun` gelesen. Im Tab „Objektiv“ lässt sich die Datenbank auch herunterladen
-(Quelle: lensfun auf GitHub, Lizenz CC BY-SA 3.0; sie wird nicht mit Silberkorn ausgeliefert).
+`/usr/share/lensfun` gelesen – beim Programmstart im Hintergrund (rund 1100 Objektive in etwa
+35 ms). Fehlt die Datenbank oder ist Silberkorns Kopie älter als 30 Tage, wird sie dabei von GitHub
+geladen (lensfun, Lizenz CC BY-SA 3.0, etwa 4 MB; sie wird nicht mit Silberkorn ausgeliefert).
+Ohne Netz bleibt es still bei der vorhandenen Kopie.
+
+Ein neues, noch unbearbeitetes Bild bekommt das passende Profil automatisch,
+wenn die Raw-Datei keine eigene Korrektur mitbringt; die Einstellung wird gleich gespeichert, damit
+Export und Vorschaubilder sie auch sehen. Bereits bearbeitete Bilder bleiben unverändert. Im Tab
+„Objektiv“ lässt sich das Profil entfernen und wieder anwenden; „Zurücksetzen“ stellt den Zustand
+eines neuen Bildes her. In der Oberfläche heißt es nur „Profil“; die Quelle steht im Info-Fenster
+(„Über Silberkorn“).
 
 Einstellungen werden nicht-destruktiv als `<Bild>.sk.json` neben dem RAW gespeichert.
 Sidecars, XMP-Dateien, Stile und Einstellungen werden atomar geschrieben (erst vollständig in eine

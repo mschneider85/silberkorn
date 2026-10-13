@@ -305,10 +305,11 @@ pub struct App {
     pub(crate) style_preview: Option<Adjustments>,
     /// A style row is hovered this frame (otherwise the preview ends).
     pub(crate) style_hovered: bool,
-    /// Lensfun profiles, loaded on first use.
+    /// Lensfun profiles, read in the background at startup.
     pub lens_db: Option<Arc<Vec<sk_core::lensfun::LensProfile>>>,
     pub lens_db_downloading: bool,
-    pub lens_db_missing: bool,
+    /// Lensfun profile name for an EXIF lens name (the search takes about a millisecond).
+    pub lens_match: Option<(String, Option<String>)>,
 
     // browser
     pub scope: Scope,
@@ -645,7 +646,7 @@ impl App {
             style_hovered: false,
             lens_db: None,
             lens_db_downloading: false,
-            lens_db_missing: false,
+            lens_match: None,
             scope: Scope::All,
             filter: Filter::default(),
             sort: settings.sort,
@@ -822,6 +823,9 @@ impl App {
             depth: Default::default(),
         };
         app.reload_styles();
+        if opts.persist_settings {
+            app.workers.load_lens_db();
+        }
         match session {
             Some(s) => {
                 app.open_session(&s);
@@ -1060,6 +1064,8 @@ impl App {
             snapshots: sc.snapshots,
             as_shot_temp_tint,
         });
+        // The prefetched rendering lacks the profile.
+        let rendered = rendered.filter(|_| !self.auto_lens_profile());
         self.undo.clear();
         self.redo.clear();
         self.zoom = None;
@@ -1788,17 +1794,14 @@ impl App {
                         Err(e) => self.status = format!("Maske fehlgeschlagen: {e}"),
                     }
                 }
-                Event::LensDbDownloaded(r) => {
-                    self.lens_db_downloading = false;
-                    self.lens_db = None;
-                    match r {
-                        Ok(dir) => {
-                            self.status = format!("Objektivdatenbank geladen ({})", dir.display());
-                            self.apply_lens_profile();
-                        }
-                        Err(e) => self.status = e,
+                Event::LensDb(db) => {
+                    self.lens_db = Some(db);
+                    self.lens_match = None;
+                    if self.auto_lens_profile() {
+                        self.request_render();
                     }
                 }
+                Event::LensDbDownloading(on) => self.lens_db_downloading = on,
                 Event::CompareImage { path, image } => {
                     // The current image is shown from its live rendering.
                     if self.compare_requested.remove(&path) && self.current_path().as_ref() != Some(&path) {

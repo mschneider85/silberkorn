@@ -145,6 +145,10 @@ impl App {
                 small,
                 Color32::from_gray(175),
             );
+            // Attribution required by the lens database's license.
+            if about {
+                painter.text(right - vec2(0.0, 32.0), Align2::RIGHT_BOTTOM, "Objektivprofile: lensfun, CC BY-SA 3.0", FontId::proportional(10.5), Color32::from_gray(140));
+            }
 
             // Indeterminate progress sweep along the bottom edge while starting up.
             if !about {

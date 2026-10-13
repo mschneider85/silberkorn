@@ -126,6 +126,9 @@ impl App {
         let mut upright = None;
         let crop_active = self.crop_tool.is_some();
         let straighten_active = self.straighten_tool.is_some();
+        let downloading = self.lens_db_downloading;
+        let db_loaded = self.lens_db.is_some();
+        let match_name = self.lens_profile_name();
         let Some(cur) = self.current.as_mut() else { return };
         let adj = &mut cur.adjustments;
         let mut changed = false;
@@ -222,8 +225,6 @@ impl App {
         let focal = cur.meta.info.focal_length.clone();
         let camera_source = cur.meta.lens.as_ref().map(|l| l.source);
         let mut profile_action: Option<bool> = None;
-        let (db_missing, downloading) = (self.lens_db_missing, self.lens_db_downloading);
-        let mut download = false;
         section(ui, "Objektivkorrektur", Some(&mut || reset_lens = true), |ui| {
             ui.label(RichText::new(lens_name.clone().unwrap_or_else(|| "Objektiv unbekannt".into())).color(Color32::from_gray(170)));
             let l = &mut adj.lens;
@@ -241,30 +242,31 @@ impl App {
                 }
             }
             ui.horizontal(|ui| {
-                let label = l.profile.clone().unwrap_or_else(|| "Kein Profil".into());
-                ui.label(format!("Profil: {label}"));
-            });
-            ui.horizontal(|ui| {
-                if ui.button("Profil suchen").on_hover_text("Lensfun-Datenbank").clicked() {
-                    profile_action = Some(true);
-                }
-                if l.profile.is_some() && ui.button("Entfernen").clicked() {
-                    profile_action = Some(false);
+                match (&l.profile, &match_name) {
+                    (Some(p), _) => {
+                        ui.label(format!("Profil: {p}"));
+                        if ui.button("Entfernen").clicked() {
+                            profile_action = Some(false);
+                        }
+                    }
+                    (None, Some(p)) => {
+                        ui.label("Kein Profil");
+                        if ui.button("Anwenden").on_hover_text(format!("Profil „{p}“")).clicked() {
+                            profile_action = Some(true);
+                        }
+                    }
+                    (None, None) if downloading || (!db_loaded && lens_name.is_some()) => {
+                        ui.spinner();
+                        ui.label("Objektivprofile werden geladen…");
+                    }
+                    (None, None) if lens_name.is_some() => {
+                        ui.label(RichText::new("Kein Profil für dieses Objektiv").color(crate::theme::TEXT_FAINT));
+                    }
+                    (None, None) => {}
                 }
             });
             if let Some(f) = &focal {
                 ui.label(RichText::new(format!("Brennweite {f}")).small().color(crate::theme::TEXT_FAINT));
-            }
-            if db_missing {
-                ui.horizontal(|ui| {
-                    if downloading {
-                        ui.spinner();
-                        ui.label("Lade Datenbank…");
-                    } else if ui.button("Objektivdatenbank herunterladen").on_hover_text("lensfun-Datenbank von GitHub (CC BY-SA 3.0)").clicked() {
-                        profile_action = None;
-                        download = true;
-                    }
-                });
             }
             changed |= slider_row(ui, "Verzeichnung", &mut l.distortion, -100.0..=100.0, 0.0, 0);
             changed |= crate::widgets::slider_row_with(ui, "Fisheye", &mut l.fisheye, 0.0..=220.0, 0.0, 0, crate::widgets::SliderOpts { suffix: "°", ..Default::default() });
@@ -276,6 +278,10 @@ impl App {
         if reset_lens {
             adj.lens = LensCorrection::default();
             changed = true;
+            // Back to what a new image gets.
+            if camera_source.is_none() && match_name.is_some() {
+                profile_action = Some(true);
+            }
         }
 
         if changed {
@@ -298,10 +304,6 @@ impl App {
         }
         if toggle_straighten {
             self.toggle_straighten();
-        }
-        if download {
-            self.lens_db_downloading = true;
-            self.workers.download_lens_db();
         }
         match profile_action {
             Some(true) => self.apply_lens_profile(),
@@ -519,32 +521,52 @@ impl App {
         self.request_render();
     }
 
-    /// Looks up the lens of the current image in the lensfun database and applies its profile.
-    pub fn apply_lens_profile(&mut self) {
-        let db = self.lens_db.get_or_insert_with(|| std::sync::Arc::new(sk_core::lensfun::load_database())).clone();
-        let Some(cur) = &self.current else { return };
-        if db.is_empty() {
-            self.status = "Keine Objektivdatenbank gefunden – bitte herunterladen".into();
-            self.lens_db_missing = true;
-            return;
+    /// The lensfun profile for the current image's lens: name and coefficients at its focal length.
+    fn lens_profile(&self) -> Option<(String, sk_core::params::LensCoefficients)> {
+        let (db, cur) = (self.lens_db.as_ref()?, self.current.as_ref()?);
+        let profile = sk_core::lensfun::find(db, cur.meta.info.lens.as_deref()?)?;
+        let coeffs = profile.coefficients(cur.meta.info.focal_mm.unwrap_or(50.0), cur.meta.info.fnumber);
+        Some((profile.name(), coeffs))
+    }
+
+    /// Name of the lensfun profile for the current lens, cached per lens name.
+    fn lens_profile_name(&mut self) -> Option<String> {
+        let lens = self.current.as_ref()?.meta.info.lens.clone()?;
+        self.lens_db.as_ref()?;
+        if self.lens_match.as_ref().is_none_or(|(l, _)| *l != lens) {
+            self.lens_match = Some((lens.clone(), self.lens_profile().map(|p| p.0)));
         }
-        self.lens_db_missing = false;
-        let Some(lens) = cur.meta.info.lens.clone() else {
-            self.status = "Objektiv in den Metadaten nicht angegeben".into();
-            return;
-        };
-        let Some(profile) = sk_core::lensfun::find(&db, &lens) else {
-            self.status = format!("Kein Profil für „{lens}“ gefunden");
-            return;
-        };
-        let focal = cur.meta.info.focal_mm.unwrap_or(50.0);
-        let coeffs = profile.coefficients(focal, cur.meta.info.fnumber);
-        let name = profile.name();
+        self.lens_match.as_ref().and_then(|m| m.1.clone())
+    }
+
+    /// Applies the lensfun profile to the current image.
+    pub fn apply_lens_profile(&mut self) {
+        let Some((name, coeffs)) = self.lens_profile() else { return };
         self.edit(|a| {
             a.lens.profile = Some(name.clone());
             a.lens.profile_coeffs = Some(coeffs);
+            // Never both: the profile would correct the same lens a second time.
             a.lens.camera = false;
         });
-        self.status = format!("Objektivprofil: {name} @ {focal:.0} mm");
+        self.status = format!("Objektivprofil: {name}");
+    }
+
+    /// Applies the lensfun profile to an image that has never been edited and whose raw file
+    /// carries no lens correction of its own, as on import. Saved right
+    /// away, so that export and thumbnails see it too. Returns whether it applied one.
+    pub fn auto_lens_profile(&mut self) -> bool {
+        let Some(cur) = &self.current else { return false };
+        if cur.meta.lens.is_some() || cur.adjustments != cur.committed || cur.committed.clone().normalized() != sk_core::params::Adjustments::default() {
+            return false;
+        }
+        let Some((name, coeffs)) = self.lens_profile() else { return false };
+        let Some(cur) = self.current.as_mut() else { return false };
+        for a in [&mut cur.adjustments, &mut cur.committed] {
+            a.lens.profile = Some(name.clone());
+            a.lens.profile_coeffs = Some(coeffs);
+        }
+        self.sidecar_dirty = true;
+        self.commit_and_save();
+        true
     }
 }
