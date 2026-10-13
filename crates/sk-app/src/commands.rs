@@ -142,7 +142,7 @@ pub const COMMANDS: &[Command] = &[
         a.show_mask = !a.show_mask;
         a.request_render();
     }),
-    cmd!("delete-spot", icon::TRASH, "Retuschepunkt löschen", "Retusche", [NONE => Key::Delete, NONE => Key::Backspace], "spot", always, |a, _| a.delete_selected_spot()),
+    cmd!("delete-spot", icon::TRASH, "Retuschepunkt oder Verlauf löschen", "Retusche", [NONE => Key::Delete, NONE => Key::Backspace], "spot verlauf gradient", always, |a, _| a.delete_selected_spot()),
     // Ansicht
     cmd!("grid", icon::SQUARES_FOUR, "Raster / Einzelbild umschalten", "Ansicht", [NONE => Key::G], "grid browser übersicht viewer", always, |a, _| a.grid_view = !a.grid_view),
     cmd!("filmstrip", icon::FILM_STRIP, "Filmstreifen ein/aus", "Ansicht", [], "filmstrip", always, |a, _| a.show_filmstrip = !a.show_filmstrip),

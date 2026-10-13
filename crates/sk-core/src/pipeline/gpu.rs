@@ -1161,7 +1161,7 @@ mod tests {
         let Some(g) = gpu() else { return };
         let plain = Adjustments::default();
         let radial = Mask {
-            radial: vec![RadialGradient { center: [0.4, 0.5], radius_x: 0.3, radius_y: 0.25, feather: 0.6, invert: false }],
+            radial: vec![RadialGradient { center: [0.4, 0.5], radius_x: 0.3, radius_y: 0.25, feather: 0.6, invert: false, angle: 0.0 }],
             ..Default::default()
         };
         let cases: Vec<(&str, Adjustments, RenderOptions, Option<Region>)> = vec![

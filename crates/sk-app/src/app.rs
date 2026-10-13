@@ -380,6 +380,10 @@ pub struct App {
     pub local_tool: Option<crate::layers::LocalTool>,
     pub local_drag: crate::layers::LocalDrag,
     pub active_layer: Option<usize>,
+    /// Layer whose name is being edited in the layer list.
+    pub(crate) renaming_layer: Option<crate::layers::Rename>,
+    /// Gradient of the active layer shown with its handles (linear and radial tools).
+    pub(crate) selected_gradient: Option<crate::gradients::GradRef>,
     /// Settings of each brush tool.
     pub brushes: crate::layers::Brushes,
     /// Brush settings changed at this time (saved once they rest).
@@ -698,6 +702,8 @@ impl App {
             local_tool: None,
             local_drag: Default::default(),
             active_layer: None,
+            renaming_layer: None,
+            selected_gradient: None,
             brushes: settings.brushes.clone(),
             brushes_changed_at: None,
             remove_overlay: None,

@@ -16,6 +16,7 @@ mod depth;
 mod develop_tools;
 mod focus;
 mod gpu;
+mod gradients;
 mod guard;
 mod guides;
 mod history;

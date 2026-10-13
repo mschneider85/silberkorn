@@ -76,7 +76,10 @@ pub fn rasterize(mask: &Mask, aspect: f32, guide: Option<&crate::brush::AutoGuid
                 for g in &mask.radial {
                     let (cx, cy) = (g.center[0] * w as f32, g.center[1] * h as f32);
                     let (rx, ry) = ((g.radius_x * long).max(1.0), (g.radius_y * long).max(1.0));
-                    let e = (((px - cx) / rx).powi(2) + ((py - cy) / ry).powi(2)).sqrt();
+                    let (sin, cos) = g.angle.sin_cos();
+                    let (dx, dy) = (px - cx, py - cy);
+                    let (lx, ly) = (dx * cos + dy * sin, dy * cos - dx * sin);
+                    let e = ((lx / rx).powi(2) + (ly / ry).powi(2)).sqrt();
                     let v = 1.0 - smoothstep(1.0 - g.feather.clamp(0.0, 1.0), 1.0, e);
                     *m = m.max(if g.invert { 1.0 - v } else { v });
                 }
@@ -696,11 +699,20 @@ mod tests {
         let b = rasterize(&m, 1.0, None);
         assert!(b.sample(0.5, 0.02) > 0.95 && b.sample(0.5, 0.98) < 0.05);
         let m = Mask {
-            radial: vec![RadialGradient { center: [0.5, 0.5], radius_x: 0.2, radius_y: 0.2, feather: 0.5, invert: false }],
+            radial: vec![RadialGradient { center: [0.5, 0.5], radius_x: 0.2, radius_y: 0.2, feather: 0.5, invert: false, angle: 0.0 }],
             ..Default::default()
         };
         let b = rasterize(&m, 1.0, None);
         assert!(b.sample(0.5, 0.5) > 0.99 && b.sample(0.05, 0.05) < 0.01);
+    }
+
+    #[test]
+    fn rotated_ellipse() {
+        // Wide ellipse turned by 90°: it now reaches up and down, not sideways.
+        let g = RadialGradient { center: [0.5, 0.5], radius_x: 0.3, radius_y: 0.1, feather: 0.2, invert: false, angle: std::f32::consts::FRAC_PI_2 };
+        let b = rasterize(&Mask { radial: vec![g], ..Default::default() }, 1.0, None);
+        assert!(b.sample(0.5, 0.72) > 0.9, "{}", b.sample(0.5, 0.72));
+        assert!(b.sample(0.72, 0.5) < 0.05, "{}", b.sample(0.72, 0.5));
     }
 
     #[test]

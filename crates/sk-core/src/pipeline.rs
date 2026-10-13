@@ -1474,7 +1474,7 @@ mod tests {
     #[test]
     fn radial_layer_affects_only_inside_and_opacity_scales() {
         let src = LinearImage::new(40, 40, vec![[0.1; 3]; 1600]);
-        let radial = crate::params::RadialGradient { center: [0.5, 0.5], radius_x: 0.2, radius_y: 0.2, feather: 0.2, invert: false };
+        let radial = crate::params::RadialGradient { center: [0.5, 0.5], radius_x: 0.2, radius_y: 0.2, feather: 0.2, invert: false, angle: 0.0 };
         let mut adj = plain();
         adj.layers.push(layer(Mask { radial: vec![radial], ..Default::default() }, LayerAdjustments { exposure: 1.5, ..Default::default() }));
         let base = Processor::new(&meta(), &plain()).render(&src, None, None);

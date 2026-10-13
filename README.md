@@ -87,10 +87,18 @@ Lokale Anpassungen (Tab „Ebenen“) wirken als Deltas auf die Hintergrund-Eins
 Pixel mit Maske × Deckkraft gemischt; überlappende Ebenen addieren sich. Masken bestehen aus
 Pinselstrichen, linearen und radialen Verläufen, „Füllen“ und „Invertieren“.
 
-**Pinsel** (Pinsel, Radierer, Entfernen; Reparieren/Klonen ohne Fluss und Auto-Maske) haben jeweils
+**Verläufe** lassen sich nachträglich ändern. Mit gewähltem Werkzeug (L oder R) erscheinen
+drei Linien bzw. Ellipsen: volle Wirkung, Mitte (50 %) und Ende des Übergangs.
+- **Linear:** Mittellinie oder Mittelpunkt verschieben den Verlauf, die äußeren (gestrichelten) Linien
+  machen den Übergang breiter oder schmaler, der runde Griff dreht ihn.
+- **Radial:** Der Mittelpunkt verschiebt, die mittlere Ellipse skaliert, ihre vier eckigen Griffe ändern
+  Breite bzw. Höhe, innere und äußere Ellipse die weiche Kante, der runde Griff dreht die Ellipse.
+- Ziehen an einer freien Stelle legt einen neuen Verlauf an; **Entf** löscht den gewählten.
+
+**Pinsel** (Pinsel, Radierer, Entfernen; Reparieren/Klonen ohne Fluss und „Kanten beachten“) haben jeweils
 eigene, gespeicherte Einstellungen: **Größe**, **Härte** (weiche bis harte Kante), **Deckkraft** (das
 Maximum eines Strichs) und **Fluss** (wie viel jeder Pinselabdruck beiträgt; innerhalb eines Strichs
-baut sich die Deckung auf). **Automatisch maskieren** beschränkt den Strich auf Bereiche, die der
+baut sich die Deckung auf). **Kanten beachten** beschränkt den Strich auf Bereiche, die der
 Stelle unter der Pinselmitte in Farbe und Helligkeit ähneln, sodass Kanten erhalten bleiben. Striche
 werden dicht aufgezeichnet und als Catmull-Rom-Kurve mit Abdrücken im Abstand von 15 % des
 Radius gerastert; Masken haben 3072 Pixel an der langen Kante. Beim Malen wird nur der aktuelle
@@ -125,8 +133,8 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
   einmal, sobald das Werkzeug gewählt wird (etwa 4 s auf dem Prozessor); jeder Klick braucht dann nur noch
   den Decoder (etwa 0,2 s). tract rechnet nur dessen 256er-Maske, Silberkorn skaliert sie selbst hoch und
   verfeinert die Kanten am Bild. Jeder Klick ist ein Rückgängig-Schritt.
-- **Helligkeitsbereich** und **Farbbereich** (mit Pipette) verfeinern jede Maske.
-- **Stilpinsel:** Pinsel-Presets (Aufhellen, Abdunkeln, Wärmer, Haut glätten, Dunst entfernen, …).
+- **Helligkeitsbereich** und **Farbbereich** (mit Pipette, unter „Maske“ → „Eingrenzen“) beschränken jede Maske.
+- **Stilpinsel** (+ unter der Ebenenliste → „Neue Ebene mit Stilpinsel“): Pinsel-Presets (Aufhellen, Abdunkeln, Wärmer, Haut glätten, Dunst entfernen, …).
 
 ### KI-Werkzeuge: Entrauschen und Entfernen
 
@@ -191,7 +199,7 @@ erscheint zusätzlich oben im Bild.
   ferne Seite, sonst bliebe dort eine scharfe Naht. Große Radien werden auf verkleinerten Kopien
   gerechnet: 24 MP etwa 1,2 s. Fehlt die Tiefenkarte beim Export, wird sie dort berechnet.
   Kommandozeile: `cargo run --release -p sk-ai --example depth -- <raw> <ordner> [stärke] [fokus] [lichter]`
-- **Tiefe auswählen** (Tab „Ebenen“, Auswahl aus Bildinhalt): eine Maske aus derselben
+- **Tiefe auswählen** (Tab „Ebenen“, Maske → Automatisch auswählen): eine Maske aus derselben
   Tiefenkarte, anfangs das nächste Fünftel des Bildes; **Nah**, **Fern** und **Weichheit** stellen
   den Bereich danach ein (gespeichert mit der Maske, rückgängig zu machen).
 

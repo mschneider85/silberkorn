@@ -289,7 +289,7 @@ pub struct LinearGradient {
 }
 
 /// Radial gradient: masked inside the ellipse, `feather` (0..1) controls the soft edge.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RadialGradient {
     pub center: [f32; 2],
     /// Radii relative to the long image edge.
@@ -297,6 +297,9 @@ pub struct RadialGradient {
     pub radius_y: f32,
     pub feather: f32,
     pub invert: bool,
+    /// Rotation of the ellipse (radians, clockwise on screen).
+    #[serde(default)]
+    pub angle: f32,
 }
 
 /// Luminance range refinement of a mask (0..1 display luminance).
