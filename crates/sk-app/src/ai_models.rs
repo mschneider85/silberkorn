@@ -96,7 +96,7 @@ impl AiFeature {
         }
     }
 
-    fn job_label(self) -> String {
+    pub(crate) fn job_label(self) -> String {
         format!("KI-Modell laden: {}", self.label())
     }
 }
@@ -212,6 +212,15 @@ impl App {
                 }
                 for (_, then) in now {
                     then(self);
+                }
+            }
+            Err(e) if e == "abgebrochen" => {
+                // Not tried again by itself: only when the user asks for the feature again.
+                self.status = format!("{}: Laden des KI-Modells abgebrochen", f.label());
+                match f {
+                    AiFeature::Denoise => self.denoise_download_cancelled(),
+                    AiFeature::Depth => self.depth_download_cancelled(),
+                    _ => {}
                 }
             }
             Err(e) => {

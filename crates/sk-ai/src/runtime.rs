@@ -146,16 +146,32 @@ pub fn install_gpu(progress: &dyn Fn(f32)) -> Result<()> {
     Ok(())
 }
 
+/// HTTP client for downloads. Every request has time limits, so that a connection that stops
+/// delivering (e.g. a dropped network) ends with an error instead of waiting forever; large files
+/// are therefore fetched in parts of a few MB, each with its own request.
+pub(crate) fn http() -> &'static ureq::Agent {
+    static AGENT: std::sync::LazyLock<ureq::Agent> = std::sync::LazyLock::new(|| {
+        use std::time::Duration;
+        ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(30)))
+            .timeout_recv_response(Some(Duration::from_secs(60)))
+            .timeout_recv_body(Some(Duration::from_secs(120)))
+            .build()
+            .into()
+    });
+    &AGENT
+}
+
 /// Size of the file at `url`, from the `Content-Range` of a one-byte request.
 fn total_size(url: &str) -> Result<usize> {
-    let resp = ureq::get(url).header("Range", "bytes=0-0").call().with_context(|| format!("Download von {url} fehlgeschlagen"))?;
+    let resp = http().get(url).header("Range", "bytes=0-0").call().with_context(|| format!("Download von {url} fehlgeschlagen"))?;
     anyhow::ensure!(resp.status().as_u16() == 206, "Der Server unterstützt keine Teil-Downloads");
     let range = resp.headers().get("content-range").and_then(|v| v.to_str().ok()).unwrap_or_default();
     range.rsplit('/').next().and_then(|n| n.trim().parse().ok()).filter(|&n: &usize| n > 0).context("Dateigröße unbekannt")
 }
 
 fn get_range(url: &str, range: &str) -> Result<Vec<u8>> {
-    let mut resp = ureq::get(url).header("Range", range).call().with_context(|| format!("Download von {url} fehlgeschlagen"))?;
+    let mut resp = http().get(url).header("Range", range).call().with_context(|| format!("Download von {url} fehlgeschlagen"))?;
     anyhow::ensure!(resp.status().as_u16() == 206, "Der Server unterstützt keine Teil-Downloads");
     Ok(resp.body_mut().with_config().limit(256 << 20).read_to_vec()?)
 }

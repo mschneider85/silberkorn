@@ -2,7 +2,7 @@
 //! in the viewer when its lens blur or a depth mask needs one, and kept in a cache. Here also the
 //! "Objektivunschärfe" section, its focus pipette, and the depth mask of a layer.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use egui::{RichText, Ui, Vec2};
@@ -23,6 +23,9 @@ pub struct DepthQueue {
     pub(crate) running: Option<(u64, PathBuf)>,
     /// Why an image's map could not be computed (not tried again until the app restarts).
     failed: HashMap<PathBuf, String>,
+    /// Cancelled by the user: not started again until the lens blur changes or a depth mask is
+    /// asked for.
+    cancelled: HashSet<PathBuf>,
     /// Layer that gets a depth mask once the image's map exists.
     /// Image and layer id waiting for the depth map.
     mask_for: Option<(PathBuf, u32)>,
@@ -38,6 +41,7 @@ enum DepthState {
     Running(f32),
     Waiting,
     Ready,
+    Cancelled,
     Failed(String),
 }
 
@@ -57,7 +61,13 @@ impl App {
         {
             return DepthState::Running(self.jobs.iter().find(|j| j.id == *id).map_or(0.0, |j| j.progress));
         }
-        if sk_core::depth::is_ready(path) { DepthState::Ready } else { DepthState::Waiting }
+        if sk_core::depth::is_ready(path) {
+            DepthState::Ready
+        } else if self.depth.cancelled.contains(path) {
+            DepthState::Cancelled
+        } else {
+            DepthState::Waiting
+        }
     }
 
     /// Each frame: starts computing the viewer image's map when something needs it.
@@ -68,7 +78,7 @@ impl App {
         let Some(cur) = &self.current else { return };
         let path = cur.meta.path.clone();
         let wanted = !cur.adjustments.lens_blur.is_off() || self.depth.mask_for.as_ref().is_some_and(|(p, _)| *p == path);
-        if !wanted || self.depth.failed.contains_key(&path) || sk_core::depth::is_ready(&path) || !self.ensure_ai(AiFeature::Depth) {
+        if !wanted || self.depth.failed.contains_key(&path) || self.depth.cancelled.contains(&path) || sk_core::depth::is_ready(&path) || !self.ensure_ai(AiFeature::Depth) {
             return;
         }
         let label = format!("{JOB_LABEL}: {}", path.file_name().unwrap_or_default().to_string_lossy());
@@ -79,6 +89,14 @@ impl App {
         }));
         let id = self.jobs.last().map_or(0, |j| j.id);
         self.depth.running = Some((id, path));
+    }
+
+    /// The model download was cancelled: like cancelling the viewer image's map.
+    pub(crate) fn depth_download_cancelled(&mut self) {
+        self.depth.mask_for = None;
+        if let Some(path) = self.current_path() {
+            self.depth.cancelled.insert(path);
+        }
     }
 
     /// A computation finished (`true` if the job was one).
@@ -117,6 +135,8 @@ impl App {
                 self.depth.mask_for = None;
                 if e != "abgebrochen" {
                     self.depth.failed.insert(path, e.clone());
+                } else {
+                    self.depth.cancelled.insert(path);
                 }
             }
         }
@@ -203,6 +223,9 @@ impl App {
                     ui.label(faint("Tiefenkarte wird gleich berechnet …"));
                 }
                 DepthState::Ready => {}
+                DepthState::Cancelled => {
+                    ui.label(faint("Abgebrochen – zum Berechnen einen Regler ändern"));
+                }
                 DepthState::Failed(e) => {
                     ui.label(RichText::new(format!("Fehlgeschlagen: {e}")).small().color(crate::theme::DANGER));
                 }
@@ -215,6 +238,7 @@ impl App {
             self.toggle_focus_picker();
         }
         if lb != before {
+            self.depth.cancelled.remove(&path);
             // Switched on for the first time: focus on the subject (once the map exists). A focus
             // chosen before stays, also after the amount was at 0 for a while.
             if before.is_off() && !lb.is_off() && lb.focus == LensBlur::default().focus {
@@ -241,6 +265,7 @@ impl App {
                 self.status = "Tiefe auswählen: Tiefenkarte wird berechnet …".into();
             }
             self.depth.failed.remove(&path);
+            self.depth.cancelled.remove(&path);
             self.depth.mask_for = self.layer_id(layer).map(|id| (path, id));
             return;
         };

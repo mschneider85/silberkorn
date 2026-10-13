@@ -1907,6 +1907,27 @@ fn cursors_match_what_can_be_done() {
 }
 
 #[test]
+fn cancelled_model_download_is_not_restarted_by_itself() {
+    use crate::ai_models::AiFeature;
+    if AiFeature::Depth.available() {
+        return;
+    }
+    let Some(mut f) = Fixture::new("depth-cancel") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    // Lens blur is on and its model was being downloaded when the user cancelled.
+    f.app.edit(|a| a.lens_blur.amount = 60.0);
+    assert!(f.app.ai_download_done(0, &AiFeature::Depth.job_label(), &Err("abgebrochen".into())));
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(500) {
+        f.app.handle_events(&f.ctx);
+        assert!(f.app.ai_download_progress(AiFeature::Depth).is_none(), "Download neu gestartet");
+        assert!(f.app.depth.running.is_none());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(f.app.status.contains("abgebrochen"), "{}", f.app.status);
+}
+
+#[test]
 fn running_jobs_can_be_cancelled() {
     let Some(mut f) = Fixture::new("cancel") else { return };
     let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

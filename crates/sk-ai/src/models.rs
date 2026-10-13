@@ -1,7 +1,7 @@
 //! Neural network models that are downloaded on request (they are not shipped with
 //! Silberkorn): where they live, where they come from, and the download itself.
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -238,27 +238,24 @@ fn target_lock(target: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
     LOCKS.lock().unwrap_or_else(|e| e.into_inner()).entry(target.to_path_buf()).or_default().clone()
 }
 
-/// Appends the rest of the file from byte `have` on (or starts over if the server can't resume).
+/// Bytes per request: small enough to arrive within the time limit of `runtime::http` also
+/// on a slow connection.
+const PART: u64 = 4 << 20;
+
+/// Appends the rest of the file from byte `have` on, part by part (each part a request of its
+/// own: a stalled connection ends with an error, and cancelling takes effect after each part).
 fn fetch(m: &ModelInfo, part: &Path, have: u64, progress: &dyn Fn(f32)) -> Result<()> {
-    let mut req = ureq::get(m.url);
-    if have > 0 {
-        req = req.header("Range", &format!("bytes={have}-"));
-    }
-    let mut resp = req.call()?;
-    let resumed = have > 0 && resp.status().as_u16() == 206;
-    let mut done = if resumed { have } else { 0 };
-    let mut file = std::fs::File::options().create(true).write(true).append(resumed).truncate(!resumed).open(part)?;
-    // Never more than the expected size, whatever the server sends.
-    let mut reader = resp.body_mut().with_config().limit(m.bytes - done + 1).reader();
-    let mut buf = vec![0u8; 1 << 20];
-    loop {
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        file.write_all(&buf[..n])?;
-        done += n as u64;
-        anyhow::ensure!(done <= m.bytes, "Die Datei ist größer als erwartet");
+    let mut file = std::fs::File::options().create(true).append(true).open(part)?;
+    let mut done = have;
+    while done < m.bytes {
+        let end = (done + PART).min(m.bytes);
+        let mut resp = crate::runtime::http().get(m.url).header("Range", &format!("bytes={done}-{}", end - 1)).call()?;
+        anyhow::ensure!(resp.status().as_u16() == 206, "Der Server unterstützt keine Teil-Downloads");
+        // Never more than asked for, whatever the server sends.
+        let data = resp.body_mut().with_config().limit(end - done + 1).read_to_vec()?;
+        anyhow::ensure!(data.len() as u64 == end - done, "Unerwartete Antwort des Servers");
+        file.write_all(&data)?;
+        done = end;
         progress((done as f64 / m.bytes.max(1) as f64).min(1.0) as f32);
     }
     file.sync_all()?;
@@ -318,6 +315,60 @@ mod tests {
         assert!(format!("{:#}", verify(&m, &file).unwrap_err()).contains("Prüfsumme"));
         std::fs::write(&file, b"ab").unwrap();
         assert!(format!("{:#}", verify(&m, &file).unwrap_err()).contains("unvollständig"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A web server on localhost that serves `data` in byte ranges; counts the requests.
+    fn range_server(data: Vec<u8>) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use std::io::{BufRead, BufReader};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/model.onnx", listener.local_addr().unwrap());
+        let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = requests.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { continue };
+                counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let mut range = None;
+                for line in BufReader::new(stream.try_clone().unwrap()).lines() {
+                    let line = line.unwrap_or_default();
+                    if line.is_empty() {
+                        break;
+                    }
+                    if let Some(r) = line.to_ascii_lowercase().strip_prefix("range: bytes=") {
+                        let (a, b) = r.split_once('-').unwrap();
+                        range = Some((a.parse::<usize>().unwrap(), b.parse::<usize>().unwrap()));
+                    }
+                }
+                let (a, b) = range.unwrap_or((0, data.len() - 1));
+                let body = &data[a..=b];
+                let head = format!(
+                    "HTTP/1.1 206 Partial Content\r\nContent-Length: {}\r\nContent-Range: bytes {a}-{b}/{}\r\nConnection: close\r\n\r\n",
+                    body.len(),
+                    data.len()
+                );
+                let _ = stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(body));
+            }
+        });
+        (url, requests)
+    }
+
+    #[test]
+    fn downloads_in_parts_and_resumes() {
+        let data: Vec<u8> = (0..(PART as usize * 2 + 12345)).map(|i| (i * 7 % 251) as u8).collect();
+        let (url, requests) = range_server(data.clone());
+        let m = ModelInfo { label: "Test", file: "m.onnx", url: Box::leak(url.into_boxed_str()), bytes: data.len() as u64, sha256: Box::leak(sha256(&data).into_boxed_str()), license: "", entry: None };
+        let dir = std::env::temp_dir().join(format!("sk-models-dl-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let target = dir.join("m.onnx");
+        // Interrupted before: the first 1000 bytes are there.
+        std::fs::write(dir.join("m.onnx.part"), &data[..1000]).unwrap();
+        download_to(&m, &target, &|_| {}).unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), data);
+        assert!(!dir.join("m.onnx.part").exists());
+        // Three parts of at most `PART` bytes, each a request of its own.
+        assert_eq!(requests.load(std::sync::atomic::Ordering::Relaxed), 3);
         std::fs::remove_dir_all(dir).ok();
     }
 

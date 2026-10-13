@@ -3,7 +3,7 @@
 //! (the image in the viewer first) and kept in a cache. Switching it on downloads the models
 //! (GPL-3.0, credited in the dialog for the AI models) the first time.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
 use egui::{Color32, RichText};
@@ -27,6 +27,8 @@ pub struct DenoiseQueue {
     failed: HashMap<PathBuf, String>,
     /// The viewer's image was checked with this amount being on (avoids a file check per frame).
     checked: Option<PathBuf>,
+    /// Cancelled by the user: not started again until its amount changes or it is transferred.
+    cancelled: HashSet<PathBuf>,
 }
 
 /// What the Details panel shows below the amount.
@@ -36,6 +38,7 @@ pub enum DenoiseState {
     Waiting,
     Running(f32),
     Ready,
+    Cancelled,
     Failed(String),
 }
 
@@ -49,7 +52,7 @@ impl App {
     /// Queues the computation of an image's denoised data (`first`: before all others).
     pub(crate) fn want_denoise(&mut self, path: &Path, first: bool) {
         let q = &mut self.denoise;
-        if q.failed.contains_key(path) || q.running.as_ref().is_some_and(|(_, p)| p == path) {
+        if q.failed.contains_key(path) || q.cancelled.contains(path) || q.running.as_ref().is_some_and(|(_, p)| p == path) {
             return;
         }
         if let Some(i) = q.pending.iter().position(|p| p == path) {
@@ -87,6 +90,11 @@ impl App {
         self.denoise.running = Some((id, path));
     }
 
+    /// The model download was cancelled: like cancelling the computation of the images waiting.
+    pub(crate) fn denoise_download_cancelled(&mut self) {
+        self.denoise.cancelled.extend(self.denoise.pending.drain(..));
+    }
+
     /// A computation finished (`true` if the job was one).
     pub(crate) fn denoise_job_done(&mut self, id: u64, result: &Result<Vec<PathBuf>, String>) -> bool {
         if self.denoise.running.as_ref().is_none_or(|(i, _)| *i != id) {
@@ -113,9 +121,9 @@ impl App {
                 if e != "abgebrochen" {
                     self.denoise.failed.insert(path, e.clone());
                 } else {
-                    // Cancelled by the user: the rest of the queue too.
+                    // Cancelled by the user: the rest of the queue too; this image stays so.
                     self.denoise.pending.clear();
-                    self.denoise.checked = None;
+                    self.denoise.cancelled.insert(path);
                 }
             }
         }
@@ -132,6 +140,9 @@ impl App {
         }
         if let Some(e) = self.denoise.failed.get(path) {
             return DenoiseState::Failed(e.clone());
+        }
+        if self.denoise.cancelled.contains(path) {
+            return DenoiseState::Cancelled;
         }
         if let Some((id, p)) = &self.denoise.running
             && p == path
@@ -192,6 +203,7 @@ impl App {
         self.commit_and_save();
         if ai > 0.0 {
             for f in &files {
+                self.denoise.cancelled.remove(f);
                 self.want_denoise(f, false);
             }
         }
@@ -202,6 +214,10 @@ impl App {
     fn denoise_controls(&mut self, ui: &mut egui::Ui, amount: &mut f32, path: &Path, hdr: bool) -> bool {
         let before = *amount;
         let changed = slider_row(ui, "KI-Entrauschen", amount, 0.0..=100.0, 0.0, 0);
+        if changed && self.denoise.cancelled.remove(path) {
+            // Queued again by `pump_denoise`.
+            self.denoise.checked = None;
+        }
         let faint = |t: String| RichText::new(t).small().color(crate::theme::TEXT_FAINT);
         if hdr {
             ui.label(faint("Für zusammengesetzte HDR-Bilder nicht verfügbar".into()));
@@ -225,6 +241,9 @@ impl App {
                 ui.label(faint(format!("Wird berechnet … {:.0} %", p * 100.0)));
             }
             DenoiseState::Ready => {}
+            DenoiseState::Cancelled => {
+                ui.label(faint("Abgebrochen – zum Berechnen den Regler ändern".into()));
+            }
             DenoiseState::Failed(e) => {
                 ui.label(RichText::new(format!("Fehlgeschlagen: {e}")).small().color(crate::theme::DANGER));
             }
