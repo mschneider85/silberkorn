@@ -915,7 +915,9 @@ impl Catalog {
     }
 }
 
-/// Lists raw files in `folder` (optionally recursive), sorted.
+/// Lists raw files in `folder` (optionally recursive), sorted. Links to folders (also Windows
+/// junctions) are not followed: emptying the trash deletes what this finds, and a link loop
+/// would list the same files again and again.
 pub fn scan_folder(folder: &Path, recursive: bool) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![folder.to_path_buf()];
@@ -927,7 +929,8 @@ pub fn scan_folder(folder: &Path, recursive: bool) -> Vec<PathBuf> {
             if hidden {
                 continue;
             }
-            if path.is_dir() {
+            let Ok(kind) = entry.file_type() else { continue };
+            if kind.is_dir() {
                 if recursive {
                     stack.push(path);
                 }
@@ -988,6 +991,24 @@ mod tests {
         let err = Catalog::open(&path).err().unwrap();
         assert!(format!("{err:#}").contains("neueren Silberkorn-Version"));
         assert_eq!(version(&path), SCHEMA_VERSION + 1);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scan_does_not_follow_folder_links() {
+        let dir = std::env::temp_dir().join(format!("sk-scan-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (photos, trash) = (dir.join("photos"), dir.join("trash"));
+        std::fs::create_dir_all(photos.join("sub")).unwrap();
+        std::fs::create_dir_all(&trash).unwrap();
+        std::fs::write(photos.join("a.ARW"), b"").unwrap();
+        std::fs::write(photos.join("sub/b.ARW"), b"").unwrap();
+        std::fs::write(trash.join("c.ARW"), b"").unwrap();
+        std::os::unix::fs::symlink(&photos, trash.join("link")).unwrap();
+        std::os::unix::fs::symlink("..", photos.join("sub/loop")).unwrap();
+        assert_eq!(scan_folder(&trash, true), vec![trash.join("c.ARW")]);
+        assert_eq!(scan_folder(&photos, true), vec![photos.join("a.ARW"), photos.join("sub/b.ARW")]);
         std::fs::remove_dir_all(dir).ok();
     }
 
