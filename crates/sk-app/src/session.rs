@@ -216,6 +216,18 @@ impl App {
         if let Some(c) = &self.catalog {
             let _ = c.rename_path(old_file, new_file);
         }
+        // In-memory data of both paths is dropped: the new one may have belonged to another file
+        // (renumbering), the old one may be taken by one next (see `relocations`).
+        self.relocations += 1;
+        for new in variant::of_file(new_file) {
+            let old = variant::path_for(old_file, variant::number(&new));
+            for p in [&old, &new] {
+                self.forget_prepared(p);
+                self.focus_maps.remove(p);
+                self.focus_pending.remove(p);
+                self.compare_requested.remove(p);
+            }
+        }
         for new in variant::of_file(new_file) {
             let old = variant::path_for(old_file, variant::number(&new));
             if keep_cache {

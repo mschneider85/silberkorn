@@ -72,7 +72,10 @@ impl App {
     }
 
     pub(crate) fn focus_received(&mut self, path: PathBuf, version: Option<u64>, size: [usize; 2], sharpness: Arc<Vec<u8>>) {
-        self.focus_pending.remove(&path);
+        // Not pending: its file was moved or renamed meanwhile (see `file_relocated`).
+        if !self.focus_pending.remove(&path) {
+            return;
+        }
         self.focus_maps.insert(path, FocusMap { version, ..FocusMap::new(size, sharpness) });
     }
 

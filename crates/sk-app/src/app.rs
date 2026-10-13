@@ -380,6 +380,9 @@ pub struct App {
     pub placeholder: Option<TextureHandle>,
     /// Recently viewed and prefetched images, most recent last.
     prepared: Vec<Ready>,
+    /// Files moved or renamed so far: results requested before may belong to another file now
+    /// going by the same path.
+    pub(crate) relocations: u64,
     /// Generation for which neighbours have been prefetched.
     prefetched_for: u64,
     /// Direction of the last step through the images (for prefetching).
@@ -715,6 +718,7 @@ impl App {
             view_magnified: false,
             placeholder: None,
             prepared: Vec::new(),
+            relocations: 0,
             prefetched_for: 0,
             step_dir: 1,
             full_due: None,
@@ -1153,7 +1157,7 @@ impl App {
             .map(|&i| self.entries[i].path.clone())
             .filter(|p| !self.prepared.iter().any(|r| r.meta.path == *p && r.rendered.is_some()))
             .collect();
-        self.workers.prefetch(paths, self.session_root());
+        self.workers.prefetch(paths, self.session_root(), self.relocations);
     }
 
     /// Starts decoding the full resolution once its time has come (see [`FULL_DELAY`]).
@@ -1721,6 +1725,7 @@ impl App {
                         self.placeholder = Some(ctx.load_texture("quick", image, TextureOptions::LINEAR));
                     }
                 }
+                Event::Prepared(p) if p.relocations != self.relocations => {}
                 Event::Prepared(p) => {
                     let p = *p;
                     let too_big = p.preview.width.max(p.preview.height) > max_side;

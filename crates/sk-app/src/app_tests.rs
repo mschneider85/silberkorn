@@ -1121,9 +1121,13 @@ fn focus_maps_of_images_out_of_view_are_dropped() {
     let Some(mut f) = Fixture::new("prune") else { return };
     f.pump("Bild geladen", |a| a.current.is_some());
     let shown = f.photo("_DSC0009.dng");
-    f.app.focus_received(shown.clone(), None, [1, 1], std::sync::Arc::new(vec![0]));
+    let mut received = |path: PathBuf| {
+        f.app.focus_pending.insert(path.clone());
+        f.app.focus_received(path, None, [1, 1], std::sync::Arc::new(vec![0]));
+    };
+    received(shown.clone());
     for i in 0..100 {
-        f.app.focus_received(f.dir.join(format!("weg{i}.dng")), None, [1, 1], std::sync::Arc::new(vec![0]));
+        received(f.dir.join(format!("weg{i}.dng")));
     }
     f.app.prune_view_caches();
     assert!(f.app.focus_maps.len() < 30, "{}", f.app.focus_maps.len());
@@ -1306,6 +1310,29 @@ fn batch_rename_keeps_settings_variants_and_selection() {
     assert_eq!(f.app.primary_path(), Some(v2_new.clone()));
     f.pump("neu geladen", |app| app.current_path().as_ref() == Some(&v2_new));
     assert!(f.app.entries.iter().any(|e| e.path == new) && !f.app.entries.iter().any(|e| e.path == a));
+}
+
+#[test]
+fn renamed_files_do_not_inherit_what_was_kept_for_their_new_path() {
+    let Some(mut f) = Fixture::new("rename-reuse") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let (a, b) = (f.photo("_DSC0009.dng"), f.photo("_DSC0010.dng"));
+    assert_eq!(f.app.current_path().as_ref(), Some(&a));
+    f.pump("Nachbar vorbereitet", |app| app.is_prepared(&b));
+    // Another file takes the neighbour's name (like renumbering to close gaps).
+    std::fs::copy(&a, f.dir.join("photos").join("c.dng")).unwrap();
+    let c = f.photo("c.dng");
+    assert_eq!(f.app.rename_files(std::slice::from_ref(&b), "Weg", 1), (1, None));
+    assert_eq!(f.app.rename_files(std::slice::from_ref(&c), "_DSC0010", 1), (1, None));
+    assert!(!f.app.is_prepared(&b), "die Vorschau gehört zur anderen Datei");
+    // A rendering requested before the renames is dropped when it arrives.
+    f.app.workers.prefetch(vec![b.clone()], None, f.app.relocations - 1);
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        f.app.handle_events(&f.ctx);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!f.app.is_prepared(&b), "veraltetes Ergebnis verworfen");
 }
 
 #[test]

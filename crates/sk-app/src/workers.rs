@@ -99,6 +99,8 @@ pub struct IndexJob {
 
 /// An image loaded and rendered with its saved adjustments, ready to show without waiting.
 pub struct Prepared {
+    /// [`App::relocations`](crate::app::App) when requested: a file renamed since may now go by this path.
+    pub relocations: u64,
     pub meta: Arc<RawMeta>,
     pub preview: Arc<LinearImage>,
     pub adjustments: Adjustments,
@@ -256,7 +258,7 @@ pub struct Workers {
     ai_tx: Sender<AiJob>,
     before_tx: Sender<RenderJob>,
     quick_tx: Sender<(u64, PathBuf, Option<PathBuf>)>,
-    prefetch_tx: Sender<(Vec<PathBuf>, Option<PathBuf>)>,
+    prefetch_tx: Sender<(Vec<PathBuf>, Option<PathBuf>, u64)>,
     proxy_tx: Sender<(Vec<PathBuf>, Option<PathBuf>)>,
     proof_tx: Sender<ProofJob>,
     compare_tx: Sender<(Vec<PathBuf>, Option<PathBuf>)>,
@@ -707,21 +709,21 @@ impl Workers {
             });
         }
 
-        let (prefetch_tx, prefetch_rx) = channel::<(Vec<PathBuf>, Option<PathBuf>)>();
+        let (prefetch_tx, prefetch_rx) = channel::<(Vec<PathBuf>, Option<PathBuf>, u64)>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
             crate::guard::spawn("Vorladen", move || {
-                while let Some((mut queue, mut session)) = recv_latest(&prefetch_rx) {
+                while let Some((mut queue, mut session, mut relocations)) = recv_latest(&prefetch_rx) {
                     queue.reverse();
                     while let Some(path) = queue.pop() {
                         activity.touch();
                         if let Some(p) = prepare(&path, session.as_deref()) {
-                            let _ = ev_tx.send(Event::Prepared(Box::new(p)));
+                            let _ = ev_tx.send(Event::Prepared(Box::new(Prepared { relocations, ..p })));
                             ctx.request_repaint();
                         }
                         // A newer request (the user moved on) replaces the rest of the queue.
-                        if let Some((q, s)) = prefetch_rx.try_iter().last() {
-                            (queue, session) = (q, s);
+                        if let Some((q, s, r)) = prefetch_rx.try_iter().last() {
+                            (queue, session, relocations) = (q, s, r);
                             queue.reverse();
                         }
                     }
@@ -1034,8 +1036,8 @@ impl Workers {
     }
 
     /// Loads and renders these images ahead of time, in order; replaces earlier requests.
-    pub fn prefetch(&self, paths: Vec<PathBuf>, session: Option<PathBuf>) {
-        let _ = self.prefetch_tx.send((paths, session));
+    pub fn prefetch(&self, paths: Vec<PathBuf>, session: Option<PathBuf>, relocations: u64) {
+        let _ = self.prefetch_tx.send((paths, session, relocations));
     }
 
     /// Renders these images for the compare view, in order; replaces earlier requests.
@@ -1148,7 +1150,7 @@ fn prepare(path: &std::path::Path, session: Option<&std::path::Path>) -> Option<
     {
         cache::store_preview(path, &adjustments, session, &::image::DynamicImage::ImageRgba8(img));
     }
-    Some(Prepared { meta: Arc::new(meta), preview: Arc::new(preview), adjustments, image, histogram: r.histogram })
+    Some(Prepared { relocations: 0, meta: Arc::new(meta), preview: Arc::new(preview), adjustments, image, histogram: r.histogram })
 }
 
 /// Thumbnail: from the disk cache, else the embedded camera JPEG, or a real
