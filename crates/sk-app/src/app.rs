@@ -1,7 +1,7 @@
 //! Application state, editing (undo/redo, copy/apply), events, shortcuts and toolbar.
 
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -284,6 +284,24 @@ fn settings_path() -> Option<PathBuf> {
     Some(sk_core::paths::config_dir().join("settings.json"))
 }
 
+/// Reads the settings. A file that can't be parsed (e.g. written by a newer version) is kept as
+/// `settings.json.bak` before the defaults replace it, so recipes and brushes aren't lost for
+/// good; the error is returned as a status message.
+fn load_settings(path: &Path) -> (Settings, Option<String>) {
+    let Ok(text) = std::fs::read_to_string(path) else { return (Settings::default(), None) };
+    match serde_json::from_str(&text) {
+        Ok(s) => (s, None),
+        Err(e) => {
+            let mut backup = path.as_os_str().to_owned();
+            backup.push(".bak");
+            let kept = std::fs::rename(path, &backup).is_ok();
+            log::warn!("Einstellungen nicht lesbar: {e}");
+            let note = if kept { format!(", gesichert als {}", Path::new(&backup).display()) } else { String::new() };
+            (Settings::default(), Some(format!("Einstellungen nicht lesbar ({e}){note}")))
+        }
+    }
+}
+
 pub struct App {
     pub(crate) workers: Workers,
     persist_settings: bool,
@@ -436,6 +454,9 @@ pub struct App {
     pub(crate) redo: Vec<Adjustments>,
     pub(crate) clipboard: Option<Adjustments>,
     pub sidecar_dirty: bool,
+    /// Settings whose sidecar couldn't be written (read-only folder, newer version): kept here so
+    /// that switching images doesn't lose them, and written again with the next change.
+    pub(crate) unsaved: HashMap<PathBuf, Sidecar>,
     pub keyword_input: String,
     /// None = fit to window; otherwise screen pixels per preview pixel.
     pub zoom: Option<f32>,
@@ -598,11 +619,7 @@ impl Default for AppOptions {
 impl App {
     pub fn new(ctx: &egui::Context, opts: AppOptions) -> Self {
         crate::theme::install(ctx);
-        let settings: Settings = settings_path()
-            .filter(|_| opts.persist_settings)
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let (settings, settings_error) = settings_path().filter(|_| opts.persist_settings).map_or((Settings::default(), None), |p| load_settings(&p));
         // Without an explicit folder, reopen the session that was open last time.
         sk_core::xmp::set_write_enabled(settings.write_xmp && opts.persist_settings);
         sk_ai::runtime::set_gpu_enabled(settings.ai_gpu.unwrap_or(true));
@@ -629,7 +646,7 @@ impl App {
             .unwrap_or_else(|| PathBuf::from("."));
         let catalog_path = opts.catalog_path;
         let (catalog, status) = match Catalog::open(&catalog_path) {
-            Ok(c) => (Some(c), String::new()),
+            Ok(c) => (Some(c), settings_error.unwrap_or_default()),
             Err(e) => (None, format!("Katalog nicht verfügbar: {e:#}")),
         };
         let mut app = Self {
@@ -766,6 +783,7 @@ impl App {
             // egui's assumption until the viewer is first shown.
             max_texture_side: 2048,
             sidecar_dirty: false,
+            unsaved: HashMap::new(),
             keyword_input: String::new(),
             zoom: None,
             pan: Vec2::ZERO,
@@ -1037,7 +1055,12 @@ impl App {
 
     /// Shows a loaded image. `rendered` is used if it was made with the saved adjustments.
     fn install(&mut self, meta: Arc<RawMeta>, preview: Arc<LinearImage>, rendered: Option<(Adjustments, TextureHandle, Histogram)>) {
-        let sc = sidecar::load(&meta.path);
+        let mut sc = sidecar::load(&meta.path);
+        // Settings that couldn't be saved win over the file (and are tried again).
+        if let Some(u) = self.unsaved.get(&meta.path) {
+            sc = Sidecar { rating: u.rating, color_label: u.color_label, keywords: u.keywords.clone(), adjustments: u.adjustments.clone(), ..sc };
+            self.sidecar_dirty = true;
+        }
         // Rounded to slider precision so that displaying it never counts as an edit.
         let (k, t) = meta.color.temp_tint_for_wb(meta.as_shot_wb);
         let as_shot_temp_tint = (k.round(), (t * 10.0).round() / 10.0);
@@ -1403,8 +1426,14 @@ impl App {
                 adjustments: cur.committed.clone(),
                 ..Default::default()
             };
-            if let Err(e) = sidecar::save(&cur.meta.path, &sc) {
-                self.status = format!("Speichern fehlgeschlagen: {e:#}");
+            match sidecar::save(&cur.meta.path, &sc) {
+                Ok(()) => {
+                    self.unsaved.remove(&cur.meta.path);
+                }
+                Err(e) => {
+                    self.status = format!("Speichern fehlgeschlagen: {e:#}");
+                    self.unsaved.insert(cur.meta.path.clone(), sc.clone());
+                }
             }
             if let Some(c) = &self.catalog {
                 let _ = c.sync_sidecar(&cur.meta.path, &sc);
@@ -1974,7 +2003,10 @@ impl App {
     /// Closing while work is running (export, merge, denoising …) asks first; quitting then
     /// cancels it.
     fn confirm_quit(&mut self, ctx: &egui::Context) {
-        let busy: Vec<String> = self.activities().into_iter().filter(|a| a.cancel.is_some()).map(|a| a.label).collect();
+        let mut busy: Vec<String> = self.activities().into_iter().filter(|a| a.cancel.is_some()).map(|a| a.label).collect();
+        if !self.unsaved.is_empty() {
+            busy.push(format!("Einstellungen von {} Bild(ern) konnten nicht gespeichert werden und gehen verloren", self.unsaved.len()));
+        }
         if ctx.input(|i| i.viewport().close_requested()) && !busy.is_empty() && !self.quit_confirmed {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.quit_asked = true;

@@ -139,14 +139,16 @@ fn escape(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
-/// `rdf:Description` with the given values (namespaces declared on it).
-fn description(rating: u8, label: ColorLabel, keywords: &[String], indent: &str) -> String {
+/// `rdf:Description` with the given values (namespaces declared on it); `None` leaves a property out.
+fn description(rating: Option<u8>, label: Option<ColorLabel>, keywords: Option<&[String]>, indent: &str) -> String {
     let mut s = format!("{indent}<rdf:Description rdf:about=\"\" xmlns:xmp=\"{NS_XMP}\" xmlns:dc=\"{NS_DC}\">\n");
-    s += &format!("{indent} <xmp:Rating>{rating}</xmp:Rating>\n");
-    if let Some(l) = label_to_text(label) {
+    if let Some(rating) = rating {
+        s += &format!("{indent} <xmp:Rating>{rating}</xmp:Rating>\n");
+    }
+    if let Some(l) = label.and_then(label_to_text) {
         s += &format!("{indent} <xmp:Label>{l}</xmp:Label>\n");
     }
-    if !keywords.is_empty() {
+    if let Some(keywords) = keywords.filter(|k| !k.is_empty()) {
         s += &format!("{indent} <dc:subject>\n{indent}  <rdf:Bag>\n");
         for k in keywords {
             s += &format!("{indent}   <rdf:li>{}</rdf:li>\n", escape(k));
@@ -163,19 +165,31 @@ pub fn updated(existing: Option<&str>, rating: u8, label: ColorLabel, keywords: 
     let new_doc = || {
         format!(
             "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\" x:xmptk=\"Silberkorn\">\n <rdf:RDF xmlns:rdf=\"{NS_RDF}\">\n{} </rdf:RDF>\n</x:xmpmeta>\n",
-            description(rating, label, keywords, "  ")
+            description(Some(rating), Some(label), Some(keywords), "  ")
         )
     };
     let Some(text) = existing.filter(|t| !t.trim().is_empty()) else { return Ok(new_doc()) };
     let doc = roxmltree::Document::parse(text).context("Vorhandene XMP-Datei ist kein gültiges XML")?;
     let Some(rdf) = doc.descendants().find(|n| n.has_tag_name((NS_RDF, "RDF"))) else { return Ok(new_doc()) };
-    // Byte ranges to remove: our properties wherever they are.
-    let mut cuts: Vec<std::ops::Range<usize>> = Vec::new();
-    let ours_attr = |a: &roxmltree::Attribute| a.namespace() == Some(NS_XMP) && matches!(a.name(), "Rating" | "Label");
-    let ours_elem = |n: &roxmltree::Node| {
-        let t = n.tag_name();
-        matches!((t.namespace(), t.name()), (Some(NS_XMP), "Rating" | "Label") | (Some(NS_DC), "subject"))
+    // Only values that changed are rewritten: what Silberkorn reads the same as its own (a
+    // rejection, -1, as rating 0; a label it doesn't know as none) stays as the file has it.
+    let old = parse(text)?;
+    let rating_changed = old.rating.unwrap_or(0) != rating;
+    let label_changed = old.label.unwrap_or(ColorLabel::None) != label;
+    let keywords_changed = old.keywords.as_deref().unwrap_or_default() != keywords;
+    if !rating_changed && !label_changed && !keywords_changed {
+        return Ok(text.to_string());
+    }
+    let changed = |ns: Option<&str>, name: &str| match (ns, name) {
+        (Some(NS_XMP), "Rating") => rating_changed,
+        (Some(NS_XMP), "Label") => label_changed,
+        (Some(NS_DC), "subject") => keywords_changed,
+        _ => false,
     };
+    // Byte ranges to remove: our changed properties wherever they are.
+    let mut cuts: Vec<std::ops::Range<usize>> = Vec::new();
+    let ours_attr = |a: &roxmltree::Attribute| a.name() != "subject" && changed(a.namespace(), a.name());
+    let ours_elem = |n: &roxmltree::Node| changed(n.tag_name().namespace(), n.tag_name().name());
     // From the start of the line (indentation and line break before it) to the end of the node.
     let line_start = |start: usize| {
         let s = text[..start].trim_end_matches([' ', '\t']).len();
@@ -207,7 +221,12 @@ pub fn updated(existing: Option<&str>, rating: u8, label: ColorLabel, keywords: 
     let insert_at = text[..close].trim_end_matches([' ', '\t']).len();
     let indent = &text[insert_at..close];
     let prefix = rdf.tag_name().namespace().and_then(|ns| rdf.lookup_prefix(ns)).unwrap_or("rdf");
-    let mut addition = description(rating, label, keywords, &format!("{indent} "));
+    let mut addition = description(
+        rating_changed.then_some(rating),
+        label_changed.then_some(label),
+        keywords_changed.then_some(keywords),
+        &format!("{indent} "),
+    );
     if prefix != "rdf" {
         addition = addition.replace("rdf:", &format!("{prefix}:"));
     }
@@ -244,7 +263,13 @@ pub fn updated(existing: Option<&str>, rating: u8, label: ColorLabel, keywords: 
 /// `<name>.xmp`). Returns the file's new modification time.
 pub fn write(image: &Path, rating: u8, label: ColorLabel, keywords: &[String]) -> Result<Option<i64>> {
     let path = existing(image).unwrap_or_else(|| candidates(image)[0].clone());
-    let old = std::fs::read_to_string(&path).ok();
+    // Only a missing file may be created from scratch: anything unreadable (another encoding,
+    // a network error) would otherwise be replaced and lose what other programs stored there.
+    let old = match std::fs::read_to_string(&path) {
+        Ok(text) => Some(text),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(e).with_context(|| format!("XMP-Datei nicht lesbar: {}", path.display())),
+    };
     let text = updated(old.as_deref(), rating, label, keywords)?;
     if old.as_deref() != Some(text.as_str()) {
         crate::safe_file::write(&path, &text)?;
@@ -307,6 +332,21 @@ mod tests {
         // A label can be removed again.
         let none = updated(Some(&out), 0, ColorLabel::None, &[]).unwrap();
         assert_eq!(parse(&none).unwrap(), XmpMeta { rating: Some(0), label: None, keywords: None });
+    }
+
+    #[test]
+    fn update_keeps_values_silberkorn_does_not_know() {
+        let lr = LIGHTROOM.replace("xmp:Rating=\"4\"", "xmp:Rating=\"-1\"").replace("Rot", "Zu bearbeiten");
+        // Only the keywords change: rejection and the foreign label stay as they are.
+        let out = updated(Some(&lr), 0, ColorLabel::None, &["Neu".into()]).unwrap();
+        assert!(out.contains("xmp:Rating=\"-1\"") && out.contains("xmp:Label=\"Zu bearbeiten\""), "{out}");
+        assert_eq!(parse(&out).unwrap().keywords, Some(vec!["Neu".to_string()]));
+        // Nothing changed: the file stays byte for byte.
+        assert_eq!(updated(Some(&lr), 0, ColorLabel::None, &["Urlaub".into(), "Berge & Seen".into()]).unwrap(), lr);
+        // A rating set in Silberkorn replaces the rejection.
+        let rated = updated(Some(&lr), 3, ColorLabel::None, &[]).unwrap();
+        assert_eq!(parse(&rated).unwrap().rating, Some(3));
+        assert!(rated.contains("Zu bearbeiten"));
     }
 
     #[test]

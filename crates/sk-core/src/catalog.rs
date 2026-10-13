@@ -498,6 +498,10 @@ impl Catalog {
     }
 
     /// Removes entries whose files no longer exist. Returns the number removed.
+    ///
+    /// Files in a folder that can't be reached (an unplugged drive, an offline share) and
+    /// variants whose sidecar can't be read are kept: they are probably only out of reach, and
+    /// removing them would lose their albums, keywords and faces.
     pub fn remove_missing(&self) -> Result<usize> {
         let paths: Vec<(i64, String)> = self
             .conn
@@ -508,7 +512,12 @@ impl Catalog {
         for (id, p) in paths {
             let path = self.resolve(&p);
             let (file, variant) = crate::variant::split(&path);
-            let gone = !file.exists() || (variant > 1 && !crate::variant::of_file(&file).contains(&path));
+            let reachable = file.parent().is_some_and(|d| d.is_dir());
+            let gone = match file.try_exists() {
+                Ok(false) => reachable,
+                Ok(true) if variant > 1 => crate::sidecar::variant_ids(&file).is_ok_and(|ids| !ids.contains(&variant)),
+                _ => false,
+            };
             if gone {
                 self.conn.execute("DELETE FROM images WHERE id = ?1", [id])?;
                 n += 1;
@@ -602,8 +611,12 @@ impl Catalog {
     pub fn store_analysis(&self, path: &Path, sharpness: f32, faces: &[FaceRecord], same_person: f32) -> Result<()> {
         let Some(id) = self.image_id(path)? else { return Ok(()) };
         let closed = faces.iter().filter(|f| f.eyes_closed > EYES_CLOSED).count();
-        self.conn.execute("DELETE FROM faces WHERE image_id = ?1", [id])?;
+        // All or nothing: an error halfway must not leave the image without its faces.
+        let tx = self.conn.unchecked_transaction()?;
+        // Before the old faces go, so that analysing again finds the same (named) persons even
+        // when this image was their only one.
         let mut centroids = self.person_centroids()?;
+        self.conn.execute("DELETE FROM faces WHERE image_id = ?1", [id])?;
         for f in faces {
             let best = centroids
                 .iter()
@@ -633,6 +646,7 @@ impl Catalog {
         )?;
         // Persons without faces are gone.
         self.conn.execute("DELETE FROM persons WHERE id NOT IN (SELECT DISTINCT person_id FROM faces WHERE person_id IS NOT NULL)", [])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -1204,5 +1218,37 @@ mod tests {
         c.store_analysis(Path::new("/f/b.ARW"), 0.45, &[], 0.42).unwrap();
         c.store_analysis(Path::new("/f/a.ARW"), 0.5, &[], 0.42).unwrap();
         assert!(c.persons(1).unwrap().is_empty());
+    }
+
+    #[test]
+    fn analysing_again_keeps_the_name() {
+        let c = Catalog::open_in_memory().unwrap();
+        c.upsert(&meta("/f/a.ARW", "2024:01:01 10:00:00", "L"), &Sidecar::default(), 0).unwrap();
+        let face = FaceRecord { bbox: [0.4, 0.3, 0.2, 0.25], embedding: vec![1.0, 0.0, 0.0], eyes_closed: 0.0 };
+        c.store_analysis(Path::new("/f/a.ARW"), 0.5, std::slice::from_ref(&face), 0.42).unwrap();
+        let id = c.persons(1).unwrap()[0].id;
+        c.name_person(id, "Anna").unwrap();
+        // The only image of Anna, analysed again.
+        c.store_analysis(Path::new("/f/a.ARW"), 0.5, &[face], 0.42).unwrap();
+        let persons = c.persons(1).unwrap();
+        assert_eq!(persons.len(), 1);
+        assert_eq!(c.person_name(persons[0].id).as_deref(), Some("Anna"));
+    }
+
+    #[test]
+    fn remove_missing_keeps_unreachable_folders() {
+        let dir = std::env::temp_dir().join(format!("sk-missing-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("da.ARW"), b"").unwrap();
+        let c = Catalog::open_in_memory().unwrap();
+        let offline = Path::new("/nicht/eingehaengt/b.ARW");
+        for p in [dir.join("da.ARW"), dir.join("weg.ARW"), offline.to_path_buf()] {
+            c.upsert(&meta(p.to_str().unwrap(), "2024:01:01 10:00:00", "L"), &Sidecar::default(), 0).unwrap();
+        }
+        // Only the file deleted from a folder that is there goes.
+        assert_eq!(c.remove_missing().unwrap(), 1);
+        assert!(c.image_id(offline).unwrap().is_some());
+        assert!(c.image_id(&dir.join("da.ARW")).unwrap().is_some());
+        std::fs::remove_dir_all(dir).ok();
     }
 }

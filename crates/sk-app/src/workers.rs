@@ -1,5 +1,6 @@
 //! Background workers. The UI thread never decodes or processes images itself.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -927,6 +928,7 @@ impl Workers {
                 while let Ok(job) = export_rx.recv() {
                     let total = job.items.len() * job.recipes.len();
                     let mut done = 0;
+                    let mut written = HashSet::new();
                     for (i, (path, adj)) in job.items.into_iter().enumerate() {
                         if job.cancel.load(Ordering::Relaxed) {
                             let _ = ev_tx.send(Event::ExportCancelled { done, total });
@@ -944,7 +946,7 @@ impl Workers {
                         };
                         // A bug on one image fails its outputs, not the whole export.
                         let results =
-                            crate::guard::catch(|| export::export_many_with(&path, &adj, &job.recipes, i as u32 + 1, &job.session, &progress));
+                            crate::guard::catch(|| export::export_many_with(&path, &adj, &job.recipes, i as u32 + 1, &job.session, &mut written, &progress));
                         if results.is_err() && job.cancel.load(Ordering::Relaxed) {
                             let _ = ev_tx.send(Event::ExportCancelled { done, total });
                             ctx.request_repaint();

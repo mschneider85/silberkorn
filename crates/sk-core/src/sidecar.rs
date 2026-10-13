@@ -247,6 +247,11 @@ fn read_file(image: &Path) -> Result<Option<Sidecar>> {
     Ok(None)
 }
 
+/// Ids of the further variants stored with a raw file; an error if its sidecar can't be read.
+pub fn variant_ids(raw: &Path) -> Result<Vec<u32>> {
+    Ok(read_file(raw)?.map(|sc| sc.variants.iter().map(|v| v.id).collect()).unwrap_or_default())
+}
+
 /// The sidecar file before changing it. One that can't be parsed is kept as `.bak` (it may hold
 /// the settings of all variants) instead of being overwritten without notice; one from a newer
 /// Silberkorn is an error (see [`VERSION`]).
@@ -349,18 +354,20 @@ pub fn remove_variant(variant: &Path) -> Result<()> {
 
 fn write_file(image: &Path, sidecar: &Sidecar) -> Result<()> {
     let path = sidecar_path(image);
-    let legacy = legacy_sidecar_path(image);
-    if legacy.exists() {
-        std::fs::remove_file(legacy)?;
-    }
     if (Sidecar { version: 0, ..sidecar.clone() }) == Sidecar::default() {
         // Nothing to store; remove a stale file if present.
         if path.exists() {
             std::fs::remove_file(path)?;
         }
-        return Ok(());
+    } else {
+        crate::safe_file::write(&path, serde_json::to_string_pretty(&Sidecar { version: VERSION, ..sidecar.clone() })?)?;
     }
-    crate::safe_file::write(&path, serde_json::to_string_pretty(&Sidecar { version: VERSION, ..sidecar.clone() })?)
+    // The legacy file goes only once its content is safely in the new one.
+    let legacy = legacy_sidecar_path(image);
+    if legacy.exists() {
+        std::fs::remove_file(legacy)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -449,6 +456,20 @@ mod tests {
         save(&img, &sc).unwrap();
         assert!(!legacy_sidecar_path(&img).exists());
         assert_eq!(load(&img).rating, 5);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn legacy_sidecar_stays_when_writing_fails() {
+        let dir = std::env::temp_dir().join(format!("sk-legacy-fail-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("c.ARW");
+        std::fs::write(legacy_sidecar_path(&img), r#"{"version":1,"rating":3}"#).unwrap();
+        // A folder in place of the new sidecar: writing it fails.
+        std::fs::create_dir_all(sidecar_path(&img).join("x")).unwrap();
+        let sc = Sidecar { rating: 5, ..load(&img) };
+        assert!(save(&img, &sc).is_err());
+        assert!(legacy_sidecar_path(&img).exists());
         std::fs::remove_dir_all(dir).ok();
     }
 

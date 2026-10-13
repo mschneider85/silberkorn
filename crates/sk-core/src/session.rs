@@ -173,12 +173,19 @@ fn free_target(dir: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
     (2..).map(|n| dir.join(format!("{stem}-{n}{ext}"))).find(|c| !taken(c)).expect("unbounded")
 }
 
-/// Rename with a copy+delete fallback for moves across file systems.
+/// Rename with a copy+delete fallback for moves across file systems. The original is deleted
+/// only once the copy is on the disk.
 fn move_file(from: &Path, to: &Path) -> Result<()> {
-    if std::fs::rename(from, to).is_ok() {
-        return Ok(());
+    match std::fs::rename(from, to) {
+        Ok(()) => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::CrossesDevices => {}
+        Err(e) => return Err(e).with_context(|| format!("{} kann nicht nach {} verschoben werden", from.display(), to.display())),
     }
-    std::fs::copy(from, to).with_context(|| format!("{} kann nicht nach {} kopiert werden", from.display(), to.display()))?;
+    let copied = std::fs::copy(from, to).and_then(|_| std::fs::File::open(to)?.sync_all());
+    if let Err(e) = copied {
+        let _ = std::fs::remove_file(to);
+        return Err(e).with_context(|| format!("{} kann nicht nach {} kopiert werden", from.display(), to.display()));
+    }
     std::fs::remove_file(from).with_context(|| format!("{} kann nicht entfernt werden", from.display()))?;
     Ok(())
 }
@@ -212,14 +219,19 @@ pub fn rename_image(image: &Path, stem: &str) -> Result<PathBuf> {
 fn relocate(image: &Path, target: &Path) -> Result<()> {
     let target = target.to_path_buf();
     move_file(image, &target)?;
+    let mut moved = vec![(image.to_path_buf(), target.clone())];
     for (from, to) in sidecar::sidecar_files_for(image).into_iter().zip(sidecar::sidecar_files_for(&target)) {
-        if from.exists()
-            && let Err(e) = move_file(&from, &to)
-        {
-            // Without its sidecar (settings, variants) the image must not move: put it back.
-            let _ = move_file(&target, image);
+        if !from.exists() {
+            continue;
+        }
+        if let Err(e) = move_file(&from, &to) {
+            // Without its sidecars (settings, variants) the image must not move: put everything back.
+            for (from, to) in moved.iter().rev() {
+                let _ = move_file(to, from);
+            }
             return Err(e);
         }
+        moved.push((from, to));
     }
     Ok(())
 }

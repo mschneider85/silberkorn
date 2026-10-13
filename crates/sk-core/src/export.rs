@@ -1,5 +1,6 @@
 //! Export ("process recipes"): full-resolution development to JPEG / TIFF / PNG / WebP / AVIF.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -154,16 +155,20 @@ pub fn export(image: &Path, adj: &Adjustments, recipe: &ExportRecipe) -> Result<
 /// Develops `image` once and writes one file per recipe. `counter` and `session` are for
 /// recipes' name templates.
 pub fn export_many(image: &Path, adj: &Adjustments, recipes: &[ExportRecipe], counter: u32, session: &str) -> Vec<Result<PathBuf>> {
-    export_many_with(image, adj, recipes, counter, session, &|_| {})
+    export_many_with(image, adj, recipes, counter, session, &mut HashSet::new(), &|_| {})
 }
 
 /// [`export_many`] with progress 0..1 of this image (reported while enlarging, which takes long).
+/// `written` holds the files written so far in this batch: an output whose name is among them
+/// gets `-2`, `-3` … instead of replacing it (same file names from two folders, a name template
+/// that gives a burst the same name).
 pub fn export_many_with(
     image: &Path,
     adj: &Adjustments,
     recipes: &[ExportRecipe],
     counter: u32,
     session: &str,
+    written: &mut HashSet<PathBuf>,
     progress: &dyn Fn(f32),
 ) -> Vec<Result<PathBuf>> {
     let loaded = raw::load_full(image).and_then(|(meta, linear)| {
@@ -199,7 +204,7 @@ pub fn export_many_with(
             let out = &cache.iter().find(|(s, _)| *s == recipe.output_space).unwrap().1;
             let fields = NameFields { image, capture: Some(&meta.info), counter, session };
             let Some(u) = recipe.upscale_for(out.width, out.height) else {
-                return write_output(&fields, out, recipe);
+                return write_output(&fields, out, recipe, written);
             };
             let key = (recipe.output_space, u);
             if !enlarged.iter().any(|(k, _)| *k == key) {
@@ -208,22 +213,33 @@ pub fn export_many_with(
                 upscaled += 1.0;
                 enlarged.push((key, big));
             }
-            write_output(&fields, &enlarged.iter().find(|(k, _)| *k == key).unwrap().1, recipe)
+            write_output(&fields, &enlarged.iter().find(|(k, _)| *k == key).unwrap().1, recipe, written)
         })
         .collect();
     progress(1.0);
     results
 }
 
-fn write_output(f: &NameFields, out: &crate::image::LinearImage, recipe: &ExportRecipe) -> Result<PathBuf> {
+fn write_output(f: &NameFields, out: &crate::image::LinearImage, recipe: &ExportRecipe, written: &mut HashSet<PathBuf>) -> Result<PathBuf> {
     let info = f.capture.cloned().unwrap_or_default();
     let bytes = encode(&resized(out, recipe)?, recipe, &info)?;
-    let path = recipe.output_path(f);
+    let path = unused_in_batch(recipe.output_path(f), written);
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).with_context(|| format!("Kann Ordner {} nicht anlegen", dir.display()))?;
     }
     crate::safe_file::write_nosync(&path, bytes)?;
+    written.insert(path.clone());
     Ok(path)
+}
+
+/// `path`, or `name-2.ext`, `name-3.ext` … if this batch already wrote a file of that name.
+fn unused_in_batch(path: PathBuf, written: &HashSet<PathBuf>) -> PathBuf {
+    if !written.contains(&path) {
+        return path;
+    }
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+    let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    (2..).map(|n| path.with_file_name(format!("{stem}-{n}{ext}"))).find(|p| !written.contains(p)).expect("unbounded")
 }
 
 /// The processed image (output space, encoded 0..1) at the recipe's size, with its watermark.
@@ -368,6 +384,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn names_are_unique_within_a_batch() {
+        let mut written = HashSet::new();
+        let a = unused_in_batch(PathBuf::from("/o/IMG_1.jpg"), &written);
+        written.insert(a.clone());
+        let b = unused_in_batch(PathBuf::from("/o/IMG_1.jpg"), &written);
+        written.insert(b.clone());
+        let c = unused_in_batch(PathBuf::from("/o/IMG_1.jpg"), &written);
+        assert_eq!((a, b, c), (PathBuf::from("/o/IMG_1.jpg"), PathBuf::from("/o/IMG_1-2.jpg"), PathBuf::from("/o/IMG_1-3.jpg")));
+    }
+
+    #[test]
     fn export_many_writes_each_recipe() {
         let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/_DSC0010.ARW");
         if !sample.exists() {
@@ -434,7 +461,7 @@ mod tests {
         };
         let recipes = [plain.clone(), up(2, None, "_2x"), up(4, Some(1000), "_4x_1000")];
         let steps = std::sync::Mutex::new(Vec::new());
-        let res = export_many_with(&sample, &adj, &recipes, 1, "", &|p| steps.lock().unwrap().push(p));
+        let res = export_many_with(&sample, &adj, &recipes, 1, "", &mut HashSet::new(), &|p| steps.lock().unwrap().push(p));
         let size = |r: &Result<PathBuf>| image::image_dimensions(r.as_ref().unwrap()).unwrap();
         let (w, h) = size(&res[0]);
         assert_eq!(size(&res[1]), (2 * w, 2 * h));
