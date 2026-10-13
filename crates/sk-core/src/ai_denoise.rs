@@ -19,6 +19,8 @@ use crate::image::LinearImage;
 pub const VERSION: u32 = 1;
 /// Products are large (about 4 bytes per pixel): the oldest are removed beyond this.
 pub const CACHE_LIMIT: u64 = 20 << 30;
+/// Larger images are refused: computing needs about 65 bytes per pixel (8 GB at this size).
+pub const MAX_PIXELS: usize = 120_000_000;
 
 const MAGIC: &[u8; 4] = b"SKDN";
 
@@ -76,10 +78,25 @@ pub fn ensure(path: &Path, progress: &dyn Fn(f32)) -> Result<()> {
     if file.is_file() {
         return Ok(());
     }
+    // (A file that can't be read is reported by the computation itself.)
+    if let Ok(meta) = crate::raw::read_meta(path) {
+        check_size(meta.info.width, meta.info.height)?;
+    }
     let img = (p.compute)(&crate::variant::file_of(path), progress)?;
     std::fs::create_dir_all(cache_dir())?;
     crate::safe_file::write(&file, encode(&img))?;
     prune(&cache_dir(), CACHE_LIMIT);
+    Ok(())
+}
+
+fn check_size(width: usize, height: usize) -> Result<()> {
+    let pixels = width.saturating_mul(height);
+    anyhow::ensure!(
+        pixels <= MAX_PIXELS,
+        "Bild zu groß für KI-Entrauschen ({} MP, höchstens {} MP)",
+        pixels / 1_000_000,
+        MAX_PIXELS / 1_000_000
+    );
     Ok(())
 }
 
@@ -329,6 +346,13 @@ fn resized(file: &Path, product: &Product, w: usize, h: usize) -> Arc<LinearImag
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn very_large_images_are_refused() {
+        assert!(check_size(11_648, 8_736).is_ok());
+        let e = check_size(40_000, 6_000).unwrap_err();
+        assert!(format!("{e}").contains("240 MP"), "{e}");
+    }
 
     fn image(w: usize, h: usize) -> LinearImage {
         LinearImage::new(w, h, (0..w * h).map(|i| [(i % 7) as f32 / 7.0, (i % 5) as f32 * 0.3, 1.5]).collect())
