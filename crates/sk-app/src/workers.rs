@@ -400,9 +400,11 @@ impl Workers {
             crate::guard::spawn("Vorschau laden", move || {
                 while let Some((generation, path)) = recv_latest(&load_rx) {
                     activity.touch();
-                    let result = raw::load_preview(&path, PREVIEW_EDGE)
-                        .map(|(m, p)| (Arc::new(m), Arc::new(p)))
-                        .map_err(|e| format!("{e:#}"));
+                    // A panic (broken file) must still answer, or the viewer waits for ever.
+                    let result = crate::guard::catch(|| {
+                        raw::load_preview(&path, PREVIEW_EDGE).map(|(m, p)| (Arc::new(m), Arc::new(p))).map_err(|e| format!("{e:#}"))
+                    })
+                    .and_then(|r| r);
                     let _ = ev_tx.send(Event::Loaded { generation, result });
                     ctx.request_repaint();
                 }
@@ -519,55 +521,59 @@ impl Workers {
                 // The encoder's result for the last image (by its guide), reused for every click.
                 let mut embedding: Option<(u64, sk_ai::segment::Embedding)> = None;
                 while let Ok(job) = ai_rx.recv() {
-                    // Guide: the image in source orientation, only white balance and exposure applied.
-                    let guide_adj = Adjustments {
-                        white_balance: job.adjustments.white_balance.clone(),
-                        exposure: job.adjustments.exposure,
-                        detail: sk_core::params::Detail { sharpen_amount: 0.0, nr_color: 0.0, ..Default::default() },
-                        ..Default::default()
-                    };
-                    let r = Processor::new(&job.meta, &guide_adj).render(&job.preview, None, None);
-                    let guide = sk_ai::guide_from_rgba(r.width, r.height, &r.rgba);
                     let prepare = matches!(job.kind, AiKind::ObjectPrepare);
-                    let result = match job.kind {
-                        AiKind::Object { .. } | AiKind::ObjectPrepare => {
-                            let generation = sk_ai::runtime::config_generation();
-                            if object.as_ref().is_none_or(|(_, g)| *g != generation) && sk_ai::segment::available() {
-                                object = sk_ai::segment::ObjectModel::load().map_err(|e| log::warn!("{e:#}")).ok().map(|m| (m, generation));
-                            }
-                            match &object {
-                                Some((m, _)) => {
-                                    let key = cache::fnv1a(format!("{}|{}x{}", job.meta.path.display(), r.width, r.height).as_bytes())
-                                        ^ cache::fnv1a(&r.rgba.iter().step_by(97).copied().collect::<Vec<u8>>());
-                                    if embedding.as_ref().is_none_or(|(k, _)| *k != key) {
-                                        embedding = None;
-                                        match m.embed(&guide) {
-                                            Ok(e) => embedding = Some((key, e)),
-                                            Err(e) => log::warn!("Objekt auswählen: {e:#}"),
+                    // A panic must still answer: the layer panel waits for the result.
+                    let result = crate::guard::catch(|| {
+                        // Guide: the image in source orientation, only white balance and exposure applied.
+                        let guide_adj = Adjustments {
+                            white_balance: job.adjustments.white_balance.clone(),
+                            exposure: job.adjustments.exposure,
+                            detail: sk_core::params::Detail { sharpen_amount: 0.0, nr_color: 0.0, ..Default::default() },
+                            ..Default::default()
+                        };
+                        let r = Processor::new(&job.meta, &guide_adj).render(&job.preview, None, None);
+                        let guide = sk_ai::guide_from_rgba(r.width, r.height, &r.rgba);
+                        match job.kind {
+                            AiKind::Object { .. } | AiKind::ObjectPrepare => {
+                                let generation = sk_ai::runtime::config_generation();
+                                if object.as_ref().is_none_or(|(_, g)| *g != generation) && sk_ai::segment::available() {
+                                    object = sk_ai::segment::ObjectModel::load().map_err(|e| log::warn!("{e:#}")).ok().map(|m| (m, generation));
+                                }
+                                match &object {
+                                    Some((m, _)) => {
+                                        let key = cache::fnv1a(format!("{}|{}x{}", job.meta.path.display(), r.width, r.height).as_bytes())
+                                            ^ cache::fnv1a(&r.rgba.iter().step_by(97).copied().collect::<Vec<u8>>());
+                                        if embedding.as_ref().is_none_or(|(k, _)| *k != key) {
+                                            embedding = None;
+                                            match m.embed(&guide) {
+                                                Ok(e) => embedding = Some((key, e)),
+                                                Err(e) => log::warn!("Objekt auswählen: {e:#}"),
+                                            }
+                                        }
+                                        match (&job.kind, &embedding) {
+                                            (AiKind::Object { clicks }, Some((_, e))) => m.mask(e, clicks).map_err(|e| format!("{e:#}")),
+                                            (AiKind::Object { .. }, None) => Err("Das Bild konnte nicht analysiert werden".into()),
+                                            _ => Err(String::new()),
                                         }
                                     }
-                                    match (&job.kind, &embedding) {
-                                        (AiKind::Object { clicks }, Some((_, e))) => m.mask(e, clicks).map_err(|e| format!("{e:#}")),
-                                        (AiKind::Object { .. }, None) => Err("Das Bild konnte nicht analysiert werden".into()),
-                                        _ => Err(String::new()),
-                                    }
+                                    None => Err("OBJECT_MODEL_MISSING".into()),
                                 }
-                                None => Err("OBJECT_MODEL_MISSING".into()),
+                            }
+                            AiKind::Sky => Ok(sk_ai::sky_mask(&guide)),
+                            AiKind::Magic { seeds, tolerance } => Ok(sk_ai::magic_mask(&guide, &seeds, tolerance)),
+                            AiKind::Subject => {
+                                let generation = sk_ai::runtime::config_generation();
+                                if model.as_ref().is_none_or(|(_, g)| *g != generation) {
+                                    model = sk_ai::SubjectModel::load(&sk_ai::default_model_path()).map_err(|e| log::warn!("{e:#}")).ok().map(|m| (m, generation));
+                                }
+                                match &model {
+                                    Some((m, _)) => m.subject_mask(&guide).map_err(|e| format!("{e:#}")),
+                                    None => Err("MODEL_MISSING".into()),
+                                }
                             }
                         }
-                        AiKind::Sky => Ok(sk_ai::sky_mask(&guide)),
-                        AiKind::Magic { seeds, tolerance } => Ok(sk_ai::magic_mask(&guide, &seeds, tolerance)),
-                        AiKind::Subject => {
-                            let generation = sk_ai::runtime::config_generation();
-                            if model.as_ref().is_none_or(|(_, g)| *g != generation) {
-                                model = sk_ai::SubjectModel::load(&sk_ai::default_model_path()).map_err(|e| log::warn!("{e:#}")).ok().map(|m| (m, generation));
-                            }
-                            match &model {
-                                Some((m, _)) => m.subject_mask(&guide).map_err(|e| format!("{e:#}")),
-                                None => Err("MODEL_MISSING".into()),
-                            }
-                        }
-                    };
+                    })
+                    .and_then(|r| r);
                     if prepare {
                         continue;
                     }
@@ -921,7 +927,7 @@ impl Workers {
                         let _ = ev_tx.send(Event::RemovalProgress { generation: job.generation, progress: p });
                         ctx.request_repaint();
                     };
-                    let result = crate::remove::compute(&job, &mut model, &progress);
+                    let result = crate::guard::catch(|| crate::remove::compute(&job, &mut model, &progress)).and_then(|r| r);
                     let _ = ev_tx.send(Event::Removal { generation: job.generation, result });
                     ctx.request_repaint();
                 }

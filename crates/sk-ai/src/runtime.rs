@@ -125,6 +125,9 @@ pub fn gpu_problem() -> Option<String> {
 /// The latest reason a network fell back to the processor.
 static LAST_GPU_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
+/// Size limit for a file of the GPU support (the libraries are some tens of MB).
+const GPU_FILE_LIMIT: usize = 256 << 20;
+
 /// Downloads the GPU support (only the needed files from the NuGet packages, by HTTP ranges).
 pub fn install_gpu(progress: &dyn Fn(f32)) -> Result<()> {
     if !cfg!(windows) {
@@ -135,7 +138,7 @@ pub fn install_gpu(progress: &dyn Fn(f32)) -> Result<()> {
     let files = gpu_files();
     let n = files.len() as f32;
     for (i, (url, inner, name, sha256)) in files.iter().enumerate() {
-        let data = zip_entry(url, inner, &|p| progress((i as f32 + p) / n))?;
+        let data = zip_entry(url, inner, GPU_FILE_LIMIT, &|p| progress((i as f32 + p) / n))?;
         anyhow::ensure!(crate::models::sha256(&data) == *sha256, "{name}: Prüfsumme stimmt nicht, die Datei wird nicht verwendet");
         sk_core::safe_file::write(&dir.join(name), &data)?;
     }
@@ -157,40 +160,48 @@ fn get_range(url: &str, range: &str) -> Result<Vec<u8>> {
     Ok(resp.body_mut().with_config().limit(256 << 20).read_to_vec()?)
 }
 
-fn u16le(b: &[u8], i: usize) -> usize {
-    u16::from_le_bytes([b[i], b[i + 1]]) as usize
+/// Little-endian numbers in data from the server: out of range is an error, not a panic.
+fn u16le(b: &[u8], i: usize) -> Result<usize> {
+    let v = b.get(i..i + 2).context("ZIP-Archiv beschädigt")?;
+    Ok(u16::from_le_bytes([v[0], v[1]]) as usize)
 }
 
-fn u32le(b: &[u8], i: usize) -> usize {
-    u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]) as usize
+fn u32le(b: &[u8], i: usize) -> Result<usize> {
+    let v = b.get(i..i + 4).context("ZIP-Archiv beschädigt")?;
+    Ok(u32::from_le_bytes([v[0], v[1], v[2], v[3]]) as usize)
 }
 
 /// One file from a ZIP archive on a web server, without downloading the whole archive: the
-/// central directory from its end, then only the file's compressed data.
-pub fn zip_entry(url: &str, name: &str, progress: &dyn Fn(f32)) -> Result<Vec<u8>> {
+/// central directory from its end, then only the file's compressed data. The archive is not
+/// trusted before the caller checks the checksum: a file above `max_bytes` (packed or unpacked)
+/// is refused instead of taking all memory.
+pub fn zip_entry(url: &str, name: &str, max_bytes: usize, progress: &dyn Fn(f32)) -> Result<Vec<u8>> {
     // Explicit ranges only: GitHub's download servers refuse suffix ranges ("bytes=-N").
     let len = total_size(url)?;
     let tail_start = len.saturating_sub(65536);
     let tail = get_range(url, &format!("bytes={tail_start}-{}", len - 1))?;
     let eocd = tail.windows(4).rposition(|w| w == b"PK\x05\x06").context("Kein ZIP-Archiv")?;
-    let (cd_size, cd_off) = (u32le(&tail, eocd + 12), u32le(&tail, eocd + 16));
+    let (cd_size, cd_off) = (u32le(&tail, eocd + 12)?, u32le(&tail, eocd + 16)?);
+    anyhow::ensure!(cd_size > 0 && cd_size <= 64 << 20, "ZIP-Archiv beschädigt");
     let cd = if cd_size <= eocd { tail[eocd - cd_size..eocd].to_vec() } else { get_range(url, &format!("bytes={cd_off}-{}", cd_off + cd_size - 1))? };
     let mut p = 0;
-    while p + 46 <= cd.len() && u32le(&cd, p) == 0x0201_4b50 {
-        let (method, csize, usize_) = (u16le(&cd, p + 10), u32le(&cd, p + 20), u32le(&cd, p + 24));
-        let (nl, el, cl) = (u16le(&cd, p + 28), u16le(&cd, p + 30), u16le(&cd, p + 32));
-        let local = u32le(&cd, p + 42);
-        let entry = String::from_utf8_lossy(&cd[p + 46..p + 46 + nl]);
+    while p + 46 <= cd.len() && u32le(&cd, p)? == 0x0201_4b50 {
+        let (method, csize, usize_) = (u16le(&cd, p + 10)?, u32le(&cd, p + 20)?, u32le(&cd, p + 24)?);
+        let (nl, el, cl) = (u16le(&cd, p + 28)?, u16le(&cd, p + 30)?, u16le(&cd, p + 32)?);
+        let local = u32le(&cd, p + 42)?;
+        let entry = String::from_utf8_lossy(cd.get(p + 46..p + 46 + nl).context("ZIP-Archiv beschädigt")?);
         if entry == name {
+            anyhow::ensure!(csize <= max_bytes && usize_ <= max_bytes, "{name}: größer als erwartet, wird nicht geladen");
             // Local header (30 bytes plus its own name and extra field), then the data.
             let head = get_range(url, &format!("bytes={local}-{}", local + 29))?;
-            let start = local + 30 + u16le(&head, 26) + u16le(&head, 28);
+            let start = local + 30 + u16le(&head, 26)? + u16le(&head, 28)?;
             let mut data = Vec::with_capacity(csize);
             let chunk = 1 << 20;
             let mut off = 0;
             while off < csize {
                 let end = (off + chunk).min(csize);
                 data.extend(get_range(url, &format!("bytes={}-{}", start + off, start + end - 1))?);
+                anyhow::ensure!(data.len() <= csize, "{name}: unerwartete Antwort des Servers");
                 off = end;
                 progress(off as f32 / csize as f32);
             }
@@ -198,7 +209,8 @@ pub fn zip_entry(url: &str, name: &str, progress: &dyn Fn(f32)) -> Result<Vec<u8
                 0 => Ok(data),
                 8 => {
                     let mut out = Vec::with_capacity(usize_);
-                    flate2::read::DeflateDecoder::new(&data[..]).read_to_end(&mut out)?;
+                    // At most the announced size (plus one byte to notice more).
+                    flate2::read::DeflateDecoder::new(&data[..]).take(usize_ as u64 + 1).read_to_end(&mut out)?;
                     anyhow::ensure!(out.len() == usize_, "{name}: unvollständig");
                     Ok(out)
                 }
@@ -420,7 +432,7 @@ mod tests {
             return;
         }
         let [(url, inner, _, sha256), _] = gpu_files();
-        let dll = zip_entry(&url, inner, &|_| {}).unwrap();
+        let dll = zip_entry(&url, inner, GPU_FILE_LIMIT, &|_| {}).unwrap();
         assert!(dll.len() > 5_000_000 && dll.starts_with(b"MZ"), "{}", dll.len());
         assert_eq!(crate::models::sha256(&dll), sha256);
     }

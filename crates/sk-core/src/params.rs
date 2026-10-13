@@ -829,9 +829,15 @@ impl Adjustments {
         self.geometry = other.geometry.clone();
     }
 
-    /// Settings without any edit count as made with the latest process version (an older file
-    /// that only holds a rating is not an edit to preserve).
+    /// Settings as read from a file: without any edit they count as made with the latest process
+    /// version (an older file that only holds a rating is not an edit to preserve); damaged AI
+    /// masks are dropped.
     pub fn normalized(mut self) -> Self {
+        // A damaged or hand-edited sidecar: a bitmap whose data doesn't match its size would be
+        // read past its end.
+        for l in &mut self.layers {
+            l.mask.ai.take_if(|a| a.data.len() != a.width * a.height);
+        }
         if (Adjustments { process: PROCESS_LATEST, ..self.clone() }) == Adjustments::default() {
             self.process = PROCESS_LATEST;
         }
@@ -893,6 +899,15 @@ impl Adjustments {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn damaged_ai_mask_is_dropped_on_load() {
+        let ai = |data: Vec<u8>| AiMask { kind: "ai".into(), width: 4, height: 4, data, depth: None };
+        let layer = |a: AiMask| Layer { mask: Mask { ai: Some(a), ..Default::default() }, ..Default::default() };
+        let adj = Adjustments { layers: vec![layer(ai(vec![0; 10])), layer(ai(vec![0; 16]))], ..Default::default() }.normalized();
+        assert!(adj.layers[0].mask.ai.is_none());
+        assert!(adj.layers[1].mask.ai.is_some());
+    }
 
     #[test]
     fn process_version_of_old_and_new_settings() {

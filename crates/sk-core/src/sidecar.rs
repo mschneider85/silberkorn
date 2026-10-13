@@ -237,6 +237,12 @@ fn read_file(image: &Path) -> Result<Option<Sidecar>> {
                 sc.adjustments = sc.adjustments.normalized();
                 for v in &mut sc.variants {
                     v.adjustments = std::mem::take(&mut v.adjustments).normalized();
+                    for s in &mut v.snapshots {
+                        s.adjustments = std::mem::take(&mut s.adjustments).normalized();
+                    }
+                }
+                for s in &mut sc.snapshots {
+                    s.adjustments = std::mem::take(&mut s.adjustments).normalized();
                 }
                 return Ok(Some(sc));
             }

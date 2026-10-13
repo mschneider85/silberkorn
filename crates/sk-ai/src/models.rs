@@ -194,8 +194,17 @@ pub fn download_to(m: &ModelInfo, target: &Path, progress: &dyn Fn(f32)) -> Resu
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    // One download per file at a time (jobs run in parallel and may want the same model): two
+    // writers on one `.part` file would leave a broken model behind.
+    let lock = target_lock(target);
+    let _only_one = lock.lock().unwrap_or_else(|e| e.into_inner());
+    if std::fs::metadata(target).is_ok_and(|md| md.len() == m.bytes) {
+        // Another job has just finished it (it was checked before it took its place).
+        progress(1.0);
+        return Ok(());
+    }
     if let Some(entry) = m.entry {
-        let data = crate::runtime::zip_entry(m.url, entry, progress).with_context(|| format!("Download von {} fehlgeschlagen", m.label))?;
+        let data = crate::runtime::zip_entry(m.url, entry, m.bytes as usize, progress).with_context(|| format!("Download von {} fehlgeschlagen", m.label))?;
         anyhow::ensure!(data.len() as u64 == m.bytes, "Download von {} unvollständig ({} von {} Bytes)", m.label, data.len(), m.bytes);
         anyhow::ensure!(sha256(&data).eq_ignore_ascii_case(m.sha256), "{}: Prüfsumme stimmt nicht (die Datei wurde verändert oder beschädigt)", m.label);
         sk_core::safe_file::write(target, &data)?;
@@ -221,6 +230,12 @@ pub fn download_to(m: &ModelInfo, target: &Path, progress: &dyn Fn(f32)) -> Resu
     std::fs::rename(&part, target)?;
     progress(1.0);
     Ok(())
+}
+
+fn target_lock(target: &Path) -> std::sync::Arc<std::sync::Mutex<()>> {
+    type Locks = std::sync::Mutex<std::collections::HashMap<PathBuf, std::sync::Arc<std::sync::Mutex<()>>>>;
+    static LOCKS: std::sync::LazyLock<Locks> = std::sync::LazyLock::new(Default::default);
+    LOCKS.lock().unwrap_or_else(|e| e.into_inner()).entry(target.to_path_buf()).or_default().clone()
 }
 
 /// Appends the rest of the file from byte `have` on (or starts over if the server can't resume).
