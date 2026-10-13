@@ -143,6 +143,16 @@ fn dark_step(full: (usize, usize)) -> usize {
     (full.0.max(full.1) / 256).max(1)
 }
 
+fn lcm(a: usize, b: usize) -> usize {
+    let gcd = |mut a: usize, mut b: usize| {
+        while b != 0 {
+            (a, b) = (b, a % b);
+        }
+        a
+    };
+    a / gcd(a, b) * b
+}
+
 impl DarkChannel {
     /// `airlight`: that of the whole image when `img` is only a part of it.
     fn new(img: &LinearImage, step: usize, airlight: Option<f32>) -> Self {
@@ -643,6 +653,9 @@ impl Processor {
             margin = margin.max(long_edge / 64.0);
         }
         let m = margin.ceil() as usize;
+        // The dark channel's blocks are counted from the region's start: it starts on the
+        // block grid of the whole image, so that its blocks are the same.
+        let align = if dehaze_active { lcm(align, dark_step(full)) } else { align };
         let (x0, y0) = (region.x.saturating_sub(m) / align * align, region.y.saturating_sub(m) / align * align);
         let ext = Region { x: x0, y: y0, w: (region.x + region.w + m).min(full.0) - x0, h: (region.y + region.h + m).min(full.1) - y0 };
         Plan { geo, full, region, ext, margin: m, scale, r_hdr, r_clarity, r_structure, hdr_active, clarity_active, structure_active, dehaze_active }
@@ -1429,15 +1442,17 @@ mod tests {
     #[test]
     fn dehaze_tiles_match_full_render() {
         // Bright haze on the left, dark ground on the right: a tile of the ground alone would
-        // estimate a much darker airlight.
-        let (w, h) = (512, 96);
+        // estimate a much darker airlight. The tile sits on the edge, off the dark channel's
+        // block grid (8 px here), so blocks must be counted from the image's origin.
+        let (w, h) = (2048, 128);
+        let edge = 1900;
         let src = LinearImage::new(
             w,
             h,
             (0..w * h)
                 .map(|i| {
                     let (x, y) = (i % w, i / w);
-                    let base = if x < w / 2 { 0.8 } else { 0.08 };
+                    let base = if x < edge { 0.8 } else { 0.08 };
                     let v = base + 0.04 * (((x / 4 + y / 4) % 2) as f32);
                     [v, v * 0.95, v * 0.9]
                 })
@@ -1445,7 +1460,7 @@ mod tests {
         );
         let adj = Adjustments { detail: Detail { dehaze: 60.0, ..Default::default() }, ..Default::default() };
         let p = Processor::new(&meta(), &adj);
-        let region = Region { x: 470, y: 40, w: 24, h: 24 };
+        let region = Region { x: 1889, y: 51, w: 24, h: 24 };
         // On the processor and (if there is one) on the graphics card.
         type Render<'a> = &'a dyn Fn(Option<Region>) -> Rendered;
         let renderers: [(&str, Render); 2] = [("CPU", &|r| p.render_cpu(&src, r, None)), ("GPU", &|r| p.render(&src, r, None))];
