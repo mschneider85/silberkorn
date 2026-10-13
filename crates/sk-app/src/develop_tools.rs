@@ -524,6 +524,9 @@ impl App {
     /// The lensfun profile for the current image's lens: name and coefficients at its focal length.
     fn lens_profile(&self) -> Option<(String, sk_core::params::LensCoefficients)> {
         let (db, cur) = (self.lens_db.as_ref()?, self.current.as_ref()?);
+        if cur.meta.lens_corrected {
+            return None;
+        }
         let profile = sk_core::lensfun::find(db, cur.meta.info.lens.as_deref()?)?;
         let coeffs = profile.coefficients(cur.meta.info.focal_mm.unwrap_or(50.0), cur.meta.info.fnumber);
         Some((profile.name(), coeffs))
@@ -531,7 +534,8 @@ impl App {
 
     /// Name of the lensfun profile for the current lens, cached per lens name.
     fn lens_profile_name(&mut self) -> Option<String> {
-        let lens = self.current.as_ref()?.meta.info.lens.clone()?;
+        let meta = &self.current.as_ref()?.meta;
+        let lens = meta.info.lens.clone().filter(|_| !meta.lens_corrected)?;
         self.lens_db.as_ref()?;
         if self.lens_match.as_ref().is_none_or(|(l, _)| *l != lens) {
             self.lens_match = Some((lens.clone(), self.lens_profile().map(|p| p.0)));

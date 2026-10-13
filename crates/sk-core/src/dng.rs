@@ -30,6 +30,17 @@ pub struct LinearDng<'a> {
     pub baseline_exposure: f32,
     /// Preview shown by browsers (8-bit sRGB, any size).
     pub preview: Option<&'a ::image::RgbImage>,
+    /// The lens is already corrected (a panorama: its frames were): no lens profile applies,
+    /// although lens and focal length are those of the frames (see [`lens_corrected`]).
+    pub lens_corrected: bool,
+}
+
+/// DNGPrivateData (a null-terminated maker name, then its data) marking a lens-corrected file.
+const LENS_CORRECTED: &[u8] = b"Silberkorn\0lens-corrected";
+
+/// Whether a DNG's DNGPrivateData marks it as lens-corrected (see [`LinearDng::lens_corrected`]).
+pub(crate) fn lens_corrected(private_data: &[u8]) -> bool {
+    private_data == LENS_CORRECTED
 }
 
 const TILE: usize = 256;
@@ -291,6 +302,9 @@ pub fn write_linear_dng(path: &Path, d: &LinearDng) -> Result<()> {
     ifd0.add(50728, Val::Rational(wb.iter().map(|v| rational(1.0 / v.max(1e-4) as f64, 1_000_000)).collect()));
     ifd0.add(50730, Val::SRational(vec![srational(d.baseline_exposure)]));
     ifd0.add(50778, Val::Short(vec![21])); // D65
+    if d.lens_corrected {
+        ifd0.add(50740, Val::Byte(LENS_CORRECTED.to_vec()));
+    }
     ifd0.blocks.push((273, vec![preview.into_raw()]));
     let ifd0_at = out.write_ifd(ifd0);
     out.buf[4..8].copy_from_slice(&ifd0_at.to_le_bytes());
@@ -325,12 +339,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.dng");
         let preview = ::image::RgbImage::from_pixel(30, 20, ::image::Rgb([200, 100, 50]));
-        write_linear_dng(&path, &LinearDng { width: w, height: h, data: &data, xyz_to_cam, as_shot_wb: [2.0, 1.0, 1.5], info: &info, baseline_exposure: 0.0, preview: Some(&preview) }).unwrap();
+        write_linear_dng(&path, &LinearDng { width: w, height: h, data: &data, xyz_to_cam, as_shot_wb: [2.0, 1.0, 1.5], info: &info, baseline_exposure: 0.0, preview: Some(&preview), lens_corrected: false }).unwrap();
         let (meta, img) = crate::raw::load_full(&path).unwrap();
         assert_eq!((img.width, img.height), (w, h));
         assert!(meta.hdr, "Float-Daten ohne Clipping");
         assert_eq!(meta.info.iso, Some(200));
         assert_eq!(meta.info.date.as_deref(), Some("2024:05:01 12:00:00"));
+        assert!(!meta.lens_corrected);
         assert!((meta.as_shot_wb[0] - 2.0).abs() < 0.01 && (meta.as_shot_wb[2] - 1.5).abs() < 0.01, "{:?}", meta.as_shot_wb);
         for (i, (a, b)) in img.data.iter().zip(&data).enumerate().step_by(997) {
             for c in 0..3 {
@@ -342,6 +357,12 @@ mod tests {
         assert!(small.data.iter().any(|p| p[0] > 2.0));
         let thumb = crate::raw::embedded_preview(&path).unwrap();
         assert_eq!((thumb.width(), thumb.height()), (30, 20));
+        // A panorama keeps its lens name but is marked as corrected.
+        let info = CaptureInfo { lens: Some("FE 24-70mm F2.8 GM".into()), focal_mm: Some(24.0), ..info };
+        write_linear_dng(&path, &LinearDng { width: w, height: h, data: &data, xyz_to_cam, as_shot_wb: [2.0, 1.0, 1.5], info: &info, baseline_exposure: 0.0, preview: None, lens_corrected: true }).unwrap();
+        let meta = crate::raw::read_meta(&path).unwrap();
+        assert!(meta.lens_corrected);
+        assert_eq!(meta.info.lens.as_deref(), Some("FE 24-70mm F2.8 GM"));
         std::fs::remove_dir_all(dir).ok();
     }
 }

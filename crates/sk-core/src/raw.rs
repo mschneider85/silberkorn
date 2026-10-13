@@ -60,6 +60,8 @@ pub struct RawMeta {
     pub hdr: bool,
     /// Lens correction stored by the camera (oriented like the image).
     pub lens: Option<crate::camera_lens::CameraLens>,
+    /// The lens is already corrected (a stitched panorama): no lens profile applies.
+    pub lens_corrected: bool,
 }
 
 struct Decoded {
@@ -92,6 +94,10 @@ fn decode_ext(path: &Path, dummy: bool) -> Result<Decoded> {
     let mut meta = build_meta(path, &raw, md.as_ref())?;
     let size = raw.crop_area.or(raw.active_area).map_or((raw.width, raw.height), |r| (r.d.w, r.d.h));
     meta.lens = crate::camera_lens::read(&file, size.0, size.1).map(|l| l.oriented(meta.orientation));
+    meta.lens_corrected = matches!(
+        decoder.ifd(rawler::decoders::WellKnownIFD::Root).ok().flatten().as_deref().and_then(|ifd| ifd.get_entry(50740u16)).map(|e| &e.value),
+        Some(rawler::formats::tiff::Value::Byte(d) | rawler::formats::tiff::Value::Undefined(d)) if crate::dng::lens_corrected(d)
+    );
     // Merged HDR data goes beyond the white level; float data within it (e.g. denoised raws)
     // is clipped like any raw file.
     meta.hdr = raw.cpp == 3 && matches!(&raw.data, RawImageData::Float(d) if d.par_iter().any(|v| *v > 1.0001));
@@ -205,7 +211,7 @@ fn build_meta(path: &Path, raw: &RawImage, md: Option<&RawMetadata>) -> Result<R
             orientation = Orientation::from_exif(o);
         }
     }
-    Ok(RawMeta { path: path.to_path_buf(), info, color, as_shot_wb, orientation, hdr: false, lens: None })
+    Ok(RawMeta { path: path.to_path_buf(), info, color, as_shot_wb, orientation, hdr: false, lens: None, lens_corrected: false })
 }
 
 /// Reads only the metadata, without decoding pixel data.

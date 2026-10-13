@@ -1339,7 +1339,7 @@ mod tests {
             color,
             as_shot_wb: [1.0, 1.0, 1.0],
             orientation: Orientation::Normal,
-            hdr: false, lens: None,
+            hdr: false, lens: None, lens_corrected: false,
         }
     }
 

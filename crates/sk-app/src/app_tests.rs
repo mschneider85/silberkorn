@@ -44,6 +44,7 @@ fn make_samples() -> Option<Vec<PathBuf>> {
                         info: &info,
                         baseline_exposure: 0.0,
                         preview: Some(&preview),
+                        lens_corrected: false,
                     },
                 )
                 .unwrap();
@@ -1589,7 +1590,7 @@ fn dng_from_jpeg(jpeg: &Path, out: &Path, mirror: bool) {
     let data: Vec<[f32; 3]> = img.pixels().map(|p| p.0.map(|v| sk_core::color::srgb_decode(v as f32 / 255.0))).collect();
     let info = sk_core::raw::CaptureInfo { make: "Test".into(), model: "JPEG".into(), ..Default::default() };
     let xyz_to_cam = sk_core::color::mat_inv(&sk_core::color::SRGB_TO_XYZ).unwrap();
-    sk_core::dng::write_linear_dng(out, &sk_core::dng::LinearDng { width: w, height: h, data: &data, xyz_to_cam, as_shot_wb: [1.0; 3], info: &info, baseline_exposure: 0.0, preview: Some(&img) }).unwrap();
+    sk_core::dng::write_linear_dng(out, &sk_core::dng::LinearDng { width: w, height: h, data: &data, xyz_to_cam, as_shot_wb: [1.0; 3], info: &info, baseline_exposure: 0.0, preview: Some(&img), lens_corrected: false }).unwrap();
 }
 
 #[test]

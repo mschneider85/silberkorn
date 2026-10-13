@@ -381,6 +381,7 @@ pub fn merge_files(paths: &[PathBuf], opts: &HdrOptions, progress: &dyn Fn(f32))
             info: &ref_meta.info,
             baseline_exposure: 0.0,
             preview: Some(&preview),
+            lens_corrected: false,
         },
     )?;
     progress(1.0);

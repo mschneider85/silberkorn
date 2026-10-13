@@ -964,6 +964,7 @@ pub fn stitch_files(paths: &[PathBuf], opts: &PanoramaOptions, progress: &dyn Fn
             info: &reference.info,
             baseline_exposure: 0.0,
             preview: Some(&preview),
+            lens_corrected: true,
         },
     )?;
     progress(1.0);
