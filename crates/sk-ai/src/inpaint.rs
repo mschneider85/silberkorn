@@ -154,9 +154,12 @@ pub fn make_removal(full: &LinearImage, wb: [f32; 3], strokes: &[BrushStroke], m
     Ok(removal)
 }
 
+/// The network: one NET x NET window (sRGB) and its pixels to fill -> the filled window.
+type Fill<'a> = &'a dyn Fn(&[[u8; 3]], &[bool]) -> Result<Vec<[u8; 3]>>;
+
 /// Fills the marked area window by window (each NET x NET, with the surroundings and what
-/// earlier windows filled as context); `fill` is the network.
-fn fill_windows(work: &mut Work, fill: &dyn Fn(&[[u8; 3]], &[bool]) -> Result<Vec<[u8; 3]>>, progress: &dyn Fn(f32)) -> Result<()> {
+/// earlier windows filled as context).
+fn fill_windows(work: &mut Work, fill: Fill, progress: &dyn Fn(f32)) -> Result<()> {
     let (w, h) = (work.w, work.h);
     let hole0: Vec<bool> = work.cover.iter().map(|c| *c > 0.05).collect();
     let hole = dilate(&hole0, w, h, 4);
