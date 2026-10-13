@@ -26,6 +26,12 @@ zusätzliche DLLs. Unter Windows nativ geht auch `cargo build --release -p sk-ap
 Einstellungen und Stile liegen dann in `%APPDATA%\silberkorn`, Katalog, Modelle, Lensfun-Profile und
 Thumbnails in `%LOCALAPPDATA%\silberkorn`.
 
+Kleinere Datei (z. B. zum Weitergeben): `--profile dist` statt `--release` baut mit LTO, Ergebnis unter
+`dist/` statt `release/`. Die `.exe` schrumpft so um etwa ein Viertel (von rund 110 auf rund 80 MB), ein
+Build dauert aber etwa eine Viertelstunde statt gut einer Minute. Zusätzlich `strip = true` im Profil
+entfernt die Funktionsnamen und spart weitere 10–25 MB; dann fehlen die Namen aber in den Backtraces
+des Absturzprotokolls.
+
 Kommandozeilen-Entwicklung (ohne GUI):
 
 ```bash

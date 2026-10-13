@@ -19,3 +19,16 @@ debug = false
 # through it. Rebuilding sk-core after a change still takes only seconds.
 [profile.dev.package.sk-core]
 opt-level = 3
+
+[profile.release]
+# Symbols are ~25 % of the binary, but guard.rs writes backtraces to the crash log and needs
+# them for function names. "debuginfo" drops only the debug info and keeps the symbol table.
+strip = "debuginfo"
+
+# For builds that are handed out: `cargo build --profile dist`, output in target/dist.
+# Fat LTO shrinks the binary by about a quarter but makes every build take minutes (full build ~14 min).
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+# panic stays "unwind": jobs.rs/guard.rs use catch_unwind for cancellation and crash recovery.
