@@ -358,11 +358,12 @@ impl Workers {
                     let total = job.paths.len();
                     let (mut indexed, mut failed) = (0, 0);
                     for (i, path) in job.paths.iter().enumerate() {
+                        // A broken file (even one that panics) fails alone; the rest of the import goes on.
                         let path = match &job.copy_to {
-                            Some(dest) => match session::copy_image(path, dest) {
+                            Some(dest) => match crate::guard::catch(|| session::copy_image(path, dest)).and_then(|r| r.map_err(|e| format!("{e:#}"))) {
                                 Ok(p) => p,
                                 Err(e) => {
-                                    log::warn!("{e:#}");
+                                    log::warn!("{e}");
                                     failed += 1;
                                     continue;
                                 }
@@ -374,10 +375,10 @@ impl Workers {
                         for path in images {
                             let needs = job.import || catalog.needs_index(&path).unwrap_or(true);
                             if needs {
-                                match catalog.index_file(&path, import_id) {
+                                match crate::guard::catch(|| catalog.index_file(&path, import_id)).and_then(|r| r.map_err(|e| format!("{e:#}"))) {
                                     Ok(_) => indexed += 1,
                                     Err(e) => {
-                                        log::warn!("{}: {e:#}", path.display());
+                                        log::warn!("{}: {e}", path.display());
                                         failed += 1;
                                     }
                                 }

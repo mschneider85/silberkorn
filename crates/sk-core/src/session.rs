@@ -236,15 +236,24 @@ fn relocate(image: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copies an image and its sidecar into `dest`. Returns the new path.
+/// Copies an image and its sidecar into `dest`. Returns the new path. The copy is all or
+/// nothing: no half-written image (full disk, crash) and no image without its settings.
 pub fn copy_image(image: &Path, dest: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(dest)?;
     let target = free_target(dest, image.file_name().context("kein Dateiname")?);
-    std::fs::copy(image, &target).with_context(|| format!("{} kann nicht kopiert werden", image.display()))?;
-    for (from, to) in sidecar::sidecar_files_for(image).into_iter().zip(sidecar::sidecar_files_for(&target)) {
-        if from.exists() {
-            std::fs::copy(&from, &to)?;
+    // The sidecars first: the image itself appears last, and only once everything is there.
+    let mut copied = Vec::new();
+    let pairs = sidecar::sidecar_files_for(image).into_iter().zip(sidecar::sidecar_files_for(&target));
+    let result = pairs.filter(|(from, _)| from.exists()).chain([(image.to_path_buf(), target.clone())]).try_for_each(|(from, to)| {
+        crate::safe_file::copy(&from, &to)?;
+        copied.push(to);
+        anyhow::Ok(())
+    });
+    if let Err(e) = result {
+        for p in copied {
+            let _ = std::fs::remove_file(p);
         }
+        return Err(e);
     }
     Ok(target)
 }
@@ -285,6 +294,26 @@ mod tests {
         // Taken name: a number is appended; the same name: nothing happens.
         assert_eq!(rename_image(&b, "Hochzeit_001").unwrap(), dir.join("Hochzeit_001-2.ARW"));
         assert_eq!(rename_image(&new, "Hochzeit_001").unwrap(), new);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn copy_takes_the_sidecar_along_and_avoids_clashes() {
+        let dir = temp("copy");
+        let (src, dest) = (dir.join("src"), dir.join("dest"));
+        std::fs::create_dir_all(&src).unwrap();
+        let a = src.join("a.ARW");
+        std::fs::write(&a, b"raw").unwrap();
+        std::fs::write(sidecar::sidecar_path(&a), b"{}").unwrap();
+        let first = copy_image(&a, &dest).unwrap();
+        assert_eq!(std::fs::read(&first).unwrap(), b"raw");
+        assert!(sidecar::sidecar_path(&first).exists());
+        assert_eq!(copy_image(&a, &dest).unwrap(), dest.join("a-2.ARW"));
+        // Nothing but the copies (no temporary files) in the target folder.
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 4);
+        // A source that can't be read leaves nothing behind.
+        assert!(copy_image(&src.join("fehlt.ARW"), &dest).is_err());
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 4);
         std::fs::remove_dir_all(dir).ok();
     }
 

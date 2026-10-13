@@ -42,6 +42,25 @@ fn write_with(path: &Path, data: &[u8], sync: bool) -> Result<()> {
     Ok(())
 }
 
+/// Copies `from` to `to` the same way as [`write`]: `to` appears only complete and on disk.
+pub fn copy(from: &Path, to: &Path) -> Result<()> {
+    let tmp = temp_path(to);
+    let result = (|| -> std::io::Result<()> {
+        let mut src = std::fs::File::open(from)?;
+        let mut file = std::fs::File::options().write(true).create_new(true).open(&tmp)?;
+        std::io::copy(&mut src, &mut file)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, to)
+    })();
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("{} kann nicht nach {} kopiert werden", from.display(), to.display()));
+    }
+    sync_dir(to);
+    Ok(())
+}
+
 /// `<dir>/.<name>.<pid>-<n>.tmp`: hidden, in the same folder (so the rename stays on one file
 /// system) and different for every write of this process and every other process.
 fn temp_path(path: &Path) -> PathBuf {
