@@ -177,8 +177,10 @@ pub fn path(m: &ModelInfo) -> PathBuf {
     models_dir().join(m.file)
 }
 
+/// Whether the model is on disk at its full size (a file left by an interrupted or older
+/// download is not, and is downloaded again).
 pub fn available(m: &ModelInfo) -> bool {
-    path(m).is_file()
+    std::fs::metadata(path(m)).is_ok_and(|md| md.is_file() && md.len() == m.bytes)
 }
 
 /// Downloads a model (streaming, with progress 0..1); returns its path.

@@ -49,7 +49,7 @@ pub struct DepthModel {
 impl DepthModel {
     fn net(&self, size: (usize, usize)) -> Result<Arc<Net>> {
         let generation = crate::runtime::config_generation();
-        let mut net = self.net.lock().unwrap();
+        let mut net = self.net.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((s, g, n)) = net.as_ref()
             && *s == size
             && *g == generation

@@ -92,9 +92,13 @@ pub fn default_model_path() -> PathBuf {
     sk_core::catalog::default_catalog_path().with_file_name("models").join("u2netp.onnx")
 }
 
-/// Whether the subject model is there.
+/// Whether the subject model is there (at its full size, unless `SILBERKORN_MODEL` names one).
 pub fn model_available() -> bool {
-    default_model_path().is_file()
+    let path = default_model_path();
+    if std::env::var_os("SILBERKORN_MODEL").is_some() {
+        return path.is_file();
+    }
+    std::fs::metadata(path).is_ok_and(|md| md.is_file() && md.len() == models::SUBJECT.bytes)
 }
 
 /// Downloads the subject model (U²-Net-p, Apache-2.0, ~4.6 MB).

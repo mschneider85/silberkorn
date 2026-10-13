@@ -32,7 +32,7 @@ pub struct Upscaler {
 impl Upscaler {
     fn net(&self, u: Upscale) -> Result<Arc<Net>> {
         let generation = crate::runtime::config_generation();
-        let mut nets = self.nets.lock().unwrap();
+        let mut nets = self.nets.lock().unwrap_or_else(|e| e.into_inner());
         if let Some((_, _, n)) = nets.iter().find(|(k, g, _)| *k == u && *g == generation) {
             return Ok(n.clone());
         }
