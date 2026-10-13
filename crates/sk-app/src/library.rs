@@ -37,8 +37,7 @@ pub struct LibraryUi {
     pub naming: Option<(i64, String)>,
 }
 
-fn record_from_sidecar(path: PathBuf) -> ImageRecord {
-    let sc = sidecar::load(&path);
+fn record_from_sidecar(path: PathBuf, sc: Sidecar) -> ImageRecord {
     ImageRecord {
         id: 0,
         name: sk_core::variant::display_name(&path),
@@ -171,9 +170,9 @@ impl App {
                     .into_iter()
                     .map(|r| (r.path.clone(), r))
                     .collect();
-                sk_core::variant::expand(catalog::scan_folder(path, false))
+                sidecar::load_all(&catalog::scan_folder(path, false))
                     .into_iter()
-                    .map(|p| indexed.get(&p).cloned().unwrap_or_else(|| record_from_sidecar(p)))
+                    .map(|(p, sc)| indexed.get(&p).cloned().unwrap_or_else(|| record_from_sidecar(p, sc)))
                     .collect()
             }
             scope => self

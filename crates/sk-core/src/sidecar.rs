@@ -182,11 +182,35 @@ pub fn load(image: &Path) -> Sidecar {
     let file = load_file(image);
     match crate::variant::number(image) {
         1 => with_xmp(image, file),
-        n => Sidecar {
-            stack: file.stack.as_ref().map(|s| Stack { id: s.id.clone(), top: false }),
-            ..file.variants.iter().find(|v| v.id == n).map(Variant::to_sidecar).unwrap_or_default()
-        },
+        n => variant_of(&file, n),
     }
+}
+
+/// Variant `n` (2 or more) of a raw file's sidecar.
+fn variant_of(file: &Sidecar, n: u32) -> Sidecar {
+    Sidecar {
+        stack: file.stack.as_ref().map(|s| Stack { id: s.id.clone(), top: false }),
+        ..file.variants.iter().find(|v| v.id == n).map(Variant::to_sidecar).unwrap_or_default()
+    }
+}
+
+/// Raw files with all their variants (each file followed by its variants, like
+/// [`crate::variant::expand`]) and the settings of each, as [`load`] gives them; every sidecar
+/// file is read once, several at a time (for folders on slow drives).
+pub fn load_all(files: &[PathBuf]) -> Vec<(PathBuf, Sidecar)> {
+    use rayon::prelude::*;
+    let per_file: Vec<Vec<(PathBuf, Sidecar)>> = files
+        .par_iter()
+        .map(|raw| {
+            let file = load_file(raw);
+            let mut ids: Vec<u32> = file.variants.iter().map(|v| v.id).filter(|n| *n >= 2).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            let variants: Vec<(PathBuf, Sidecar)> = ids.into_iter().map(|n| (crate::variant::path_for(raw, n), variant_of(&file, n))).collect();
+            std::iter::once((raw.clone(), with_xmp(raw, file))).chain(variants).collect()
+        })
+        .collect();
+    per_file.into_iter().flatten().collect()
 }
 
 /// Takes rating, label and keywords from a changed XMP file.
@@ -567,6 +591,25 @@ mod tests {
         save(&img, &Sidecar { rating: 2, ..Default::default() }).unwrap();
         assert_eq!(std::fs::read_to_string(dir.join("b.ARW.sk.json.bak")).unwrap(), "erst kaputt");
         assert_eq!(std::fs::read_to_string(dir.join("b.ARW.sk.json.2.bak")).unwrap(), "wieder kaputt");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn load_all_matches_loading_one_by_one() {
+        let dir = std::env::temp_dir().join(format!("sk-loadall-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (dir.join("a.ARW"), dir.join("b.ARW"));
+        for p in [&a, &b] {
+            std::fs::write(p, b"raw").unwrap();
+        }
+        save(&a, &Sidecar { rating: 2, ..Default::default() }).unwrap();
+        add_variant(&a, &Sidecar { rating: 4, ..Default::default() }).unwrap();
+        add_variant(&a, &Sidecar { rating: 5, ..Default::default() }).unwrap();
+        let files = vec![a.clone(), b.clone()];
+        let one_by_one: Vec<(PathBuf, Sidecar)> = crate::variant::expand(files.clone()).into_iter().map(|p| { let sc = load(&p); (p, sc) }).collect();
+        assert_eq!(one_by_one.len(), 4);
+        assert_eq!(load_all(&files), one_by_one);
         std::fs::remove_dir_all(dir).ok();
     }
 
