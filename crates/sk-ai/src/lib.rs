@@ -12,6 +12,8 @@ pub mod inpaint;
 pub mod models;
 pub mod runtime;
 pub mod segment;
+pub mod tiles;
+pub mod upscale;
 
 use std::path::{Path, PathBuf};
 

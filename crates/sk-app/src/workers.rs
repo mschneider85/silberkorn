@@ -54,6 +54,8 @@ pub enum Event {
         focus: Option<Arc<Vec<u8>>>,
     },
     ExportProgress { done: usize, total: usize, last: Result<PathBuf, String> },
+    /// Progress 0..1 within the image being exported (while enlarging).
+    ExportStep(f32),
     /// The export was cancelled after `done` of `total` outputs.
     ExportCancelled { done: usize, total: usize },
     IndexProgress { done: usize, total: usize },
@@ -930,9 +932,24 @@ impl Workers {
                             ctx.request_repaint();
                             break;
                         }
+                        // Enlarging takes long: cancelling also stops within an image (unwinding
+                        // from its progress report, so no file is left half-written).
+                        let progress = |p: f32| {
+                            if job.cancel.load(Ordering::Relaxed) {
+                                std::panic::resume_unwind(Box::new(()));
+                            }
+                            let _ = ev_tx.send(Event::ExportStep(p));
+                            ctx.request_repaint();
+                        };
                         // A bug on one image fails its outputs, not the whole export.
-                        let results = crate::guard::catch(|| export::export_many(&path, &adj, &job.recipes, i as u32 + 1, &job.session))
-                            .unwrap_or_else(|e| job.recipes.iter().map(|_| Err(anyhow::anyhow!("{e}"))).collect());
+                        let results =
+                            crate::guard::catch(|| export::export_many_with(&path, &adj, &job.recipes, i as u32 + 1, &job.session, &progress));
+                        if results.is_err() && job.cancel.load(Ordering::Relaxed) {
+                            let _ = ev_tx.send(Event::ExportCancelled { done, total });
+                            ctx.request_repaint();
+                            break;
+                        }
+                        let results = results.unwrap_or_else(|e| job.recipes.iter().map(|_| Err(anyhow::anyhow!("{e}"))).collect());
                         for r in results {
                             done += 1;
                             let last = r.map_err(|e| format!("{}: {e:#}", path.display()));

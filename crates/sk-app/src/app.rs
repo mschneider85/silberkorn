@@ -468,6 +468,9 @@ pub struct App {
     pub recipes: Vec<ExportRecipe>,
     pub selected_recipe: usize,
     pub export_progress: Option<(usize, usize)>,
+    /// Progress within the image being exported (while enlarging), and its number of outputs.
+    pub export_step: Option<f32>,
+    pub export_recipes: usize,
     /// Cancels the running export.
     pub export_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Closing was requested while work was running; the user is asked first.
@@ -585,6 +588,7 @@ impl App {
         sk_core::xmp::set_write_enabled(settings.write_xmp && opts.persist_settings);
         sk_ai::runtime::set_gpu_enabled(settings.ai_gpu.unwrap_or(true));
         sk_ai::denoise::register();
+        sk_ai::upscale::register();
         sk_core::gpu::set_enabled(settings.develop_gpu.unwrap_or(true));
         // Sets up the graphics card and compiles the shaders while the window opens.
         std::thread::spawn(sk_core::pipeline::prepare_gpu);
@@ -775,6 +779,8 @@ impl App {
             },
             selected_recipe: 0,
             export_progress: None,
+            export_step: None,
+            export_recipes: 1,
             export_cancel: None,
             quit_asked: false,
             quit_confirmed: false,
@@ -1448,6 +1454,13 @@ impl App {
         }
     }
 
+    /// Export progress 0..1 (outputs done, plus the part of the image being enlarged).
+    pub fn export_fraction(&self) -> Option<f32> {
+        let (done, total) = self.export_progress?;
+        let step = self.export_step.unwrap_or(0.0) * self.export_recipes as f32;
+        Some(((done as f32 + step) / total.max(1) as f32).min(1.0))
+    }
+
     pub fn export_selection(&mut self) {
         self.commit_and_save();
         let current = self.current.as_ref().map(|c| (c.meta.path.clone(), c.committed.clone()));
@@ -1480,7 +1493,14 @@ impl App {
             self.export_progress = None;
             return;
         }
+        if let Some(m) = recipes.iter().filter_map(|r| r.upscale).map(sk_ai::upscale::model).find(|m| !sk_ai::models::available(m)) {
+            self.status = format!("Erst das Modell laden: {} (im Rezept unter „KI-Vergrößern“)", m.label);
+            self.export_progress = None;
+            return;
+        }
         let session = self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
+        self.export_recipes = recipes.len();
+        self.export_step = None;
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.export_cancel = Some(cancel.clone());
         self.workers.export(ExportJob { items, recipes, session, cancel });
@@ -1703,6 +1723,7 @@ impl App {
                         },
                     }
                 }
+                Event::ExportStep(p) => self.export_step = (p < 1.0).then_some(p),
                 Event::ExportProgress { done, total, last } => {
                     self.export_progress = (done < total).then_some((done, total));
                     match last {
@@ -1716,6 +1737,7 @@ impl App {
                 }
                 Event::ExportCancelled { done, total } => {
                     self.export_progress = None;
+                    self.export_step = None;
                     self.export_cancel = None;
                     self.status = format!("Verarbeitung abgebrochen ({done} von {total} fertig)");
                 }

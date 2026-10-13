@@ -62,7 +62,7 @@ impl App {
             ui.add_space(10.0);
             ui.label(RichText::new("KI").strong());
             ui.label(
-                "Entrauschen, Entfernen, Motivmasken und die Gesichtserkennung können auf der Grafikkarte rechnen \
+                "Entrauschen, Vergrößern, Entfernen, Motivmasken und die Gesichtserkennung können auf der Grafikkarte rechnen \
                  (DirectML: jede Karte mit DirectX 12, auch AMD und Intel). Das ist ein Vielfaches schneller als auf dem Prozessor.",
             );
             ui.add_space(8.0);

@@ -56,6 +56,28 @@ pub const DENOISE_LINEAR: ModelInfo = ModelInfo {
 /// darktable-ai's release archive with both RawNIND models (pinned release).
 const RAWNIND_ARCHIVE: &str = "https://github.com/darktable-org/darktable-ai/releases/download/release-5.6.0/rawdenoise-nind.dtmodel";
 
+/// Upscaling: RealPLKSR (Dongheon Lee et al., University of Seoul), the MSSIM stage
+/// without GAN training, so it adds no invented texture; as converted for darktable.
+pub const UPSCALE_X2: ModelInfo = ModelInfo {
+    label: "KI-Vergrößern 2× (RealPLKSR)",
+    file: "realplksr_x2.onnx",
+    url: "https://huggingface.co/darktable-org/upscale-realplksr-onnx/resolve/0bb636eeeed5fffd256571c3cc440d9fdf62467e/onnx/model_x2.onnx",
+    bytes: 29_627_920,
+    sha256: "d7abb65092f3808d3aa255ffdab42b1d672883915d90adbdd321204168b9f293",
+    license: "MIT",
+    entry: None,
+};
+
+pub const UPSCALE_X4: ModelInfo = ModelInfo {
+    label: "KI-Vergrößern 4× (RealPLKSR)",
+    file: "realplksr_x4.onnx",
+    url: "https://huggingface.co/darktable-org/upscale-realplksr-onnx/resolve/0bb636eeeed5fffd256571c3cc440d9fdf62467e/onnx/model_x4.onnx",
+    bytes: 29_711_010,
+    sha256: "8ce692652494e2e5c31e1f7c7ab61eb084e9a450cde727a374f5d6746cfe054b",
+    license: "MIT",
+    entry: None,
+};
+
 /// Object removal: MI-GAN (Picsart), inpainting at 512 px.
 pub const INPAINT: ModelInfo = ModelInfo {
     label: "Entfernen (MI-GAN)",
@@ -274,7 +296,7 @@ mod tests {
 
     #[test]
     fn every_model_is_pinned() {
-        for m in [DENOISE_BAYER, DENOISE_LINEAR, OBJECT_ENCODER, OBJECT_DECODER, INPAINT, FACE_DETECT, FACE_EMBED, EYE_STATE, SUBJECT] {
+        for m in [DENOISE_BAYER, DENOISE_LINEAR, UPSCALE_X2, UPSCALE_X4, OBJECT_ENCODER, OBJECT_DECODER, INPAINT, FACE_DETECT, FACE_EMBED, EYE_STATE, SUBJECT] {
             assert!(m.bytes > 0 && m.sha256.len() == 64 && m.sha256.bytes().all(|b| b.is_ascii_hexdigit()), "{}", m.label);
             assert!(!m.url.contains("/resolve/main/"), "{}: nicht auf einen Stand festgelegt", m.label);
         }

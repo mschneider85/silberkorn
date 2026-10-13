@@ -12,13 +12,14 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use rayon::prelude::*;
 use sk_core::color::{mat_inv, mat_vec};
 use sk_core::image::LinearImage;
 
 use crate::models::{self, DENOISE_BAYER, DENOISE_LINEAR};
-use crate::runtime::{Data, Input, Net};
+use crate::runtime::{Input, Net};
+use crate::tiles::{Gain, Tiling, run_tiled};
 
 /// Network input edge (cells for the Bayer network, pixels for the linear one) and overlap.
 const TILE: usize = 512;
@@ -29,6 +30,10 @@ const BAYER_GAIN: f32 = 1.0e-6;
 const LINEAR_GAIN: f32 = -3.2e-10;
 /// At most this many tiles at once on the processor (each needs several hundred MB).
 const PARALLEL_TILES: usize = 6;
+
+fn tiling(scale: usize) -> Tiling {
+    Tiling { tile: TILE, overlap: OVERLAP, scale, parallel: PARALLEL_TILES }
+}
 
 /// Identifies the models for the product cache.
 pub fn tag() -> String {
@@ -127,7 +132,7 @@ impl Denoiser {
             .into_par_iter()
             .map(|(dx, dy)| (0..cw * ch).map(|i| m.data[(oy + 2 * (i / cw) + dy) * m.width + ox + 2 * (i % cw) + dx]).collect())
             .collect();
-        let out = run_tiled(&*self.net(true)?, &planes, cw, ch, 2, [0.25, 0.5, 0.25], BAYER_GAIN, progress)?;
+        let out = run_tiled(&*self.net(true)?, &planes, cw, ch, tiling(2), Some(Gain { weights: [0.25, 0.5, 0.25], nominal: BAYER_GAIN }), progress)?;
         let (w2, h2) = (2 * cw, 2 * ch);
         let mut data = vec![[f32::NAN; 3]; m.width * m.height];
         data.par_chunks_mut(m.width).enumerate().for_each(|(y, row)| {
@@ -151,7 +156,7 @@ impl Denoiser {
         let rec2020: Vec<[f32; 3]> = plain.data.par_iter().map(|p| mat_vec(&m, [p[0] * wb[0], p[1] * wb[1], p[2] * wb[2]])).collect();
         let planes: Vec<Vec<f32>> = (0..3).into_par_iter().map(|c| rec2020.iter().map(|p| p[c]).collect()).collect();
         drop(rec2020);
-        let out = run_tiled(&*self.net(false)?, &planes, w, h, 1, [1.0 / 3.0; 3], LINEAR_GAIN, progress)?;
+        let out = run_tiled(&*self.net(false)?, &planes, w, h, tiling(1), Some(Gain { weights: [1.0 / 3.0; 3], nominal: LINEAR_GAIN }), progress)?;
         let data = (0..w * h)
             .into_par_iter()
             .map(|i| {
@@ -161,122 +166,6 @@ impl Denoiser {
             .collect();
         Ok(LinearImage::new(w, h, data))
     }
-}
-
-/// Tile origins along one axis: `0, step, …` with the last tile ending at the border.
-fn origins(len: usize) -> Vec<usize> {
-    if len <= TILE {
-        return vec![0];
-    }
-    let step = TILE - OVERLAP;
-    let mut v: Vec<usize> = (0..).map(|i| i * step).take_while(|&o| o + TILE < len).collect();
-    v.push(len - TILE);
-    v
-}
-
-/// Blending weight at position `i` (0..`len`) of a tile: 1 inside, falling linearly over the
-/// overlap towards neighbouring tiles (not at the image border).
-fn ramp(i: usize, len: usize, at_start: bool, at_end: bool) -> f32 {
-    let o = (OVERLAP * len / TILE) as f32;
-    let mut w = 1.0f32;
-    if !at_start {
-        w = w.min((i as f32 + 0.5) / o);
-    }
-    if !at_end {
-        w = w.min((len - i) as f32 / o - 0.5 / o);
-    }
-    w.clamp(1e-3, 1.0)
-}
-
-/// Mirrors a position outside `0..len` back in (for images smaller than a tile).
-fn mirror(i: usize, len: usize) -> usize {
-    if i < len { i } else { (2 * len).saturating_sub(i + 2).min(len - 1) }
-}
-
-/// Runs a network over `planes` (`w` x `h` each) in overlapping tiles; returns three planes of
-/// `scale * w` x `scale * h`. Each tile's output is scaled so that its brightness (channels
-/// weighted by `weights`) matches the input's mean; `nominal` is the scale for black tiles.
-#[allow(clippy::too_many_arguments)]
-fn run_tiled(
-    net: &Net,
-    planes: &[Vec<f32>],
-    w: usize,
-    h: usize,
-    scale: usize,
-    weights: [f32; 3],
-    nominal: f32,
-    progress: &dyn Fn(f32),
-) -> Result<[Vec<f32>; 3]> {
-    let (xs, ys) = (origins(w), origins(h));
-    let tiles: Vec<(usize, usize, usize, usize)> =
-        ys.iter().enumerate().flat_map(|(yi, &ty)| xs.iter().enumerate().map(move |(xi, &tx)| (xi, yi, tx, ty))).collect();
-    let (ow, oh, ot) = (scale * w, scale * h, scale * TILE);
-    let acc = Mutex::new(([vec![0.0f32; ow * oh], vec![0.0f32; ow * oh], vec![0.0f32; ow * oh]], vec![0.0f32; ow * oh]));
-    let run = |&(xi, yi, tx, ty): &(usize, usize, usize, usize)| -> Result<()> {
-        let c = planes.len();
-        let mut input = vec![0.0f32; c * TILE * TILE];
-        for (p, plane) in planes.iter().enumerate() {
-            for j in 0..TILE {
-                let y = mirror(ty + j, h);
-                for i in 0..TILE {
-                    input[p * TILE * TILE + j * TILE + i] = plane[y * w + mirror(tx + i, w)];
-                }
-            }
-        }
-        let out = net.run(&[Data::F32(&input)])?;
-        let o = out.first().context("Keine Modellausgabe")?;
-        let n = ot * ot;
-        anyhow::ensure!(o.data.len() == 3 * n, "Unerwartete Modellausgabe {:?}", o.shape);
-        let mean_in = input.iter().sum::<f32>() / input.len() as f32;
-        let mean_out = (0..3).map(|k| weights[k] * o.data[k * n..(k + 1) * n].iter().sum::<f32>() / n as f32).sum::<f32>();
-        let gain = mean_in / mean_out;
-        let gain = if mean_in > 1e-4 && gain.is_finite() && gain != 0.0 { gain } else { nominal };
-        let mut acc = acc.lock().unwrap();
-        let (sum, wsum) = &mut *acc;
-        for j in 0..ot {
-            let y = scale * ty + j;
-            if y >= oh {
-                break;
-            }
-            let wy = ramp(j, ot, yi == 0, yi + 1 == ys.len());
-            for i in 0..ot {
-                let x = scale * tx + i;
-                if x >= ow {
-                    break;
-                }
-                let wt = wy * ramp(i, ot, xi == 0, xi + 1 == xs.len());
-                for (k, plane) in sum.iter_mut().enumerate() {
-                    plane[y * ow + x] += o.data[k * n + j * ot + i] * gain * wt;
-                }
-                wsum[y * ow + x] += wt;
-            }
-        }
-        Ok(())
-    };
-    // Progress (and with it cancelling) is reported from this thread, after each round of tiles.
-    if net.prefers_serial() {
-        for (i, t) in tiles.iter().enumerate() {
-            run(t)?;
-            progress((i + 1) as f32 / tiles.len() as f32);
-        }
-    } else {
-        let threads = PARALLEL_TILES.min(rayon::current_num_threads()).max(1);
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build()?;
-        let mut done = 0;
-        for round in tiles.chunks(threads) {
-            pool.install(|| round.par_iter().try_for_each(run))?;
-            done += round.len();
-            progress(done as f32 / tiles.len() as f32);
-        }
-    }
-    let (mut sum, wsum) = acc.into_inner().unwrap();
-    for plane in &mut sum {
-        plane.par_iter_mut().zip(&wsum).for_each(|(v, s)| *v /= s.max(1e-6));
-    }
-    if sum.iter().any(|p| p.iter().any(|v| !v.is_finite())) {
-        bail!("Das Modell lieferte ungültige Werte");
-    }
-    Ok(sum)
 }
 
 /// Registers RawNIND as the provider of `sk_core::ai_denoise` (whether or not it is downloaded:
@@ -289,22 +178,6 @@ pub fn register() {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn tiles_cover_the_image_and_blend_to_one() {
-        assert_eq!(origins(100), vec![0]);
-        assert_eq!(origins(TILE), vec![0]);
-        let o = origins(3000);
-        assert_eq!(*o.last().unwrap(), 3000 - TILE);
-        assert!(o.windows(2).all(|w| w[1] - w[0] <= TILE - OVERLAP));
-        // Inside a tile the weight is 1; at a shared edge both tiles contribute.
-        assert_eq!(ramp(TILE / 2, TILE, false, false), 1.0);
-        assert!(ramp(0, TILE, false, false) < 0.1 && ramp(0, TILE, true, false) == 1.0);
-        // Scaled tiles (the Bayer network doubles the size) fall over a doubled overlap.
-        assert_eq!(ramp(2 * OVERLAP, 2 * TILE, false, false), 1.0);
-        assert!(ramp(OVERLAP, 2 * TILE, false, false) < 0.6);
-        assert_eq!((mirror(5, 10), mirror(10, 10), mirror(11, 10)), (5, 8, 7));
-    }
 
     /// With the downloaded model: a noisy flat mosaic comes out flat, at the same brightness.
     #[test]

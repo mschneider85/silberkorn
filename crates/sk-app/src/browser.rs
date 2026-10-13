@@ -423,7 +423,9 @@ impl App {
                     // The recipe's name only if it says more than the format.
                     let name = if r.name.is_empty() || r.name.eq_ignore_ascii_case(r.format.label()) { String::new() } else { format!("{}  ·  ", r.name) };
                     let warn = if self.softproof.settings.gamut_warning && r.output_space != sk_core::color::OutputSpace::ProPhoto { "  ·  beschnitten: magenta" } else { "" };
-                    format!("PROOF  ·  {name}{format}  ·  {} × {} px  ·  {}  ·  {}{warn}", p.width, p.height, r.output_space.label(), file_size(p.file_size))
+                    // Enlarging takes far too long for a proof: it shows the image without.
+                    let up = if r.upscale_for(p.width, p.height).is_some() { "  ·  ohne KI-Vergrößern" } else { "" };
+                    format!("PROOF  ·  {name}{format}  ·  {} × {} px  ·  {}  ·  {}{up}{warn}", p.width, p.height, r.output_space.label(), file_size(p.file_size))
                 }
                 (_, Some(r)) => format!("PROOF  ·  {}  ·  wird berechnet …", r.name),
                 (_, None) => "PROOF  ·  kein Ausgabe-Rezept".into(),

@@ -135,7 +135,7 @@ Die neuronalen Netze werden nicht mitgeliefert, sondern beim ersten Gebrauch auf
 Jede Datei wird gegen Größe und SHA-256 geprüft (Hugging-Face-Links auf einen festen Stand
 festgelegt); ein abgebrochener Download wird beim nächsten Versuch fortgesetzt.
 
-**KI-Beschleunigung** (Bearbeiten → „KI-Beschleunigung …“, Windows): Die Netze rechnen dann über
+**KI-Beschleunigung** (Bearbeiten → „Grafikkarte …“, Abschnitt „KI“, Windows): Die Netze rechnen dann über
 ONNX Runtime mit DirectML auf der Grafikkarte (jede DirectX-12-Karte). ONNX Runtime wird nicht
 gelinkt, sondern zur Laufzeit geladen: Auf Wunsch lädt Silberkorn `onnxruntime.dll` (1.24.4) und
 `DirectML.dll` (1.15.4) aus Microsofts NuGet-Paketen nach `%LOCALAPPDATA%\silberkorn\gpu`, und zwar
@@ -312,6 +312,13 @@ als **Dateiname** der verarbeiteten Bilder (der Zähler zählt dort die Bilder e
   4:4:4, rav1e). AVIF kennzeichnet den Farbraum ohne ICC-Profil und gibt es deshalb nur in sRGB
   und Display P3; ein 24-MP-Bild braucht rund 12 s. Die Proof-Ansicht zeigt bei WebP die
   komprimierten Pixel, bei AVIF die Pixel vor der Kompression (mit der echten Dateigröße).
+- **KI-Vergrößern** (wie „Super Resolution“): verdoppelt oder vervierfacht die Kantenlänge des
+  fertig entwickelten Bildes mit einem neuronalen Netz, bevor es gespeichert wird; eine lange
+  Kante verkleinert danach wieder (so lassen sich z. B. genau 8000 px erreichen). Das Netz ist
+  RealPLKSR (MIT, ~30 MB je Faktor, in der Fassung von darktable-ai); es erfindet keine Details
+  und wird erst bei Bedarf im Rezept geladen. Höchstens 250 MP Ergebnis. Auf dem Prozessor
+  langsam (eine 512er-Kachel etwa 1,5 min, ein 24-MP-Bild eine halbe Stunde und mehr), mit
+  Grafikkarte (Windows) deutlich schneller. Die Proof-Ansicht zeigt das Bild ohne Vergrößerung.
 - **Metadaten:** JPEG, PNG, WebP und AVIF erhalten EXIF mit Kamera, Objektiv, Belichtung und
   Aufnahmedatum (abschaltbar) sowie Fotograf und Copyright. GPS-Daten werden nie übernommen.
   TIFF-Dateien erhalten keine Metadaten.

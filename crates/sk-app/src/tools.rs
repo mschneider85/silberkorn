@@ -332,6 +332,8 @@ impl App {
             self.selected_recipe = self.selected_recipe.min(self.recipes.len() - 1);
         }
         self.selected_recipe = self.selected_recipe.min(self.recipes.len().saturating_sub(1));
+        let upscale_download = self.recipes.get(self.selected_recipe).and_then(|r| r.upscale).and_then(|u| self.model_download_progress(sk_ai::upscale::model(u)));
+        let (mut download, mut show_gpu) = (None, false);
         let Some(r) = self.recipes.get_mut(self.selected_recipe) else { return };
         section(ui, "Rezept bearbeiten", None, |ui| {
             widgets::field(ui, "Name", |ui| ui.text_edit_singleline(&mut r.name));
@@ -363,6 +365,42 @@ impl App {
                 r.long_edge = Some(edge);
             } else {
                 r.long_edge = None;
+            }
+            let mut upscale = r.upscale.is_some();
+            ui.checkbox(&mut upscale, "KI-Vergrößern").on_hover_text(
+                "Vergrößert das fertige Bild mit einem neuronalen Netz, bevor es gespeichert wird (wie „Super Resolution“). Eine lange Kante verkleinert es danach wieder.",
+            );
+            if !upscale {
+                r.upscale = None;
+            } else {
+                let u = r.upscale.get_or_insert_with(Default::default);
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut u.factor, 2, "2×").on_hover_text("Doppelte Kantenlänge, vierfache Pixelzahl");
+                    ui.selectable_value(&mut u.factor, 4, "4×").on_hover_text("Vierfache Kantenlänge, sechzehnfache Pixelzahl");
+                });
+                let m = sk_ai::upscale::model(*u);
+                if !sk_ai::models::available(m) {
+                    match upscale_download {
+                        Some(p) => {
+                            ui.add(egui::ProgressBar::new(p).text(format!("Modell wird geladen … {:.0} %", p * 100.0)));
+                        }
+                        None => {
+                            if ui.button(format!("Modell laden ({} MB, {})", m.size_mb(), m.license)).clicked() {
+                                download = Some(m);
+                            }
+                        }
+                    }
+                }
+                if !(sk_ai::runtime::gpu_enabled() && sk_ai::runtime::gpu_installed()) {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            RichText::new("Auf dem Prozessor dauert das lange: bei 24 MP eine halbe Stunde und mehr.").small().color(crate::theme::TEXT_FAINT),
+                        );
+                        if sk_ai::runtime::gpu_supported() && ui.small_button("KI-Beschleunigung …").clicked() {
+                            show_gpu = true;
+                        }
+                    });
+                }
             }
             widgets::field(ui, "Ordner", |ui| {
                 let mut dir = r.output_dir.to_string_lossy().to_string();
@@ -447,12 +485,22 @@ impl App {
             if ui.add_enabled(n > 0 && k > 0, button).clicked() {
                 self.export_selection();
             }
-            if let Some((done, total)) = self.export_progress {
-                ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).text(format!("{done} / {total}")));
+            if let (Some((done, total)), Some(f)) = (self.export_progress, self.export_fraction()) {
+                let text = match self.export_step {
+                    Some(p) => format!("{done} / {total} · KI-Vergrößern {:.0} %", p * 100.0),
+                    None => format!("{done} / {total}"),
+                };
+                ui.add(egui::ProgressBar::new(f).text(text));
             }
             for msg in self.export_log.iter().rev().take(8) {
                 ui.label(RichText::new(msg).small());
             }
         });
+        if let Some(m) = download {
+            self.download_model_job(m);
+        }
+        if show_gpu {
+            self.show_gpu_dialog = true;
+        }
     }
 }

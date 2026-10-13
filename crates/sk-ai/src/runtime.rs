@@ -143,6 +143,14 @@ pub fn install_gpu(progress: &dyn Fn(f32)) -> Result<()> {
     Ok(())
 }
 
+/// Size of the file at `url`, from the `Content-Range` of a one-byte request.
+fn total_size(url: &str) -> Result<usize> {
+    let resp = ureq::get(url).header("Range", "bytes=0-0").call().with_context(|| format!("Download von {url} fehlgeschlagen"))?;
+    anyhow::ensure!(resp.status().as_u16() == 206, "Der Server unterstützt keine Teil-Downloads");
+    let range = resp.headers().get("content-range").and_then(|v| v.to_str().ok()).unwrap_or_default();
+    range.rsplit('/').next().and_then(|n| n.trim().parse().ok()).filter(|&n: &usize| n > 0).context("Dateigröße unbekannt")
+}
+
 fn get_range(url: &str, range: &str) -> Result<Vec<u8>> {
     let mut resp = ureq::get(url).header("Range", range).call().with_context(|| format!("Download von {url} fehlgeschlagen"))?;
     anyhow::ensure!(resp.status().as_u16() == 206, "Der Server unterstützt keine Teil-Downloads");
@@ -160,7 +168,10 @@ fn u32le(b: &[u8], i: usize) -> usize {
 /// One file from a ZIP archive on a web server, without downloading the whole archive: the
 /// central directory from its end, then only the file's compressed data.
 pub fn zip_entry(url: &str, name: &str, progress: &dyn Fn(f32)) -> Result<Vec<u8>> {
-    let tail = get_range(url, "bytes=-65536")?;
+    // Explicit ranges only: GitHub's download servers refuse suffix ranges ("bytes=-N").
+    let len = total_size(url)?;
+    let tail_start = len.saturating_sub(65536);
+    let tail = get_range(url, &format!("bytes={tail_start}-{}", len - 1))?;
     let eocd = tail.windows(4).rposition(|w| w == b"PK\x05\x06").context("Kein ZIP-Archiv")?;
     let (cd_size, cd_off) = (u32le(&tail, eocd + 12), u32le(&tail, eocd + 16));
     let cd = if cd_size <= eocd { tail[eocd - cd_size..eocd].to_vec() } else { get_range(url, &format!("bytes={cd_off}-{}", cd_off + cd_size - 1))? };
