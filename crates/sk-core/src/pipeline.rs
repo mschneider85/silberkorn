@@ -943,7 +943,8 @@ impl Processor {
                 let lin = p.map(srgb_decode);
                 let out = mat_vec(&m, lin);
                 let out = if map { crate::color::gamut_map(out, dot(lin, LUMA)) } else { out };
-                out.map(|v| trc.encode(v.clamp(0.0, 1.0)))
+                // NaN survives `clamp`: no such value reaches an exported file.
+                out.map(|v| trc.encode(if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) }))
             })
             .collect();
         LinearImage::new(enc.width, enc.height, data)
@@ -1437,6 +1438,17 @@ mod tests {
             }
         }
         assert!(max_diff <= 2, "tile differs from full render by {max_diff}");
+    }
+
+    #[test]
+    fn invalid_values_do_not_reach_the_export() {
+        let (w, h) = (64, 48);
+        let mut data = vec![[0.3f32; 3]; w * h];
+        data[w * 20 + 30] = [f32::NAN, f32::INFINITY, 0.3];
+        let src = LinearImage::new(w, h, data);
+        let adj = Adjustments { detail: Detail { clarity: 40.0, ..Default::default() }, ..Default::default() };
+        let out = Processor::new(&meta(), &adj).process_cpu(&src, None, OutputSpace::Srgb);
+        assert!(out.data.iter().flatten().all(|v| v.is_finite()));
     }
 
     #[test]

@@ -1024,11 +1024,15 @@ fn check_display(g: &Gpu, rgba: &[u8]) -> Result<()> {
 }
 
 /// Like [`check_display`] for converted output: the kernel marks each written pixel with w = 1.
-/// (An all-black result is checked over the whole image, see `process_gpu`.)
+/// (An all-black result is checked over the whole image, see `process_gpu`.) A value that is not
+/// finite is redone on the CPU without blaming the card: it may come from the image data.
 fn check_output(g: &Gpu, data: &[[f32; 4]]) -> Result<()> {
-    if data.iter().any(|p| p[3] != 1.0 || !p[..3].iter().all(|v| v.is_finite())) {
+    if data.iter().any(|p| p[3] != 1.0) {
         g.fail("Grafikkarte lieferte ein unvollständiges Ergebnis");
         bail!("Grafikkarte: unvollständiges Ergebnis");
+    }
+    if data.iter().any(|p| !p[..3].iter().all(|v| v.is_finite())) {
+        bail!("Grafikkarte: ungültige Werte im Ergebnis, wird auf dem Prozessor gerechnet");
     }
     Ok(())
 }

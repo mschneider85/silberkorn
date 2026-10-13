@@ -70,12 +70,13 @@ const CLIP: f32 = 0.92;
 const SMALL: usize = 4;
 
 /// Scene brightness factor from EXIF (exposure time × ISO / f-number²), if known.
-fn exif_exposure(meta: &RawMeta) -> Option<f64> {
-    let (n, d) = meta.info.exposure_rational?;
+fn exif_exposure(info: &crate::raw::CaptureInfo) -> Option<f64> {
+    let (n, d) = info.exposure_rational?;
     let t = n as f64 / d as f64;
-    let iso = meta.info.iso.unwrap_or(100) as f64;
-    let f = meta.info.fnumber.filter(|f| *f > 0.0).unwrap_or(1.0) as f64;
-    Some(t * iso / (f * f))
+    let iso = info.iso.filter(|i| *i > 0).unwrap_or(100) as f64;
+    let f = info.fnumber.filter(|f| *f > 0.0).unwrap_or(1.0) as f64;
+    // A damaged exposure time (zero denominator or numerator) is no exposure at all.
+    Some(t * iso / (f * f)).filter(|e| e.is_finite() && *e > 0.0)
 }
 
 #[inline]
@@ -333,8 +334,8 @@ pub fn merge_files(paths: &[PathBuf], opts: &HdrOptions, progress: &dyn Fn(f32))
     // Reference: the middle exposure (by EXIF; else the middle of the selection).
     let metas: Vec<RawMeta> = files.iter().map(|p| raw::read_meta(p)).collect::<Result<_>>()?;
     let mut order: Vec<usize> = (0..files.len()).collect();
-    if metas.iter().all(|m| exif_exposure(m).is_some()) {
-        order.sort_by(|&a, &b| exif_exposure(&metas[a]).unwrap().total_cmp(&exif_exposure(&metas[b]).unwrap()));
+    if metas.iter().all(|m| exif_exposure(&m.info).is_some()) {
+        order.sort_by(|&a, &b| exif_exposure(&metas[a].info).unwrap().total_cmp(&exif_exposure(&metas[b].info).unwrap()));
     }
     let reference = order[order.len() / 2];
     progress(0.02);
@@ -358,8 +359,9 @@ pub fn merge_files(paths: &[PathBuf], opts: &HdrOptions, progress: &dyn Fn(f32))
         let (dx, dy) = (dx * SMALL as i32, dy * SMALL as i32);
         let img = shifted(&img, dx, dy);
         let small = shifted(&small, dx / SMALL as i32, dy / SMALL as i32);
-        let exif = exif_exposure(&meta).zip(exif_exposure(&ref_meta)).map(|(a, b)| (a / b) as f32);
-        let k = exposure_ratio(&small, &ref_small).or(exif).unwrap_or(1.0).max(1e-4);
+        let exif = exif_exposure(&meta.info).zip(exif_exposure(&ref_meta.info)).map(|(a, b)| (a / b) as f32);
+        let usable = |k: &f32| k.is_finite() && *k > 0.0;
+        let k = exposure_ratio(&small, &ref_small).filter(usable).or(exif.filter(usable)).unwrap_or(1.0).max(1e-4);
         images.push((img, k));
         progress(0.05 + 0.45 * (i + 1) as f32 / total);
     }
@@ -412,6 +414,17 @@ mod tests {
                 base * tex
             })
             .collect()
+    }
+
+    #[test]
+    fn damaged_exif_gives_no_exposure() {
+        let mut info = crate::raw::CaptureInfo { exposure_rational: Some((1, 100)), iso: Some(200), ..Default::default() };
+        assert!(exif_exposure(&info).is_some_and(|e| e > 0.0));
+        // ISO 0 counts as unknown (like a missing value), an exposure time of 0 as no exposure.
+        info.iso = Some(0);
+        assert_eq!(exif_exposure(&info), exif_exposure(&crate::raw::CaptureInfo { iso: None, ..info.clone() }));
+        info.exposure_rational = Some((0, 100));
+        assert_eq!(exif_exposure(&info), None);
     }
 
     #[test]

@@ -78,6 +78,11 @@ fn decode_ext(path: &Path, dummy: bool) -> Result<Decoded> {
     let decoder: Box<dyn Decoder> = rawler::get_decoder(&source).map_err(|e| anyhow!("Unbekanntes RAW-Format: {e}"))?;
     let params = RawDecodeParams::default();
     let mut raw = decoder.raw_image(&source, &params, dummy).map_err(|e| anyhow!("RAW-Dekodierung fehlgeschlagen: {e}"))?;
+    // Float data may hold NaN or infinity (damaged or foreign DNGs): they would spread through
+    // every neighborhood operation of the pipeline.
+    if let RawImageData::Float(d) = &mut raw.data {
+        d.par_iter_mut().filter(|v| !v.is_finite()).for_each(|v| *v = 0.0);
+    }
     if !dummy {
         apply_gain_maps(decoder.as_ref(), &mut raw)?;
     }
