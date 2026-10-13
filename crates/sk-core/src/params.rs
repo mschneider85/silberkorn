@@ -208,7 +208,7 @@ pub struct Adjustments {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub removals: Vec<Removal>,
     /// Lens blur from the depth map.
-    #[serde(skip_serializing_if = "LensBlur::is_off")]
+    #[serde(skip_serializing_if = "LensBlur::is_default")]
     pub lens_blur: LensBlur,
 }
 
@@ -400,6 +400,11 @@ impl Default for LensBlur {
 impl LensBlur {
     pub fn is_off(&self) -> bool {
         self.amount <= 0.0
+    }
+
+    /// Unchanged (not saved): switched off, the focus and range stay saved for later.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
     }
 }
 
@@ -863,6 +868,15 @@ mod tests {
         let mut pasted = new.clone();
         pasted.keep_geometry_from(&old);
         assert_eq!(pasted.process, PROCESS_LEGACY);
+    }
+
+    #[test]
+    fn lens_blur_focus_is_kept_while_off() {
+        let mut a = Adjustments::default();
+        assert!(!serde_json::to_string(&a).unwrap().contains("lens_blur"));
+        a.lens_blur = LensBlur { amount: 0.0, focus: 0.42, ..Default::default() };
+        let back: Adjustments = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+        assert_eq!(back.lens_blur.focus, 0.42);
     }
 
     #[test]

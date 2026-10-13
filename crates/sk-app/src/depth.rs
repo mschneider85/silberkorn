@@ -98,7 +98,9 @@ impl App {
                 self.compare_details.remove(&path);
                 self.forget_prepared(&path);
                 if self.current_path().as_ref() == Some(&path) {
-                    if self.depth.autofocus.take_if(|p| *p == path).is_some() {
+                    if self.depth.autofocus.take_if(|p| *p == path).is_some()
+                        && self.current.as_ref().is_some_and(|c| c.adjustments.lens_blur.focus == LensBlur::default().focus)
+                    {
                         self.focus_on_subject();
                     }
                     if let Some((_, layer)) = self.depth.mask_for.take_if(|(p, _)| *p == path) {
@@ -221,8 +223,9 @@ impl App {
             self.toggle_focus_picker();
         }
         if lb != before {
-            // Switched on: focus on the subject (once the map exists).
-            if before.is_off() && !lb.is_off() && lb.focus == before.focus {
+            // Switched on for the first time: focus on the subject (once the map exists). A focus
+            // chosen before stays, also after the amount was at 0 for a while.
+            if before.is_off() && !lb.is_off() && lb.focus == LensBlur::default().focus {
                 if sk_core::depth::is_ready(&path) {
                     if let Some(map) = sk_core::depth::load(&path) {
                         lb.focus = (map.quantile(0.9) * 100.0).round() / 100.0;
