@@ -894,6 +894,18 @@ impl Processor {
     }
 
     pub(super) fn render_gpu(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Result<Rendered> {
+        let r = self.render_gpu_inner(g, src, region, cache);
+        // Buffers are cached while the work is recorded: after a failure some may never have
+        // been computed (an invalid command buffer runs none of its work).
+        if r.is_err()
+            && let Some(c) = cache
+        {
+            *c.gpu.lock().unwrap_or_else(|e| e.into_inner()) = Cache::default();
+        }
+        r
+    }
+
+    fn render_gpu_inner(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Result<Rendered> {
         g.checked(|| {
             let mut timer = Timer::start();
             let plan = self.plan(src, region, 1);
@@ -1107,6 +1119,21 @@ mod tests {
         g.inject_incomplete.store(true, std::sync::atomic::Ordering::Relaxed);
         assert!(p.process_gpu(&g, &src, None, OutputSpace::Srgb).is_err());
         assert!(g.problem().is_some());
+    }
+
+    #[test]
+    fn failed_render_empties_the_stage_cache() {
+        let Some(g) = Gpu::new_for_test() else { return };
+        let (w, h) = (120, 80);
+        let src = image(w, h);
+        let p = Processor::new(&meta(w, h), &Adjustments::default());
+        let cache = StageCache::default();
+        assert!(p.render_gpu(&g, &src, None, Some(&cache)).is_ok());
+        assert!(cache.gpu.lock().unwrap().early.is_some());
+        g.inject_incomplete.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(p.render_gpu(&g, &src, None, Some(&cache)).is_err());
+        let c = cache.gpu.lock().unwrap();
+        assert!(c.source.is_none() && c.early.is_none() && c.local.is_none());
     }
 
     #[test]
