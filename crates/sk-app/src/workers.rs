@@ -61,7 +61,6 @@ pub enum Event {
     IndexProgress { done: usize, total: usize },
     LensDbDownloaded(Result<PathBuf, String>),
     AiMask { generation: u64, layer: usize, result: Result<sk_ai::MaskImage, String> },
-    ModelDownloaded(Result<PathBuf, String>),
     /// An image of the compare view, rendered with its saved adjustments.
     CompareImage { path: PathBuf, image: ColorImage },
     /// Exposure and/or white balance of an image matched to the reference (see [`MatchJob`]);
@@ -1079,15 +1078,6 @@ impl Workers {
 
     pub fn render_before(&self, job: RenderJob) {
         let _ = self.before_tx.send(job);
-    }
-
-    pub fn download_model(&self) {
-        let (tx, ctx) = (self.ev_tx.clone(), self.ctx.clone());
-        thread::spawn(move || {
-            let r = crate::guard::catch(sk_ai::download_model).and_then(|r| r.map_err(|e| format!("{e:#}")));
-            let _ = tx.send(Event::ModelDownloaded(r));
-            ctx.request_repaint();
-        });
     }
 
     /// Downloads the lensfun database in the background.

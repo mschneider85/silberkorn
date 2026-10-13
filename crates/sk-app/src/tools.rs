@@ -379,24 +379,15 @@ impl App {
                     ui.selectable_value(&mut u.factor, 4, "4×").on_hover_text("Vierfache Kantenlänge, sechzehnfache Pixelzahl");
                 });
                 let m = sk_ai::upscale::model(*u);
-                if !sk_ai::models::available(m) {
-                    match upscale_download {
-                        Some(p) => {
-                            ui.add(egui::ProgressBar::new(p).text(format!("Modell wird geladen … {:.0} %", p * 100.0)));
-                        }
-                        None => {
-                            if ui.button(format!("Modell laden ({} MB, {})", m.size_mb(), m.license)).clicked() {
-                                download = Some(m);
-                            }
-                        }
-                    }
+                if !sk_ai::models::available(m) && crate::widgets::model_download(ui, "RealPLKSR", m.size_mb(), m.license, upscale_download) {
+                    download = Some(m);
                 }
                 if !(sk_ai::runtime::gpu_enabled() && sk_ai::runtime::gpu_installed()) {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(
                             RichText::new("Auf dem Prozessor dauert das lange: bei 24 MP eine halbe Stunde und mehr.").small().color(crate::theme::TEXT_FAINT),
                         );
-                        if sk_ai::runtime::gpu_supported() && ui.small_button("KI-Beschleunigung …").clicked() {
+                        if sk_ai::runtime::gpu_supported() && ui.small_button(crate::gpu::DIALOG_TITLE).clicked() {
                             show_gpu = true;
                         }
                     });

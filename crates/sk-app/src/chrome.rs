@@ -340,6 +340,9 @@ impl App {
         ui.separator();
         let ref_text = if self.compare_ref.is_some() && self.compare_ref == self.primary_path() { "Referenzbild entfernen" } else { "Als Referenzbild festlegen" };
         self.command_item_labeled(ui, "reference", ref_text);
+        if self.compare_ref.is_some() && self.compare_ref != self.primary_path() && item(ui, icon::PUSH_PIN_SLASH, "Referenzbild entfernen", "", true) {
+            self.compare_ref = None;
+        }
         let can_match = self.can_match();
         ui.add_enabled_ui(can_match, |ui| {
             ui.menu_button(format!("{}  An Referenz angleichen", icon::SCALES), |ui| {
@@ -396,9 +399,6 @@ impl App {
         }
         if check(ui, self.multi_view, "Auswahl nebeneinander vergleichen", "") {
             self.multi_view = !self.multi_view;
-        }
-        if self.compare_ref.is_some() && item(ui, icon::PUSH_PIN_SLASH, "Referenzbild entfernen", "", true) {
-            self.compare_ref = None;
         }
         if check(ui, self.clip_warning, "Belichtungswarnung", &shortcut("clip-warning")) {
             self.toggle_clip_warning();
@@ -458,14 +458,6 @@ impl App {
         if check(ui, self.fullscreen, "Vollbild ohne Ablenkung", &shortcut("fullscreen")) {
             self.toggle_fullscreen(&ui.ctx().clone());
         }
-        ui.separator();
-        ui.menu_button(format!("{}  Werkzeug", icon::SIDEBAR_SIMPLE), |ui| {
-            for tab in Tab::ALL {
-                if ui.add(Button::selectable(self.tab == tab, format!("{}  {}", tab.icon(), tab.title()))).clicked() {
-                    self.tab = tab;
-                }
-            }
-        });
     }
 
     fn help_menu(&mut self, ui: &mut Ui) {

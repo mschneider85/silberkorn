@@ -189,15 +189,10 @@ impl App {
             let faint = |t: &str| RichText::new(t).small().color(crate::theme::TEXT_FAINT);
             match &state {
                 DepthState::NoModel => {
-                    ui.label(faint("Braucht eine Tiefenkarte des Bildes; das Modell ist noch nicht geladen."));
-                    let label = format!("Modell laden ({} MB)", DEPTH.size_mb());
-                    if ui.button(label).on_hover_text("Depth Anything V2 Small, Apache-2.0").clicked() {
-                        download = true;
-                    }
+                    download = crate::widgets::model_download(ui, "Depth Anything V2 (Tiefenkarte)", DEPTH.size_mb(), DEPTH.license, None);
                 }
                 DepthState::Downloading(p) => {
-                    ui.add(egui::ProgressBar::new(*p).desired_height(6.0));
-                    ui.label(faint(&format!("Modell wird geladen … {:.0} %", p * 100.0)));
+                    crate::widgets::model_download(ui, "", 0, "", Some(*p));
                 }
                 _ if lb.is_off() => {}
                 DepthState::Running(p) => {

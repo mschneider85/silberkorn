@@ -92,10 +92,15 @@ pub fn default_model_path() -> PathBuf {
     sk_core::catalog::default_catalog_path().with_file_name("models").join("u2netp.onnx")
 }
 
+/// Whether the subject model is there.
+pub fn model_available() -> bool {
+    default_model_path().is_file()
+}
+
 /// Downloads the subject model (U²-Net-p, Apache-2.0, ~4.6 MB).
-pub fn download_model() -> Result<PathBuf> {
+pub fn download_model(progress: &dyn Fn(f32)) -> Result<PathBuf> {
     let path = default_model_path();
-    models::download_to(&models::SUBJECT, &path, &|_| {})?;
+    models::download_to(&models::SUBJECT, &path, progress)?;
     Ok(path)
 }
 

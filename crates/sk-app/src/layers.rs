@@ -206,8 +206,11 @@ pub struct ObjectSession {
     pub clicks: Vec<sk_ai::segment::Click>,
 }
 
+/// Label of the job that downloads the subject and sky model.
+pub(crate) const SUBJECT_DOWNLOAD: &str = "Modell laden: Motiv auswählen (U²-Net)";
+
 /// Label of the job that downloads the object selection models.
-const OBJECT_DOWNLOAD: &str = "Modell laden: Objekt auswählen (MobileSAM)";
+pub(crate) const OBJECT_DOWNLOAD: &str = "Modell laden: Objekt auswählen (MobileSAM)";
 
 /// Drag state of the local tools.
 #[derive(Clone, Debug, Default)]
@@ -306,21 +309,25 @@ impl App {
     fn object_controls(&mut self, ui: &mut Ui) -> bool {
         let faint = |t: &str| egui::RichText::new(t).small().color(crate::theme::TEXT_FAINT);
         if !sk_ai::segment::available() {
-            if let Some(p) = self.jobs.iter().find(|j| j.label == OBJECT_DOWNLOAD).map(|j| j.progress) {
-                ui.add(egui::ProgressBar::new(p).text(format!("Modell wird geladen … {:.0} %", p * 100.0)));
-                return false;
-            }
-            ui.label(faint(&format!(
-                "Das Modell (MobileSAM, Apache-2.0, {} MB) wird einmalig heruntergeladen.",
-                sk_ai::segment::download_mb()
-            )));
-            return ui.button(format!("{}  Modell laden", crate::theme::icon::DOWNLOAD_SIMPLE)).clicked();
+            let progress = self.jobs.iter().find(|j| j.label == OBJECT_DOWNLOAD).map(|j| j.progress);
+            return crate::widgets::model_download(ui, "MobileSAM", sk_ai::segment::download_mb(), sk_ai::models::OBJECT_ENCODER.license, progress);
         }
         ui.label(faint("Klick: Objekt auswählen · weitere Klicks verfeinern · Alt+Klick: Teil ausnehmen"));
         if self.object_session.is_some() && ui.button("Nächstes Objekt").on_hover_text("Der nächste Klick wählt ein weiteres Objekt dazu").clicked() {
             self.object_session = None;
         }
         false
+    }
+
+    /// Downloads the subject and sky model in the background.
+    pub(crate) fn download_subject_model(&mut self) {
+        if self.jobs.iter().any(|j| j.label == SUBJECT_DOWNLOAD) {
+            return;
+        }
+        self.start_job(SUBJECT_DOWNLOAD, Box::new(|p| {
+            sk_ai::download_model(p)?;
+            Ok(Vec::new())
+        }));
     }
 
     /// Downloads the object selection models in the background, then analyzes the image.
@@ -751,9 +758,7 @@ impl App {
         let mut ai_action = None;
         let mut pick = false;
         let busy = self.ai_busy;
-        let model_missing = self.model_missing;
-        let downloading = self.model_downloading;
-        let tol = &mut self.magic_tolerance;
+        let subject_download = (!sk_ai::model_available()).then(|| self.jobs.iter().find(|j| j.label == SUBJECT_DOWNLOAD).map(|j| j.progress));
         let tool = self.local_tool;
         let depth_map = self.current.as_ref().and_then(|c| sk_core::depth::load(&c.meta.path));
         let Some(cur) = self.current.as_mut() else { return };
@@ -766,12 +771,6 @@ impl App {
                 if ui.add_enabled(!busy, egui::Button::new("\u{E1AA}  Himmel auswählen")).clicked() {
                     ai_action = Some(2);
                 }
-                if ui.selectable_label(tool == Some(LocalTool::Magic), LocalTool::Magic.label()).clicked() {
-                    ai_action = Some(3);
-                }
-                if ui.selectable_label(tool == Some(LocalTool::Object), LocalTool::Object.label()).clicked() {
-                    ai_action = Some(5);
-                }
                 if ui
                     .add_enabled(!busy, egui::Button::new("\u{E7AE}  Tiefe auswählen"))
                     .on_hover_text("Wählt nach Entfernung aus (anfangs den nahen Teil des Bildes); der Bereich lässt sich danach einstellen")
@@ -783,7 +782,6 @@ impl App {
                     ui.spinner();
                 }
             });
-            slider_row(ui, "Toleranz", tol, 0.0..=1.0, 0.3, 2);
             if let Some(range) = layer.mask.ai.as_ref().and_then(|a| a.depth)
                 && let Some(r) = App::depth_mask_controls(ui, &range)
                 && let Some(map) = &depth_map
@@ -795,15 +793,11 @@ impl App {
                 layer.mask.ai = None;
                 *changed = true;
             }
-            if model_missing {
-                ui.horizontal(|ui| {
-                    if downloading {
-                        ui.spinner();
-                        ui.label("Lade Modell…");
-                    } else if ui.button("KI-Modell herunterladen (4,6 MB)").on_hover_text("U²-Net-p, Apache-2.0").clicked() {
-                        ai_action = Some(4);
-                    }
-                });
+            if let Some(progress) = subject_download {
+                let m = &sk_ai::models::SUBJECT;
+                if crate::widgets::model_download(ui, "U²-Net (Motiv und Himmel)", m.size_mb(), m.license, progress) {
+                    ai_action = Some(4);
+                }
             }
         });
         section(ui, "Maske verfeinern", None, |ui| {
@@ -837,18 +831,13 @@ impl App {
         match ai_action {
             Some(1) => self.request_ai(crate::workers::AiKind::Subject),
             Some(2) => self.request_ai(crate::workers::AiKind::Sky),
-            Some(3) => self.set_local_tool(LocalTool::Magic),
-            Some(5) => self.set_local_tool(LocalTool::Object),
             Some(6) => {
                 if let Some(layer) = self.ensure_layer() {
                     self.object_session = None;
                     self.set_depth_mask(layer, None);
                 }
             }
-            Some(4) => {
-                self.model_downloading = true;
-                self.workers.download_model();
-            }
+            Some(4) => self.download_subject_model(),
             _ => {}
         }
         if pick {

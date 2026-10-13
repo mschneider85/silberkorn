@@ -166,6 +166,20 @@ fn library_workflow() {
 }
 
 #[test]
+fn noise_settings_carry_over_to_the_selection() {
+    let Some(mut f) = Fixture::new("noise") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let other = f.app.entries.iter().map(|e| e.path.clone()).find(|p| Some(p) != f.app.current_path().as_ref()).unwrap();
+    f.app.selection = f.app.entries.iter().map(|e| e.path.clone()).collect();
+    f.app.transfer_noise((40.0, 25.0, 30.0));
+    let d = sidecar::load(&other).adjustments.detail;
+    assert_eq!((d.ai_denoise, d.nr_luma, d.nr_color), (40.0, 25.0, 30.0));
+    let d = &f.app.current.as_ref().unwrap().adjustments.detail;
+    assert_eq!((d.ai_denoise, d.nr_luma, d.nr_color), (40.0, 25.0, 30.0));
+    assert!(f.app.can_undo());
+}
+
+#[test]
 #[ignore = "langsam: läuft mit cargo t-all"]
 fn edit_copy_apply_style_and_export() {
     let Some(mut f) = Fixture::new("edit") else { return };

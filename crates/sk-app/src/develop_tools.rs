@@ -312,33 +312,21 @@ impl App {
     }
 
     pub fn details_tab(&mut self, ui: &mut Ui) {
-        let Some(cur) = self.current.as_mut() else {
+        if self.current.is_none() {
             crate::widgets::no_image(ui);
             return;
-        };
-        let (path, hdr) = (cur.meta.path.clone(), cur.meta.hdr);
-        let mut ai_amount = cur.adjustments.detail.ai_denoise;
-        let mut r_ai = false;
-        let mut changed = false;
-        section(ui, "KI-Entrauschen", Some(&mut || r_ai = true), |ui| {
-            changed |= self.denoise_controls(ui, &mut ai_amount, &path, hdr);
-        });
+        }
+        let mut changed = self.noise_section(ui);
         let Some(cur) = self.current.as_mut() else { return };
-        cur.adjustments.detail.ai_denoise = if r_ai { 0.0 } else { ai_amount };
-        changed |= r_ai;
         let d = &mut cur.adjustments.detail;
         let defaults = Detail::default();
 
-        let (mut r_sharp, mut r_nr, mut r_clarity, mut r_vig, mut r_grain) = (false, false, false, false, false);
+        let (mut r_sharp, mut r_clarity, mut r_vig, mut r_grain) = (false, false, false, false);
         section(ui, "Schärfen", Some(&mut || r_sharp = true), |ui| {
             changed |= slider_row(ui, "Stärke", &mut d.sharpen_amount, 0.0..=500.0, defaults.sharpen_amount, 0);
             changed |= slider_row(ui, "Radius", &mut d.sharpen_radius, 0.2..=3.0, defaults.sharpen_radius, 1);
             changed |= slider_row(ui, "Schwelle", &mut d.sharpen_threshold, 0.0..=20.0, defaults.sharpen_threshold, 1);
             ui.label(RichText::new("Wirkung bei 100 % prüfen (Z)").small().color(crate::theme::TEXT_FAINT));
-        });
-        section(ui, "Rauschreduzierung", Some(&mut || r_nr = true), |ui| {
-            changed |= slider_row(ui, "Luminanz", &mut d.nr_luma, 0.0..=100.0, defaults.nr_luma, 0);
-            changed |= slider_row(ui, "Farbe", &mut d.nr_color, 0.0..=100.0, defaults.nr_color, 0);
         });
         section(ui, "Klarheit", Some(&mut || r_clarity = true), |ui| {
             changed |= slider_row(ui, "Klarheit", &mut d.clarity, -100.0..=100.0, 0.0, 0);
@@ -362,9 +350,6 @@ impl App {
         if r_sharp {
             (d.sharpen_amount, d.sharpen_radius, d.sharpen_threshold) = (defaults.sharpen_amount, defaults.sharpen_radius, defaults.sharpen_threshold);
         }
-        if r_nr {
-            (d.nr_luma, d.nr_color) = (defaults.nr_luma, defaults.nr_color);
-        }
         if r_clarity {
             (d.clarity, d.structure) = (0.0, 0.0);
         }
@@ -374,7 +359,7 @@ impl App {
         if r_grain {
             (d.grain_amount, d.grain_size) = (0.0, defaults.grain_size);
         }
-        if changed || r_sharp || r_nr || r_clarity || r_vig || r_grain {
+        if changed || r_sharp || r_clarity || r_vig || r_grain {
             self.request_render();
         }
         self.lens_blur_section(ui);

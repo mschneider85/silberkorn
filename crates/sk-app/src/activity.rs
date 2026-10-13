@@ -49,9 +49,6 @@ impl App {
         if let Some((done, total)) = self.index_progress {
             v.push(Activity { label: format!("Indexieren {done} / {total}"), progress: Some(done as f32 / total.max(1) as f32), in_viewer: false, cancel: None });
         }
-        if self.model_downloading {
-            v.push(Activity { label: "KI-Modell wird geladen".into(), progress: None, in_viewer: false, cancel: None });
-        }
         if self.lens_db_downloading {
             v.push(Activity { label: "Objektivprofile werden geladen".into(), progress: None, in_viewer: false, cancel: None });
         }

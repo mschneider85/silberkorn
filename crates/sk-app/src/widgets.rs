@@ -369,6 +369,19 @@ pub fn hint(ui: &mut Ui, text: impl Into<String>) -> Response {
     ui.label(RichText::new(text.into()).small().color(theme::TEXT_FAINT))
 }
 
+/// A tool whose model is not loaded yet: what it is, then the download button or its progress.
+/// The same in every panel; returns whether the download was asked for.
+pub fn model_download(ui: &mut Ui, model: &str, mb: u64, license: &str, progress: Option<f32>) -> bool {
+    if let Some(p) = progress {
+        ui.add(egui::ProgressBar::new(p).desired_height(6.0));
+        hint(ui, format!("Modell wird geladen … {:.0} %", p * 100.0));
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
+        return false;
+    }
+    hint(ui, format!("Braucht das Modell {model} ({mb} MB, {license}); es wird einmalig heruntergeladen."));
+    ui.button(format!("{}  Modell laden", theme::icon::DOWNLOAD_SIMPLE)).clicked()
+}
+
 /// Centered placeholder for an empty view or tool: a large icon, a line of text and a hint.
 pub fn empty_state(ui: &mut Ui, ic: &str, title: &str, hint: &str) {
     ui.add_space(24.0);

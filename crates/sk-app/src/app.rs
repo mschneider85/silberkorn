@@ -258,7 +258,6 @@ struct Settings {
     print: sk_core::print::PrintSettings,
     hdr_options: sk_core::hdr::HdrOptions,
     pano_options: sk_core::panorama::PanoramaOptions,
-    denoise_strength: Option<f32>,
     /// AI on the graphics card (if available).
     ai_gpu: Option<bool>,
     /// Development pipeline on the graphics card (if available).
@@ -405,8 +404,6 @@ pub struct App {
     pub spot_search: Option<std::sync::mpsc::Receiver<(PathBuf, Vec<sk_core::params::Spot>)>>,
     /// 0..1, see `sk_core::spots::find`.
     pub spot_sensitivity: f32,
-    pub model_missing: bool,
-    pub model_downloading: bool,
     pub tiles: Tiles,
     /// Last tile request, to avoid resending identical requests.
     pub(crate) tiles_requested: Option<TileKey>,
@@ -555,8 +552,6 @@ pub struct App {
     pub denoise: crate::denoise::DenoiseQueue,
     /// Depth maps being computed (lens blur, depth masks).
     pub depth: crate::depth::DepthQueue,
-    /// 0..100
-    pub denoise_strength: f32,
 }
 
 /// Startup options (separate from `eframe` so that tests can construct the app).
@@ -715,8 +710,6 @@ impl App {
             removal_progress: 0.0,
             show_gpu_dialog: false,
             ai_busy: false,
-            model_missing: false,
-            model_downloading: false,
             tiles: Tiles::default(),
             tiles_requested: None,
             edited_at: Instant::now(),
@@ -809,7 +802,6 @@ impl App {
             denoise_dialog: None,
             denoise: Default::default(),
             depth: Default::default(),
-            denoise_strength: settings.denoise_strength.unwrap_or(60.0).clamp(0.0, 100.0),
         };
         app.reload_styles();
         match session {
@@ -868,7 +860,6 @@ impl App {
             print: self.print.settings.clone(),
             hdr_options: self.hdr_options,
             pano_options: self.pano_options,
-            denoise_strength: Some(self.denoise_strength),
             ai_gpu: Some(sk_ai::runtime::gpu_enabled()),
             develop_gpu: Some(sk_core::gpu::enabled()),
             brushes: self.brushes.clone(),
@@ -1757,7 +1748,6 @@ impl App {
                     }
                     match result {
                         Ok(m) => {
-                            self.model_missing = false;
                             // An object replaces its previous result (what the mask held before stays).
                             let base = self.object_session.as_ref().filter(|s| s.layer == layer).map(|s| s.base.clone());
                             self.edit(|a| {
@@ -1775,20 +1765,9 @@ impl App {
                             self.status = "Für „Objekt“ zuerst das Modell laden (Tab „Ebenen“)".into();
                         }
                         Err(e) if e == "MODEL_MISSING" => {
-                            self.model_missing = true;
-                            self.status = "KI-Modell fehlt – bitte im Tab „Ebenen“ herunterladen".into();
+                            self.status = "Für „Motiv“ und „Himmel“ zuerst das Modell laden (Tab „Ebenen“)".into();
                         }
                         Err(e) => self.status = format!("Maske fehlgeschlagen: {e}"),
-                    }
-                }
-                Event::ModelDownloaded(r) => {
-                    self.model_downloading = false;
-                    match r {
-                        Ok(p) => {
-                            self.model_missing = false;
-                            self.status = format!("KI-Modell geladen ({})", p.display());
-                        }
-                        Err(e) => self.status = format!("Download fehlgeschlagen: {e}"),
                     }
                 }
                 Event::LensDbDownloaded(r) => {
@@ -2133,7 +2112,7 @@ impl App {
                 (self.inpaint_busy, self.removal_progress) = (true, 0.4);
             }
             if std::env::var_os("SILBERKORN_DENOISE").is_some() {
-                self.open_denoise();
+                self.open_denoise_download();
             }
             if std::env::var_os("SILBERKORN_MERGE").is_some() {
                 self.select_all();

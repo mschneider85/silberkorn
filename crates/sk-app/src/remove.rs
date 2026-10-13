@@ -10,7 +10,6 @@ use sk_core::params::{BrushStroke, WbMode};
 
 use crate::app::App;
 use crate::layers::{LocalDrag, LocalTool};
-use crate::theme::icon;
 use crate::widgets::section_help;
 use crate::workers::InpaintJob;
 
@@ -182,18 +181,7 @@ impl App {
                 self.brushes_changed_at = Some(std::time::Instant::now());
             }
             if !models::available(&models::INPAINT) {
-                match downloading {
-                    Some(p) => {
-                        ui.add(egui::ProgressBar::new(p).text(format!("Modell wird geladen … {:.0} %", p * 100.0)));
-                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
-                    }
-                    None => {
-                        let hover = format!("Lädt das Modell {} ({} MB, Lizenz {}).", models::INPAINT.label, models::INPAINT.size_mb(), models::INPAINT.license);
-                        if ui.button(format!("{}  Modell laden ({} MB)", icon::DOWNLOAD_SIMPLE, models::INPAINT.size_mb())).on_hover_text(hover).clicked() {
-                            download = true;
-                        }
-                    }
-                }
+                download = crate::widgets::model_download(ui, "MI-GAN", models::INPAINT.size_mb(), models::INPAINT.license, downloading);
             }
             if n > 0 {
                 ui.horizontal(|ui| {

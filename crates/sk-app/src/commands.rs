@@ -82,7 +82,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("paste-adjustments", icon::CLIPBOARD_TEXT, "Anpassungen auf Auswahl anwenden", "Bearbeiten", [CTRL_SHIFT => Key::V], "paste einfügen", |a| a.clipboard.is_some(), |a, _| a.paste_adjustments()),
     cmd!("reset", icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", "Bearbeiten", [], "reset", has_image, |a, _| a.reset_adjustments()),
     cmd!("select-all", icon::CHECK_SQUARE, "Alle auswählen", "Bearbeiten", [CTRL => Key::A], "select all", has_images, |a, _| a.select_all()),
-    cmd!("gpu", icon::LIGHTNING, "Grafikkarte …", "Bearbeiten", [], "gpu grafikkarte", always, |a, _| a.show_gpu_dialog = true),
+    cmd!("gpu", icon::LIGHTNING, "Grafikkarte und KI-Modelle …", "Bearbeiten", [], "gpu grafikkarte ki modelle download laden zwischenspeicher", always, |a, _| a.show_gpu_dialog = true),
     // Bild
     cmd!("rotate-left", icon::ARROW_COUNTER_CLOCKWISE, "Links drehen", "Bild", [CTRL => Key::OpenBracket], "rotate", has_image, |a, _| a.rotate(3)),
     cmd!("rotate-right", icon::ARROW_CLOCKWISE, "Rechts drehen", "Bild", [CTRL => Key::CloseBracket], "rotate", has_image, |a, _| a.rotate(1)),
@@ -119,7 +119,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("stack-toggle", icon::STACK, "Stapel auf-/zuklappen", "Bild", [SHIFT => Key::G], "stack", has_selection, |a, _| a.run_stack_action(crate::stacks::StackAction::Toggle)),
     cmd!("merge-hdr", icon::SUN_HORIZON, "HDR zusammenfügen …", "Bild", [], "merge belichtungsreihe", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Hdr)),
     cmd!("merge-pano", icon::PANORAMA, "Panorama zusammenfügen …", "Bild", [], "merge stitch", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Panorama)),
-    cmd!("denoise", icon::SPARKLE, "KI-Entrauschen …", "Bild", [], "denoise rauschen ki entrauschen", has_selection, |a, _| a.open_denoise()),
+    cmd!("denoise", icon::SPARKLE, "KI-Entrauschen", "Bild", [], "denoise rauschen ki entrauschen rauschreduzierung", has_image, |a, ctx| a.open_denoise(ctx)),
     cmd!("reference", icon::PUSH_PIN, "Referenzbild festlegen / entfernen", "Bild", [SHIFT => Key::Enter], "vergleich compare", has_image, |a, _| a.toggle_reference()),
     cmd!("previous", icon::CARET_LEFT, "Vorheriges Bild", "Bild", [NONE => Key::ArrowLeft], "zurück previous", has_images, |a, _| a.step(-1)),
     cmd!("next", icon::CARET_RIGHT, "Nächstes Bild", "Bild", [NONE => Key::ArrowRight], "weiter next", has_images, |a, _| a.step(1)),
