@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::params::{Adjustments, BaseCurve, ColorWheel, Curve, HslBand};
@@ -34,14 +34,30 @@ pub fn list_in(dir: &Path) -> Vec<Style> {
     styles
 }
 
+/// The file holding the style called `name` (the name inside the file counts: different names
+/// can give the same file name, e.g. "S/W" and "S_W").
+fn file_of(dir: &Path, name: &str) -> Option<std::path::PathBuf> {
+    std::fs::read_dir(dir).ok()?.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "json")).find(|p| {
+        std::fs::read_to_string(p).ok().and_then(|t| serde_json::from_str::<Style>(&t).ok()).is_some_and(|s| s.name == name)
+    })
+}
+
+/// Saves a style: replaces the one of the same name, never another one whose name gives the same
+/// file name (that gets a number appended).
 pub fn save_in(dir: &Path, style: &Style) -> Result<()> {
     std::fs::create_dir_all(dir)?;
-    crate::safe_file::write(&dir.join(file_name(&style.name)), serde_json::to_string_pretty(style)?)?;
+    let path = file_of(dir, &style.name).unwrap_or_else(|| {
+        let base = file_name(&style.name);
+        let stem = base.trim_end_matches(".json");
+        std::iter::once(base.clone()).chain((2..).map(|n| format!("{stem} {n}.json"))).map(|f| dir.join(f)).find(|p| !p.exists()).expect("unbounded")
+    });
+    crate::safe_file::write(&path, serde_json::to_string_pretty(style)?)?;
     Ok(())
 }
 
 pub fn delete_in(dir: &Path, name: &str) -> Result<()> {
-    std::fs::remove_file(dir.join(file_name(name)))?;
+    let path = file_of(dir, name).with_context(|| format!("Stil „{name}“ nicht gefunden"))?;
+    std::fs::remove_file(path)?;
     Ok(())
 }
 
@@ -282,6 +298,29 @@ mod tests {
         assert_eq!(list_in(&dir), vec![s.clone()]);
         delete_in(&dir, &s.name).unwrap();
         assert!(list_in(&dir).is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn names_with_the_same_file_name_stay_apart() {
+        let dir = std::env::temp_dir().join(format!("sk-styles-clash-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let style = |name: &str, contrast: f32| Style { name: name.into(), adjustments: Adjustments { contrast, ..Default::default() } };
+        for (i, name) in ["S/W", "S&W", "S_W"].into_iter().enumerate() {
+            save_in(&dir, &style(name, i as f32)).unwrap();
+        }
+        assert_eq!(list_in(&dir).len(), 3);
+        // Saving under an existing name replaces that style only.
+        save_in(&dir, &style("S&W", 50.0)).unwrap();
+        let all = list_in(&dir);
+        assert_eq!(all.len(), 3);
+        assert_eq!(all.iter().find(|s| s.name == "S&W").unwrap().adjustments.contrast, 50.0);
+        // Deleting one leaves the others.
+        delete_in(&dir, "S/W").unwrap();
+        let names: Vec<String> = list_in(&dir).into_iter().map(|s| s.name).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"S&W".to_string()) && names.contains(&"S_W".to_string()));
+        assert!(delete_in(&dir, "S/W").is_err());
         std::fs::remove_dir_all(dir).ok();
     }
 
