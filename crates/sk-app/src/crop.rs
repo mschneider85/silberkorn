@@ -179,15 +179,22 @@ impl App {
 
         // Interaction.
         let hit = |p: Pos2| -> Handle {
-            let near = |a: f32, b: f32| (a - b).abs() < 10.0;
-            let (l, rr, t, b) = (near(p.x, r.left()), near(p.x, r.right()), near(p.y, r.top()), near(p.y, r.bottom()));
+            // Corners grab a little further out than edges, they are the usual target.
+            let near = |a: f32, b: f32, d: f32| (a - b).abs() < d;
+            let corner = |x: f32, y: f32| near(p.x, x, 16.0) && near(p.y, y, 16.0);
+            let (l, rr, t, b) = (near(p.x, r.left(), 10.0), near(p.x, r.right(), 10.0), near(p.y, r.top(), 10.0), near(p.y, r.bottom(), 10.0));
             let in_x = p.x > r.left() - 10.0 && p.x < r.right() + 10.0;
             let in_y = p.y > r.top() - 10.0 && p.y < r.bottom() + 10.0;
+            if corner(r.left(), r.top()) {
+                return Handle::Corner(false, false);
+            } else if corner(r.right(), r.top()) {
+                return Handle::Corner(true, false);
+            } else if corner(r.left(), r.bottom()) {
+                return Handle::Corner(false, true);
+            } else if corner(r.right(), r.bottom()) {
+                return Handle::Corner(true, true);
+            }
             match (l, rr, t, b) {
-                (true, _, true, _) => Handle::Corner(false, false),
-                (_, true, true, _) => Handle::Corner(true, false),
-                (true, _, _, true) => Handle::Corner(false, true),
-                (_, true, _, true) => Handle::Corner(true, true),
                 (true, ..) if in_y => Handle::Edge(Side::Left),
                 (_, true, ..) if in_y => Handle::Edge(Side::Right),
                 (_, _, true, _) if in_x => Handle::Edge(Side::Top),
@@ -209,8 +216,10 @@ impl App {
             ui.ctx().set_cursor_icon(icon);
         }
         let to_norm = |p: Pos2| vec2((p.x - img_rect.left()) / img_rect.width(), (p.y - img_rect.top()) / img_rect.height());
+        // Where the button went down: by the time a drag is recognized the pointer has moved
+        // on, and a quick grab at a corner would otherwise land outside it and draw a new frame.
         if response.drag_started()
-            && let Some(pos) = response.interact_pointer_pos()
+            && let Some(pos) = ui.input(|i| i.pointer.press_origin()).or(response.interact_pointer_pos())
             && let Some(tool) = &mut self.crop_tool
         {
             // Without a crop yet, dragging inside the image draws a new one.
@@ -322,7 +331,7 @@ impl App {
         let Some(tool) = &mut self.straighten_tool else { return };
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         if response.drag_started()
-            && let Some(p) = response.interact_pointer_pos()
+            && let Some(p) = ui.input(|i| i.pointer.press_origin()).or(response.interact_pointer_pos())
         {
             tool.line = Some((p, p));
         }
