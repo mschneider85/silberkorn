@@ -223,14 +223,15 @@ impl App {
                 self.sidecar_dirty = true;
                 sc
             } else {
-                let mut sc = sidecar::load(path);
+                let mut sc = match self.sidecar_for_update(path) {
+                    Ok(sc) => sc,
+                    Err(e) => {
+                        self.status = format!("Nicht gespeichert: {e:#}");
+                        continue;
+                    }
+                };
                 f(&mut sc);
-                if let Err(e) = sidecar::save(path, &sc) {
-                    self.status = format!("Speichern fehlgeschlagen: {e:#}");
-                }
-                if let Some(c) = &self.catalog {
-                    let _ = c.sync_sidecar(path, &sc);
-                }
+                self.save_sidecar(path, &sc);
                 sc
             };
             if let Some(i) = self.index_of(path) {
@@ -346,11 +347,15 @@ impl App {
                 if !file.exists() || (n > 1 && !sk_core::variant::of_file(&file).contains(path)) {
                     continue;
                 }
-                let mut sc = sidecar::load(path);
+                let mut sc = match self.sidecar_for_update(path) {
+                    Ok(sc) => sc,
+                    Err(e) => {
+                        self.status = format!("Nicht gespeichert: {e:#}");
+                        continue;
+                    }
+                };
                 sc.adjustments = f(&sc.adjustments);
-                if let Err(e) = sidecar::save(path, &sc) {
-                    self.status = format!("Speichern fehlgeschlagen: {e:#}");
-                }
+                self.save_sidecar(path, &sc);
                 self.thumb_requested.remove(path);
                 self.compare_textures.remove(path);
                 self.compare_requested.remove(path);

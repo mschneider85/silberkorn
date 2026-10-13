@@ -233,6 +233,9 @@ impl App {
             if keep_cache {
                 cache::rename(&old, &new, root.as_deref());
             }
+            if let Some(u) = self.unsaved.remove(&old) {
+                self.unsaved.insert(new.clone(), u);
+            }
             if let Some(t) = self.thumbs.remove(&old) {
                 self.thumbs.insert(new.clone(), t);
                 self.thumb_requested.insert(new);

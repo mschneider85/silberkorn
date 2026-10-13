@@ -179,11 +179,39 @@ pub fn sidecar_files_for(image: &Path) -> [PathBuf; 4] {
 /// Rating, label and keywords come from the XMP file instead if it changed since Silberkorn last
 /// read or wrote it (see `xmp`).
 pub fn load(image: &Path) -> Sidecar {
-    let file = load_file(image);
+    from_file(image, load_file(image))
+}
+
+/// Like [`load`], but an error if the sidecar file exists and can't be read or is from a newer
+/// Silberkorn: whoever saves what this returns would otherwise replace the stored settings with
+/// defaults. A damaged file counts as none, as when saving (which keeps it as `.bak`).
+pub fn try_load(image: &Path) -> Result<Sidecar> {
+    let file = match read_file(image) {
+        Ok(Some(sc)) if sc.version > VERSION => anyhow::bail!(
+            "{} wurde von einer neueren Silberkorn-Version gespeichert und wird nicht überschrieben. Bitte Silberkorn aktualisieren.",
+            sidecar_path(image).display()
+        ),
+        Ok(sc) => sc.unwrap_or_default(),
+        Err(e) if is_damaged(&e) => {
+            log::warn!("{e:#}");
+            Sidecar::default()
+        }
+        Err(e) => return Err(e),
+    };
+    Ok(from_file(image, file))
+}
+
+/// The settings of `image` (raw file or variant) from its raw file's sidecar.
+fn from_file(image: &Path, file: Sidecar) -> Sidecar {
     match crate::variant::number(image) {
         1 => with_xmp(image, file),
         n => variant_of(&file, n),
     }
+}
+
+/// Whether a [`read_file`] error means the file is damaged (not unreadable or newer).
+fn is_damaged(e: &anyhow::Error) -> bool {
+    e.chain().any(|c| c.is::<serde_json::Error>())
 }
 
 /// Variant `n` (2 or more) of a raw file's sidecar.
@@ -308,8 +336,7 @@ fn load_for_update(image: &Path) -> Result<Sidecar> {
             sidecar_path(image).display()
         ),
         Ok(sc) => Ok(sc.unwrap_or_default()),
-        Err(e) if e.chain().any(|c| c.is::<serde_json::Error>()) => {
-            let _ = e;
+        Err(e) if is_damaged(&e) => {
             for path in json_files_for(image).into_iter().filter(|p| p.exists()) {
                 // Never replaces an earlier backup.
                 let backup = (1..)
@@ -448,6 +475,24 @@ mod tests {
         assert_eq!(loaded.adjustments.exposure, 0.7);
         save(&img, &Sidecar::default()).unwrap();
         assert!(!sidecar_path(&img).exists());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn try_load_refuses_unreadable_files_only() {
+        let dir = std::env::temp_dir().join(format!("sk-tryload-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("u.ARW");
+        assert_eq!(try_load(&img).unwrap().rating, 0);
+        save(&img, &Sidecar { rating: 3, ..Default::default() }).unwrap();
+        assert_eq!(try_load(&img).unwrap().rating, 3);
+        // Damaged: counts as none (saving keeps it as `.bak`).
+        std::fs::write(sidecar_path(&img), "{ kaputt").unwrap();
+        assert_eq!(try_load(&img).unwrap().rating, 0);
+        // Can't be read at all: an error, not the defaults.
+        std::fs::remove_file(sidecar_path(&img)).unwrap();
+        std::fs::create_dir(sidecar_path(&img)).unwrap();
+        assert!(try_load(&img).is_err());
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -155,6 +155,9 @@ pub struct Current {
     pub keywords: Vec<String>,
     pub as_shot_temp_tint: (f32, f32),
     pub snapshots: Vec<sk_core::sidecar::Snapshot>,
+    /// Why the sidecar couldn't be read when the image was opened: then nothing is saved, so
+    /// that the stored settings aren't replaced with the defaults shown instead.
+    pub unreadable: Option<String>,
 }
 
 /// Undo steps kept per image (each a full copy of the adjustments; masks are shared).
@@ -1071,12 +1074,19 @@ impl App {
 
     /// Shows a loaded image. `rendered` is used if it was made with the saved adjustments.
     fn install(&mut self, meta: Arc<RawMeta>, preview: Arc<LinearImage>, rendered: Option<(Adjustments, TextureHandle, Histogram)>) {
-        let mut sc = sidecar::load(&meta.path);
+        let (sc, unreadable) = match sidecar::try_load(&meta.path) {
+            Ok(sc) => (sc, None),
+            Err(e) => {
+                let e = format!("{e:#}");
+                self.status = format!("Einstellungen nicht lesbar, Änderungen werden nicht gespeichert: {e}");
+                (sidecar::load(&meta.path), Some(e))
+            }
+        };
         // Settings that couldn't be saved win over the file (and are tried again).
-        if let Some(u) = self.unsaved.get(&meta.path) {
-            sc = Sidecar { rating: u.rating, color_label: u.color_label, keywords: u.keywords.clone(), adjustments: u.adjustments.clone(), ..sc };
+        if self.unsaved.contains_key(&meta.path) {
             self.sidecar_dirty = true;
         }
+        let mut sc = self.with_unsaved(&meta.path, sc);
         // Rounded to slider precision so that displaying it never counts as an edit.
         let (k, t) = meta.color.temp_tint_for_wb(meta.as_shot_wb);
         let as_shot_temp_tint = (k.round(), (t * 10.0).round() / 10.0);
@@ -1115,6 +1125,7 @@ impl App {
             keywords: sc.keywords,
             snapshots: sc.snapshots,
             as_shot_temp_tint,
+            unreadable,
         });
         // The prefetched rendering lacks the profile.
         let rendered = rendered.filter(|_| !self.auto_lens_profile());
@@ -1446,6 +1457,12 @@ impl App {
             self.redo.clear();
             self.sidecar_dirty = true;
         }
+        if self.sidecar_dirty
+            && let Some(e) = &cur.unreadable
+        {
+            self.sidecar_dirty = false;
+            self.status = format!("Nicht gespeichert, die Einstellungen waren beim Öffnen nicht lesbar: {e}");
+        }
         if self.sidecar_dirty {
             self.sidecar_dirty = false;
             let sc = Sidecar {
@@ -1455,18 +1472,39 @@ impl App {
                 adjustments: cur.committed.clone(),
                 ..Default::default()
             };
-            match sidecar::save(&cur.meta.path, &sc) {
-                Ok(()) => {
-                    self.unsaved.remove(&cur.meta.path);
-                }
-                Err(e) => {
-                    self.status = format!("Speichern fehlgeschlagen: {e:#}");
-                    self.unsaved.insert(cur.meta.path.clone(), sc.clone());
-                }
+            let path = cur.meta.path.clone();
+            self.save_sidecar(&path, &sc);
+        }
+    }
+
+    /// `sc` with the settings of `path` that couldn't be saved yet: they win over the file.
+    pub(crate) fn with_unsaved(&self, path: &Path, sc: Sidecar) -> Sidecar {
+        match self.unsaved.get(path) {
+            Some(u) => Sidecar { rating: u.rating, color_label: u.color_label, keywords: u.keywords.clone(), adjustments: u.adjustments.clone(), ..sc },
+            None => sc,
+        }
+    }
+
+    /// Settings of an image for changing them: an error if its sidecar can't be read (saving
+    /// would replace it with defaults).
+    pub(crate) fn sidecar_for_update(&self, path: &Path) -> anyhow::Result<Sidecar> {
+        Ok(self.with_unsaved(path, sidecar::try_load(path)?))
+    }
+
+    /// Writes the sidecar of an image and syncs the catalog; settings that can't be saved are
+    /// kept in `unsaved` (and tried again when the image is opened).
+    pub(crate) fn save_sidecar(&mut self, path: &Path, sc: &Sidecar) {
+        match sidecar::save(path, sc) {
+            Ok(()) => {
+                self.unsaved.remove(path);
             }
-            if let Some(c) = &self.catalog {
-                let _ = c.sync_sidecar(&cur.meta.path, &sc);
+            Err(e) => {
+                self.status = format!("Speichern fehlgeschlagen: {e:#}");
+                self.unsaved.insert(path.to_path_buf(), sc.clone());
             }
+        }
+        if let Some(c) = &self.catalog {
+            let _ = c.sync_sidecar(path, sc);
         }
     }
 

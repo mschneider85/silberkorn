@@ -2114,3 +2114,31 @@ fn thumbnail_textures_are_limited() {
     assert!(!f.app.thumbs.contains_key(&path(1)), "am längsten nicht gezeigt geht");
     assert!(!f.app.thumb_requested.contains(&path(1)), "wird bei Bedarf neu angefordert");
 }
+
+#[test]
+fn sidecars_that_cant_be_read_or_saved() {
+    let Some(mut f) = Fixture::new("unreadable") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let b = f.photo("_DSC0010.dng");
+
+    // Settings of an image that couldn't be saved stay when it is changed from the grid.
+    let mut pending = sidecar::Sidecar::default();
+    pending.adjustments.exposure = 0.9;
+    f.app.unsaved.insert(b.clone(), pending);
+    f.app.selection = [b.clone()].into_iter().collect();
+    f.app.set_rating(2);
+    let saved = sidecar::load(&b);
+    assert_eq!((saved.rating, saved.adjustments.exposure), (2, 0.9));
+    assert!(f.app.unsaved.is_empty());
+
+    // A sidecar that can't be read is not replaced with the defaults shown instead.
+    let file = sidecar::sidecar_path(&b);
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    f.app.select_path(&b, egui::Modifiers::NONE);
+    f.pump("zweites Bild", |app| app.current_path().as_ref() == Some(&b));
+    f.app.set_rating(5);
+    assert!(f.app.status.contains("nicht lesbar"), "{}", f.app.status);
+    assert!(file.is_dir());
+    assert!(f.app.unsaved.is_empty());
+}
