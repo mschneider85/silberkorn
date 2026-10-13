@@ -7,7 +7,7 @@ use sk_core::catalog::{Filter, Scope, SortKey};
 use sk_core::sidecar::{self, ColorLabel};
 use sk_core::styles;
 
-use crate::app::{App, AppOptions};
+use crate::app::{App, AppOptions, MAX_THUMBS};
 
 /// The test images: the sample raw files reduced to 2400 x 1600, as linear DNGs. Same scene,
 /// capture data and camera color, but a sixth of the pixels, so the tests spend their time on
@@ -539,6 +539,8 @@ fn session_workflow() {
     assert_eq!(f.app.lists.total, 1);
 
     // Thumbnails are cached inside the session and are still valid after another move.
+    // As the browser asks for a visible cell.
+    f.app.thumb_requested.insert(a3.clone());
     f.app.workers.thumbnail(a3.clone(), Some(s2.root.clone()));
     f.pump("Vorschaubild", |a| a.thumbs.contains_key(&a3));
     let adj = sidecar::load(&a3).adjustments;
@@ -2014,4 +2016,24 @@ fn ai_mask_lands_on_its_layer_after_deleting_another() {
     let layers = &f.app.current.as_ref().unwrap().adjustments.layers;
     assert!(layers[0].mask.ai.is_none(), "B unverändert");
     assert!(layers[1].mask.ai.is_some(), "C hat die Maske");
+}
+
+/// Only a limited number of thumbnails stays in memory; those not drawn for the longest go first.
+#[test]
+fn thumbnail_textures_are_limited() {
+    let Some(mut f) = Fixture::new("thumb-limit") else { return };
+    let img = || egui::ColorImage::new([2, 2], vec![egui::Color32::WHITE; 4]);
+    let path = |i: usize| PathBuf::from(format!("/t/{i}.ARW"));
+    // Not asked for by the browser (background previews): not kept.
+    f.app.set_thumb(&f.ctx.clone(), path(0), img());
+    assert!(f.app.thumbs.is_empty());
+    for i in 0..=MAX_THUMBS {
+        f.app.thumb_requested.insert(path(i));
+        f.app.thumb_seen.insert(path(i), if i == 0 { 1_000_000 } else { i as u64 });
+        f.app.set_thumb(&f.ctx.clone(), path(i), img());
+    }
+    assert!(f.app.thumbs.len() <= MAX_THUMBS);
+    assert!(f.app.thumbs.contains_key(&path(0)), "zuletzt gezeigt bleibt");
+    assert!(!f.app.thumbs.contains_key(&path(1)), "am längsten nicht gezeigt geht");
+    assert!(!f.app.thumb_requested.contains(&path(1)), "wird bei Bedarf neu angefordert");
 }

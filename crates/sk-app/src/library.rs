@@ -184,6 +184,7 @@ impl App {
         };
         sort_records(&mut records, self.sort, self.sort_desc);
         self.entries = records;
+        self.forget_unlisted_thumbs();
         self.selection.retain(|p| self.entries.iter().any(|e| &e.path == p));
         self.refilter();
         self.refresh_catalog_lists();

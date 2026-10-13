@@ -239,7 +239,10 @@ impl App {
         let count = |m: Modifiers| m.command as u8 + m.ctrl as u8 + m.shift as u8 + m.alt as u8;
         keys.sort_by_key(|(_, (m, _))| std::cmp::Reverse(count(*m)));
         for (c, (m, k)) in keys {
-            if ctx.input_mut(|i| i.consume_key(m, k)) && (c.enabled)(self) {
+            // A key of an unavailable command stays for others (Enter of "finish crop" must still
+            // reach a dialog); with modifiers it is taken anyway, or Shift+X would run X.
+            let enabled = (c.enabled)(self);
+            if (enabled || count(m) > 0) && ctx.input_mut(|i| i.consume_key(m, k)) && enabled {
                 (c.run)(self, ctx);
             }
         }

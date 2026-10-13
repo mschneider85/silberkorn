@@ -781,6 +781,7 @@ impl App {
             self.thumb_requested.insert(entry.path.clone());
             self.workers.thumbnail(entry.path.clone(), self.session.as_ref().map(|s| s.root.clone()));
         }
+        self.thumb_seen.insert(entry.path.clone(), ui.ctx().cumulative_pass_nr());
         let selected = self.selection.contains(&entry.path);
         let painter = ui.painter_at(rect);
         let is_primary = Some(&entry.path) == primary;

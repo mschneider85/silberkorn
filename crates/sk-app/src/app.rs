@@ -280,6 +280,9 @@ struct Settings {
     side_column: crate::side_column::SideColumn,
 }
 
+/// Thumbnail textures kept at most (see `App::trim_thumbs`).
+pub(crate) const MAX_THUMBS: usize = 2000;
+
 fn settings_path() -> Option<PathBuf> {
     Some(sk_core::paths::config_dir().join("settings.json"))
 }
@@ -349,6 +352,8 @@ pub struct App {
     pub stack_sizes: HashMap<String, usize>,
     pub auto_stack: Option<crate::stacks::AutoStackDialog>,
     pub thumbs: HashMap<PathBuf, TextureHandle>,
+    /// When each thumbnail was last drawn (egui pass), to drop the oldest beyond [`MAX_THUMBS`].
+    pub(crate) thumb_seen: HashMap<PathBuf, u64>,
     pub thumb_requested: HashSet<PathBuf>,
     pub grid_view: bool,
     pub index_progress: Option<(usize, usize)>,
@@ -694,6 +699,7 @@ impl App {
             stack_sizes: HashMap::new(),
             auto_stack: None,
             thumbs: HashMap::new(),
+            thumb_seen: HashMap::new(),
             thumb_requested: HashSet::new(),
             grid_view: false,
             index_progress: None,
@@ -1562,6 +1568,12 @@ impl App {
     }
 
     pub fn export_selection(&mut self) {
+        // One export at a time: a second would take over the first's progress and cancel switch,
+        // and neither could be cancelled any more.
+        if self.export_progress.is_some() {
+            self.status = "Es läuft bereits ein Export – bitte warten oder abbrechen".into();
+            return;
+        }
         self.commit_and_save();
         let current = self.current.as_ref().map(|c| (c.meta.path.clone(), c.committed.clone()));
         let items: Vec<(PathBuf, Adjustments)> = self
@@ -1934,14 +1946,41 @@ impl App {
         }
     }
 
-    fn set_thumb(&mut self, ctx: &egui::Context, path: PathBuf, image: egui::ColorImage) {
+    pub(crate) fn set_thumb(&mut self, ctx: &egui::Context, path: PathBuf, image: egui::ColorImage) {
         match self.thumbs.get_mut(&path) {
             Some(t) => t.set(image, TextureOptions::LINEAR),
+            // Previews made in the background announce every image: only those the browser has
+            // shown are kept (the others come from the disk cache when they appear).
+            None if !self.thumb_requested.contains(&path) => {}
             None => {
                 let tex = ctx.load_texture(format!("thumb:{}", path.display()), image, TextureOptions::LINEAR);
                 self.thumbs.insert(path, tex);
+                self.trim_thumbs();
             }
         }
+    }
+
+    /// Drops the thumbnails not drawn for the longest time once there are more than
+    /// [`MAX_THUMBS`] (up to 256 KB each): scrolling through a large catalog must not fill the memory.
+    fn trim_thumbs(&mut self) {
+        if self.thumbs.len() <= MAX_THUMBS {
+            return;
+        }
+        let mut by_age: Vec<(u64, PathBuf)> = self.thumbs.keys().map(|p| (self.thumb_seen.get(p).copied().unwrap_or(0), p.clone())).collect();
+        by_age.sort_unstable_by_key(|(seen, _)| *seen);
+        for (_, p) in by_age.into_iter().take(MAX_THUMBS / 4) {
+            self.thumbs.remove(&p);
+            self.thumb_seen.remove(&p);
+            self.thumb_requested.remove(&p);
+        }
+    }
+
+    /// Thumbnails of images no longer listed (another folder or album) are dropped.
+    pub(crate) fn forget_unlisted_thumbs(&mut self) {
+        let listed: HashSet<&PathBuf> = self.entries.iter().map(|e| &e.path).collect();
+        self.thumbs.retain(|p, _| listed.contains(p));
+        self.thumb_seen.retain(|p, _| listed.contains(p));
+        self.thumb_requested.retain(|p| listed.contains(p));
     }
 
     pub(crate) fn send_render(&mut self) {
@@ -2018,8 +2057,9 @@ impl App {
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::K)) {
             self.palette.toggle();
         }
-        // While a menu or the palette is open the keyboard belongs to it, as in native applications.
-        if self.palette.open || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) {
+        // While a menu, a dialog or the palette is open the keyboard belongs to it, as in native
+        // applications (Ctrl+Entf must not trash the selection behind the rename dialog).
+        if self.palette.open || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) || ctx.memory(|m| m.top_modal_layer()).is_some() {
             return;
         }
         // Ctrl+1 … Ctrl+0: the tool tabs in rail order.
