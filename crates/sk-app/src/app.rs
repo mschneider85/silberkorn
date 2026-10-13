@@ -29,6 +29,7 @@ pub enum Tab {
     Color,
     Details,
     Layers,
+    Retouch,
     Metadata,
     Styles,
     History,
@@ -37,7 +38,7 @@ pub enum Tab {
 
 impl Tab {
     /// In rail order: organizing, developing, presets and history, output.
-    pub const ALL: [Tab; 10] = [
+    pub const ALL: [Tab; 11] = [
         Tab::Library,
         Tab::Metadata,
         Tab::Lens,
@@ -45,6 +46,7 @@ impl Tab {
         Tab::Color,
         Tab::Details,
         Tab::Layers,
+        Tab::Retouch,
         Tab::Styles,
         Tab::History,
         Tab::Output,
@@ -54,7 +56,7 @@ impl Tab {
     pub fn group(self) -> u8 {
         match self {
             Tab::Library | Tab::Metadata => 0,
-            Tab::Lens | Tab::Exposure | Tab::Color | Tab::Details | Tab::Layers => 1,
+            Tab::Lens | Tab::Exposure | Tab::Color | Tab::Details | Tab::Layers | Tab::Retouch => 1,
             Tab::Styles | Tab::History => 2,
             Tab::Output => 3,
         }
@@ -67,7 +69,8 @@ impl Tab {
             Tab::Exposure => "Belichtung",
             Tab::Color => "Farbe",
             Tab::Details => "Details",
-            Tab::Layers => "Ebenen & Retusche",
+            Tab::Layers => "Ebenen",
+            Tab::Retouch => "Retusche",
             Tab::Metadata => "Metadaten",
             Tab::Styles => "Stile",
             Tab::History => "Verlauf",
@@ -84,11 +87,19 @@ impl Tab {
             Tab::Color => "Farbe",
             Tab::Details => "Details",
             Tab::Layers => "Ebenen",
+            Tab::Retouch => "Retusche",
             Tab::Metadata => "Info",
             Tab::Styles => "Stile",
             Tab::History => "Verlauf",
             Tab::Output => "Ausgabe",
         }
+    }
+
+    /// Ctrl+1 … Ctrl+0 in rail order; the history has none (it is also in the side column).
+    pub fn key(self) -> Option<Key> {
+        const KEYS: [Key; 10] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9, Key::Num0];
+        let i = Tab::ALL.into_iter().filter(|t| *t != Tab::History).position(|t| t == self)?;
+        KEYS.get(i).copied()
     }
 
     pub fn icon(self) -> &'static str {
@@ -100,6 +111,7 @@ impl Tab {
             Tab::Color => icon::PALETTE,
             Tab::Details => icon::MAGNIFYING_GLASS_PLUS,
             Tab::Layers => icon::STACK,
+            Tab::Retouch => icon::BANDAIDS,
             Tab::Metadata => icon::INFO,
             Tab::Styles => icon::SPARKLE,
             Tab::History => icon::CLOCK_COUNTER_CLOCKWISE,
@@ -1916,9 +1928,10 @@ impl App {
             return;
         }
         // Ctrl+1 … Ctrl+0: the tool tabs in rail order.
-        for (i, tab) in Tab::ALL.into_iter().enumerate() {
-            let key = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9, Key::Num0][i];
-            if ctx.input_mut(|inp| inp.consume_key(Modifiers::COMMAND, key)) {
+        for tab in Tab::ALL {
+            if let Some(key) = tab.key()
+                && ctx.input_mut(|inp| inp.consume_key(Modifiers::COMMAND, key))
+            {
                 self.tab = tab;
             }
         }

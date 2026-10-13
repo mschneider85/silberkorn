@@ -611,18 +611,18 @@ fn menu_bar_behaves_like_native() {
     let mut d = TitleBarDriver;
     let nodes = d.frame(&mut f, vec![]);
     let title = |l: &str| widget(&nodes, l).unwrap_or_else(|| panic!("Menütitel {l} fehlt")).center();
-    let (datei, bild, ansicht) = (title("Datei"), title("Bild"), title("Ansicht"));
+    let (datei, entwickeln, ansicht) = (title("Datei"), title("Entwickeln"), title("Ansicht"));
 
     // Hovering alone opens nothing.
-    let nodes = d.move_to(&mut f, bild);
+    let nodes = d.move_to(&mut f, entwickeln);
     assert!(widget(&nodes, "Links drehen").is_none());
 
     // A click opens the menu, hovering another title switches to it.
     let nodes = d.click(&mut f, datei);
     assert!(widget(&nodes, "Beenden").is_some(), "Datei-Menü sollte offen sein");
-    d.move_to(&mut f, bild);
+    d.move_to(&mut f, entwickeln);
     let nodes = d.frame(&mut f, vec![]);
-    assert!(widget(&nodes, "Links drehen").is_some(), "Hover sollte zum Bild-Menü wechseln");
+    assert!(widget(&nodes, "Links drehen").is_some(), "Hover sollte zum Entwickeln-Menü wechseln");
     assert!(widget(&nodes, "Beenden").is_none());
 
     // Arrow keys step to the neighbouring menu.

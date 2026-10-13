@@ -79,7 +79,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
-        "Ebenen & Retusche",
+        "Ebenen und Retusche",
         &[
             ("B / N", "Pinsel / Radierer"),
             ("L / R", "Linearer / radialer Verlauf"),
@@ -236,8 +236,9 @@ impl App {
                     match i {
                         0 => self.file_menu(ui),
                         1 => self.edit_menu(ui),
-                        2 => self.image_menu(ui),
-                        3 => self.view_menu(ui),
+                        2 => self.photo_menu(ui),
+                        3 => self.develop_menu(ui),
+                        4 => self.view_menu(ui),
                         _ => self.help_menu(ui),
                     }
                     close_on_activation(ui);
@@ -278,21 +279,9 @@ impl App {
         self.command_item(ui, "gpu");
     }
 
-    fn image_menu(&mut self, ui: &mut Ui) {
+    /// Organizing: rating, labels, metadata, names, variants, stacks, where the files are.
+    fn photo_menu(&mut self, ui: &mut Ui) {
         let n_sel = self.selected_paths().len();
-        self.command_item(ui, "rotate-left");
-        self.command_item(ui, "rotate-right");
-        self.command_item(ui, "crop");
-        self.command_item(ui, "auto-upright");
-        self.command_item(ui, "rename");
-        let process = self.current.as_ref().map(|c| c.adjustments.process);
-        let label = match process {
-            Some(p) if p < sk_core::params::PROCESS_LATEST => format!("Auf aktuelle Prozessversion heben (dieses Bild: {p})"),
-            _ => "Auf aktuelle Prozessversion heben".to_string(),
-        };
-        self.command_item_labeled(ui, "process-update", &label);
-        self.command_item_labeled(ui, "wb-picker", "Weißabgleich aufnehmen");
-        ui.separator();
         ui.add_enabled_ui(n_sel > 0, |ui| {
             ui.menu_button(format!("{}  Bewertung", icon::STAR), |ui| {
                 for r in 0..=5u8 {
@@ -332,11 +321,30 @@ impl App {
             .response
             .on_hover_text("Bewertung, Farb-Label und Keywords mit Lightroom, Bridge und Capture One austauschen");
         });
+        self.command_item(ui, "rename");
         ui.separator();
         self.variant_menu(ui);
         self.stack_menu(ui);
-        self.merge_menu(ui);
+        ui.separator();
+        self.move_menu(ui);
+        self.command_item(ui, "trash");
+        ui.separator();
+        self.command_item(ui, "previous");
+        self.command_item(ui, "next");
+    }
+
+    /// Developing: geometry, white balance, noise, merging, matching to a reference.
+    fn develop_menu(&mut self, ui: &mut Ui) {
+        self.command_item(ui, "rotate-left");
+        self.command_item(ui, "rotate-right");
+        self.command_item(ui, "crop");
+        self.command_item(ui, "straighten");
+        self.command_item(ui, "auto-upright");
+        ui.separator();
+        self.command_item_labeled(ui, "wb-picker", "Weißabgleich aufnehmen");
         self.command_item(ui, "denoise");
+        ui.separator();
+        self.merge_menu(ui);
         ui.separator();
         let ref_text = if self.compare_ref.is_some() && self.compare_ref == self.primary_path() { "Referenzbild entfernen" } else { "Als Referenzbild festlegen" };
         self.command_item_labeled(ui, "reference", ref_text);
@@ -359,10 +367,12 @@ impl App {
             .on_disabled_hover_text("Ein Referenzbild festlegen und weitere Bilder auswählen");
         });
         ui.separator();
-        self.move_menu(ui);
-        ui.separator();
-        self.command_item(ui, "previous");
-        self.command_item(ui, "next");
+        let process = self.current.as_ref().map(|c| c.adjustments.process);
+        let label = match process {
+            Some(p) if p < sk_core::params::PROCESS_LATEST => format!("Auf aktuelle Prozessversion heben (dieses Bild: {p})"),
+            _ => "Auf aktuelle Prozessversion heben".to_string(),
+        };
+        self.command_item_labeled(ui, "process-update", &label);
     }
 
     fn view_menu(&mut self, ui: &mut Ui) {
@@ -609,7 +619,7 @@ impl App {
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.add_space(6.0);
             let mut group = Tab::ALL[0].group();
-            for (i, tab) in Tab::ALL.into_iter().enumerate() {
+            for tab in Tab::ALL {
                 if tab.group() != group {
                     group = tab.group();
                     ui.add_space(4.0);
@@ -632,8 +642,9 @@ impl App {
                 let color = if selected { Color32::WHITE } else if resp.hovered() { theme::TEXT } else { theme::TEXT_DIM };
                 painter.text(rect.center() - vec2(0.0, 7.0), egui::Align2::CENTER_CENTER, tab.icon(), egui::FontId::proportional(19.0), color);
                 painter.text(rect.center_bottom() - vec2(0.0, 9.0), egui::Align2::CENTER_CENTER, tab.short_title(), egui::FontId::proportional(10.0), color);
-                let key = crate::palette::tab_shortcut(i);
-                if resp.on_hover_text(format!("{}  ({key})", tab.title())).clicked() {
+                let key = crate::palette::tab_shortcut(tab);
+                let hover = if key.is_empty() { tab.title().to_string() } else { format!("{}  ({key})", tab.title()) };
+                if resp.on_hover_text(hover).clicked() {
                     self.tab = tab;
                 }
             }
@@ -751,7 +762,7 @@ impl App {
 }
 
 /// Titles of the top-level menus, in bar order (see `App::menu_bar`).
-const MENUS: [&str; 5] = ["Datei", "Bearbeiten", "Bild", "Ansicht", "Hilfe"];
+const MENUS: [&str; 6] = ["Datei", "Bearbeiten", "Foto", "Entwickeln", "Ansicht", "Hilfe"];
 
 fn menu_popup_id(ui: &Ui, i: usize) -> Id {
     ui.id().with(("bar_menu", i))

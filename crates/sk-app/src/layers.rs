@@ -6,7 +6,7 @@ use sk_core::params::{BrushStroke, Layer, LayerAdjustments, LinearGradient, Mask
 use sk_core::pipeline::{Processor, RenderOptions};
 use egui::{Color32, Pos2, Rect, Response, Stroke, Ui, Vec2, pos2, vec2};
 
-use crate::app::App;
+use crate::app::{App, Tab};
 use crate::widgets::{section, slider_row};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -87,6 +87,14 @@ impl LocalTool {
             LocalTool::Object => (icon::CURSOR_CLICK, "Objekt", ""),
             LocalTool::ColorPick => (icon::EYEDROPPER, "Farbe", ""),
             LocalTool::Remove => (icon::SPARKLE, "Entfernen", "X"),
+        }
+    }
+
+    /// The tab with the tool's settings.
+    pub fn tab(self) -> Tab {
+        match self {
+            LocalTool::Heal | LocalTool::Clone | LocalTool::Remove => Tab::Retouch,
+            _ => Tab::Layers,
         }
     }
 
@@ -1126,6 +1134,8 @@ impl App {
             return;
         }
         let action = self.layer_list(ui);
+        let help = "Pinsel, Radierer, Verläufe und Magic Brush malen die Maske der gewählten Ebene.\n\n[ und ] ändern die Pinselgröße · Doppelklick auf einen Regler: Standard.\n\nMagic Brush: ähnliche, zusammenhängende Farben werden ausgewählt; weitere Striche erweitern die Auswahl.\n\nObjekt: auf ein Objekt klicken, es wird ausgewählt; weitere Klicks verfeinern, Alt+Klick nimmt Teile aus.";
+        self.tools_section(ui, help, &[LocalTool::Brush, LocalTool::Eraser, LocalTool::Linear, LocalTool::Radial, LocalTool::Magic, LocalTool::Object]);
         // Options of the active layer directly below the list.
         let Some(cur) = self.current.as_mut() else { return };
         let layers = &mut cur.adjustments.layers;
@@ -1177,22 +1187,46 @@ impl App {
         if changed {
             self.request_render();
         }
+        let mut style = None;
+        crate::widgets::section_full(ui, "Style Brushes", false, Some("Neue Ebene mit fertigen Einstellungen, dann malen"), None, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (name, adj) in STYLE_BRUSHES {
+                    if ui.button(*name).clicked() {
+                        style = Some((*name, *adj));
+                    }
+                }
+            });
+        });
+        if let Some((name, adj)) = style {
+            self.add_style_brush(name, adj);
+        }
+        self.apply_layer_action(action);
+    }
+
+    /// Retouching: heal, clone and generative removal work on the image, not on a layer.
+    pub fn retouch_tab(&mut self, ui: &mut Ui) {
+        if self.current.is_none() {
+            crate::widgets::no_image(ui);
+            return;
+        }
+        let help = "Reparieren (H) und Klonen (S): über eine Stelle malen, die Quelle wird automatisch gewählt.\n\nEntfernen (X): über das Störende malen; die KI füllt die Stelle passend zur Umgebung.\n\n[ und ] ändern die Pinselgröße.";
+        self.tools_section(ui, help, &[LocalTool::Heal, LocalTool::Clone, LocalTool::Remove]);
+        self.remove_section(ui);
+        self.retouch_section(ui);
+    }
+
+    /// The tool tiles (three per row) and the settings of the active one.
+    fn tools_section(&mut self, ui: &mut Ui, help: &str, tools: &[LocalTool]) {
         let mut tool_click = None;
         let mut brushes_changed = false;
         let mut object_download = false;
-        let help = "Pinsel, Radierer, Verläufe und Magic Brush malen die Maske der gewählten Ebene.\n\n[ und ] ändern die Pinselgröße · Doppelklick auf einen Regler: Standard.\n\nMagic Brush: ähnliche, zusammenhängende Farben werden ausgewählt; weitere Striche erweitern die Auswahl.\n\nObjekt: auf ein Objekt klicken, es wird ausgewählt; weitere Klicks verfeinern, Alt+Klick nimmt Teile aus.";
         crate::widgets::section_help(ui, "Werkzeuge", help, None, |ui| {
-            let tools = [
-                [LocalTool::Brush, LocalTool::Eraser, LocalTool::Linear],
-                [LocalTool::Radial, LocalTool::Magic, LocalTool::Object],
-                [LocalTool::Heal, LocalTool::Clone, LocalTool::Remove],
-            ];
             let gap = 4.0;
             let w = ((ui.available_width() - 2.0 * gap) / 3.0).floor();
-            for row in tools {
+            for row in tools.chunks(3) {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = gap;
-                    for t in row {
+                    for &t in row {
                         let (ic, name, key) = t.tile();
                         let hover = if key.is_empty() { name.to_string() } else { format!("{name} ({key})") };
                         if crate::widgets::tool_tile(ui, ic, name, key, self.local_tool == Some(t), w).on_hover_text(hover).clicked() {
@@ -1202,7 +1236,7 @@ impl App {
                 });
             }
             ui.add_space(4.0);
-            match self.local_tool {
+            match self.local_tool.filter(|t| tools.contains(t)) {
                 Some(t @ (LocalTool::Brush | LocalTool::Eraser)) => {
                     brushes_changed |= brush_controls(ui, self.brushes.of(Some(t)), Some(t), true);
                 }
@@ -1227,24 +1261,6 @@ impl App {
         if brushes_changed {
             self.brushes_changed_at = Some(std::time::Instant::now());
         }
-        self.remove_section(ui);
-
-        let mut style = None;
-        crate::widgets::section_full(ui, "Style Brushes", false, Some("Neue Ebene mit fertigen Einstellungen, dann malen"), None, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                for (name, adj) in STYLE_BRUSHES {
-                    if ui.button(*name).clicked() {
-                        style = Some((*name, *adj));
-                    }
-                }
-            });
-        });
-        if let Some((name, adj)) = style {
-            self.add_style_brush(name, adj);
-        }
-
-        self.retouch_section(ui);
-        self.apply_layer_action(action);
     }
 
     pub(crate) fn apply_layer_action(&mut self, action: Option<LayerAction>) {

@@ -96,9 +96,9 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Details, "Körnung", "grain film korn"),
     (Tab::Details, "Objektivunschärfe", "lens blur bokeh tiefe tiefenschärfe hintergrund unschärfe ki"),
     (Tab::Layers, "Werkzeuge", "pinsel radierer verlauf maske brush"),
-    (Tab::Layers, "Entfernen (KI)", "remove objekt retusche ki"),
+    (Tab::Retouch, "Entfernen (KI)", "remove objekt retusche ki"),
     (Tab::Layers, "Ebenen", "layer maske lokal"),
-    (Tab::Layers, "Reparieren & Klonen", "heal clone stempel flecken"),
+    (Tab::Retouch, "Reparieren & Klonen", "heal clone stempel flecken staub"),
     (Tab::Metadata, "Keywords", "schlagworte stichworte tags"),
     (Tab::Metadata, "Aufnahme", "exif kamera objektiv iso"),
     (Tab::Styles, "Filmsimulationen", "film look preset"),
@@ -121,8 +121,8 @@ impl App {
         use Action::Run;
 
         // Tools and their sections first: they are what one looks for most often.
-        for (i, tab) in Tab::ALL.into_iter().enumerate() {
-            add(tab.icon(), tab.title(), "Werkzeug", &tab_shortcut(i), true, "tab", Action::Tab(tab));
+        for tab in Tab::ALL {
+            add(tab.icon(), tab.title(), "Werkzeug", &tab_shortcut(tab), true, "tab", Action::Tab(tab));
         }
         for &(tab, title, keywords) in SECTIONS {
             add(tab.icon(), title, tab.title(), "", true, keywords, Action::Section(tab, title));
@@ -321,8 +321,8 @@ fn command_row(ui: &Ui, rect: Rect, c: &Command, selected: bool) {
 }
 
 /// "Strg+1" … "Strg+0" for the tool tabs in rail order.
-pub fn tab_shortcut(i: usize) -> String {
-    if i < 10 { format!("Strg+{}", (i + 1) % 10) } else { String::new() }
+pub fn tab_shortcut(tab: Tab) -> String {
+    tab.key().map(|k| crate::commands::key_text((egui::Modifiers::COMMAND, k))).unwrap_or_default()
 }
 
 /// Lowercase without diacritics, so "weiss" finds "Weiß" and "farbung" finds "Färbung".

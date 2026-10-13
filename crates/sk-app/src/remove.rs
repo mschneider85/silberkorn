@@ -128,7 +128,7 @@ impl App {
     pub(crate) fn request_removal(&mut self) {
         let Some(cur) = &self.current else { return };
         if !models::available(&models::INPAINT) {
-            self.status = "KI-Modell für „Entfernen“ fehlt – bitte im Tab „Ebenen & Retusche“ laden".into();
+            self.status = "KI-Modell für „Entfernen“ fehlt – bitte im Tab „Retusche“ laden".into();
             self.remove_strokes.clear();
             return;
         }

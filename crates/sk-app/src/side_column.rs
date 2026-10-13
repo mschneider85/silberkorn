@@ -327,8 +327,8 @@ fn tool_of(name: &'static str) -> Option<(Tab, Option<&'static str>)> {
         "Vignette" => (Tab::Details, Some("Vignettierung")),
         "Objektivunschärfe" => (Tab::Details, Some("Objektivunschärfe")),
         "Ebenen" => (Tab::Layers, None),
-        "Retusche" => (Tab::Layers, Some("Reparieren & Klonen")),
-        "Entfernen" => (Tab::Layers, Some("Entfernen (KI)")),
+        "Retusche" => (Tab::Retouch, Some("Reparieren & Klonen")),
+        "Entfernen" => (Tab::Retouch, Some("Entfernen (KI)")),
         _ => return None,
     };
     Some(t)

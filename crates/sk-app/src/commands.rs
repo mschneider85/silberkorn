@@ -48,7 +48,7 @@ fn in_session(a: &App) -> bool {
 }
 
 fn tool(a: &mut App, t: LocalTool) {
-    a.tab = Tab::Layers;
+    a.tab = t.tab();
     if a.local_tool != Some(t) {
         a.set_local_tool(t);
     }
@@ -83,66 +83,66 @@ pub const COMMANDS: &[Command] = &[
     cmd!("reset", icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", "Bearbeiten", [], "reset", has_image, |a, _| a.reset_adjustments()),
     cmd!("select-all", icon::CHECK_SQUARE, "Alle auswählen", "Bearbeiten", [CTRL => Key::A], "select all", has_images, |a, _| a.select_all()),
     cmd!("gpu", icon::LIGHTNING, "Grafikkarte und KI-Modelle …", "Bearbeiten", [], "gpu grafikkarte ki modelle download laden zwischenspeicher", always, |a, _| a.show_gpu_dialog = true),
-    // Bild
-    cmd!("rotate-left", icon::ARROW_COUNTER_CLOCKWISE, "Links drehen", "Bild", [CTRL => Key::OpenBracket], "rotate", has_image, |a, _| a.rotate(3)),
-    cmd!("rotate-right", icon::ARROW_CLOCKWISE, "Rechts drehen", "Bild", [CTRL => Key::CloseBracket], "rotate", has_image, |a, _| a.rotate(1)),
-    cmd!("crop", icon::CROP, "Zuschneiden", "Bild", [NONE => Key::C], "crop", has_image, |a, _| a.toggle_crop()),
-    cmd!("finish-crop", icon::CHECK, "Zuschnitt übernehmen", "Bild", [NONE => Key::Enter], "crop fertig", |a| a.crop_tool.is_some(), |a, _| a.finish_crop_tool()),
-    cmd!("straighten", icon::RULER, "Geraderichten (Linie ziehen)", "Bild", [], "straighten horizont", has_image, |a, _| {
+    // Foto und Entwickeln
+    cmd!("rotate-left", icon::ARROW_COUNTER_CLOCKWISE, "Links drehen", "Entwickeln", [CTRL => Key::OpenBracket], "rotate", has_image, |a, _| a.rotate(3)),
+    cmd!("rotate-right", icon::ARROW_CLOCKWISE, "Rechts drehen", "Entwickeln", [CTRL => Key::CloseBracket], "rotate", has_image, |a, _| a.rotate(1)),
+    cmd!("crop", icon::CROP, "Zuschneiden", "Entwickeln", [NONE => Key::C], "crop", has_image, |a, _| a.toggle_crop()),
+    cmd!("finish-crop", icon::CHECK, "Zuschnitt übernehmen", "Entwickeln", [NONE => Key::Enter], "crop fertig", |a| a.crop_tool.is_some(), |a, _| a.finish_crop_tool()),
+    cmd!("straighten", icon::RULER, "Geraderichten (Linie ziehen)", "Entwickeln", [], "straighten horizont", has_image, |a, _| {
         a.tab = Tab::Lens;
         a.toggle_straighten();
     }),
-    cmd!("auto-upright", icon::PERSPECTIVE, "Automatisch geraderichten", "Bild", [SHIFT => Key::A], "upright", has_image, |a, _| a.auto_upright(sk_core::upright::UprightMode::Vertical)),
-    cmd!("wb-picker", icon::EYEDROPPER, "Weißabgleich-Pipette", "Bild", [NONE => Key::W], "white balance wb aufnehmen", has_image, |a, _| {
+    cmd!("auto-upright", icon::PERSPECTIVE, "Automatisch geraderichten", "Entwickeln", [SHIFT => Key::A], "upright", has_image, |a, _| a.auto_upright(sk_core::upright::UprightMode::Vertical)),
+    cmd!("wb-picker", icon::EYEDROPPER, "Weißabgleich-Pipette", "Entwickeln", [NONE => Key::W], "white balance wb aufnehmen", has_image, |a, _| {
         if !a.picking_wb {
             a.tab = Tab::Color;
         }
         a.toggle_wb_picker();
     }),
-    cmd!("rename", icon::PENCIL_SIMPLE, "Umbenennen …", "Bild", [CTRL_SHIFT => Key::R], "rename", has_selection, |a, _| a.open_rename()),
-    cmd!("process-update", icon::ARROW_CIRCLE_UP, "Auf aktuelle Prozessversion heben", "Bild", [], "prozessversion engine update", has_selection, |a, _| a.update_process_version()),
-    cmd!("rating-0", icon::STAR, "Bewertung entfernen", "Bild", [NONE => Key::Num0], "sterne rating", has_selection, |a, _| a.set_rating(0)),
-    cmd!("rating-1", icon::STAR, "Bewertung ★", "Bild", [NONE => Key::Num1], "sterne rating", has_selection, |a, _| a.set_rating(1)),
-    cmd!("rating-2", icon::STAR, "Bewertung ★★", "Bild", [NONE => Key::Num2], "sterne rating", has_selection, |a, _| a.set_rating(2)),
-    cmd!("rating-3", icon::STAR, "Bewertung ★★★", "Bild", [NONE => Key::Num3], "sterne rating", has_selection, |a, _| a.set_rating(3)),
-    cmd!("rating-4", icon::STAR, "Bewertung ★★★★", "Bild", [NONE => Key::Num4], "sterne rating", has_selection, |a, _| a.set_rating(4)),
-    cmd!("rating-5", icon::STAR, "Bewertung ★★★★★", "Bild", [NONE => Key::Num5], "sterne rating", has_selection, |a, _| a.set_rating(5)),
-    cmd!("label-red", icon::TAG, "Farb-Label: Rot", "Bild", [NONE => Key::Num6], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Red)),
-    cmd!("label-yellow", icon::TAG, "Farb-Label: Gelb", "Bild", [NONE => Key::Num7], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Yellow)),
-    cmd!("label-green", icon::TAG, "Farb-Label: Grün", "Bild", [NONE => Key::Num8], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Green)),
-    cmd!("label-blue", icon::TAG, "Farb-Label: Blau", "Bild", [NONE => Key::Num9], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Blue)),
-    cmd!("label-none", icon::TAG, "Farb-Label: Keine", "Bild", [], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::None)),
-    cmd!("new-variant", icon::COPY_SIMPLE, "Neue Variante", "Bild", [NONE => Key::F2], "variant kopie", has_image, |a, _| a.pending = Some(crate::session::PendingAction::NewVariant { clone: false })),
-    cmd!("clone-variant", icon::COPY, "Variante klonen", "Bild", [NONE => Key::F3], "variant kopie", has_image, |a, _| a.pending = Some(crate::session::PendingAction::NewVariant { clone: true })),
-    cmd!("stack-create", icon::STACK_PLUS, "Stapel bilden", "Bild", [CTRL => Key::G], "stack gruppieren", several_files, |a, _| a.run_stack_action(crate::stacks::StackAction::Create)),
-    cmd!("stack-dissolve", icon::STACK_MINUS, "Stapel auflösen", "Bild", [CTRL_SHIFT => Key::G], "stack", |a| !a.selected_stack_ids().is_empty(), |a, _| a.run_stack_action(crate::stacks::StackAction::Dissolve)),
-    cmd!("stack-toggle", icon::STACK, "Stapel auf-/zuklappen", "Bild", [SHIFT => Key::G], "stack", has_selection, |a, _| a.run_stack_action(crate::stacks::StackAction::Toggle)),
-    cmd!("merge-hdr", icon::SUN_HORIZON, "HDR zusammenfügen …", "Bild", [], "merge belichtungsreihe", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Hdr)),
-    cmd!("merge-pano", icon::PANORAMA, "Panorama zusammenfügen …", "Bild", [], "merge stitch", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Panorama)),
-    cmd!("denoise", icon::SPARKLE, "KI-Entrauschen", "Bild", [], "denoise rauschen ki entrauschen rauschreduzierung", has_image, |a, ctx| a.open_denoise(ctx)),
-    cmd!("reference", icon::PUSH_PIN, "Referenzbild festlegen / entfernen", "Bild", [SHIFT => Key::Enter], "vergleich compare", has_image, |a, _| a.toggle_reference()),
-    cmd!("previous", icon::CARET_LEFT, "Vorheriges Bild", "Bild", [NONE => Key::ArrowLeft], "zurück previous", has_images, |a, _| a.step(-1)),
-    cmd!("next", icon::CARET_RIGHT, "Nächstes Bild", "Bild", [NONE => Key::ArrowRight], "weiter next", has_images, |a, _| a.step(1)),
-    cmd!("to-selects", icon::FOLDER_SIMPLE_STAR, "Nach „Auswahl“ verschieben", "Bild", [CTRL => Key::J], "selects session", in_session, |a, _| a.move_to_session_folder(sk_core::session::SessionFolder::Selects)),
-    cmd!("trash", icon::TRASH, "In den Papierkorb", "Bild", [CTRL => Key::Delete, CTRL => Key::Backspace], "löschen delete", has_selection, |a, _| a.trash_selection()),
-    // Ebenen & Retusche
-    cmd!("tool-brush", icon::PAINT_BRUSH, "Pinsel", "Ebenen & Retusche", [NONE => Key::B], "brush maske malen", has_image, |a, _| tool(a, LocalTool::Brush)),
-    cmd!("tool-eraser", icon::ERASER, "Radierer", "Ebenen & Retusche", [NONE => Key::N], "eraser maske", has_image, |a, _| tool(a, LocalTool::Eraser)),
-    cmd!("tool-linear", icon::GRADIENT, "Linearer Verlauf", "Ebenen & Retusche", [NONE => Key::L], "gradient verlaufsfilter", has_image, |a, _| tool(a, LocalTool::Linear)),
-    cmd!("tool-radial", icon::CIRCLE_DASHED, "Radialer Verlauf", "Ebenen & Retusche", [NONE => Key::R], "radial", has_image, |a, _| tool(a, LocalTool::Radial)),
-    cmd!("tool-magic", icon::MAGIC_WAND, "Magic Brush", "Ebenen & Retusche", [NONE => Key::J], "zauberstab auswahl", has_image, |a, _| tool(a, LocalTool::Magic)),
-    cmd!("tool-object", icon::CURSOR_CLICK, "Objekt auswählen", "Ebenen & Retusche", [SHIFT => Key::J], "objekt auswahl klick sam maske", has_image, |a, _| tool(a, LocalTool::Object)),
-    cmd!("find-spots", icon::SPARKLE, "Staub und Flecken finden", "Ebenen & Retusche", [], "sensorstaub flecken unreinheiten pickel retusche reparieren", has_image, |a, _| a.find_spots()),
-    cmd!("tool-heal", icon::BANDAIDS, "Reparieren", "Ebenen & Retusche", [NONE => Key::H], "heal flecken", has_image, |a, _| tool(a, LocalTool::Heal)),
-    cmd!("tool-clone", icon::STAMP, "Klonen", "Ebenen & Retusche", [NONE => Key::S], "clone stempel", has_image, |a, _| tool(a, LocalTool::Clone)),
-    cmd!("tool-remove", icon::SPARKLE, "Entfernen (KI)", "Ebenen & Retusche", [NONE => Key::X], "remove objekt", has_image, |a, _| tool(a, LocalTool::Remove)),
-    cmd!("brush-smaller", icon::MINUS, "Pinsel kleiner", "Ebenen & Retusche", [NONE => Key::OpenBracket], "größe", always, |a, _| brush_size(a, 1.0 / 1.2)),
-    cmd!("brush-larger", icon::PLUS, "Pinsel größer", "Ebenen & Retusche", [NONE => Key::CloseBracket], "größe", always, |a, _| brush_size(a, 1.2)),
-    cmd!("show-mask", icon::EYE, "Maske anzeigen", "Ebenen & Retusche", [NONE => Key::M], "mask", always, |a, _| {
+    cmd!("rename", icon::PENCIL_SIMPLE, "Umbenennen …", "Foto", [CTRL_SHIFT => Key::R], "rename", has_selection, |a, _| a.open_rename()),
+    cmd!("process-update", icon::ARROW_CIRCLE_UP, "Auf aktuelle Prozessversion heben", "Entwickeln", [], "prozessversion engine update", has_selection, |a, _| a.update_process_version()),
+    cmd!("rating-0", icon::STAR, "Bewertung entfernen", "Foto", [NONE => Key::Num0], "sterne rating", has_selection, |a, _| a.set_rating(0)),
+    cmd!("rating-1", icon::STAR, "Bewertung ★", "Foto", [NONE => Key::Num1], "sterne rating", has_selection, |a, _| a.set_rating(1)),
+    cmd!("rating-2", icon::STAR, "Bewertung ★★", "Foto", [NONE => Key::Num2], "sterne rating", has_selection, |a, _| a.set_rating(2)),
+    cmd!("rating-3", icon::STAR, "Bewertung ★★★", "Foto", [NONE => Key::Num3], "sterne rating", has_selection, |a, _| a.set_rating(3)),
+    cmd!("rating-4", icon::STAR, "Bewertung ★★★★", "Foto", [NONE => Key::Num4], "sterne rating", has_selection, |a, _| a.set_rating(4)),
+    cmd!("rating-5", icon::STAR, "Bewertung ★★★★★", "Foto", [NONE => Key::Num5], "sterne rating", has_selection, |a, _| a.set_rating(5)),
+    cmd!("label-red", icon::TAG, "Farb-Label: Rot", "Foto", [NONE => Key::Num6], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Red)),
+    cmd!("label-yellow", icon::TAG, "Farb-Label: Gelb", "Foto", [NONE => Key::Num7], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Yellow)),
+    cmd!("label-green", icon::TAG, "Farb-Label: Grün", "Foto", [NONE => Key::Num8], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Green)),
+    cmd!("label-blue", icon::TAG, "Farb-Label: Blau", "Foto", [NONE => Key::Num9], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Blue)),
+    cmd!("label-none", icon::TAG, "Farb-Label: Keine", "Foto", [], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::None)),
+    cmd!("new-variant", icon::COPY_SIMPLE, "Neue Variante", "Foto", [NONE => Key::F2], "variant kopie", has_image, |a, _| a.pending = Some(crate::session::PendingAction::NewVariant { clone: false })),
+    cmd!("clone-variant", icon::COPY, "Variante klonen", "Foto", [NONE => Key::F3], "variant kopie", has_image, |a, _| a.pending = Some(crate::session::PendingAction::NewVariant { clone: true })),
+    cmd!("stack-create", icon::STACK_PLUS, "Stapel bilden", "Foto", [CTRL => Key::G], "stack gruppieren", several_files, |a, _| a.run_stack_action(crate::stacks::StackAction::Create)),
+    cmd!("stack-dissolve", icon::STACK_MINUS, "Stapel auflösen", "Foto", [CTRL_SHIFT => Key::G], "stack", |a| !a.selected_stack_ids().is_empty(), |a, _| a.run_stack_action(crate::stacks::StackAction::Dissolve)),
+    cmd!("stack-toggle", icon::STACK, "Stapel auf-/zuklappen", "Foto", [SHIFT => Key::G], "stack", has_selection, |a, _| a.run_stack_action(crate::stacks::StackAction::Toggle)),
+    cmd!("merge-hdr", icon::SUN_HORIZON, "HDR zusammenfügen …", "Entwickeln", [], "merge belichtungsreihe", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Hdr)),
+    cmd!("merge-pano", icon::PANORAMA, "Panorama zusammenfügen …", "Entwickeln", [], "merge stitch", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Panorama)),
+    cmd!("denoise", icon::SPARKLE, "KI-Entrauschen", "Entwickeln", [], "denoise rauschen ki entrauschen rauschreduzierung", has_image, |a, ctx| a.open_denoise(ctx)),
+    cmd!("reference", icon::PUSH_PIN, "Referenzbild festlegen / entfernen", "Entwickeln", [SHIFT => Key::Enter], "vergleich compare", has_image, |a, _| a.toggle_reference()),
+    cmd!("previous", icon::CARET_LEFT, "Vorheriges Bild", "Foto", [NONE => Key::ArrowLeft], "zurück previous", has_images, |a, _| a.step(-1)),
+    cmd!("next", icon::CARET_RIGHT, "Nächstes Bild", "Foto", [NONE => Key::ArrowRight], "weiter next", has_images, |a, _| a.step(1)),
+    cmd!("to-selects", icon::FOLDER_SIMPLE_STAR, "Nach „Auswahl“ verschieben", "Foto", [CTRL => Key::J], "selects session", in_session, |a, _| a.move_to_session_folder(sk_core::session::SessionFolder::Selects)),
+    cmd!("trash", icon::TRASH, "In den Papierkorb", "Foto", [CTRL => Key::Delete, CTRL => Key::Backspace], "löschen delete", has_selection, |a, _| a.trash_selection()),
+    // Ebenen und Retusche
+    cmd!("tool-brush", icon::PAINT_BRUSH, "Pinsel", "Ebenen", [NONE => Key::B], "brush maske malen", has_image, |a, _| tool(a, LocalTool::Brush)),
+    cmd!("tool-eraser", icon::ERASER, "Radierer", "Ebenen", [NONE => Key::N], "eraser maske", has_image, |a, _| tool(a, LocalTool::Eraser)),
+    cmd!("tool-linear", icon::GRADIENT, "Linearer Verlauf", "Ebenen", [NONE => Key::L], "gradient verlaufsfilter", has_image, |a, _| tool(a, LocalTool::Linear)),
+    cmd!("tool-radial", icon::CIRCLE_DASHED, "Radialer Verlauf", "Ebenen", [NONE => Key::R], "radial", has_image, |a, _| tool(a, LocalTool::Radial)),
+    cmd!("tool-magic", icon::MAGIC_WAND, "Magic Brush", "Ebenen", [NONE => Key::J], "zauberstab auswahl", has_image, |a, _| tool(a, LocalTool::Magic)),
+    cmd!("tool-object", icon::CURSOR_CLICK, "Objekt auswählen", "Ebenen", [SHIFT => Key::J], "objekt auswahl klick sam maske", has_image, |a, _| tool(a, LocalTool::Object)),
+    cmd!("find-spots", icon::SPARKLE, "Staub und Flecken finden", "Retusche", [], "sensorstaub flecken unreinheiten pickel retusche reparieren", has_image, |a, _| a.find_spots()),
+    cmd!("tool-heal", icon::BANDAIDS, "Reparieren", "Retusche", [NONE => Key::H], "heal flecken", has_image, |a, _| tool(a, LocalTool::Heal)),
+    cmd!("tool-clone", icon::STAMP, "Klonen", "Retusche", [NONE => Key::S], "clone stempel", has_image, |a, _| tool(a, LocalTool::Clone)),
+    cmd!("tool-remove", icon::SPARKLE, "Entfernen (KI)", "Retusche", [NONE => Key::X], "remove objekt", has_image, |a, _| tool(a, LocalTool::Remove)),
+    cmd!("brush-smaller", icon::MINUS, "Pinsel kleiner", "Ebenen", [NONE => Key::OpenBracket], "größe", always, |a, _| brush_size(a, 1.0 / 1.2)),
+    cmd!("brush-larger", icon::PLUS, "Pinsel größer", "Ebenen", [NONE => Key::CloseBracket], "größe", always, |a, _| brush_size(a, 1.2)),
+    cmd!("show-mask", icon::EYE, "Maske anzeigen", "Ebenen", [NONE => Key::M], "mask", always, |a, _| {
         a.show_mask = !a.show_mask;
         a.request_render();
     }),
-    cmd!("delete-spot", icon::TRASH, "Retuschepunkt löschen", "Ebenen & Retusche", [NONE => Key::Delete, NONE => Key::Backspace], "spot", always, |a, _| a.delete_selected_spot()),
+    cmd!("delete-spot", icon::TRASH, "Retuschepunkt löschen", "Retusche", [NONE => Key::Delete, NONE => Key::Backspace], "spot", always, |a, _| a.delete_selected_spot()),
     // Ansicht
     cmd!("grid", icon::SQUARES_FOUR, "Raster / Viewer umschalten", "Ansicht", [NONE => Key::G], "grid browser übersicht", always, |a, _| a.grid_view = !a.grid_view),
     cmd!("filmstrip", icon::FILM_STRIP, "Filmstreifen ein/aus", "Ansicht", [], "filmstrip", always, |a, _| a.show_filmstrip = !a.show_filmstrip),
