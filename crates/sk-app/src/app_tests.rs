@@ -1259,6 +1259,15 @@ fn trashing_variants_deletes_only_them() {
     f.app.new_variant(true);
     let v2 = sk_core::variant::path_for(&a, 2);
     assert_eq!(f.app.primary_path().as_ref(), Some(&v2));
+    // Together with another image: the variant's file would go with all its variants.
+    let b = f.photo("_DSC0010.dng");
+    f.app.select_path(&b, egui::Modifiers::COMMAND);
+    assert_eq!(f.app.selected_paths().len(), 2);
+    f.app.trash_selection();
+    assert!(f.app.status.contains("getrennt"), "{}", f.app.status);
+    assert_eq!(f.app.confirm_delete_variant, None);
+    assert!(a.exists() && b.exists());
+    f.app.select_path(&v2, egui::Modifiers::NONE);
     f.app.trash_selection();
     assert_eq!(f.app.confirm_delete_variant, Some(vec![v2.clone()]));
     f.app.delete_variants(&[v2]);

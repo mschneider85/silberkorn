@@ -250,6 +250,9 @@ impl App {
         let selected = self.selected_paths();
         if !selected.is_empty() && selected.iter().all(|p| variant::number(p) > 1) {
             self.request_delete_variant();
+        } else if selected.iter().any(|p| variant::number(p) > 1 && !selected.contains(&variant::file_of(p))) {
+            // The file would go to the trash with all its variants, not only the selected one.
+            self.status = "Die Auswahl enthält weitere Varianten ohne ihr Bild: Varianten und Bilder bitte getrennt löschen".into();
         } else {
             self.move_to_session_folder(SessionFolder::Trash);
         }
