@@ -24,7 +24,8 @@ pub struct DepthQueue {
     /// Why an image's map could not be computed (not tried again until the app restarts).
     failed: HashMap<PathBuf, String>,
     /// Layer that gets a depth mask once the image's map exists.
-    mask_for: Option<(PathBuf, usize)>,
+    /// Image and layer id waiting for the depth map.
+    mask_for: Option<(PathBuf, u32)>,
     /// Image whose focus is set to its subject once the map exists (the lens blur was just
     /// switched on).
     autofocus: Option<PathBuf>,
@@ -103,7 +104,9 @@ impl App {
                     {
                         self.focus_on_subject();
                     }
-                    if let Some((_, layer)) = self.depth.mask_for.take_if(|(p, _)| *p == path) {
+                    if let Some((_, id)) = self.depth.mask_for.take_if(|(p, _)| *p == path)
+                        && let Some(layer) = self.layer_index(id)
+                    {
                         self.set_depth_mask(layer, None);
                     }
                     self.request_render();
@@ -238,7 +241,7 @@ impl App {
                 self.status = "Tiefe auswählen: Tiefenkarte wird berechnet …".into();
             }
             self.depth.failed.remove(&path);
-            self.depth.mask_for = Some((path, layer));
+            self.depth.mask_for = self.layer_id(layer).map(|id| (path, id));
             return;
         };
         // By default the nearest fifth of the image (usually the subject).

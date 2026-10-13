@@ -574,6 +574,8 @@ pub struct App {
     pub viewer_window: crate::viewer_window::ViewerWindow,
     /// The viewer window has been created (its full screen state is only set on creation).
     pub(crate) viewer_window_shown: bool,
+    /// A mouse button is held in the viewer window (as of its last frame).
+    pub(crate) viewer_pointer_down: bool,
     /// The viewer window was moved or resized at this time (saved once it rests).
     pub(crate) viewer_window_moved: Option<Instant>,
     pub softproof: crate::softproof::SoftProofState,
@@ -831,6 +833,7 @@ impl App {
                 ..settings.viewer_window
             },
             viewer_window_shown: false,
+            viewer_pointer_down: false,
             viewer_window_moved: None,
             softproof: crate::softproof::SoftProofState { settings: settings.softproof.clone(), ..Default::default() },
             print: crate::print_preview::PrintPreviewState { settings: settings.print.clone(), ..Default::default() },
@@ -1065,6 +1068,11 @@ impl App {
         let (k, t) = meta.color.temp_tint_for_wb(meta.as_shot_wb);
         let as_shot_temp_tint = (k.round(), (t * 10.0).round() / 10.0);
         let rendered = rendered.filter(|(adj, ..)| *adj == sc.adjustments);
+        // Layer ids for everything that can be restored, so that the active layer follows undo.
+        sc.adjustments.assign_layer_ids();
+        for s in &mut sc.snapshots {
+            s.adjustments.assign_layer_ids();
+        }
         self.loading = None;
         self.full_due = Some(Instant::now() + FULL_DELAY);
         self.tiles = Tiles::default();
@@ -1080,6 +1088,9 @@ impl App {
         self.before_key = None;
         self.local_drag = Default::default();
         self.snapshot_rename = None;
+        // Areas painted for removal belong to the previous image.
+        self.remove_strokes.clear();
+        self.remove_overlay = None;
         self.current = Some(Current {
             meta,
             preview,
@@ -1412,6 +1423,8 @@ impl App {
     /// Pushes finished edits to the undo stack and writes the sidecar.
     pub fn commit_and_save(&mut self) {
         let Some(cur) = self.current.as_mut() else { return };
+        // New and pasted layers.
+        cur.adjustments.assign_layer_ids();
         if cur.adjustments != cur.committed {
             self.undo.push(std::mem::replace(&mut cur.committed, cur.adjustments.clone()));
             self.redo.clear();
@@ -1443,23 +1456,53 @@ impl App {
 
     pub(crate) fn undo(&mut self) {
         self.commit_and_save();
+        let active = self.active_layer_id();
         let Some(cur) = self.current.as_mut() else { return };
         if let Some(prev) = self.undo.pop() {
             self.redo.push(std::mem::replace(&mut cur.adjustments, prev.clone()));
             cur.committed = prev;
             self.sidecar_dirty = true;
+            self.layers_replaced(active);
             self.request_render();
         }
     }
 
     pub(crate) fn redo(&mut self) {
+        self.commit_and_save();
+        let active = self.active_layer_id();
         let Some(cur) = self.current.as_mut() else { return };
         if let Some(next) = self.redo.pop() {
             self.undo.push(std::mem::replace(&mut cur.adjustments, next.clone()));
             cur.committed = next;
             self.sidecar_dirty = true;
+            self.layers_replaced(active);
             self.request_render();
         }
+    }
+
+    /// Sets the adjustments to a snapshot's.
+    pub(crate) fn apply_snapshot(&mut self, adj: Adjustments) {
+        self.commit_and_save();
+        let active = self.active_layer_id();
+        self.edit(|a| *a = adj);
+        self.commit_and_save();
+        self.layers_replaced(active);
+    }
+
+    fn active_layer_id(&self) -> Option<u32> {
+        let cur = self.current.as_ref()?;
+        cur.adjustments.layers.get(self.active_layer?).map(|l| l.id)
+    }
+
+    /// After the layers were replaced as a whole (undo, redo, snapshot), indices no longer mean
+    /// the same layer: the active layer is found again by its id, other selections end.
+    fn layers_replaced(&mut self, active: Option<u32>) {
+        self.active_layer = active.and_then(|id| self.layer_index(id));
+        self.selected_gradient = None;
+        self.selected_spot = None;
+        self.object_session = None;
+        // A drag still under way (undo with the mouse held) must not go on with an old index.
+        self.local_drag = Default::default();
     }
 
     pub fn edit(&mut self, f: impl FnOnce(&mut Adjustments)) {
@@ -1814,9 +1857,11 @@ impl App {
                     match result {
                         Ok(m) => {
                             // An object replaces its previous result (what the mask held before stays).
+                            // The layer may have moved (others deleted) or be gone (undone).
+                            let Some(index) = self.layer_index(layer) else { continue };
                             let base = self.object_session.as_ref().filter(|s| s.layer == layer).map(|s| s.base.clone());
                             self.edit(|a| {
-                                if let Some(l) = a.layers.get_mut(layer) {
+                                if let Some(l) = a.layers.get_mut(index) {
                                     let old = match base {
                                         Some(b) => b,
                                         None => l.mask.ai.take(),
@@ -2068,7 +2113,7 @@ impl App {
         }
 
         // Commit edits once the user lets go of the mouse (one undo step per gesture).
-        if !ctx.input(|i| i.pointer.any_down()) {
+        if !ctx.input(|i| i.pointer.any_down()) && !self.viewer_pointer_down {
             self.commit_and_save();
         }
         self.sync_softproof();
@@ -2268,7 +2313,7 @@ impl eframe::App for App {
         if input || self.loading.is_some() || self.render_requested {
             self.workers.touch();
         }
-        self.pointer_down = ctx.input(|i| i.pointer.any_down());
+        self.pointer_down = ctx.input(|i| i.pointer.any_down()) || self.viewer_pointer_down;
         if !self.pointer_down {
             (self.drag_draft_level, self.drag_view_level) = (None, None);
         }

@@ -1969,3 +1969,49 @@ fn view_larger_than_the_gpu_texture_limit_is_shown_by_tiles() {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// Undo brings a deleted layer back: the active layer stays the same layer, not the same index.
+#[test]
+fn active_layer_follows_undo_and_redo() {
+    let Some(mut f) = Fixture::new("layer-undo") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let named = |n: &str| sk_core::params::Layer { name: n.into(), ..Default::default() };
+    f.app.edit(|a| a.layers = vec![named("A"), named("B"), named("C")]);
+    f.app.commit_and_save();
+    f.app.active_layer = Some(2);
+    // Delete A, as the layer list does.
+    f.app.edit(|a| {
+        a.layers.remove(0);
+    });
+    f.app.active_layer = Some(1);
+    f.app.commit_and_save();
+    let active = |f: &Fixture| f.app.active_layer.map(|i| f.app.current.as_ref().unwrap().adjustments.layers[i].name.clone());
+    f.app.undo();
+    assert_eq!(active(&f).as_deref(), Some("C"));
+    f.app.redo();
+    assert_eq!(active(&f).as_deref(), Some("C"));
+    // Undoing the creation of the active layer leaves no active layer.
+    f.app.undo();
+    f.app.undo();
+    assert_eq!(f.app.active_layer, None);
+}
+
+/// A content-based mask that arrives after a layer before it was deleted goes to its layer.
+#[test]
+fn ai_mask_lands_on_its_layer_after_deleting_another() {
+    let Some(mut f) = Fixture::new("ai-layer") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let named = |n: &str| sk_core::params::Layer { name: n.into(), ..Default::default() };
+    f.app.edit(|a| a.layers = vec![named("A"), named("B"), named("C")]);
+    f.app.commit_and_save();
+    let target = f.app.layer_id(2).unwrap();
+    f.app.edit(|a| {
+        a.layers.remove(0);
+    });
+    let mask = sk_ai::MaskImage { width: 4, height: 4, data: vec![255; 16] };
+    f.app.workers.inject(crate::workers::Event::AiMask { generation: f.app.generation(), layer: target, result: Ok(mask) });
+    f.app.handle_events(&f.ctx.clone());
+    let layers = &f.app.current.as_ref().unwrap().adjustments.layers;
+    assert!(layers[0].mask.ai.is_none(), "B unverändert");
+    assert!(layers[1].mask.ai.is_some(), "C hat die Maske");
+}

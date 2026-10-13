@@ -162,10 +162,20 @@ fn paint_stroke_into(bm: &mut MaskBitmap, stroke: &crate::params::BrushStroke, a
     }
 }
 
-fn mask_key(mask: &Mask, aspect: f32) -> u64 {
+fn mask_key(mask: &Mask, aspect: f32, src: Option<&LinearImage>) -> u64 {
     let drawn = serde_json::json!({ "f": mask.fill, "s": mask.strokes, "l": mask.linear, "r": mask.radial });
     let ai = mask.ai.as_ref().map_or(0, |a| crate::cache::fnv1a(&a.data) ^ (a.width as u64) << 32 ^ a.height as u64);
-    crate::cache::fnv1a(format!("{drawn}|{ai}|{aspect:.5}").as_bytes())
+    // Automatic masking follows the image's edges: the same strokes on another image (pasted
+    // layer, batch export) give another mask.
+    let image = src.filter(|_| mask.strokes.iter().any(|s| s.auto_mask)).map_or(0, image_fingerprint);
+    crate::cache::fnv1a(format!("{drawn}|{ai}|{aspect:.5}|{image}").as_bytes())
+}
+
+/// Hash of the size and about 4096 evenly spread pixels of an image.
+fn image_fingerprint(img: &LinearImage) -> u64 {
+    let step = (img.data.len() / 4096).max(1);
+    let bytes: Vec<u8> = img.data.iter().step_by(step).flat_map(|p| p.iter().flat_map(|v| v.to_le_bytes())).collect();
+    crate::cache::fnv1a(&bytes) ^ ((img.width as u64) << 32 | img.height as u64)
 }
 
 type MaskCache = Mutex<Vec<(u64, Arc<MaskBitmap>)>>;
@@ -185,14 +195,14 @@ fn cache_lookup(key: u64) -> Option<Arc<MaskBitmap>> {
 /// While a stroke is being painted only that stroke is drawn again: the mask without it stays
 /// in the cache. `src` (the oriented camera image) is needed for automatic masking.
 pub fn cached_bitmap(mask: &Mask, aspect: f32, src: Option<&LinearImage>) -> Arc<MaskBitmap> {
-    let key = mask_key(mask, aspect);
+    let key = mask_key(mask, aspect, src);
     if let Some(bm) = cache_lookup(key) {
         return bm;
     }
     let guide = mask.strokes.iter().any(|s| s.auto_mask).then(|| src.map(|s| crate::brush::AutoGuide::from_image(s, 1024))).flatten();
     let prefix = mask.strokes.split_last().and_then(|(last, rest)| {
         let without = Mask { strokes: rest.to_vec(), ..mask.clone() };
-        cache_lookup(mask_key(&without, aspect)).map(|b| (b, last))
+        cache_lookup(mask_key(&without, aspect, src)).map(|b| (b, last))
     });
     let bm = match prefix {
         Some((base, last)) => {

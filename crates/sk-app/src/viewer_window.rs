@@ -36,6 +36,7 @@ impl App {
     /// Shows the viewer window (call every frame of the main window).
     pub(crate) fn show_viewer_window(&mut self, ctx: &egui::Context) {
         if !self.viewer_detached() {
+            self.viewer_pointer_down = false;
             return;
         }
         let w = self.viewer_window;
@@ -54,6 +55,10 @@ impl App {
         ctx.show_viewport_immediate(viewport_id(), builder, |ui, class| {
             let vctx = ui.ctx().clone();
             self.pixels_per_point = vctx.pixels_per_point();
+            // The main window's input doesn't see a drag in here: one gesture must stay one
+            // undo step and use drafts like in the main window.
+            self.viewer_pointer_down = vctx.input(|i| i.pointer.any_down());
+            self.pointer_down |= self.viewer_pointer_down;
             if ui.input(|i| i.viewport().close_requested()) {
                 self.viewer_window.open = false;
                 self.save_settings();

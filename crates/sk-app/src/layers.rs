@@ -209,7 +209,8 @@ impl UvToScreen {
 /// them; the result replaces the previous one (added to what the mask held before the first click).
 pub struct ObjectSession {
     pub path: std::path::PathBuf,
-    pub layer: usize,
+    /// Layer id.
+    pub layer: u32,
     /// The layer's AI mask before the first click.
     pub base: Option<sk_core::params::AiMask>,
     pub clicks: Vec<sk_ai::segment::Click>,
@@ -277,8 +278,21 @@ impl App {
         }
         let n = cur.adjustments.layers.len() + 1;
         cur.adjustments.layers.push(Layer { name: format!("Ebene {n}"), ..Default::default() });
+        cur.adjustments.assign_layer_ids();
         self.active_layer = Some(cur.adjustments.layers.len() - 1);
         self.active_layer
+    }
+
+    /// Id of layer `i`, which stays with it when other layers are deleted or edits undone.
+    pub(crate) fn layer_id(&mut self, i: usize) -> Option<u32> {
+        let cur = self.current.as_mut()?;
+        cur.adjustments.assign_layer_ids();
+        cur.adjustments.layers.get(i).map(|l| l.id)
+    }
+
+    /// Index of the layer with id `id`, if it still exists.
+    pub(crate) fn layer_index(&self, id: u32) -> Option<usize> {
+        self.current.as_ref()?.adjustments.layer_index(id)
     }
 
     pub fn set_local_tool(&mut self, tool: LocalTool) {
@@ -308,7 +322,8 @@ impl App {
         if !sk_ai::segment::available() {
             return;
         }
-        let (Some(layer), Some(cur)) = (self.active_layer, &self.current) else { return };
+        let Some(layer) = self.active_layer.and_then(|i| self.layer_id(i)) else { return };
+        let Some(cur) = &self.current else { return };
         self.workers.ai_mask(crate::workers::AiJob {
             generation: self.generation(),
             layer,
@@ -340,7 +355,8 @@ impl App {
         }
         if let Some(p) = pressed_on(ui, response)
             && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
-            && let Some(layer) = self.ensure_layer()
+            && let Some(index) = self.ensure_layer()
+            && let Some(layer) = self.layer_id(index)
         {
             if !self.ensure_ai(AiFeature::Object) {
                 self.status = "Objekt auswählen: Das KI-Modell wird noch geladen …".into();
@@ -354,7 +370,7 @@ impl App {
                     self.status = "Zuerst auf das Objekt klicken; Alt+Klick nimmt danach Teile aus".into();
                     return;
                 }
-                let base = self.current.as_ref().and_then(|c| c.adjustments.layers.get(layer)).and_then(|l| l.mask.ai.clone());
+                let base = self.current.as_ref().and_then(|c| c.adjustments.layers.get(index)).and_then(|l| l.mask.ai.clone());
                 self.object_session = Some(ObjectSession { path, layer, base, clicks: Vec::new() });
             }
             let session = self.object_session.as_mut().unwrap();
@@ -599,7 +615,14 @@ impl App {
 
     /// Starts a content-based mask computation for the active layer.
     pub fn request_ai(&mut self, kind: crate::workers::AiKind) {
-        let Some(layer) = self.ensure_layer() else { return };
+        if let Some(layer) = self.ensure_layer() {
+            self.request_ai_on(layer, kind);
+        }
+    }
+
+    /// Starts a content-based mask computation for layer `index`.
+    fn request_ai_on(&mut self, index: usize, kind: crate::workers::AiKind) {
+        let Some(layer) = self.layer_id(index) else { return };
         if !matches!(kind, crate::workers::AiKind::Object { .. }) {
             self.object_session = None;
         }
@@ -784,9 +807,13 @@ impl App {
             Some(k @ (1 | 2)) => {
                 let kind = if k == 1 { crate::workers::AiKind::Subject } else { crate::workers::AiKind::Sky };
                 let generation = self.generation();
+                // The layer chosen now, even if another one is active when the model is there.
+                let layer = self.ensure_layer().and_then(|i| self.layer_id(i));
                 self.with_ai(AiFeature::Subject, move |app| {
-                    if app.generation() == generation {
-                        app.request_ai(kind);
+                    if app.generation() == generation
+                        && let Some(i) = layer.and_then(|id| app.layer_index(id))
+                    {
+                        app.request_ai_on(i, kind);
                     }
                 });
             }

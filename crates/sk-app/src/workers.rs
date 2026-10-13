@@ -63,7 +63,7 @@ pub enum Event {
     /// The lensfun database was read (again after a download).
     LensDb(Arc<Vec<sk_core::lensfun::LensProfile>>),
     LensDbDownloading(bool),
-    AiMask { generation: u64, layer: usize, result: Result<sk_ai::MaskImage, String> },
+    AiMask { generation: u64, layer: u32, result: Result<sk_ai::MaskImage, String> },
     /// An image of the compare view, rendered with its saved adjustments.
     CompareImage { path: PathBuf, image: ColorImage },
     /// Exposure and/or white balance of an image matched to the reference (see [`MatchJob`]);
@@ -221,7 +221,8 @@ pub enum AiKind {
 /// Computes a content-based mask for a layer.
 pub struct AiJob {
     pub generation: u64,
-    pub layer: usize,
+    /// Id of the layer that gets the mask (see `Layer::id`).
+    pub layer: u32,
     pub kind: AiKind,
     pub meta: Arc<RawMeta>,
     pub preview: Arc<LinearImage>,
@@ -322,6 +323,12 @@ fn recv_latest<T>(rx: &Receiver<T>) -> Option<T> {
 }
 
 impl Workers {
+    /// An event as if a worker had sent it.
+    #[cfg(test)]
+    pub(crate) fn inject(&self, ev: Event) {
+        let _ = self.ev_tx.send(ev);
+    }
+
     pub fn spawn(ctx: egui::Context) -> Self {
         let (ev_tx, events) = channel();
         let (ev_tx_keep, ctx_keep) = (ev_tx.clone(), ctx.clone());

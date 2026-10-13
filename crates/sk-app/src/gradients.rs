@@ -248,7 +248,7 @@ impl App {
                 LocalDrag::Gradient => {
                     if let Some(GradRef { layer, linear, index }) = self.selected_gradient {
                         self.edit(|a| {
-                            let m = &mut a.layers[layer].mask;
+                            let Some(m) = a.layers.get_mut(layer).map(|l| &mut l.mask) else { return };
                             if linear {
                                 if let Some(g) = m.linear.get_mut(index) {
                                     g.end = uv;
@@ -263,7 +263,7 @@ impl App {
                 }
                 LocalDrag::EditGradient(d) => {
                     self.edit(|a| {
-                        let m = &mut a.layers[d.grad.layer].mask;
+                        let Some(m) = a.layers.get_mut(d.grad.layer).map(|l| &mut l.mask) else { return };
                         if d.grad.linear {
                             if let Some(g) = m.linear.get_mut(d.grad.index) {
                                 *g = drag_linear(f, &d, uv);

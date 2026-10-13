@@ -222,8 +222,7 @@ impl App {
             self.add_snapshot(None);
         }
         if let Some(adj) = apply.and_then(|i| self.current.as_ref()?.snapshots.get(i)).map(|s| s.adjustments.clone()) {
-            self.edit(|a| *a = adj);
-            self.commit_and_save();
+            self.apply_snapshot(adj);
         }
     }
 

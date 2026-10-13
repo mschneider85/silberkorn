@@ -15,7 +15,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
-use wgpu::util::DeviceExt;
 
 /// Helpers shared by all kernels (prepended to every shader).
 const COMMON: &str = include_str!("shaders/common.wgsl");
@@ -317,11 +316,12 @@ impl Gpu {
     }
 
     fn upload_bytes(&self, bytes: &[u8]) -> wgpu::Buffer {
-        self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: None,
-            contents: bytes,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
-        })
+        // Not `create_buffer_init`: it panics when the buffer can't be created (out of memory,
+        // above the size limit) instead of reporting the error to `checked`, so the CPU fallback
+        // never ran.
+        let buf = self.buffer(bytes.len() as u64);
+        self.queue.write_buffer(&buf, 0, bytes);
+        buf
     }
 
     pub(crate) fn encoder(&self) -> Encoder<'_> {

@@ -492,6 +492,8 @@ impl Processor {
             "g": self.adj.geometry, "l": self.adj.lens, "r": self.adj.rotation, "ic": self.opts.ignore_crop,
             "wb": self.wb, "nl": self.adj.detail.nr_luma, "nc": self.adj.detail.nr_color, "rt": self.adj.retouch,
             "rm": self.adj.removals.iter().map(|r| (r.id, r.rect)).collect::<Vec<_>>(),
+            // Depends on the process version and the light, not only on the multipliers.
+            "cw": self.cam_to_working,
         });
         let key = format!("{:p}|{}x{}|{region:?}|{relevant}", src.data.as_ptr(), src.width, src.height);
         crate::cache::fnv1a(key.as_bytes())

@@ -434,6 +434,10 @@ impl Mask {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Layer {
+    /// Identifies the layer while it is edited (its index changes when layers are deleted or
+    /// edits undone): unique within the image, 0 until [`Adjustments::assign_layer_ids`].
+    #[serde(skip_serializing_if = "is_zero")]
+    pub id: u32,
     pub name: String,
     pub enabled: bool,
     /// 0..100
@@ -445,6 +449,7 @@ pub struct Layer {
 impl Default for Layer {
     fn default() -> Self {
         Self {
+            id: 0,
             name: "Ebene".into(),
             enabled: true,
             opacity: 100.0,
@@ -452,6 +457,10 @@ impl Default for Layer {
             mask: Mask::default(),
         }
     }
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -827,6 +836,34 @@ impl Adjustments {
             self.process = PROCESS_LATEST;
         }
         self
+    }
+
+    /// Gives every layer without an id (new, pasted, from an older sidecar), or with one another
+    /// layer has too, a new one. Returns whether anything changed.
+    ///
+    /// New ids are not reused within the process, so that an id kept by a running job (or an
+    /// undone state) never meets a different layer.
+    pub fn assign_layer_ids(&mut self) -> bool {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static NEXT: AtomicU32 = AtomicU32::new(1);
+        let mut changed = false;
+        for i in 0..self.layers.len() {
+            let id = self.layers[i].id;
+            NEXT.fetch_max(id.saturating_add(1), Ordering::Relaxed);
+            if id == 0 || self.layers[..i].iter().any(|l| l.id == id) {
+                let max = self.layers.iter().map(|l| l.id).max().unwrap_or(0);
+                let new = NEXT.fetch_add(1, Ordering::Relaxed).max(max + 1);
+                NEXT.fetch_max(new + 1, Ordering::Relaxed);
+                self.layers[i].id = new;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// Index of the layer with this id.
+    pub fn layer_index(&self, id: u32) -> Option<usize> {
+        (id != 0).then(|| self.layers.iter().position(|l| l.id == id)).flatten()
     }
 
     /// Colors outside the output space are mapped instead of clipped (process version 2).

@@ -340,6 +340,12 @@ impl App {
             if Some(path) == current.as_ref() {
                 self.edit(|a| *a = f(a));
             } else {
+                // Results arriving late (matching to a reference) must not bring back a deleted
+                // variant or write a sidecar next to a file that was moved away.
+                let (file, n) = sk_core::variant::split(path);
+                if !file.exists() || (n > 1 && !sk_core::variant::of_file(&file).contains(path)) {
+                    continue;
+                }
                 let mut sc = sidecar::load(path);
                 sc.adjustments = f(&sc.adjustments);
                 if let Err(e) = sidecar::save(path, &sc) {

@@ -128,8 +128,7 @@ impl App {
             Some(SnapshotAction::Add) => self.add_snapshot(None),
             Some(SnapshotAction::Apply(i)) => {
                 if let Some(adj) = self.current.as_ref().and_then(|c| c.snapshots.get(i)).map(|s| s.adjustments.clone()) {
-                    self.edit(|a| *a = adj);
-                    self.commit_and_save();
+                    self.apply_snapshot(adj);
                 }
             }
             Some(SnapshotAction::Delete(i)) => {
