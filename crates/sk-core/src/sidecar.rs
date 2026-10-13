@@ -311,15 +311,23 @@ pub fn save(image: &Path, sidecar: &Sidecar) -> Result<()> {
     let mut file = load_for_update(image)?;
     match crate::variant::number(image) {
         1 => {
+            let current = crate::xmp::mtime(image);
+            let own_change = (sidecar.rating, sidecar.color_label, &sidecar.keywords) != (file.rating, file.color_label, &file.keywords);
             // From now on these settings count, not an older XMP file (written along if enabled).
-            let xmp_mtime = if crate::xmp::write_enabled() {
+            // Unless the XMP file was changed elsewhere since it was last read and rating, label
+            // and keywords weren't changed here: then that change still counts on the next load.
+            // (Not recognized: a caller holding values from an older XMP change that wasn't saved
+            // yet; they count as changed here.)
+            let xmp_mtime = if current.is_some() && current != file.xmp_mtime && !own_change {
+                file.xmp_mtime
+            } else if crate::xmp::write_enabled() {
                 crate::xmp::write(image, sidecar.rating, sidecar.color_label, &sidecar.keywords).unwrap_or_else(|e| {
                     // The settings themselves are still saved.
                     log::warn!("{e:#}");
                     crate::xmp::mtime(image)
                 })
             } else {
-                crate::xmp::mtime(image)
+                current
             };
             file = Sidecar {
                 variants: std::mem::take(&mut file.variants),
@@ -600,6 +608,15 @@ mod tests {
         write_xmp(crate::xmp::updated(None, 5, ColorLabel::Blue, &[]).unwrap(), 2_000_000);
         let sc = load(&img);
         assert_eq!((sc.rating, sc.color_label, sc.adjustments.exposure), (5, ColorLabel::Blue, 0.3));
+        // Changed elsewhere while open here, and only the adjustments are saved: the change
+        // isn't lost.
+        save(&img, &sc).unwrap();
+        let mut open = load(&img);
+        write_xmp(crate::xmp::updated(None, 3, ColorLabel::Green, &[]).unwrap(), 2_500_000);
+        open.adjustments.exposure = 0.4;
+        save(&img, &open).unwrap();
+        let sc = load(&img);
+        assert_eq!((sc.rating, sc.color_label, sc.adjustments.exposure), (3, ColorLabel::Green, 0.4));
         // Variants keep their own values.
         let v2 = add_variant(&img, &Sidecar { rating: 2, ..Default::default() }).unwrap();
         assert_eq!(load(&v2).rating, 2);
@@ -607,7 +624,7 @@ mod tests {
         save(&img, &Sidecar { rating: 0, ..load(&img) }).unwrap();
         assert_eq!(load(&img).rating, 0);
         reread_xmp(&img).unwrap();
-        assert_eq!(load(&img).rating, 5);
+        assert_eq!(load(&img).rating, 3);
         std::fs::remove_dir_all(dir).ok();
     }
 }
