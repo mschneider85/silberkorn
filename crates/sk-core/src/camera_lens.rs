@@ -451,14 +451,19 @@ pub fn gain_maps(list: &[u8]) -> Vec<GainMap> {
             }
             let points = [u(32)?, u(36)?];
             let map_planes = u(72)?;
-            let n = points[0] as usize * points[1] as usize * map_planes as usize;
+            // Untrusted sizes: the product must not overflow.
+            let n = (points[0] as usize).checked_mul(points[1] as usize)?.checked_mul(map_planes as usize)?;
             if n == 0 || n > 1 << 22 || p.len() < 76 + 4 * n {
                 return None;
             }
-            let gains = p[76..76 + 4 * n].chunks_exact(4).map(|b| f32::from_be_bytes(b.try_into().unwrap())).collect();
+            // A gain that isn't a number leaves the pixel as it is.
+            let gains = p[76..76 + 4 * n].chunks_exact(4).map(|b| f32::from_be_bytes(b.try_into().unwrap())).map(|g| if g.is_finite() { g } else { 1.0 }).collect();
             let fix = |pts: u32, s: f64, o: f64| if pts == 1 { (1.0, 0.0) } else { (s, o) };
             let (sv, ov) = fix(points[0], d(40)?, d(56)?);
             let (sh, oh) = fix(points[1], d(48)?, d(64)?);
+            if !(sv.is_finite() && sv > 0.0 && sh.is_finite() && sh > 0.0 && ov.is_finite() && oh.is_finite()) {
+                return None;
+            }
             Some(GainMap {
                 area: [u(0)?, u(4)?, u(8)?, u(12)?],
                 plane: u(16)?,
@@ -504,7 +509,7 @@ impl GainMap {
             for col in (left..right).step_by(self.col_pitch as usize) {
                 let (c0, tc) = grid(col, width, 1, ph);
                 let c1 = (c0 + 1).min(ph - 1);
-                for plane in self.plane as usize..(self.plane + self.planes) as usize {
+                for plane in self.plane as usize..self.plane.saturating_add(self.planes) as usize {
                     if plane >= cpp {
                         break;
                     }
@@ -622,6 +627,22 @@ mod tests {
         assert!((data[8] - 0.25 * 1.625).abs() < 1e-6, "{data:?}");
         // An unknown opcode that isn't optional: nothing is applied.
         assert!(gain_maps(&list(&[opcode(9, 0, &p), opcode(77, 0, &[])])).is_empty());
+    }
+
+    #[test]
+    fn damaged_gain_maps_are_not_applied() {
+        let params = |points: [u32; 2], spacing: f64, planes: u32| {
+            let mut p: Vec<u8> = [0u32, 0, 4, 4, 0, 1, 1, 1, points[0], points[1]].iter().flat_map(|v| v.to_be_bytes()).collect();
+            p.extend([spacing, spacing, 0.0, 0.0].iter().flat_map(|v| v.to_be_bytes()));
+            p.extend(planes.to_be_bytes());
+            p.extend([1.0f32; 4].iter().flat_map(|v| v.to_be_bytes()));
+            p
+        };
+        assert_eq!(gain_maps(&list(&[opcode(9, 0, &params([2, 2], 1.0, 1))])).len(), 1);
+        // Sizes whose product overflows, a spacing of 0 or not a number.
+        assert!(gain_maps(&list(&[opcode(9, 0, &params([1 << 31, 1 << 31], 1.0, 5))])).is_empty());
+        assert!(gain_maps(&list(&[opcode(9, 0, &params([2, 2], 0.0, 1))])).is_empty());
+        assert!(gain_maps(&list(&[opcode(9, 0, &params([2, 2], f64::NAN, 1))])).is_empty());
     }
 
     #[test]

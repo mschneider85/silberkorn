@@ -8,6 +8,7 @@ use rawler::cfa::CFAColor;
 use rawler::decoders::{Decoder, RawDecodeParams, RawMetadata};
 use rawler::imgop::develop::{Intermediate, ProcessingStep, RawDevelop};
 use rawler::imgop::xyz::Illuminant;
+use rawler::imgop::Rect;
 use rawler::rawimage::{RawImageData, RawPhotometricInterpretation};
 use rawler::rawsource::RawSource;
 use rayon::prelude::*;
@@ -83,6 +84,7 @@ fn decode_ext(path: &Path, dummy: bool) -> Result<Decoded> {
     if let RawImageData::Float(d) = &mut raw.data {
         d.par_iter_mut().filter(|v| !v.is_finite()).for_each(|v| *v = 0.0);
     }
+    sanitize_areas(&mut raw, &file);
     if !dummy {
         apply_gain_maps(decoder.as_ref(), &mut raw)?;
     }
@@ -94,6 +96,29 @@ fn decode_ext(path: &Path, dummy: bool) -> Result<Decoded> {
     // is clipped like any raw file.
     meta.hdr = raw.cpp == 3 && matches!(&raw.data, RawImageData::Float(d) if d.par_iter().any(|v| *v > 1.0001));
     Ok(Decoded { raw, meta })
+}
+
+/// Drops an active area or default crop that does not fit (damaged or foreign DNGs): the code
+/// working with them indexes the pixel data by them, and the crop must lie in the active area.
+fn sanitize_areas(raw: &mut RawImage, file: &Path) {
+    let (active, crop) = valid_areas(raw.width, raw.height, raw.active_area, raw.crop_area);
+    if active != raw.active_area {
+        log::warn!("{}: ungültiger aktiver Sensorbereich, wird ignoriert", file.display());
+    }
+    if crop != raw.crop_area {
+        log::warn!("{}: ungültiger Standard-Beschnitt, wird ignoriert", file.display());
+    }
+    (raw.active_area, raw.crop_area) = (active, crop);
+}
+
+/// Active area and crop of a `width` x `height` sensor, each `None` if it doesn't fit.
+fn valid_areas(width: usize, height: usize, active: Option<Rect>, crop: Option<Rect>) -> (Option<Rect>, Option<Rect>) {
+    let fits = |r: &Rect, x0: usize, y0: usize, x1: usize, y1: usize| {
+        r.d.w > 0 && r.d.h > 0 && r.p.x >= x0 && r.p.y >= y0 && r.p.x.checked_add(r.d.w).is_some_and(|e| e <= x1) && r.p.y.checked_add(r.d.h).is_some_and(|e| e <= y1)
+    };
+    let active = active.filter(|a| fits(a, 0, 0, width, height));
+    let (x0, y0, x1, y1) = active.map_or((0, 0, width, height), |a| (a.p.x, a.p.y, a.p.x + a.d.w, a.p.y + a.d.h));
+    (active, crop.filter(|c| fits(c, x0, y0, x1, y1)))
 }
 
 /// DNG lens shading (GainMap opcodes in OpcodeList2), on the scaled data of the active area.
@@ -472,6 +497,18 @@ fn embedded_preview_rawler(path: &Path) -> Result<::image::DynamicImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn areas_outside_the_sensor_are_dropped() {
+        let r = |x, y, w, h| Rect::new(rawler::imgop::Point::new(x, y), rawler::imgop::Dim2::new(w, h));
+        let (active, crop) = (r(8, 8, 100, 80), r(10, 10, 90, 70));
+        assert_eq!(valid_areas(120, 100, Some(active), Some(crop)), (Some(active), Some(crop)));
+        // Active area beyond the image, crop beyond the active area or larger than it.
+        assert_eq!(valid_areas(100, 100, Some(active), None), (None, None));
+        assert_eq!(valid_areas(120, 100, Some(active), Some(r(4, 10, 90, 70))), (Some(active), None));
+        assert_eq!(valid_areas(120, 100, Some(active), Some(r(10, 10, 120, 70))), (Some(active), None));
+        assert_eq!(valid_areas(120, 100, None, Some(r(usize::MAX, 0, 2, 2))), (None, None));
+    }
 
     /// The fast preview reader finds the same embedded image as rawler (on the sample raws in
     /// `samples/`, skipped without them).
