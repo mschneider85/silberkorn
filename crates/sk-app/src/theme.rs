@@ -27,6 +27,8 @@ pub const TEXT_DIM: Color32 = Color32::from_rgb(150, 150, 158);
 pub const TEXT_FAINT: Color32 = Color32::from_rgb(108, 108, 116);
 pub const DANGER: Color32 = Color32::from_rgb(230, 110, 100);
 pub const STAR: Color32 = Color32::from_rgb(240, 196, 70);
+/// Glow around highlighted symbols and the wordmark: the accent, a little brighter.
+pub const GLOW: Color32 = Color32::from_rgb(110, 178, 255);
 
 pub fn install(ctx: &egui::Context) {
     let mut fonts = egui::FontDefinitions::default();
@@ -110,4 +112,19 @@ pub fn install(ctx: &egui::Context) {
 /// Frame for the dark chrome bars (menu, toolbar, rail, status bar).
 pub fn chrome_frame(margin: Margin) -> egui::Frame {
     egui::Frame::new().fill(CHROME).inner_margin(margin)
+}
+
+/// Soft glow around text or a symbol, in the style of a neon sign: a blurred light behind it
+/// (`strength` 0..1 scales it) and rings of transparent copies that hug the glyphs. The text
+/// itself is drawn on top by the caller.
+pub fn paint_glow(painter: &egui::Painter, pos: egui::Pos2, galley: &std::sync::Arc<egui::Galley>, radius: f32, strength: f32) {
+    let rect = egui::Rect::from_min_size(pos, galley.size());
+    let blob = Shadow { offset: [0, 0], blur: (radius * 3.0) as u8, spread: 0, color: GLOW.gamma_multiply(0.3 * strength) };
+    painter.add(blob.as_shape(rect.shrink2(rect.size() * 0.2), CornerRadius::same((rect.height() / 2.0) as u8)));
+    for (r, alpha) in [(radius, 0.06), (radius * 0.6, 0.1), (radius * 0.3, 0.15)] {
+        for i in 0..12 {
+            let a = i as f32 / 12.0 * std::f32::consts::TAU;
+            painter.galley_with_override_text_color(pos + vec2(a.cos(), a.sin()) * r, galley.clone(), GLOW.gamma_multiply(alpha * strength));
+        }
+    }
 }

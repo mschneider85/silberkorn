@@ -176,7 +176,10 @@ impl App {
         let menus_right = ui
             .scope_builder(UiBuilder::new().max_rect(left).layout(Layout::left_to_right(Align::Center)), |ui| {
                 ui.add_space(10.0);
-                ui.label(RichText::new(icon::APERTURE).size(17.0).color(theme::ACCENT));
+                let logo = ui.painter().layout_no_wrap(icon::APERTURE.to_string(), FontId::proportional(17.0), theme::ACCENT);
+                let (rect, _) = ui.allocate_exact_size(logo.size(), Sense::hover());
+                theme::paint_glow(ui.painter(), rect.min, &logo, 1.5, 0.35);
+                ui.painter().galley(rect.min, logo, theme::GLOW);
                 ui.add_space(4.0);
                 self.menu_bar(ui)
             })
@@ -635,12 +638,17 @@ impl App {
                     painter.rect_filled(rect, 7.0, Color32::from_rgb(38, 38, 42));
                 }
                 if t > 0.0 {
-                    painter.rect_filled(rect, 7.0, theme::ACCENT_SOFT.gamma_multiply(t));
                     let bar = egui::Rect::from_center_size(pos2(rect.left() - 2.0, rect.center().y), vec2(3.0, 24.0 * t));
                     painter.rect_filled(bar, 1.5, theme::ACCENT);
                 }
                 let color = if selected { Color32::WHITE } else if resp.hovered() { theme::TEXT } else { theme::TEXT_DIM };
-                painter.text(rect.center() - vec2(0.0, 7.0), egui::Align2::CENTER_CENTER, tab.icon(), egui::FontId::proportional(19.0), color);
+                let symbol = painter.layout_no_wrap(tab.icon().to_string(), egui::FontId::proportional(19.0), color);
+                let pos = rect.center() - vec2(0.0, 7.0) - symbol.size() / 2.0;
+                if t > 0.0 {
+                    // The selected tab's symbol glows in the accent color, like neon.
+                    theme::paint_glow(painter, pos, &symbol, 6.0, t);
+                }
+                painter.galley(pos, symbol, color);
                 painter.text(rect.center_bottom() - vec2(0.0, 9.0), egui::Align2::CENTER_CENTER, tab.short_title(), egui::FontId::proportional(10.0), color);
                 let key = crate::palette::tab_shortcut(tab);
                 let hover = if key.is_empty() { tab.title().to_string() } else { format!("{}  ({key})", tab.title()) };

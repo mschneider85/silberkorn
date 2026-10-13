@@ -129,6 +129,7 @@ impl App {
             let tag_pos = pos2(base.x, line.top() - 18.0 - tagline.size().y);
             let word = painter.layout_job(spaced("Silberkorn", 58.0 * scale.max(0.7), 1.5, Color32::WHITE));
             let word_pos = pos2(base.x - 3.0, tag_pos.y - 4.0 - word.size().y);
+            theme::paint_glow(painter, word_pos, &word, 7.0 * scale.max(0.7), 1.0);
             painter.galley(word_pos, word, Color32::WHITE);
             painter.galley(tag_pos, tagline, Color32::WHITE);
             let rule = Rect::from_min_size(pos2(base.x, line.top() - 10.0), vec2(36.0, 2.0));
