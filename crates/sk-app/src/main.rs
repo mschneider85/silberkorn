@@ -2,6 +2,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod activity;
+mod ai_models;
 mod app;
 #[cfg(test)]
 mod app_tests;

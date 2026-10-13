@@ -8,6 +8,7 @@ use sk_ai::models;
 use sk_core::brush::AutoGuide;
 use sk_core::params::{BrushStroke, WbMode};
 
+use crate::ai_models::AiFeature;
 use crate::app::App;
 use crate::layers::{LocalDrag, LocalTool};
 use crate::widgets::section_help;
@@ -126,12 +127,21 @@ impl App {
 
     /// Fills the painted area in the background.
     pub(crate) fn request_removal(&mut self) {
-        let Some(cur) = &self.current else { return };
-        if !models::available(&models::INPAINT) {
-            self.status = "KI-Modell für „Entfernen“ fehlt – bitte im Tab „Retusche“ laden".into();
-            self.remove_strokes.clear();
+        if self.current.is_none() {
             return;
         }
+        if !self.ensure_ai(AiFeature::Inpaint) {
+            // The painted area stays on screen and is filled once the model is there.
+            let generation = self.generation();
+            self.with_ai(AiFeature::Inpaint, move |app| {
+                if app.generation() == generation && !app.inpaint_busy && !app.remove_strokes.is_empty() {
+                    app.request_removal();
+                }
+            });
+            self.status = format!("Entfernen: KI-Modell wird geladen ({} MB, einmalig) …", AiFeature::Inpaint.download_mb());
+            return;
+        }
+        let Some(cur) = &self.current else { return };
         let wb = match cur.adjustments.white_balance.mode {
             WbMode::AsShot => cur.meta.as_shot_wb,
             WbMode::Custom => cur.meta.color.wb_for_temp_tint(cur.adjustments.white_balance.kelvin, cur.adjustments.white_balance.tint),
@@ -168,11 +178,10 @@ impl App {
     pub(crate) fn remove_section(&mut self, ui: &mut Ui) {
         let n = self.current.as_ref().map_or(0, |c| c.adjustments.removals.len());
         let mut clear: Option<bool> = None;
-        let mut download = false;
-        let downloading = self.model_download_progress(&models::INPAINT);
+        let downloading = self.ai_download_progress(AiFeature::Inpaint);
         let active = self.local_tool == Some(LocalTool::Remove);
         // The tool itself sits in the tool grid; this section only appears when it has something to show.
-        if !active && n == 0 && models::available(&models::INPAINT) {
+        if !active && n == 0 && downloading.is_none() {
             return;
         }
         let help = "Über das Störende malen; beim Loslassen füllt die KI die Stelle passend zur Umgebung.";
@@ -180,8 +189,8 @@ impl App {
             if active && crate::layers::brush_controls(ui, &mut self.brushes.remove, Some(LocalTool::Remove), true) {
                 self.brushes_changed_at = Some(std::time::Instant::now());
             }
-            if !models::available(&models::INPAINT) {
-                download = crate::widgets::model_download(ui, "MI-GAN", models::INPAINT.size_mb(), models::INPAINT.license, downloading);
+            if let Some(p) = downloading {
+                crate::ai_models::download_progress(ui, AiFeature::Inpaint, p);
             }
             if n > 0 {
                 ui.horizontal(|ui| {
@@ -195,9 +204,6 @@ impl App {
                 });
             }
         });
-        if download {
-            self.download_model_job(&models::INPAINT);
-        }
         match clear {
             Some(true) => self.edit(|a| a.removals.clear()),
             Some(false) => self.edit(|a| {

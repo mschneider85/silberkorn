@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use egui::{RichText, Ui, Vec2};
-use sk_ai::models::DEPTH;
 use sk_core::params::{DepthRange, LensBlur};
 use sk_core::pipeline::{Processor, RenderOptions};
 
+use crate::ai_models::{self, AiFeature};
 use crate::app::App;
 use crate::widgets::slider_row;
 
@@ -42,10 +42,10 @@ enum DepthState {
 
 impl App {
     fn depth_state(&self, path: &Path) -> DepthState {
-        if let Some(p) = self.model_download_progress(&DEPTH) {
+        if let Some(p) = self.ai_download_progress(AiFeature::Depth) {
             return DepthState::Downloading(p);
         }
-        if !sk_ai::depth::available() {
+        if !AiFeature::Depth.available() {
             return DepthState::NoModel;
         }
         if let Some(e) = self.depth.failed.get(path) {
@@ -61,13 +61,13 @@ impl App {
 
     /// Each frame: starts computing the viewer image's map when something needs it.
     pub(crate) fn pump_depth(&mut self) {
-        if self.depth.running.is_some() || !sk_ai::depth::available() {
+        if self.depth.running.is_some() {
             return;
         }
         let Some(cur) = &self.current else { return };
         let path = cur.meta.path.clone();
         let wanted = !cur.adjustments.lens_blur.is_off() || self.depth.mask_for.as_ref().is_some_and(|(p, _)| *p == path);
-        if !wanted || self.depth.failed.contains_key(&path) || sk_core::depth::is_ready(&path) {
+        if !wanted || self.depth.failed.contains_key(&path) || sk_core::depth::is_ready(&path) || !self.ensure_ai(AiFeature::Depth) {
             return;
         }
         let label = format!("{JOB_LABEL}: {}", path.file_name().unwrap_or_default().to_string_lossy());
@@ -170,10 +170,9 @@ impl App {
         let before = lb;
         let mut reset = false;
         let mut toggle_pick = false;
-        let mut download = false;
         let picking = self.picking_focus;
         let state = self.depth_state(&path);
-        let help = "Zeichnet Vorder- und Hintergrund weich wie eine offene Blende. Wie nah jede Stelle ist, schätzt ein neuronales Netz (Depth Anything V2) einmal je Bild; die Tiefenkarte wird im Hintergrund berechnet und zwischengespeichert.\n\nFokus: Pipette oder Regler (0 ist der fernste, 1 der nächste Teil des Bildes). Schärfebereich: wie weit davor und dahinter es scharf bleibt. Lichter: helle Stellen werden in der Unschärfe zu leuchtenden Scheiben.";
+        let help = "Zeichnet Vorder- und Hintergrund weich wie eine offene Blende. Wie nah jede Stelle ist, schätzt ein neuronales Netz einmal je Bild; die Tiefenkarte wird im Hintergrund berechnet und zwischengespeichert.\n\nFokus: Pipette oder Regler (0 ist der fernste, 1 der nächste Teil des Bildes). Schärfebereich: wie weit davor und dahinter es scharf bleibt. Lichter: helle Stellen werden in der Unschärfe zu leuchtenden Scheiben.";
         crate::widgets::section_help(ui, "Objektivunschärfe", help, Some(&mut || reset = true), |ui| {
             let d = LensBlur::default();
             slider_row(ui, "Stärke", &mut lb.amount, 0.0..=100.0, 0.0, 0);
@@ -189,11 +188,9 @@ impl App {
             let faint = |t: &str| RichText::new(t).small().color(crate::theme::TEXT_FAINT);
             match &state {
                 DepthState::NoModel => {
-                    download = crate::widgets::model_download(ui, "Depth Anything V2 (Tiefenkarte)", DEPTH.size_mb(), DEPTH.license, None);
+                    ui.label(faint(&format!("Lädt beim ersten Einschalten ein KI-Modell ({} MB)", AiFeature::Depth.download_mb())));
                 }
-                DepthState::Downloading(p) => {
-                    crate::widgets::model_download(ui, "", 0, "", Some(*p));
-                }
+                DepthState::Downloading(p) => ai_models::download_progress(ui, AiFeature::Depth, *p),
                 _ if lb.is_off() => {}
                 DepthState::Running(p) => {
                     ui.add(egui::ProgressBar::new(*p).desired_height(6.0));
@@ -210,9 +207,6 @@ impl App {
         });
         if reset {
             lb = LensBlur::default();
-        }
-        if download {
-            self.download_model_job(&DEPTH);
         }
         if toggle_pick {
             self.toggle_focus_picker();
@@ -238,11 +232,8 @@ impl App {
     pub(crate) fn set_depth_mask(&mut self, layer: usize, range: Option<DepthRange>) {
         let Some(path) = self.current_path() else { return };
         let Some(map) = sk_core::depth::load(&path) else {
-            if !sk_ai::depth::available() {
-                if self.model_download_progress(&DEPTH).is_none() {
-                    self.download_model_job(&DEPTH);
-                }
-                self.status = format!("Tiefe auswählen: Modell wird geladen ({} MB) …", DEPTH.size_mb());
+            if !self.ensure_ai(AiFeature::Depth) {
+                self.status = format!("Tiefe auswählen: KI-Modell wird geladen ({} MB, einmalig) …", AiFeature::Depth.download_mb());
             } else {
                 self.status = "Tiefe auswählen: Tiefenkarte wird berechnet …".into();
             }

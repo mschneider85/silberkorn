@@ -124,13 +124,13 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
 
 ### Auswahl aus Bildinhalt
 
-- **Motiv auswählen:** neuronales Netz U²-Net-p (Apache-2.0, 4,6 MB). Das Modell wird im Tab „Ebenen“
-  auf Wunsch nach `~/.local/share/silberkorn/models/` geladen (oder `SILBERKORN_MODEL=<pfad>`).
+- **Motiv auswählen:** neuronales Netz U²-Net-p (Apache-2.0, 4,6 MB). Das Modell wird beim Programmstart
+  still nach `~/.local/share/silberkorn/models/` geladen (oder `SILBERKORN_MODEL=<pfad>`).
 - **Himmel auswählen:** helle, strukturarme, blaue oder neutrale Bereiche, die mit dem oberen Rand verbunden sind.
 - **Zauberpinsel (J):** über den Bereich malen; gewählt wird, was zusammenhängt und einer der überstrichenen Farben ähnelt (Größe und Toleranz einstellbar).
 - **Objekt (Umschalt+J):** auf ein Objekt klicken, es wird ausgewählt; weitere Klicks verfeinern, Alt+Klick
   nimmt Teile aus, „Nächstes Objekt“ wählt ein weiteres dazu. MobileSAM (Apache-2.0; Bild-Encoder und
-  Masken-Decoder von Segment Anything als ONNX, 45 MB, auf Wunsch geladen). Der Encoder analysiert das Bild
+  Masken-Decoder von Segment Anything als ONNX, 45 MB, geladen beim ersten Wählen des Werkzeugs). Der Encoder analysiert das Bild
   einmal, sobald das Werkzeug gewählt wird (etwa 4 s auf dem Prozessor); jeder Klick braucht dann nur noch
   den Decoder (etwa 0,2 s). tract rechnet nur dessen 256er-Maske, Silberkorn skaliert sie selbst hoch und
   verfeinert die Kanten am Bild. Jeder Klick ist ein Rückgängig-Schritt.
@@ -139,10 +139,14 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
 
 ### KI-Werkzeuge: Entrauschen und Entfernen
 
-Die neuronalen Netze werden nicht mitgeliefert, sondern beim ersten Gebrauch auf Wunsch nach
-`~/.local/share/silberkorn/models/` geladen (`SILBERKORN_MODELS=<ordner>` überschreibt den Ort).
-Der Dialog Bearbeiten → „Grafikkarte und KI-Modelle …“ listet alle Modelle mit Größe und Lizenz und
-lädt sie auf Wunsch vorab. Jede Datei wird gegen Größe und SHA-256 geprüft (Hugging-Face-Links auf einen festen Stand
+Die neuronalen Netze werden nicht mitgeliefert, sondern nach `~/.local/share/silberkorn/models/`
+geladen (`SILBERKORN_MODELS=<ordner>` überschreibt den Ort): die kleinen (Motiv/Himmel, Gesichtserkennung,
+Augen; zusammen etwa 5 MB) still beim Programmstart, die großen beim ersten Gebrauch der Funktion. Es gibt
+keinen eigenen Schritt „Modell laden“: Wer „Motiv“ klickt, KI-Entrauschen einschaltet oder mit „Entfernen“
+malt, sieht den Fortschritt am Werkzeug, danach läuft die Funktion von selbst weiter (ein Export mit
+KI-Vergrößern startet nach dem Download). Modellnamen und Lizenzen stehen nur im Dialog Bearbeiten →
+„Grafikkarte und KI-Modelle …“; dort lassen sich mit „Alle vorab laden“ auch alle Modelle für die Arbeit
+ohne Internet holen. Jede Datei wird gegen Größe und SHA-256 geprüft (Hugging-Face-Links auf einen festen Stand
 festgelegt); ein abgebrochener Download wird beim nächsten Versuch fortgesetzt.
 
 **KI-Beschleunigung** (Bearbeiten → „Grafikkarte und KI-Modelle …“, Abschnitt „KI-Berechnung“, Windows): Die Netze rechnen dann über

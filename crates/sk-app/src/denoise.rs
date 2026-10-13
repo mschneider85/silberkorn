@@ -1,30 +1,22 @@
 //! KI-Entrauschen (see `sk_core::ai_denoise` and `sk_ai::denoise`): the amount is an ordinary,
 //! undoable adjustment; the denoised data of each image is computed once in the background
-//! (the image in the viewer first) and kept in a cache. The models are GPL-3.0 and downloaded
-//! only after the user has seen their terms.
+//! (the image in the viewer first) and kept in a cache. Switching it on downloads the models
+//! (GPL-3.0, credited in the dialog for the AI models) the first time.
 
 use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 
-use egui::{Button, Color32, RichText, vec2};
-use sk_ai::models::{self, ModelInfo};
+use egui::{Color32, RichText};
 use sk_core::params::Detail;
 
+use crate::ai_models::AiFeature;
 use crate::app::App;
-use crate::theme::icon;
 use crate::widgets::{image_count, slider_row};
 
 /// Title of the section in the Details panel.
 pub const NOISE_SECTION: &str = "Rauschen";
 
 const JOB_LABEL: &str = "KI-Entrauschen";
-pub(crate) const DOWNLOAD_LABEL: &str = "Modell laden: KI-Entrauschen (RawNIND)";
-
-/// The dialog: download the models, with their terms.
-pub struct DenoiseDialog {
-    pub accepted: bool,
-}
-
 /// Images waiting for their denoised data.
 #[derive(Default)]
 pub struct DenoiseQueue {
@@ -54,39 +46,6 @@ impl App {
         crate::widgets::reveal_section(ctx, NOISE_SECTION);
     }
 
-    /// The model download, with its terms.
-    pub fn open_denoise_download(&mut self) {
-        self.denoise_dialog = Some(DenoiseDialog { accepted: false });
-    }
-
-    /// Downloads a model in the background (one job per model).
-    pub fn download_model_job(&mut self, m: &'static ModelInfo) {
-        let label = format!("Modell laden: {}", m.label);
-        if self.jobs.iter().any(|j| j.label == label) {
-            return;
-        }
-        self.start_job(&label, Box::new(move |p| {
-            models::download(m, p)?;
-            Ok(Vec::new())
-        }));
-    }
-
-    /// Progress of a running model download.
-    pub fn model_download_progress(&self, m: &ModelInfo) -> Option<f32> {
-        let label = format!("Modell laden: {}", m.label);
-        self.jobs.iter().find(|j| j.label == label).map(|j| j.progress)
-    }
-
-    fn download_denoise_models(&mut self) {
-        if self.jobs.iter().any(|j| j.label == DOWNLOAD_LABEL) {
-            return;
-        }
-        self.start_job(DOWNLOAD_LABEL, Box::new(|p| {
-            sk_ai::denoise::download(p)?;
-            Ok(Vec::new())
-        }));
-    }
-
     /// Queues the computation of an image's denoised data (`first`: before all others).
     pub(crate) fn want_denoise(&mut self, path: &Path, first: bool) {
         let q = &mut self.denoise;
@@ -114,7 +73,7 @@ impl App {
                 self.want_denoise(&p, true);
             }
         }
-        if self.denoise.running.is_some() || !sk_ai::denoise::available() {
+        if self.denoise.running.is_some() || self.denoise.pending.is_empty() || !self.ensure_ai(AiFeature::Denoise) {
             return;
         }
         let Some(path) = self.denoise.pending.pop_front() else { return };
@@ -165,10 +124,10 @@ impl App {
 
     /// State of an image's denoised data, for the Details panel.
     pub fn denoise_state(&self, path: &Path) -> DenoiseState {
-        if let Some(p) = self.jobs.iter().find(|j| j.label == DOWNLOAD_LABEL).map(|j| j.progress) {
+        if let Some(p) = self.ai_download_progress(AiFeature::Denoise) {
             return DenoiseState::Downloading(p);
         }
-        if !sk_ai::denoise::available() {
+        if !AiFeature::Denoise.available() {
             return DenoiseState::NoModel;
         }
         if let Some(e) = self.denoise.failed.get(path) {
@@ -231,7 +190,7 @@ impl App {
             a
         });
         self.commit_and_save();
-        if ai > 0.0 && sk_ai::denoise::available() {
+        if ai > 0.0 {
             for f in &files {
                 self.want_denoise(f, false);
             }
@@ -250,16 +209,13 @@ impl App {
         }
         match self.denoise_state(path) {
             DenoiseState::NoModel => {
-                let m = &sk_ai::models::DENOISE_BAYER;
-                if crate::widgets::model_download(ui, "RawNIND", sk_ai::denoise::download_mb(), m.license, None)
-                    || (changed && before == 0.0 && *amount > 0.0)
-                {
-                    self.open_denoise_download();
+                if changed && before == 0.0 && *amount > 0.0 {
+                    self.ensure_ai(AiFeature::Denoise);
+                } else {
+                    ui.label(faint(format!("Lädt beim ersten Einschalten ein KI-Modell ({} MB)", AiFeature::Denoise.download_mb())));
                 }
             }
-            DenoiseState::Downloading(p) => {
-                crate::widgets::model_download(ui, "", 0, "", Some(p));
-            }
+            DenoiseState::Downloading(p) => crate::ai_models::download_progress(ui, AiFeature::Denoise, p),
             _ if *amount <= 0.0 => {}
             DenoiseState::Waiting => {
                 ui.label(faint("Wird gleich berechnet …".into()));
@@ -274,66 +230,6 @@ impl App {
             }
         }
         changed
-    }
-
-    pub(crate) fn denoise_dialogs(&mut self, ctx: &egui::Context) {
-        let Some(dialog) = &mut self.denoise_dialog else { return };
-        let (mut close, mut download, mut show_gpu) = (false, false, false);
-        let modal = egui::Modal::new(egui::Id::new("denoise")).show(ctx, |ui| {
-            ui.set_width(460.0);
-            ui.label(RichText::new(format!("{}  KI-Entrauschen: Modell laden", icon::SPARKLE)).size(17.0).strong().color(Color32::WHITE));
-            ui.add_space(6.0);
-            ui.label(
-                "Ein neuronales Netz, trainiert auf echten Aufnahmepaaren mit und ohne Rauschen, säubert die RAW-Daten \
-                 und rechnet sie dabei selbst in Farbe um. Das Original bleibt unverändert; die Stärke steht unter \
-                 Details › Rauschen.",
-            );
-            let on_gpu = sk_ai::runtime::gpu_enabled() && sk_ai::runtime::gpu_installed();
-            let where_ = if on_gpu {
-                "Die Berechnung läuft einmal je Bild im Hintergrund auf der Grafikkarte."
-            } else {
-                "Die Berechnung läuft einmal je Bild im Hintergrund auf dem Prozessor (etwa eine halbe Minute für 24 Megapixel)."
-            };
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(where_).small().color(Color32::from_gray(150)));
-                if !on_gpu && sk_ai::runtime::gpu_supported() && ui.small_button(crate::gpu::DIALOG_TITLE).clicked() {
-                    show_gpu = true;
-                }
-            });
-            ui.add_space(10.0);
-            ui.label(RichText::new("Modell und Lizenz").strong());
-            ui.label(format!(
-                "Verwendet wird RawNIND (UtNet2) von Benoit Brummer (UCLouvain), wie es darktable veröffentlicht. \
-                 Das Modell ist nicht Teil von Silberkorn: es wird auf Ihren Wunsch von GitHub (darktable-ai) \
-                 heruntergeladen (etwa {} MB) und nur auf diesem Computer verwendet.",
-                sk_ai::denoise::download_mb()
-            ));
-            ui.label(
-                "Die Gewichte stehen unter der GNU General Public License 3.0. Wer die Modelldateien weitergibt, \
-                 muss deren Bedingungen einhalten. Die Trainingsbilder stehen unter CC BY 4.0 und CC0.",
-            );
-            ui.hyperlink_to("Lizenztext (GPL 3.0)", "https://www.gnu.org/licenses/gpl-3.0.html");
-            ui.checkbox(&mut dialog.accepted, "Ich habe die Lizenzbedingungen gelesen");
-            ui.add_space(12.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let load = Button::new(format!("{}  Modell laden", icon::DOWNLOAD_SIMPLE)).min_size(vec2(110.0, 26.0));
-                if ui.add_enabled(dialog.accepted, load).clicked() {
-                    download = true;
-                }
-                if ui.add(Button::new("Abbrechen").min_size(vec2(90.0, 26.0))).clicked() {
-                    close = true;
-                }
-            });
-        });
-        if show_gpu {
-            self.show_gpu_dialog = true;
-        }
-        if download {
-            self.download_denoise_models();
-        }
-        if download || close || modal.should_close() {
-            self.denoise_dialog = None;
-        }
     }
 
     /// The cache of denoised data (in the dialog for the graphics card and the AI models).

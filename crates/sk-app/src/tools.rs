@@ -6,6 +6,7 @@ use sk_core::params::{BaseCurve, Curve, Levels, WbMode, WhiteBalance};
 use sk_core::sidecar::ColorLabel;
 use egui::{Color32, RichText, Ui};
 
+use crate::ai_models::AiFeature;
 use crate::app::{App, CurveChannel, Tab};
 use crate::widgets::{self, section, slider_row};
 
@@ -333,7 +334,8 @@ impl App {
             self.selected_recipe = self.selected_recipe.min(self.recipes.len() - 1);
         }
         self.selected_recipe = self.selected_recipe.min(self.recipes.len().saturating_sub(1));
-        let upscale_download = self.recipes.get(self.selected_recipe).and_then(|r| r.upscale).and_then(|u| self.model_download_progress(sk_ai::upscale::model(u)));
+        let upscale_feature = self.recipes.get(self.selected_recipe).and_then(|r| r.upscale).map(AiFeature::for_upscale);
+        let upscale_download = upscale_feature.and_then(|f| self.ai_download_progress(f));
         let (mut download, mut show_gpu) = (None, false);
         let Some(r) = self.recipes.get_mut(self.selected_recipe) else { return };
         section(ui, "Rezept bearbeiten", None, |ui| {
@@ -379,9 +381,11 @@ impl App {
                     ui.selectable_value(&mut u.factor, 2, "2×").on_hover_text("Doppelte Kantenlänge, vierfache Pixelzahl");
                     ui.selectable_value(&mut u.factor, 4, "4×").on_hover_text("Vierfache Kantenlänge, sechzehnfache Pixelzahl");
                 });
-                let m = sk_ai::upscale::model(*u);
-                if !sk_ai::models::available(m) && crate::widgets::model_download(ui, "RealPLKSR", m.size_mb(), m.license, upscale_download) {
-                    download = Some(m);
+                let f = AiFeature::for_upscale(*u);
+                if let Some(p) = upscale_download.filter(|_| upscale_feature == Some(f)) {
+                    crate::ai_models::download_progress(ui, f, p);
+                } else if !f.available() {
+                    download = Some(f);
                 }
                 if !(sk_ai::runtime::gpu_enabled() && sk_ai::runtime::gpu_installed()) {
                     ui.horizontal_wrapped(|ui| {
@@ -488,8 +492,9 @@ impl App {
                 ui.label(RichText::new(msg).small());
             }
         });
-        if let Some(m) = download {
-            self.download_model_job(m);
+        // Chosen in the recipe: the model loads right away (the export would wait for it).
+        if let Some(f) = download {
+            self.ensure_ai(f);
         }
         if show_gpu {
             self.show_gpu_dialog = true;

@@ -564,7 +564,10 @@ pub struct App {
     pub merge_dialog: Option<crate::merge::MergeDialog>,
     pub hdr_options: sk_core::hdr::HdrOptions,
     pub pano_options: sk_core::panorama::PanoramaOptions,
-    pub denoise_dialog: Option<crate::denoise::DenoiseDialog>,
+    /// Model downloads and what waits for them (see `ai_models`).
+    pub ai_downloads: crate::ai_models::AiDownloads,
+    /// Background jobs whose end is not reported in the status bar.
+    pub quiet_jobs: Vec<String>,
     /// Images waiting for their AI denoised data.
     pub denoise: crate::denoise::DenoiseQueue,
     /// Depth maps being computed (lens blur, depth masks).
@@ -818,13 +821,15 @@ impl App {
             merge_dialog: None,
             hdr_options: settings.hdr_options,
             pano_options: settings.pano_options,
-            denoise_dialog: None,
+            ai_downloads: Default::default(),
+            quiet_jobs: Vec::new(),
             denoise: Default::default(),
             depth: Default::default(),
         };
         app.reload_styles();
         if opts.persist_settings {
             app.workers.load_lens_db();
+            app.preload_small_ai();
         }
         match session {
             Some(s) => {
@@ -1516,9 +1521,16 @@ impl App {
             self.export_progress = None;
             return;
         }
-        if let Some(m) = recipes.iter().filter_map(|r| r.upscale).map(sk_ai::upscale::model).find(|m| !sk_ai::models::available(m)) {
-            self.status = format!("Erst das Modell laden: {} (im Rezept unter „KI-Vergrößern“)", m.label);
+        if let Some(f) = recipes.iter().filter_map(|r| r.upscale).map(crate::ai_models::AiFeature::for_upscale).find(|f| !f.available()) {
+            // Exports once the model is there, if the selection is still the same.
             self.export_progress = None;
+            let selection = self.selected_paths();
+            self.with_ai(f, move |app| {
+                if app.selected_paths() == selection {
+                    app.export_selection();
+                }
+            });
+            self.status = format!("{}: KI-Modell wird geladen ({} MB, einmalig), danach wird exportiert …", f.label(), f.download_mb());
             return;
         }
         let session = self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
@@ -1786,10 +1798,10 @@ impl App {
                             self.status = "Maske erstellt".into();
                         }
                         Err(e) if e == "OBJECT_MODEL_MISSING" => {
-                            self.status = "Für „Objekt“ zuerst das Modell laden (Tab „Ebenen“)".into();
+                            self.status = "Objekt auswählen: Das KI-Modell wird noch geladen …".into();
                         }
                         Err(e) if e == "MODEL_MISSING" => {
-                            self.status = "Für „Motiv“ und „Himmel“ zuerst das Modell laden (Tab „Ebenen“)".into();
+                            self.status = "Motiv und Himmel: Das KI-Modell wird noch geladen …".into();
                         }
                         Err(e) => self.status = format!("Maske fehlgeschlagen: {e}"),
                     }
@@ -2133,9 +2145,6 @@ impl App {
             if std::env::var_os("SILBERKORN_BUSY").is_some() {
                 (self.inpaint_busy, self.removal_progress) = (true, 0.4);
             }
-            if std::env::var_os("SILBERKORN_DENOISE").is_some() {
-                self.open_denoise_download();
-            }
             if std::env::var_os("SILBERKORN_MERGE").is_some() {
                 self.select_all();
                 self.open_merge(crate::merge::MergeKind::Panorama);
@@ -2268,7 +2277,6 @@ impl eframe::App for App {
             self.stack_dialogs(&ctx);
             self.merge_dialogs(&ctx);
             self.print_dialogs(&ctx);
-            self.denoise_dialogs(&ctx);
             self.finish_frame(&ctx);
             return;
         }
@@ -2314,7 +2322,6 @@ impl eframe::App for App {
         self.stack_dialogs(&ctx);
         self.merge_dialogs(&ctx);
         self.print_dialogs(&ctx);
-        self.denoise_dialogs(&ctx);
         self.finish_frame(&ctx);
     }
 

@@ -6,6 +6,7 @@ use sk_core::params::{BrushStroke, Layer, LayerAdjustments, Mask, Spot, SpotMode
 use sk_core::pipeline::{Processor, RenderOptions};
 use egui::{Color32, Pos2, Rect, Response, Stroke, Ui, Vec2, pos2, vec2};
 
+use crate::ai_models::AiFeature;
 use crate::app::{App, Tab};
 use crate::widgets::{section, slider_row};
 
@@ -214,12 +215,6 @@ pub struct ObjectSession {
     pub clicks: Vec<sk_ai::segment::Click>,
 }
 
-/// Label of the job that downloads the subject and sky model.
-pub(crate) const SUBJECT_DOWNLOAD: &str = "Modell laden: Motiv auswählen (U²-Net)";
-
-/// Label of the job that downloads the object selection models.
-pub(crate) const OBJECT_DOWNLOAD: &str = "Modell laden: Objekt auswählen (MobileSAM)";
-
 /// Drag state of the local tools.
 #[derive(Clone, Debug, Default)]
 pub enum LocalDrag {
@@ -294,8 +289,16 @@ impl App {
         if self.local_tool.is_some_and(|t| t.is_mask_tool()) {
             self.ensure_layer();
         }
-        if new == Some(LocalTool::Object) {
-            self.prepare_object();
+        match new {
+            Some(LocalTool::Object) => self.with_ai(AiFeature::Object, |app| {
+                if app.local_tool == Some(LocalTool::Object) {
+                    app.prepare_object();
+                }
+            }),
+            Some(LocalTool::Remove) => {
+                self.ensure_ai(AiFeature::Inpaint);
+            }
+            _ => {}
         }
         self.request_render();
     }
@@ -316,40 +319,17 @@ impl App {
         });
     }
 
-    /// Settings of the object tool; returns whether the model download was asked for.
-    fn object_controls(&mut self, ui: &mut Ui) -> bool {
+    /// Settings of the object tool.
+    fn object_controls(&mut self, ui: &mut Ui) {
         let faint = |t: &str| egui::RichText::new(t).small().color(crate::theme::TEXT_FAINT);
-        if !sk_ai::segment::available() {
-            let progress = self.jobs.iter().find(|j| j.label == OBJECT_DOWNLOAD).map(|j| j.progress);
-            return crate::widgets::model_download(ui, "MobileSAM", sk_ai::segment::download_mb(), sk_ai::models::OBJECT_ENCODER.license, progress);
+        if let Some(p) = self.ai_download_progress(AiFeature::Object) {
+            crate::ai_models::download_progress(ui, AiFeature::Object, p);
+            return;
         }
         ui.label(faint("Klick: Objekt auswählen · weitere Klicks verfeinern · Alt+Klick: Teil ausnehmen"));
         if self.object_session.is_some() && ui.button("Nächstes Objekt").on_hover_text("Der nächste Klick wählt ein weiteres Objekt dazu").clicked() {
             self.object_session = None;
         }
-        false
-    }
-
-    /// Downloads the subject and sky model in the background.
-    pub(crate) fn download_subject_model(&mut self) {
-        if self.jobs.iter().any(|j| j.label == SUBJECT_DOWNLOAD) {
-            return;
-        }
-        self.start_job(SUBJECT_DOWNLOAD, Box::new(|p| {
-            sk_ai::download_model(p)?;
-            Ok(Vec::new())
-        }));
-    }
-
-    /// Downloads the object selection models in the background, then analyzes the image.
-    pub(crate) fn download_object_models(&mut self) {
-        if self.jobs.iter().any(|j| j.label == OBJECT_DOWNLOAD) {
-            return;
-        }
-        self.start_job(OBJECT_DOWNLOAD, Box::new(|p| {
-            sk_ai::segment::download(p)?;
-            Ok(Vec::new())
-        }));
     }
 
     /// Object selection: a click adds the object under it, Alt+click takes the part under it away.
@@ -362,8 +342,8 @@ impl App {
             && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
             && let Some(layer) = self.ensure_layer()
         {
-            if !sk_ai::segment::available() {
-                self.status = "Für „Objekt“ zuerst das Modell laden (Tab „Ebenen“)".into();
+            if !self.ensure_ai(AiFeature::Object) {
+                self.status = "Objekt auswählen: Das KI-Modell wird noch geladen …".into();
                 return;
             }
             let include = !ui.input(|i| i.modifiers.alt);
@@ -707,7 +687,8 @@ impl App {
         let mut ai_action = None;
         let mut pick = false;
         let busy = self.ai_busy;
-        let subject_download = (!sk_ai::model_available()).then(|| self.jobs.iter().find(|j| j.label == SUBJECT_DOWNLOAD).map(|j| j.progress));
+        let subject_download = self.ai_download_progress(AiFeature::Subject);
+        let busy = busy || subject_download.is_some();
         let tool = self.local_tool;
         let active = self.active_layer;
         let depth_map = self.current.as_ref().and_then(|c| sk_core::depth::load(&c.meta.path));
@@ -766,11 +747,8 @@ impl App {
                 *changed = true;
             }
         }
-        if let Some(progress) = subject_download {
-            let m = &sk_ai::models::SUBJECT;
-            if crate::widgets::model_download(ui, "U²-Net (Motiv und Himmel)", m.size_mb(), m.license, progress) {
-                ai_action = Some(4);
-            }
+        if let Some(p) = subject_download {
+            crate::ai_models::download_progress(ui, AiFeature::Subject, p);
         }
 
         if let Some(layer) = layer {
@@ -803,15 +781,21 @@ impl App {
             }
         }
         match ai_action {
-            Some(1) => self.request_ai(crate::workers::AiKind::Subject),
-            Some(2) => self.request_ai(crate::workers::AiKind::Sky),
+            Some(k @ (1 | 2)) => {
+                let kind = if k == 1 { crate::workers::AiKind::Subject } else { crate::workers::AiKind::Sky };
+                let generation = self.generation();
+                self.with_ai(AiFeature::Subject, move |app| {
+                    if app.generation() == generation {
+                        app.request_ai(kind);
+                    }
+                });
+            }
             Some(6) => {
                 if let Some(layer) = self.ensure_layer() {
                     self.object_session = None;
                     self.set_depth_mask(layer, None);
                 }
             }
-            Some(4) => self.download_subject_model(),
             _ => {}
         }
         if pick {
@@ -1194,7 +1178,6 @@ impl App {
         let gap = 4.0;
         let w = ((ui.available_width() - 2.0 * gap) / 3.0).floor();
         let mut tool_click = None;
-        let mut object_download = false;
         for row in tools.chunks(3) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = gap;
@@ -1221,14 +1204,11 @@ impl App {
                 brushes_changed |= slider_row(ui, "Größe", &mut self.brushes.magic.size, 2.0..=400.0, d.size, 0);
                 slider_row(ui, "Toleranz", &mut self.magic_tolerance, 0.0..=1.0, 0.3, 2);
             }
-            Some(LocalTool::Object) => object_download = self.object_controls(ui),
+            Some(LocalTool::Object) => self.object_controls(ui),
             _ => {}
         }
         if let Some(t) = tool_click {
             self.set_local_tool(t);
-        }
-        if object_download {
-            self.download_object_models();
         }
         if brushes_changed {
             self.brushes_changed_at = Some(std::time::Instant::now());

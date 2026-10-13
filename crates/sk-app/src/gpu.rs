@@ -2,8 +2,9 @@
 //! (see `sk_ai::runtime`).
 
 use egui::{Button, Color32, RichText, vec2};
-use sk_ai::{models, runtime};
+use sk_ai::runtime;
 
+use crate::ai_models::AiFeature;
 use crate::app::App;
 use crate::theme::icon;
 
@@ -97,7 +98,7 @@ impl App {
             }
             ui.add_space(10.0);
             ui.label(RichText::new("KI-Modelle").strong());
-            ui.label("Jedes Modell wird erst geladen, wenn es gebraucht wird; hier lässt sich das auch vorab erledigen.");
+            ui.label("Jedes Modell wird beim ersten Gebrauch der Funktion geladen, die kleinen gleich beim Start; hier lässt sich das auch vorab erledigen.");
             ui.add_space(4.0);
             model_action = self.models_ui(ui);
             self.denoise_cache_ui(ui);
@@ -118,14 +119,10 @@ impl App {
             self.install_gpu_job();
         }
         match model_action {
-            Some(Model::Denoise) => self.open_denoise_download(),
-            Some(Model::Subject) => self.download_subject_model(),
-            Some(Model::Object) => self.download_object_models(),
-            Some(Model::Files(files)) => {
-                for m in files {
-                    self.download_model_job(m);
-                }
+            Some(ModelAction::One(f)) => {
+                self.ensure_ai(f);
             }
+            Some(ModelAction::All) => self.download_all_ai(),
             None => {}
         }
         if close || modal.should_close() {
@@ -139,55 +136,40 @@ const GPU_JOB: &str = "KI-Beschleunigung laden";
 /// Menu entry and title of the dialog.
 pub const DIALOG_TITLE: &str = "Grafikkarte und KI-Modelle …";
 
-/// A model (or group of models) to download.
-enum Model {
-    Denoise,
-    Subject,
-    Object,
-    Files(&'static [&'static models::ModelInfo]),
+/// What the model list asks for.
+enum ModelAction {
+    One(AiFeature),
+    All,
 }
 
 impl App {
-    /// The AI models: what each is for, its size and license, loaded or not (with a button).
-    fn models_ui(&self, ui: &mut egui::Ui) -> Option<Model> {
-        use crate::{denoise, layers};
-        const UPSCALE_X2: &[&models::ModelInfo] = &[&models::UPSCALE_X2];
-        const UPSCALE_X4: &[&models::ModelInfo] = &[&models::UPSCALE_X4];
-        const INPAINT: &[&models::ModelInfo] = &[&models::INPAINT];
-        const DEPTH: &[&models::ModelInfo] = &[&models::DEPTH];
-        let job = |label: &str| self.jobs.iter().find(|j| j.label == label).map(|j| j.progress);
-        let files = |list: &'static [&'static models::ModelInfo]| {
-            let progress = list.iter().find_map(|m| self.model_download_progress(m));
-            let mb = list.iter().map(|m| m.size_mb()).sum::<u64>();
-            (list.iter().all(|m| models::available(m)), progress, mb, list[0].license, Model::Files(list))
-        };
-        let face = files(&sk_ai::faces::NEEDED);
-        let rows = [
-            ("KI-Entrauschen", "RawNIND", (sk_ai::denoise::available(), job(denoise::DOWNLOAD_LABEL), sk_ai::denoise::download_mb(), "GPL-3.0", Model::Denoise)),
-            ("Motiv und Himmel auswählen", "U²-Net", (sk_ai::model_available(), job(layers::SUBJECT_DOWNLOAD), models::SUBJECT.size_mb(), models::SUBJECT.license, Model::Subject)),
-            ("Objekt auswählen", "MobileSAM", (sk_ai::segment::available(), job(layers::OBJECT_DOWNLOAD), sk_ai::segment::download_mb(), models::OBJECT_ENCODER.license, Model::Object)),
-            ("Entfernen", "MI-GAN", files(INPAINT)),
-            ("Tiefenkarte (Objektivunschärfe)", "Depth Anything V2", files(DEPTH)),
-            ("KI-Vergrößern 2×", "RealPLKSR", files(UPSCALE_X2)),
-            ("KI-Vergrößern 4×", "RealPLKSR", files(UPSCALE_X4)),
-            ("Gesichter und Augen", "YuNet, SFace", (face.0, face.1, face.2, "MIT, Apache-2.0", face.4)),
-        ];
+    /// The AI models: what each is for, model and license, size, loaded or not (with a button).
+    fn models_ui(&self, ui: &mut egui::Ui) -> Option<ModelAction> {
         let mut action = None;
         egui::Grid::new("models").num_columns(3).spacing([12.0, 4.0]).show(ui, |ui| {
-            for (what, name, (available, progress, mb, license, model)) in rows {
-                ui.label(what);
-                ui.label(RichText::new(format!("{name} · {mb} MB · {license}")).small().color(Color32::from_gray(150)));
-                if available {
+            for f in AiFeature::ALL {
+                let (name, license) = f.credits();
+                ui.label(f.label());
+                ui.label(RichText::new(format!("{name} · {} MB · {license}", f.download_mb())).small().color(Color32::from_gray(150)));
+                if f.available() {
                     ui.label(RichText::new(format!("{}  geladen", icon::CHECK)).small().color(Color32::from_gray(170)));
-                } else if let Some(p) = progress {
+                } else if let Some(p) = self.ai_download_progress(f) {
                     ui.add(egui::ProgressBar::new(p).desired_width(90.0).desired_height(6.0));
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
                 } else if ui.small_button(format!("{}  Laden", icon::DOWNLOAD_SIMPLE)).clicked() {
-                    action = Some(model);
+                    action = Some(ModelAction::One(f));
                 }
                 ui.end_row();
             }
         });
+        let missing = AiFeature::ALL.iter().filter(|f| !f.available() && self.ai_download_progress(**f).is_none()).count();
+        if missing > 1 {
+            ui.add_space(4.0);
+            let text = format!("{}  Alle vorab laden ({} MB)", icon::DOWNLOAD_SIMPLE, self.missing_ai_mb());
+            if ui.button(text).on_hover_text("Damit alle KI-Funktionen auch ohne Internet gehen").clicked() {
+                action = Some(ModelAction::All);
+            }
+        }
         action
     }
 }
