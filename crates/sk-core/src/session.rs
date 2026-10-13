@@ -220,7 +220,7 @@ fn relocate(image: &Path, target: &Path) -> Result<()> {
     let target = target.to_path_buf();
     move_file(image, &target)?;
     let mut moved = vec![(image.to_path_buf(), target.clone())];
-    for (from, to) in sidecar::sidecar_files_for(image).into_iter().zip(sidecar::sidecar_files_for(&target)) {
+    for (from, to) in sidecar::sidecar_files_for(image).into_iter().zip(sidecar::sidecar_files_for(&target)).filter(|(from, _)| crate::xmp::owned(image, from)) {
         if !from.exists() {
             continue;
         }
@@ -244,7 +244,7 @@ pub fn copy_image(image: &Path, dest: &Path) -> Result<PathBuf> {
     // The sidecars first: the image itself appears last, and only once everything is there.
     let mut copied = Vec::new();
     let pairs = sidecar::sidecar_files_for(image).into_iter().zip(sidecar::sidecar_files_for(&target));
-    let result = pairs.filter(|(from, _)| from.exists()).chain([(image.to_path_buf(), target.clone())]).try_for_each(|(from, to)| {
+    let result = pairs.filter(|(from, _)| from.exists() && crate::xmp::owned(image, from)).chain([(image.to_path_buf(), target.clone())]).try_for_each(|(from, to)| {
         crate::safe_file::copy(&from, &to)?;
         copied.push(to);
         anyhow::Ok(())
@@ -262,7 +262,7 @@ pub fn copy_image(image: &Path, dest: &Path) -> Result<PathBuf> {
 pub fn delete_image(image: &Path) -> Result<()> {
     std::fs::remove_file(image).with_context(|| format!("{} kann nicht gelöscht werden", image.display()))?;
     for s in sidecar::sidecar_files_for(image) {
-        if s.exists() {
+        if s.exists() && crate::xmp::owned(image, &s) {
             std::fs::remove_file(s)?;
         }
     }
@@ -314,6 +314,33 @@ mod tests {
         // A source that can't be read leaves nothing behind.
         assert!(copy_image(&src.join("fehlt.ARW"), &dest).is_err());
         assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 4);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn raw_files_of_the_same_name_do_not_share_an_xmp_file() {
+        let dir = temp("xmp-pair");
+        let (arw, dng, jpg) = (dir.join("IMG_0001.ARW"), dir.join("IMG_0001.DNG"), dir.join("IMG_0002.JPG"));
+        for p in [&arw, &dng, &jpg] {
+            std::fs::write(p, b"raw").unwrap();
+        }
+        let shared = dir.join("IMG_0001.xmp");
+        std::fs::write(&shared, crate::xmp::updated(None, 4, sidecar::ColorLabel::None, &[]).unwrap()).unwrap();
+        // Neither reads it; ratings are written to a file of its own.
+        assert_eq!(crate::xmp::existing(&arw), None);
+        crate::xmp::write(&arw, 2, sidecar::ColorLabel::None, &[]).unwrap();
+        assert_eq!(crate::xmp::existing(&arw), Some(dir.join("IMG_0001.ARW.xmp")));
+        assert_eq!(crate::xmp::existing(&dng), None);
+        // Renaming or deleting one leaves it to the other.
+        let renamed = rename_image(&arw, "Neu").unwrap();
+        assert!(shared.exists() && dir.join("Neu.ARW.xmp").exists());
+        delete_image(&renamed).unwrap();
+        assert!(shared.exists());
+        // Alone (a JPEG of the same name doesn't count), the file is the raw's own.
+        std::fs::write(dir.join("IMG_0001.JPG"), b"jpg").unwrap();
+        assert_eq!(crate::xmp::existing(&dng), Some(shared.clone()));
+        delete_image(&dng).unwrap();
+        assert!(!shared.exists());
         std::fs::remove_dir_all(dir).ok();
     }
 

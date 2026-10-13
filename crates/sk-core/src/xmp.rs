@@ -50,9 +50,26 @@ pub fn files_for(image: &Path) -> [PathBuf; 2] {
     candidates(image)
 }
 
+/// Whether `xmp` (one of [`files_for`]) belongs to this image alone. `IMG_0001.xmp` is shared
+/// when another raw file of the same name lies next to it (`IMG_0001.ARW` and `IMG_0001.DNG`):
+/// then it is neither read, written, moved nor deleted with either of them (they use
+/// `IMG_0001.ARW.xmp`).
+pub fn owned(image: &Path, xmp: &Path) -> bool {
+    let file = crate::variant::file_of(image);
+    if xmp != file.with_extension("xmp") {
+        return true;
+    }
+    let own = file.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
+    !crate::raw::RAW_EXTENSIONS
+        .iter()
+        .filter(|e| **e != own)
+        .flat_map(|e| [e.to_string(), e.to_ascii_uppercase()])
+        .any(|e| file.with_extension(e).is_file())
+}
+
 /// The existing XMP file of an image.
 pub fn existing(image: &Path) -> Option<PathBuf> {
-    candidates(image).into_iter().find(|p| p.is_file())
+    candidates(image).into_iter().find(|p| p.is_file() && owned(image, p))
 }
 
 /// Modification time (milliseconds) of the image's XMP file, if there is one.
@@ -262,7 +279,7 @@ pub fn updated(existing: Option<&str>, rating: u8, label: ColorLabel, keywords: 
 /// Writes rating, label and keywords into the image's XMP file (the existing one, else
 /// `<name>.xmp`). Returns the file's new modification time.
 pub fn write(image: &Path, rating: u8, label: ColorLabel, keywords: &[String]) -> Result<Option<i64>> {
-    let path = existing(image).unwrap_or_else(|| candidates(image)[0].clone());
+    let path = existing(image).unwrap_or_else(|| candidates(image).into_iter().find(|p| owned(image, p)).expect("the long name is always owned"));
     // Only a missing file may be created from scratch: anything unreadable (another encoding,
     // a network error) would otherwise be replaced and lose what other programs stored there.
     let old = match std::fs::read_to_string(&path) {
