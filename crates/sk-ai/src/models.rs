@@ -156,6 +156,18 @@ pub const OBJECT_DECODER: ModelInfo = ModelInfo {
     entry: None,
 };
 
+/// Depth maps: Depth Anything V2 Small (Lihe Yang et al., HKU and TikTok; the small model is
+/// Apache-2.0, the larger ones are not), as exported to ONNX by onnx-community.
+pub const DEPTH: ModelInfo = ModelInfo {
+    label: "Tiefenkarte (Depth Anything V2)",
+    file: "depth_anything_v2_small.onnx",
+    url: "https://huggingface.co/onnx-community/depth-anything-v2-small/resolve/4472b7362082ad9968fee890ca0f1e5aca36b93d/onnx/model.onnx",
+    bytes: 99_060_839,
+    sha256: "afb6a5c28f3b6bf1618c6e43f02073ef9dfdc70e937502d51603e57b0a1df10c",
+    license: "Apache-2.0",
+    entry: None,
+};
+
 /// Folder of the downloaded models (`SILBERKORN_MODELS` overrides it).
 pub fn models_dir() -> PathBuf {
     std::env::var_os("SILBERKORN_MODELS").map(PathBuf::from).unwrap_or_else(|| sk_core::paths::data_dir().join("models"))
@@ -296,7 +308,7 @@ mod tests {
 
     #[test]
     fn every_model_is_pinned() {
-        for m in [DENOISE_BAYER, DENOISE_LINEAR, UPSCALE_X2, UPSCALE_X4, OBJECT_ENCODER, OBJECT_DECODER, INPAINT, FACE_DETECT, FACE_EMBED, EYE_STATE, SUBJECT] {
+        for m in [DENOISE_BAYER, DENOISE_LINEAR, UPSCALE_X2, UPSCALE_X4, OBJECT_ENCODER, OBJECT_DECODER, INPAINT, FACE_DETECT, FACE_EMBED, EYE_STATE, SUBJECT, DEPTH] {
             assert!(m.bytes > 0 && m.sha256.len() == 64 && m.sha256.bytes().all(|b| b.is_ascii_hexdigit()), "{}", m.label);
             assert!(!m.url.contains("/resolve/main/"), "{}: nicht auf einen Stand festgelegt", m.label);
         }

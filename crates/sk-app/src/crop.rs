@@ -97,6 +97,7 @@ impl App {
         self.straighten_tool = None;
         self.picking_wb = false;
         self.picking_skin = false;
+        self.picking_focus = false;
         self.local_drag = Default::default();
         self.finish_crop_tool();
     }

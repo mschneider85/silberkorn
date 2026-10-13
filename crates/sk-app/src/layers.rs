@@ -755,6 +755,7 @@ impl App {
         let downloading = self.model_downloading;
         let tol = &mut self.magic_tolerance;
         let tool = self.local_tool;
+        let depth_map = self.current.as_ref().and_then(|c| sk_core::depth::load(&c.meta.path));
         let Some(cur) = self.current.as_mut() else { return };
         let Some(layer) = cur.adjustments.layers.get_mut(li) else { return };
         section(ui, "Auswahl aus Bildinhalt", None, |ui| {
@@ -771,11 +772,25 @@ impl App {
                 if ui.selectable_label(tool == Some(LocalTool::Object), LocalTool::Object.label()).clicked() {
                     ai_action = Some(5);
                 }
+                if ui
+                    .add_enabled(!busy, egui::Button::new("\u{E7AE}  Tiefe auswählen"))
+                    .on_hover_text("Wählt nach Entfernung aus (anfangs den nahen Teil des Bildes); der Bereich lässt sich danach einstellen")
+                    .clicked()
+                {
+                    ai_action = Some(6);
+                }
                 if busy {
                     ui.spinner();
                 }
             });
             slider_row(ui, "Toleranz", tol, 0.0..=1.0, 0.3, 2);
+            if let Some(range) = layer.mask.ai.as_ref().and_then(|a| a.depth)
+                && let Some(r) = App::depth_mask_controls(ui, &range)
+                && let Some(map) = &depth_map
+            {
+                layer.mask.ai = Some(map.resized(sk_ai::MASK_EDGE).range_mask(&r));
+                *changed = true;
+            }
             if layer.mask.ai.is_some() && ui.button("Auswahl entfernen").clicked() {
                 layer.mask.ai = None;
                 *changed = true;
@@ -824,6 +839,12 @@ impl App {
             Some(2) => self.request_ai(crate::workers::AiKind::Sky),
             Some(3) => self.set_local_tool(LocalTool::Magic),
             Some(5) => self.set_local_tool(LocalTool::Object),
+            Some(6) => {
+                if let Some(layer) = self.ensure_layer() {
+                    self.object_session = None;
+                    self.set_depth_mask(layer, None);
+                }
+            }
             Some(4) => {
                 self.model_downloading = true;
                 self.workers.download_model();

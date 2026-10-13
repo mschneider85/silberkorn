@@ -77,6 +77,7 @@ pub fn changes(before: &Adjustments, after: &Adjustments) -> Vec<(&'static str, 
         ("Körnung", d.grain_size, e.grain_size),
         ("Vignette", d.vignette_amount, e.vignette_amount),
         ("Dunst entfernen", d.dehaze, e.dehaze),
+        ("Objektivunschärfe", a.lens_blur.amount, b.lens_blur.amount),
     ] {
         push(x != y, name, Some(y));
     }
@@ -87,6 +88,8 @@ pub fn changes(before: &Adjustments, after: &Adjustments) -> Vec<(&'static str, 
     push(a.layers != b.layers, "Ebenen", None);
     push(a.retouch != b.retouch, "Retusche", None);
     push(a.removals != b.removals, "Entfernen", None);
+    let (l, m) = (&a.lens_blur, &b.lens_blur);
+    push(l.amount == m.amount && l != m, "Objektivunschärfe", None);
     changes
 }
 

@@ -1727,6 +1727,52 @@ fn object_clicks_select_and_refine() {
     assert_eq!(mask(&f).map(|m| covered(&m)), Some(n));
 }
 
+/// Lens blur: switching it on computes the image's depth map in the background, the focus
+/// pipette takes the depth under the click, and "Tiefe auswählen" gives a layer an adjustable
+/// depth mask.
+#[test]
+#[ignore = "langsam: läuft mit cargo t-all"]
+fn lens_blur_and_depth_mask() {
+    if !sk_ai::depth::available() {
+        return;
+    }
+    let Some(mut f) = Fixture::new("depth") else { return };
+    // Not in the user's cache (the test's files are new each run).
+    unsafe { std::env::set_var("SILBERKORN_DEPTH_CACHE", f.dir.join("depth")) };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    let path = f.app.current_path().unwrap();
+    f.app.edit(|a| a.lens_blur.amount = 60.0);
+    f.pump("Tiefenkarte", |a| a.depth.running.is_none() && sk_core::depth::is_ready(&path));
+    assert!(f.app.status.contains("fertig"), "{}", f.app.status);
+
+    // Focus by click: on the tree in the middle-right, then on the wall at the left edge
+    // (much nearer).
+    viewer_frame(&mut f, vec![]);
+    let at = |f: &mut Fixture, p: egui::Pos2| {
+        f.app.toggle_focus_picker();
+        assert!(f.app.picking_focus);
+        click(f, p);
+        assert!(!f.app.picking_focus);
+        f.app.current.as_ref().unwrap().adjustments.lens_blur.focus
+    };
+    let tree = at(&mut f, egui::pos2(760.0, 300.0));
+    let wall = at(&mut f, egui::pos2(30.0, 400.0));
+    assert!(wall > tree + 0.2, "Mauer {wall}, Baum {tree}");
+
+    // A depth mask on a new layer, then a narrower range.
+    f.app.edit(|a| a.layers.push(Default::default()));
+    f.app.active_layer = Some(0);
+    f.app.set_depth_mask(0, None);
+    let mask = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.layers[0].mask.ai.clone().unwrap();
+    let m = mask(&f);
+    let range = m.depth.expect("Tiefenbereich gespeichert");
+    let covered = |m: &sk_core::params::AiMask| m.data.iter().filter(|v| **v > 128).count();
+    let n = covered(&m);
+    assert!(n > m.data.len() / 20 && n < m.data.len() / 2, "{n} von {}", m.data.len());
+    f.app.set_depth_mask(0, Some(sk_core::params::DepthRange { far: range.far + 0.1, ..range }));
+    assert!(covered(&mask(&f)) < n);
+}
+
 /// "Staub und Flecken finden" runs in the background and adds heal spots once; searching
 /// again does not add the same spots twice.
 #[test]

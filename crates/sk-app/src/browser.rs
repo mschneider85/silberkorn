@@ -169,7 +169,7 @@ impl App {
         if space_pan && (response.hovered() || response.dragged()) {
             ui.ctx().set_cursor_icon(if response.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
         }
-        if (response.dragged() && (space_pan || (!self.picking_wb && !self.picking_skin && !tools_active && !self.split_dragging)))
+        if (response.dragged() && (space_pan || (!self.picking_wb && !self.picking_skin && !self.picking_focus && !tools_active && !self.split_dragging)))
             || response.dragged_by(egui::PointerButton::Middle)
         {
             self.pan += response.drag_delta();
@@ -332,6 +332,7 @@ impl App {
             && !tools_active
             && !self.picking_wb
             && !self.picking_skin
+            && !self.picking_focus
             && !split_drag
             && !space_pan
             && in_after
@@ -368,6 +369,14 @@ impl App {
             {
                 self.pick_skin_tone((pos - img_rect.min) / scale);
             }
+        } else if self.picking_focus {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            if response.clicked()
+                && let Some(pos) = response.interact_pointer_pos()
+                && img_rect.contains(pos)
+            {
+                self.pick_focus((pos - img_rect.min) / scale);
+            }
         } else {
             // No tool: zoomed in, the image can be moved; fitted, it can be magnified
             // (double-click, or hold the button for the loupe).
@@ -398,6 +407,8 @@ impl App {
             Some("Weißabgleich – auf eine neutrale Fläche klicken".into())
         } else if self.picking_skin {
             Some("Hautton – auf eine typische Hautstelle klicken".into())
+        } else if self.picking_focus {
+            Some("Fokus – auf die Stelle klicken, die scharf bleiben soll".into())
         } else if self.show_before {
             Some("Vorher".into())
         } else {

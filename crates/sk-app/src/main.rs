@@ -12,6 +12,7 @@ mod compare;
 mod crop;
 mod culling;
 mod denoise;
+mod depth;
 mod develop_tools;
 mod focus;
 mod gpu;

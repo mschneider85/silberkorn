@@ -361,6 +361,8 @@ pub struct App {
     pub picking_wb: bool,
     /// The skin tone pipette is active (color tab).
     pub picking_skin: bool,
+    /// The focus pipette of the lens blur is active (details tab).
+    pub picking_focus: bool,
     /// Active crop tool state (the viewer shows the uncropped frame).
     pub crop_tool: Option<crate::crop::CropTool>,
     pub straighten_tool: Option<crate::crop::StraightenTool>,
@@ -551,6 +553,8 @@ pub struct App {
     pub denoise_dialog: Option<crate::denoise::DenoiseDialog>,
     /// Images waiting for their AI denoised data.
     pub denoise: crate::denoise::DenoiseQueue,
+    /// Depth maps being computed (lens blur, depth masks).
+    pub depth: crate::depth::DepthQueue,
     /// 0..100
     pub denoise_strength: f32,
 }
@@ -589,6 +593,7 @@ impl App {
         sk_ai::runtime::set_gpu_enabled(settings.ai_gpu.unwrap_or(true));
         sk_ai::denoise::register();
         sk_ai::upscale::register();
+        sk_ai::depth::register();
         sk_core::gpu::set_enabled(settings.develop_gpu.unwrap_or(true));
         // Sets up the graphics card and compiles the shaders while the window opens.
         std::thread::spawn(sk_core::pipeline::prepare_gpu);
@@ -680,6 +685,7 @@ impl App {
             color_view: Default::default(),
             picking_wb: false,
             picking_skin: false,
+            picking_focus: false,
             crop_tool: None,
             straighten_tool: None,
             local_tool: None,
@@ -802,6 +808,7 @@ impl App {
             pano_options: settings.pano_options,
             denoise_dialog: None,
             denoise: Default::default(),
+            depth: Default::default(),
             denoise_strength: settings.denoise_strength.unwrap_or(60.0).clamp(0.0, 100.0),
         };
         app.reload_styles();
@@ -1319,6 +1326,7 @@ impl App {
             self.load_error = None;
             self.picking_wb = false;
             self.picking_skin = false;
+            self.picking_focus = false;
             self.full_due = None;
             match self.prepared.iter().position(|r| r.meta.path == *path).map(|i| self.prepared.remove(i)) {
                 Some(r) => {
@@ -1575,6 +1583,7 @@ impl App {
         }
         self.load_full_when_due(ctx);
         self.pump_denoise();
+        self.pump_depth();
         self.poll_spot_search();
         // The rendered preview must fit into a single GPU texture.
         let max_side = ctx.input(|i| i.max_texture_side).max(512);
@@ -1939,7 +1948,7 @@ impl App {
         let pressed = |k: Key, m: Modifiers| ctx.input_mut(|i| i.consume_key(m, k));
         if pressed(Key::Escape, Modifiers::NONE) {
             // Esc first ends a tool; with none active it leaves full screen.
-            let tool_active = self.picking_wb || self.picking_skin || self.local_tool.is_some() || self.straighten_tool.is_some() || self.crop_tool.is_some();
+            let tool_active = self.picking_wb || self.picking_skin || self.picking_focus || self.local_tool.is_some() || self.straighten_tool.is_some() || self.crop_tool.is_some();
             if !tool_active && self.fullscreen {
                 self.toggle_fullscreen(ctx);
             }
@@ -2190,7 +2199,7 @@ impl App {
 
 /// Union (max) of an existing AI mask with a new one of the same kind of resolution.
 fn merge_ai(old: Option<sk_core::params::AiMask>, new: sk_ai::MaskImage) -> sk_core::params::AiMask {
-    let mut out = sk_core::params::AiMask { kind: "ai".into(), width: new.width, height: new.height, data: new.data };
+    let mut out = sk_core::params::AiMask { kind: "ai".into(), width: new.width, height: new.height, data: new.data, depth: None };
     if let Some(o) = old
         && o.width > 0
         && o.height > 0

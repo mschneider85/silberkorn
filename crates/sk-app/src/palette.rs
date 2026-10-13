@@ -95,6 +95,7 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Details, "Dunst entfernen", "dehaze dunst nebel"),
     (Tab::Details, "Vignettierung", "vignette"),
     (Tab::Details, "Körnung", "grain film korn"),
+    (Tab::Details, "Objektivunschärfe", "lens blur bokeh tiefe tiefenschärfe hintergrund unschärfe ki"),
     (Tab::Layers, "Werkzeuge", "pinsel radierer verlauf maske brush"),
     (Tab::Layers, "Entfernen (KI)", "remove objekt retusche ki"),
     (Tab::Layers, "Ebenen", "layer maske lokal"),

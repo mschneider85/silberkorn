@@ -278,6 +278,24 @@ fn ort_session(path: &Path) -> Result<(ort::session::Session, bool)> {
     Ok((session, false))
 }
 
+/// A network for tract with fixed input shapes (`plain`: without the shape hints of the file).
+fn tract_plan(path: &Path, inputs: &[Input], keep: Option<&[usize]>, plain: bool) -> Result<Arc<TypedRunnableModel>> {
+    let onnx = tract_onnx::onnx().with_ignore_output_shapes(plain).with_ignore_value_info(plain);
+    let mut model = onnx.model_for_path(path).with_context(|| format!("Modell {} nicht lesbar", path.display()))?;
+    for (i, inp) in inputs.iter().enumerate() {
+        model = match inp {
+            Input::F32(s) => model.with_input_fact(i, f32::fact(*s).into())?,
+            Input::U8(s) => model.with_input_fact(i, u8::fact(*s).into())?,
+            Input::F32Shape(s) => model.with_input_fact(i, f32::fact(*s).into())?,
+        };
+    }
+    if let Some(keep) = keep {
+        let outlets: Vec<OutletId> = keep.iter().filter_map(|&i| model.outputs.get(i).copied()).collect();
+        model.select_output_outlets(&outlets)?;
+    }
+    model.into_optimized()?.into_runnable()
+}
+
 impl Net {
     /// Loads a network with fixed input shapes: on the graphics card if possible, else with
     /// ONNX Runtime on the processor, else with tract.
@@ -304,19 +322,12 @@ impl Net {
                 }
             }
         }
-        let mut model = tract_onnx::onnx().model_for_path(path).with_context(|| format!("Modell {} nicht lesbar", path.display()))?;
-        for (i, inp) in inputs.iter().enumerate() {
-            model = match inp {
-                Input::F32(s) => model.with_input_fact(i, f32::fact(*s).into())?,
-                Input::U8(s) => model.with_input_fact(i, u8::fact(*s).into())?,
-                Input::F32Shape(s) => model.with_input_fact(i, f32::fact(*s).into())?,
-            };
-        }
-        if let Some(keep) = keep {
-            let outlets: Vec<OutletId> = keep.iter().filter_map(|&i| model.outputs.get(i).copied()).collect();
-            model.select_output_outlets(&outlets)?;
-        }
-        let net = Net { backend: Backend::Cpu(model.into_optimized()?.into_runnable()?), inputs: inputs.to_vec() };
+        // Shape hints inside some exports (symbolic batch sizes) contradict the fixed input
+        // shapes; such networks are loaded again without them.
+        let plan = tract_plan(path, inputs, keep, false).or_else(|e| {
+            tract_plan(path, inputs, keep, true).map_err(|_| e)
+        })?;
+        let net = Net { backend: Backend::Cpu(plan), inputs: inputs.to_vec() };
         *LAST_DEVICE.lock().unwrap() = Some(net.device());
         Ok(net)
     }

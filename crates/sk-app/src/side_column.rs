@@ -324,6 +324,7 @@ fn tool_of(name: &'static str) -> Option<(Tab, Option<&'static str>)> {
         "Schärfen" | "Rauschreduzierung" | "Körnung" | "Dunst entfernen" => (Tab::Details, Some(name)),
         "Klarheit" | "Struktur" => (Tab::Details, Some("Klarheit")),
         "Vignette" => (Tab::Details, Some("Vignettierung")),
+        "Objektivunschärfe" => (Tab::Details, Some("Objektivunschärfe")),
         "Ebenen" => (Tab::Layers, None),
         "Retusche" => (Tab::Layers, Some("Reparieren & Klonen")),
         "Entfernen" => (Tab::Layers, Some("Entfernen (KI)")),

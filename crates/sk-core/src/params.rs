@@ -207,6 +207,9 @@ pub struct Adjustments {
     /// Objects removed by generative fill (applied before the spots).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub removals: Vec<Removal>,
+    /// Lens blur from the depth map.
+    #[serde(skip_serializing_if = "LensBlur::is_off")]
+    pub lens_blur: LensBlur,
 }
 
 /// Something removed from the image: the strokes that marked it and the generated content
@@ -339,6 +342,65 @@ pub struct AiMask {
     pub height: usize,
     /// 8-bit mask values, row-major.
     pub data: Vec<u8>,
+    /// The depth range the mask was made from (kind "depth"), so it can be changed later.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth: Option<DepthRange>,
+}
+
+/// A range of the depth map (see `depth`): 0 is the farthest part of the image, 1 the nearest.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DepthRange {
+    pub near: f32,
+    pub far: f32,
+    /// Soft transition width.
+    pub falloff: f32,
+}
+
+impl Default for DepthRange {
+    fn default() -> Self {
+        Self { near: 1.0, far: 0.6, falloff: 0.1 }
+    }
+}
+
+impl DepthRange {
+    /// Mask value at depth `d`.
+    pub fn weight(&self, d: f32) -> f32 {
+        let (lo, hi) = (self.far.min(self.near), self.far.max(self.near));
+        let f = self.falloff.max(1e-3);
+        let rise = ((d - (lo - f)) / f).clamp(0.0, 1.0);
+        let fall = (((hi + f) - d) / f).clamp(0.0, 1.0);
+        let s = |t: f32| t * t * (3.0 - 2.0 * t);
+        // An end at the limit of the scale takes everything beyond it.
+        (if lo <= 0.0 { 1.0 } else { s(rise) }) * (if hi >= 1.0 { 1.0 } else { s(fall) })
+    }
+}
+
+/// Lens blur from the depth map (see `lens_blur`): parts in front of and behind the focus are
+/// blurred like by a wide aperture.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LensBlur {
+    /// 0..100; 0 is off.
+    pub amount: f32,
+    /// Depth in focus (0 far .. 1 near).
+    pub focus: f32,
+    /// Depth range around the focus that stays sharp.
+    pub range: f32,
+    /// Brightens highlights in the blurred parts into discs of light (bokeh), 0..100.
+    pub bokeh: f32,
+}
+
+impl Default for LensBlur {
+    fn default() -> Self {
+        Self { amount: 0.0, focus: 0.9, range: 0.1, bokeh: 0.0 }
+    }
+}
+
+impl LensBlur {
+    pub fn is_off(&self) -> bool {
+        self.amount <= 0.0
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -734,6 +796,7 @@ impl Default for Adjustments {
             layers: Vec::new(),
             retouch: Vec::new(),
             removals: Vec::new(),
+            lens_blur: LensBlur::default(),
         }
     }
 }

@@ -247,6 +247,8 @@ pub struct Processor {
     opts: RenderOptions,
     /// Image and amount (0..1) of AI denoising (see `ai_denoise`).
     ai_denoise: Option<(std::path::PathBuf, f32)>,
+    /// Image and settings of the lens blur (see `lens_blur`).
+    lens_blur: Option<(std::path::PathBuf, crate::params::LensBlur)>,
 }
 
 impl Processor {
@@ -309,6 +311,7 @@ impl Processor {
             hdr: meta.hdr,
             opts,
             ai_denoise: (adj.detail.ai_denoise > 0.0 && !meta.hdr).then(|| (meta.path.clone(), adj.detail.ai_denoise / 100.0)),
+            lens_blur: (!adj.lens_blur.is_off()).then(|| (meta.path.clone(), adj.lens_blur)),
             adj: adj.clone(),
             camera_lens: meta.lens.clone(),
         }
@@ -839,16 +842,19 @@ impl Processor {
         w
     }
 
-    /// The source with the AI denoised data blended in, if wanted and available.
-    fn denoised(&self, src: &LinearImage) -> Option<Arc<LinearImage>> {
-        let (path, amount) = self.ai_denoise.as_ref()?;
-        crate::ai_denoise::blended(path, src, *amount)
+    /// The source with the AI denoised data blended in and the lens blur, as far as wanted and
+    /// available (`None`: the source as it is).
+    fn prepared(&self, src: &LinearImage) -> Option<Arc<LinearImage>> {
+        let denoised = self.ai_denoise.as_ref().and_then(|(path, amount)| crate::ai_denoise::blended(path, src, *amount));
+        let base = denoised.as_deref().unwrap_or(src);
+        let blurred = self.lens_blur.as_ref().and_then(|(path, p)| crate::lens_blur::blurred(path, base, p, !self.hdr));
+        blurred.or(denoised)
     }
 
     /// Full processing into an output color space (encoded 0..1 floats), for export.
     pub fn process(&self, src: &LinearImage, region: Option<Region>, space: OutputSpace) -> LinearImage {
-        let denoised = self.denoised(src);
-        let src = denoised.as_deref().unwrap_or(src);
+        let prepared = self.prepared(src);
+        let src = prepared.as_deref().unwrap_or(src);
         if let Some(g) = crate::gpu::active() {
             match self.process_gpu(g, src, region, space) {
                 Ok(img) => return img,
@@ -860,8 +866,8 @@ impl Processor {
 
     /// [`Self::process`] without the graphics card.
     pub fn process_cpu(&self, src: &LinearImage, region: Option<Region>, space: OutputSpace) -> LinearImage {
-        let denoised = self.denoised(src);
-        self.process_source_cpu(denoised.as_deref().unwrap_or(src), region, space)
+        let prepared = self.prepared(src);
+        self.process_source_cpu(prepared.as_deref().unwrap_or(src), region, space)
     }
 
     fn process_source_cpu(&self, src: &LinearImage, region: Option<Region>, space: OutputSpace) -> LinearImage {
@@ -884,8 +890,8 @@ impl Processor {
 
     /// Display rendering (sRGB, 8-bit) with histogram.
     pub fn render(&self, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Rendered {
-        let denoised = self.denoised(src);
-        let src = denoised.as_deref().unwrap_or(src);
+        let prepared = self.prepared(src);
+        let src = prepared.as_deref().unwrap_or(src);
         if let Some(g) = crate::gpu::active() {
             match self.render_gpu(g, src, region, cache) {
                 Ok(r) => return r,
@@ -898,8 +904,8 @@ impl Processor {
 
     /// [`Self::render`] without the graphics card.
     pub fn render_cpu(&self, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Rendered {
-        let denoised = self.denoised(src);
-        let (enc, full, mask) = self.process_encoded(denoised.as_deref().unwrap_or(src), region, cache);
+        let prepared = self.prepared(src);
+        let (enc, full, mask) = self.process_encoded(prepared.as_deref().unwrap_or(src), region, cache);
         self.display(enc, full, mask)
     }
 

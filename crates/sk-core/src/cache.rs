@@ -52,6 +52,16 @@ pub fn fnv1a(data: &[u8]) -> u64 {
     data.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x0100_0000_01b3))
 }
 
+/// Identity of an image's file (for variants the raw file): path, size and modification time,
+/// so data computed from it is not used once the file changes.
+pub fn file_identity(path: &Path) -> Option<String> {
+    let file = crate::variant::file_of(path);
+    let file = file.canonicalize().unwrap_or(file);
+    let md = std::fs::metadata(&file).ok()?;
+    let mtime = md.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+    Some(format!("{}|{}|{mtime}", file.display(), md.len()))
+}
+
 /// Validity key: modification time (whole seconds, comparable across platforms), size and adjustments.
 pub fn thumb_key(path: &Path, adj: &Adjustments) -> String {
     let meta = std::fs::metadata(crate::variant::file_of(path)).ok();
@@ -59,8 +69,10 @@ pub fn thumb_key(path: &Path, adj: &Adjustments) -> String {
     let size = meta.map_or(0, |m| m.len());
     // AI denoising shows once its data has been computed.
     let denoised = if adj.detail.ai_denoise > 0.0 && crate::ai_denoise::is_ready(path) { "|dn" } else { "" };
+    // So does the lens blur once the depth map exists.
+    let blurred = if !adj.lens_blur.is_off() && crate::depth::is_ready(path) { "|lb" } else { "" };
     let adj = if *adj == Adjustments::default() { String::new() } else { serde_json::to_string(adj).unwrap_or_default() };
-    format!("{:016x}", fnv1a(format!("{mtime}|{size}|{adj}{denoised}").as_bytes()))
+    format!("{:016x}", fnv1a(format!("{mtime}|{size}|{adj}{denoised}{blurred}").as_bytes()))
 }
 
 /// Thumbnail file of an image (without extension). `session` is the root of the open session, if any.

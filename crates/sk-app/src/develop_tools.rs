@@ -377,6 +377,7 @@ impl App {
         if changed || r_sharp || r_nr || r_clarity || r_vig || r_grain {
             self.request_render();
         }
+        self.lens_blur_section(ui);
     }
 
     /// Color editor, color balance and black & white (appended to the color tab).

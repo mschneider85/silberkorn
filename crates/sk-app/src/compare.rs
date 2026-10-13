@@ -74,6 +74,7 @@ impl App {
             || self.local_tool.is_some()
             || self.picking_wb
             || self.picking_skin
+            || self.picking_focus
             || self.split_view
             || self.show_before
             || self.proof_view;

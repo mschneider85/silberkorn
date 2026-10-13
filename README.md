@@ -37,7 +37,7 @@ SK_ADJ='{"exposure":0.5,"shadows":40}' cargo run --release -p sk-core --example 
 | Crate | Inhalt |
 |---|---|
 | `sk-core` | RAW-Dekodierung (rawler), Farbmathematik, Entwicklungs-Pipeline, Sidecars, Export |
-| `sk-ai`   | Masken aus Bildinhalt: Motiv (U²-Net via tract/ONNX), Himmel, Magic Brush, Kantenverfeinerung |
+| `sk-ai`   | Neuronale Netze (tract/ONNX Runtime): Masken aus Bildinhalt, Tiefenkarte, Entrauschen, Entfernen, Vergrößern, Gesichter |
 | `sk-app`  | egui/wgpu-Oberfläche, Hintergrund-Worker |
 
 Pipeline (Arbeitsfarbraum: lineares Rec.2020):
@@ -171,6 +171,28 @@ erscheint zusätzlich oben im Bild.
   verkleinert berechnet. Das Ergebnis ist ein kleiner Flicken mit weicher Kante im Sidecar (Feld
   `removals`): Er wird vor Reparieren/Klonen eingesetzt, bleibt am Bildinhalt wie die Masken und
   ist ein Rückgängig-Schritt. „Letzten zurücknehmen“ und „Alle“ stellen das Original wieder her.
+- **Objektivunschärfe** (Tab „Details“): zeichnet Vorder- und
+  Hintergrund weich wie eine offene Blende. Wie nah jede Stelle ist, schätzt Depth Anything V2
+  Small (Lihe Yang et al.; das kleine Modell steht unter Apache-2.0, die größeren nicht; 99 MB,
+  ONNX von onnx-community) einmal je Bild auf der Vorschau (etwa 7 s auf dem Prozessor). Die
+  Tiefenkarte (relative Nähe 0 fern … 1 nah, 1536 px, Kanten am Bild verfeinert) liegt in
+  `~/.cache/silberkorn/depth/` (`SILBERKORN_DEPTH_CACHE` überschreibt den Ort, höchstens 2 GB).
+  **Fokus** per Pipette (Klick auf die Stelle, die scharf bleiben soll) oder Regler; beim
+  Einschalten liegt er auf dem nächsten Zehntel des Bildes, meist dem Motiv. **Schärfebereich**:
+  wie weit davor und dahinter es scharf bleibt; **Lichter**: helle Stellen werden in der
+  Unschärfe zu leuchtenden Scheiben. Die Unschärfe wächst mit dem Tiefenabstand zum Fokus (die
+  Netzausgabe ist inverse Tiefe, zu der der Zerstreuungskreis proportional ist), bei Stärke 100
+  bis auf 2,5 % der langen Kante. Sie wird wie das Entrauschen vor allen anderen Stufen auf die
+  linearen Daten angewendet, gilt also für Vorschau, Thumbnails und Export: Der Hintergrund
+  sammelt nur von Nachbarn, die mindestens so unscharf sind (kein Hof um das scharfe Motiv);
+  unscharfer Vordergrund wird in Ebenen nach Radius über das Dahinterliegende gelegt und greift
+  über seine Kante hinaus. Übergangswerte an harten Tiefenkanten springen auf die nahe oder
+  ferne Seite, sonst bliebe dort eine scharfe Naht. Große Radien werden auf verkleinerten Kopien
+  gerechnet: 24 MP etwa 1,2 s. Fehlt die Tiefenkarte beim Export, wird sie dort berechnet.
+  Kommandozeile: `cargo run --release -p sk-ai --example depth -- <raw> <ordner> [stärke] [fokus] [lichter]`
+- **Tiefe auswählen** (Tab „Ebenen“, Auswahl aus Bildinhalt): eine Maske aus derselben
+  Tiefenkarte, anfangs das nächste Fünftel des Bildes; **Nah**, **Fern** und **Weichheit** stellen
+  den Bereich danach ein (gespeichert mit der Maske, rückgängig zu machen).
 
 ### Gesichter und Sichtung
 

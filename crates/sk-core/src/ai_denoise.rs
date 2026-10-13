@@ -9,7 +9,6 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
-use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result, bail};
 use rayon::prelude::*;
@@ -52,11 +51,7 @@ pub fn cache_dir() -> PathBuf {
 /// time) and the model, so an edited file or another model never finds an old product.
 pub fn product_file(path: &Path) -> Option<PathBuf> {
     let tag = provider()?.tag.clone();
-    let file = crate::variant::file_of(path);
-    let file = file.canonicalize().unwrap_or(file);
-    let md = std::fs::metadata(&file).ok()?;
-    let mtime = md.modified().ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
-    let id = format!("{}|{}|{mtime}|{tag}|{VERSION}", file.display(), md.len());
+    let id = format!("{}|{tag}|{VERSION}", crate::cache::file_identity(path)?);
     Some(cache_dir().join(format!("{:016x}.skdn", crate::cache::fnv1a(id.as_bytes()))))
 }
 
@@ -258,7 +253,7 @@ static BLENDS: Mutex<Vec<(BlendKey, Arc<LinearImage>)>> = Mutex::new(Vec::new())
 const BLEND_BUDGET: usize = 600 << 20;
 
 /// A few pixels of the source: tells a freed and newly allocated buffer at the same address apart.
-fn fingerprint(img: &LinearImage) -> u64 {
+pub(crate) fn fingerprint(img: &LinearImage) -> u64 {
     let n = img.data.len();
     let samples: Vec<u8> = (0..64).flat_map(|i| img.data[i * n / 64].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>()).collect();
     crate::cache::fnv1a(&samples)
