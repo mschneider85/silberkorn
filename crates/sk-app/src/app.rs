@@ -157,6 +157,9 @@ pub struct Current {
     pub snapshots: Vec<sk_core::sidecar::Snapshot>,
 }
 
+/// Undo steps kept per image (each a full copy of the adjustments; masks are shared).
+pub(crate) const UNDO_LIMIT: usize = 500;
+
 /// An image that can be shown without loading: recently viewed or prefetched (see `App::prepared`).
 struct Ready {
     meta: Arc<RawMeta>,
@@ -1437,6 +1440,9 @@ impl App {
         cur.adjustments.assign_layer_ids();
         if cur.adjustments != cur.committed {
             self.undo.push(std::mem::replace(&mut cur.committed, cur.adjustments.clone()));
+            if self.undo.len() > UNDO_LIMIT {
+                self.undo.remove(0);
+            }
             self.redo.clear();
             self.sidecar_dirty = true;
         }
@@ -2331,19 +2337,19 @@ impl App {
 
 /// Union (max) of an existing AI mask with a new one of the same kind of resolution.
 fn merge_ai(old: Option<sk_core::params::AiMask>, new: sk_ai::MaskImage) -> sk_core::params::AiMask {
-    let mut out = sk_core::params::AiMask { kind: "ai".into(), width: new.width, height: new.height, data: new.data, depth: None };
+    let mut data = new.data;
     if let Some(o) = old
         && o.width > 0
         && o.height > 0
     {
-        for (i, v) in out.data.iter_mut().enumerate() {
-            let (x, y) = (i % out.width, i / out.width);
-            let ox = (x * o.width / out.width).min(o.width - 1);
-            let oy = (y * o.height / out.height).min(o.height - 1);
+        for (i, v) in data.iter_mut().enumerate() {
+            let (x, y) = (i % new.width, i / new.width);
+            let ox = (x * o.width / new.width).min(o.width - 1);
+            let oy = (y * o.height / new.height).min(o.height - 1);
             *v = (*v).max(o.data[oy * o.width + ox]);
         }
     }
-    out
+    sk_core::params::AiMask { kind: "ai".into(), width: new.width, height: new.height, data: data.into(), depth: None }
 }
 
 impl eframe::App for App {

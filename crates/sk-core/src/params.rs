@@ -343,8 +343,9 @@ pub struct AiMask {
     pub kind: String,
     pub width: usize,
     pub height: usize,
-    /// 8-bit mask values, row-major.
-    pub data: Vec<u8>,
+    /// 8-bit mask values, row-major. Shared between copies (undo steps, history): it doesn't
+    /// change once made.
+    pub data: std::sync::Arc<Vec<u8>>,
     /// The depth range the mask was made from (kind "depth"), so it can be changed later.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth: Option<DepthRange>,
@@ -902,7 +903,7 @@ mod tests {
 
     #[test]
     fn damaged_ai_mask_is_dropped_on_load() {
-        let ai = |data: Vec<u8>| AiMask { kind: "ai".into(), width: 4, height: 4, data, depth: None };
+        let ai = |data: Vec<u8>| AiMask { kind: "ai".into(), width: 4, height: 4, data: data.into(), depth: None };
         let layer = |a: AiMask| Layer { mask: Mask { ai: Some(a), ..Default::default() }, ..Default::default() };
         let adj = Adjustments { layers: vec![layer(ai(vec![0; 10])), layer(ai(vec![0; 16]))], ..Default::default() }.normalized();
         assert!(adj.layers[0].mask.ai.is_none());

@@ -70,7 +70,7 @@ impl DepthMap {
             kind: "depth".into(),
             width: self.width,
             height: self.height,
-            data: self.data.iter().map(|d| (r.weight(*d) * 255.0 + 0.5) as u8).collect(),
+            data: self.data.iter().map(|d| (r.weight(*d) * 255.0 + 0.5) as u8).collect::<Vec<u8>>().into(),
             depth: Some(*r),
         }
     }

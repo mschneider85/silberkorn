@@ -413,7 +413,7 @@ fn phase5_speed_edit_ai_masks_split_and_recipes() {
     f.app.request_ai(crate::workers::AiKind::Sky);
     f.pump("Himmel", |a| !a.ai_busy);
     let merged = f.app.current.as_ref().unwrap().adjustments.layers[0].mask.ai.clone().unwrap();
-    assert!(merged.data.iter().zip(&ai.data).all(|(m, a)| m >= a), "union keeps the magic selection");
+    assert!(merged.data.iter().zip(ai.data.iter()).all(|(m, a)| m >= a), "union keeps the magic selection");
 
     // Color pick sets a color range on the active layer.
     f.app.set_local_tool(crate::layers::LocalTool::ColorPick);
@@ -1333,6 +1333,26 @@ fn renamed_files_do_not_inherit_what_was_kept_for_their_new_path() {
         std::thread::sleep(Duration::from_millis(20));
     }
     assert!(!f.app.is_prepared(&b), "veraltetes Ergebnis verworfen");
+}
+
+#[test]
+fn undo_history_is_bounded_and_shares_masks() {
+    let Some(mut f) = Fixture::new("undo-limit") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let mask = sk_core::params::AiMask { kind: "ai".into(), width: 32, height: 32, data: vec![200u8; 32 * 32].into(), depth: None };
+    f.app.edit(|a| {
+        a.layers.push(Default::default());
+        a.layers[0].mask.ai = Some(mask.clone());
+    });
+    f.app.commit_and_save();
+    for i in 0..crate::app::UNDO_LIMIT + 20 {
+        f.app.edit(|a| a.exposure = i as f32 / 1000.0);
+        f.app.commit_and_save();
+    }
+    assert_eq!(f.app.undo.len(), crate::app::UNDO_LIMIT);
+    // Every step refers to the same mask data instead of a copy of its own.
+    let data = |a: &sk_core::params::Adjustments| a.layers[0].mask.ai.as_ref().unwrap().data.clone();
+    assert!(f.app.undo.iter().all(|a| std::sync::Arc::ptr_eq(&data(a), &mask.data)));
 }
 
 #[test]
