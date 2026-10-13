@@ -192,7 +192,17 @@ fn store_kind(path: &Path, adj: &Adjustments, session: Option<&Path>, img: &::im
     }
     let mut bytes = Vec::new();
     let mut enc = ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, kind.quality());
-    if enc.encode_image(&img.to_rgb8()).is_ok() && crate::safe_file::write_nosync(&jpg, &bytes).is_ok() {
+    if enc.encode_image(&img.to_rgb8()).is_err() {
+        return;
+    }
+    // Image and key are written as a pair: two renderings of the same image (different
+    // settings, from different threads) must not leave one's image with the other's key. The
+    // old key goes first, so that a failed write leaves no key (a cache miss) rather than a
+    // wrong one.
+    static PAIR: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _pair = PAIR.lock().unwrap_or_else(|e| e.into_inner());
+    let _ = std::fs::remove_file(&key);
+    if crate::safe_file::write_nosync(&jpg, &bytes).is_ok() {
         let _ = crate::safe_file::write_nosync(&key, thumb_key(path, adj));
     }
 }

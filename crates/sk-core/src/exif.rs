@@ -43,15 +43,20 @@ fn rational(v: f64, denominator: u32) -> Value {
 
 /// The TIFF-structured EXIF data (without the JPEG "Exif\0\0" prefix), or empty if there is nothing to write.
 pub fn build(f: &ExifFields) -> Vec<u8> {
-    let ascii = |s: &str| (!s.trim().is_empty()).then(|| Value::Ascii(s.trim().to_string()));
+    // Text as UTF-8 (what readers expect in practice, also for "©" and umlauts), without control
+    // characters: a NUL would end the value early.
+    let ascii = |s: &str| {
+        let s: String = s.chars().filter(|c| !c.is_control()).collect();
+        (!s.trim().is_empty()).then(|| Value::Ascii(s.trim().to_string()))
+    };
     let mut ifd0: Vec<(u16, Value)> = Vec::new();
     let mut sub: Vec<(u16, Value)> = Vec::new();
     if let Some(c) = f.capture {
         ifd0.extend(ascii(&c.make).map(|v| (0x010F, v)));
         ifd0.extend(ascii(&c.model).map(|v| (0x0110, v)));
-        if let Some(date) = c.date.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
-            ifd0.push((0x0132, Value::Ascii(date.into())));
-            sub.push((0x9003, Value::Ascii(date.into())));
+        if let Some(Value::Ascii(date)) = c.date.as_deref().and_then(ascii) {
+            ifd0.push((0x0132, Value::Ascii(date.clone())));
+            sub.push((0x9003, Value::Ascii(date)));
         }
         if let Some((n, d)) = c.exposure_rational {
             sub.push((0x829A, Value::Rational(n, d)));
@@ -171,6 +176,15 @@ mod tests {
         assert_eq!(ascii_at(&b, get(&sub, 0xA434)), "FE 24-70mm F2.8 GM");
         let off = get(&sub, 0x829A).3 as usize;
         assert_eq!((u32::from_le_bytes(b[off..off + 4].try_into().unwrap()), u32::from_le_bytes(b[off + 4..off + 8].try_into().unwrap())), (1, 50));
+    }
+
+    #[test]
+    fn text_keeps_its_characters_but_no_control_characters() {
+        let b = build(&ExifFields { capture: None, artist: "Jörg Müller", copyright: "© 2026\0 alle Rechte" });
+        let e = entries(&b, 8);
+        let get = |tag| ascii_at(&b, *e.iter().find(|x| x.0 == tag).unwrap());
+        assert_eq!(get(0x013B), "Jörg Müller");
+        assert_eq!(get(0x8298), "© 2026 alle Rechte");
     }
 
     #[test]

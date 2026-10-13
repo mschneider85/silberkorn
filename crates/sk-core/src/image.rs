@@ -25,6 +25,8 @@ impl LinearImage {
 
     /// Like [`Self::box_downscale`], but leaves `self` alone (no copy of a large source needed).
     pub fn box_downscaled(&self, factor: usize) -> Self {
+        // Never below one pixel: a narrow strip (e.g. a panorama) keeps its short side.
+        let factor = factor.min(self.width).min(self.height);
         if factor <= 1 {
             return self.clone();
         }
@@ -224,6 +226,15 @@ pub fn rotate_pixels<T: Copy + Send + Sync + Default>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn very_narrow_images_can_be_downscaled() {
+        let strip = LinearImage::new(60, 40000, vec![[0.5; 3]; 60 * 40000]);
+        let small = strip.fit_within(256);
+        assert!(small.width >= 1 && small.height <= 256, "{}x{}", small.width, small.height);
+        let tiny = LinearImage::new(3, 2, vec![[0.5; 3]; 6]).box_downscaled(4);
+        assert_eq!((tiny.width, tiny.height), (1, 1));
+    }
 
     fn img() -> LinearImage {
         // 3x2 image, value = index
