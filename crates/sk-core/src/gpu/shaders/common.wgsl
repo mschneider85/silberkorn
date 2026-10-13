@@ -93,6 +93,9 @@ struct Geo {
     fill: f32,
     kv: f32,
     kh: f32,
+    ks: f32,
+    fish_f: f32,
+    fish_fr: f32,
     norm: f32,
     half_diag: f32,
     k1: f32,
@@ -124,7 +127,21 @@ struct Geo {
     cam_vig: array<f32, 5>,
 }
 
+// Rectilinear -> fisheye position (GeoMap::defish).
+fn geo_defish(g: Geo, p: vec2<f32>) -> vec2<f32> {
+    let r = length(p);
+    if g.fish_f == 0.0 || r < 1e-6 {
+        return p;
+    }
+    return p * (g.fish_f * atan(r / g.fish_fr) / r);
+}
+
 fn geo_centered(g: Geo, ox: f32, oy: f32) -> vec2<f32> {
+    return geo_defish(g, geo_plane(g, ox, oy));
+}
+
+// Centered position before the fisheye and lens correction (GeoMap::frame_to_source).
+fn geo_plane(g: Geo, ox: f32, oy: f32) -> vec2<f32> {
     let fx = g.crop_x * g.frame_w + ox - g.frame_w / 2.0;
     let fy = g.crop_y * g.frame_h + oy - g.frame_h / 2.0;
     var x = (g.cos * fx - g.sin * fy) / g.fill;
@@ -150,8 +167,7 @@ fn geo_centered(g: Geo, ox: f32, oy: f32) -> vec2<f32> {
     let xn = s.x / hw;
     let yn = s.y / hh;
     let d = max(1.0 + g.kv * yn + g.kh * xn, 0.2);
-    let sc = 1.0 / (1.0 + max(abs(g.kv), abs(g.kh)) * 0.5);
-    return vec2<f32>(xn / d * hw * sc, yn / d * hh * sc);
+    return vec2<f32>(xn / d * hw * g.ks, yn / d * hh * g.ks);
 }
 
 fn distortion_factor(g: Geo, r2: f32, r: f32) -> f32 {

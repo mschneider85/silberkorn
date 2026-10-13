@@ -578,6 +578,9 @@ pub struct LensCorrection {
     pub profile: Option<String>,
     /// Barrel (+) / pincushion (-) correction, -100..100.
     pub distortion: f32,
+    /// Fisheye to rectilinear: diagonal angle of view of the fisheye in degrees (0 = off,
+    /// 180 = a typical full-frame fisheye). Assumes the equidistant projection.
+    pub fisheye: f32,
     /// Lateral chromatic aberration (red/cyan and blue/yellow), -100..100.
     pub ca_red: f32,
     pub ca_blue: f32,
@@ -589,7 +592,7 @@ pub struct LensCorrection {
 
 impl Default for LensCorrection {
     fn default() -> Self {
-        Self { camera: true, profile: None, distortion: 0.0, ca_red: 0.0, ca_blue: 0.0, vignetting: 0.0, profile_coeffs: None }
+        Self { camera: true, profile: None, distortion: 0.0, fisheye: 0.0, ca_red: 0.0, ca_blue: 0.0, vignetting: 0.0, profile_coeffs: None }
     }
 }
 

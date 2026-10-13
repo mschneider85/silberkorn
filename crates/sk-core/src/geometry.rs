@@ -34,6 +34,12 @@ pub struct GeoMap {
     flip_v: bool,
     kv: f32,
     kh: f32,
+    /// Zoom after the keystone so that the corrected image covers the whole frame (see `keystone_fill`).
+    ks: f32,
+    /// Fisheye correction (see `fisheye_params`): focal length of the fisheye and of the
+    /// rectilinear image in pixels; 0 = off.
+    fish_f: f32,
+    fish_fr: f32,
     /// Normalization radius for distortion/TCA (half of the shorter source side).
     norm: f32,
     half_diag: f32,
@@ -94,11 +100,13 @@ impl GeoMap {
         let v = lens.vignetting / 100.0;
         let vig = [coeffs.vig_k1, coeffs.vig_k2, coeffs.vig_k3];
         let vig = [vig[0] - v, vig[1], vig[2]];
+        let (fish_f, fish_fr) = fisheye_params(lens.fisheye, src_w, src_h);
         let identity_lens = k1 == 0.0 && ptlens.is_none() && poly5.is_none() && ca == [1.0; 3] && camera.as_ref().is_none_or(|c| !c.has_warp());
 
         // Tolerance for float noise (0.4 * 10.0 is not exactly 4 in f32).
         let whole = |v: f32| (v - v.round()).abs() < 1e-3;
         let pixel_exact = theta == 0.0
+            && fish_f == 0.0
             && geom.keystone_v == 0.0
             && geom.keystone_h == 0.0
             && identity_lens
@@ -109,7 +117,7 @@ impl GeoMap {
 
         let out_w = ((crop.w * frame_w).round() as usize).max(1);
         let out_h = ((crop.h * frame_h).round() as usize).max(1);
-        Self {
+        let mut map = Self {
             src_w,
             src_h,
             frame_w,
@@ -123,6 +131,9 @@ impl GeoMap {
             flip_v: geom.flip_v,
             kv: geom.keystone_v / 100.0 * 0.6,
             kh: geom.keystone_h / 100.0 * 0.6,
+            ks: 1.0,
+            fish_f,
+            fish_fr,
             norm,
             half_diag,
             k1,
@@ -136,7 +147,36 @@ impl GeoMap {
             pixel_exact,
             out_w,
             out_h,
+        };
+        map.ks = map.keystone_fill();
+        map
+    }
+
+    /// The zoom applied after the keystone correction (1 without one).
+    pub fn keystone_zoom(&self) -> f32 {
+        self.ks
+    }
+
+    /// Zoom for the keystone correction: the largest at which the whole frame still lies on the
+    /// image, so that no empty areas appear. The keystone maps the frame (after straighten) to
+    /// a quadrilateral; its border is checked, the corners being the farthest points.
+    fn keystone_fill(&self) -> f32 {
+        if self.kv == 0.0 && self.kh == 0.0 {
+            return 1.0;
         }
+        let (hw, hh) = (self.frame_w / 2.0, self.frame_h / 2.0);
+        let (sw, sh) = (self.src_w / 2.0, self.src_h / 2.0);
+        const N: usize = 16;
+        let mut k = f32::MAX;
+        for i in 0..=N {
+            let t = i as f32 / N as f32 * 2.0 - 1.0;
+            for (fx, fy) in [(t * hw, -hh), (t * hw, hh), (-hw, t * hh), (hw, t * hh)] {
+                let (x, y) = self.frame_to_source(fx, fy, 1.0);
+                k = k.min(sw / x.abs().max(1e-6)).min(sh / y.abs().max(1e-6));
+            }
+        }
+        // A hair inside, so that interpolation at the border never reaches past the image.
+        k * 0.999
     }
 
     pub fn frame_size(&self) -> (f32, f32) {
@@ -149,6 +189,29 @@ impl GeoMap {
     fn to_source_centered(&self, ox: f32, oy: f32) -> (f32, f32) {
         let fx = self.crop.x * self.frame_w + ox - self.frame_w / 2.0;
         let fy = self.crop.y * self.frame_h + oy - self.frame_h / 2.0;
+        let (x, y) = self.frame_to_source(fx, fy, self.ks);
+        self.defish(x, y)
+    }
+
+    /// Rectilinear -> fisheye position (centered): the angle from the axis stays, the radius
+    /// follows the equidistant projection r = f·θ.
+    #[inline]
+    fn defish(&self, x: f32, y: f32) -> (f32, f32) {
+        if self.fish_f == 0.0 {
+            return (x, y);
+        }
+        let r = (x * x + y * y).sqrt();
+        if r < 1e-6 {
+            return (x, y);
+        }
+        let k = self.fish_f * (r / self.fish_fr).atan() / r;
+        (x * k, y * k)
+    }
+
+    /// Frame position relative to its center -> centered source position (before lens
+    /// correction), with `ks` as the keystone zoom.
+    #[inline]
+    fn frame_to_source(&self, fx: f32, fy: f32, ks: f32) -> (f32, f32) {
         // Undo straighten (positive angle rotates the image counter-clockwise).
         let mut x = (self.cos * fx - self.sin * fy) / self.fill;
         let mut y = (self.sin * fx + self.cos * fy) / self.fill;
@@ -172,8 +235,7 @@ impl GeoMap {
         let (hw, hh) = (self.src_w / 2.0, self.src_h / 2.0);
         let (xn, yn) = (sx / hw, sy / hh);
         let d = (1.0 + self.kv * yn + self.kh * xn).max(0.2);
-        let s = 1.0 / (1.0 + self.kv.abs().max(self.kh.abs()) * 0.5);
-        (xn / d * hw * s, yn / d * hh * s)
+        (xn / d * hw * ks, yn / d * hh * ks)
     }
 
     /// Source pixel coordinates per channel (pixel centers at integers) and vignetting gain.
@@ -289,6 +351,24 @@ impl GeoMap {
     }
 }
 
+/// Focal lengths (pixels) for the fisheye correction with the given diagonal angle of view
+/// (degrees): that of the fisheye, f = half diagonal / half angle, and that of the rectilinear
+/// image. The latter is chosen so that the rectilinear image as large as the source lies
+/// completely on the fisheye image (no empty areas). The projection only shrinks radii, most
+/// at the shortest distance to the border (the middle of the long sides), so that one
+/// decides: f·atan(m / fr) = m. Beyond 80° from the axis the rectilinear image would grow
+/// without bound; it is cut off there. (0, 0) when off.
+fn fisheye_params(fov: f32, src_w: f32, src_h: f32) -> (f32, f32) {
+    if fov <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let half_diag = (src_w * src_w + src_h * src_h).sqrt() / 2.0;
+    let f = half_diag / (fov.min(360.0) / 2.0).to_radians();
+    let m = src_w.min(src_h) / 2.0;
+    let fr = m / (m / f).min(80f32.to_radians()).tan();
+    (f, fr)
+}
+
 /// [`GeoMap`] as laid out in the `Geo` struct of the compute shaders (common.wgsl).
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -304,6 +384,9 @@ pub(crate) struct GeoGpu {
     fill: f32,
     kv: f32,
     kh: f32,
+    ks: f32,
+    fish_f: f32,
+    fish_fr: f32,
     norm: f32,
     half_diag: f32,
     k1: f32,
@@ -346,6 +429,9 @@ impl GeoMap {
             fill: self.fill,
             kv: self.kv,
             kh: self.kh,
+            ks: self.ks,
+            fish_f: self.fish_f,
+            fish_fr: self.fish_fr,
             norm: self.norm,
             half_diag: self.half_diag,
             k1: self.k1,
@@ -507,6 +593,59 @@ mod tests {
         let g = GeoMap::new(&geom, &LensCorrection::default(), None, 0, 40, 30, false);
         let out = g.resample(&src, full(40, 30));
         assert!(out.data.iter().all(|p| p[0] > 0.99), "no black corners");
+    }
+
+    #[test]
+    fn keystone_keeps_frame_filled() {
+        let src = LinearImage::new(60, 40, vec![[1.0; 3]; 2400]);
+        for (v, h, angle) in [(60.0, 0.0, 0.0), (-100.0, 0.0, 0.0), (0.0, 80.0, 0.0), (-70.0, 50.0, 5.0), (100.0, -100.0, -8.0)] {
+            let geom = Geometry { keystone_v: v, keystone_h: h, straighten: angle, ..Default::default() };
+            let g = GeoMap::new(&geom, &LensCorrection::default(), None, 0, 60, 40, false);
+            let out = g.resample(&src, full(60, 40));
+            assert!(out.data.iter().all(|p| p[0] > 0.99), "empty area at {v} / {h} / {angle}°");
+            // ... and not zoomed in further than needed: an edge of the image is reached.
+            let reach = [(0.0, 0.0), (60.0, 0.0), (0.0, 40.0), (60.0, 40.0)]
+                .iter()
+                .map(|&(x, y)| {
+                    let (sx, sy) = g.source_point(x, y);
+                    ((sx + 0.5) / 30.0 - 1.0).abs().max(((sy + 0.5) / 20.0 - 1.0).abs())
+                })
+                .fold(0.0, f32::max);
+            assert!(reach > 0.99, "zoomed in too far at {v} / {h} / {angle}°: {reach}");
+        }
+    }
+
+    #[test]
+    fn fisheye_keeps_frame_filled_and_straightens_lines() {
+        let src = LinearImage::new(60, 40, vec![[1.0; 3]; 2400]);
+        for fov in [30.0, 120.0, 180.0, 220.0] {
+            let lens = LensCorrection { fisheye: fov, ..Default::default() };
+            let g = GeoMap::new(&Geometry { straighten: 3.0, keystone_v: 30.0, ..Default::default() }, &lens, None, 0, 60, 40, false);
+            let out = g.resample(&src, full(60, 40));
+            assert!(out.data.iter().all(|p| p[0] > 0.99), "empty area at {fov}°");
+        }
+        // A straight line in the scene is curved on the fisheye image; corrected, it is straight
+        // again. Scene: points on the line y = 0.5·h (rectilinear), seen through a 180° fisheye.
+        let (w, h) = (600.0f32, 400.0f32);
+        let (f, _) = fisheye_params(180.0, w, h);
+        let lens = LensCorrection { fisheye: 180.0, ..Default::default() };
+        let g = GeoMap::new(&Geometry::default(), &lens, None, 0, w as usize, h as usize, false);
+        let pts: Vec<(f32, f32)> = [-0.9f32, -0.5, 0.0, 0.5, 0.9]
+            .iter()
+            .map(|&t| {
+                // A ray through (t·f·2, 0.5·f) at distance f: its angle from the axis.
+                let (x, y) = (t * 2.0, 0.5);
+                let theta = (x * x + y * y).sqrt().atan();
+                let r = f * theta;
+                let n = (x * x + y * y).sqrt();
+                // Its position on the fisheye image, then back to the output.
+                let (sx, sy) = (x / n * r + w / 2.0 - 0.5, y / n * r + h / 2.0 - 0.5);
+                g.output_point(sx, sy)
+            })
+            .collect();
+        let ys: Vec<f32> = pts.iter().map(|p| p.1).collect();
+        let spread = ys.iter().cloned().fold(f32::MIN, f32::max) - ys.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(spread < 0.5, "line still curved: {ys:?}");
     }
 
     #[test]

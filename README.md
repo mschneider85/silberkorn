@@ -43,7 +43,8 @@ SK_ADJ='{"exposure":0.5,"shadows":40}' cargo run --release -p sk-core --example 
 Pipeline (Arbeitsfarbraum: lineares Rec.2020):
 
 1. Geometrie: Zuschnitt, Geraderichten, Spiegeln, Drehen, Perspektive, Objektivkorrektur
-   (Verzeichnung, CA, Vignettierung – manuell, aus den Kameradaten oder per Lensfun-Profil)
+   (Verzeichnung, CA, Vignettierung – manuell, aus den Kameradaten oder per Lensfun-Profil;
+   Fisheye-Entzerrung)
 2. Weißabgleich mit Highlight-Rekonstruktion, Kameramatrix
 3. Rauschreduzierung (Luminanz: Guided Filter, Farbe: Chroma-Glättung)
 4. Belichtung, lokales HDR, Klarheit/Struktur, Kontrast, Basiskurve
@@ -293,6 +294,9 @@ oder Wege bleiben unberücksichtigt. Die Perspektive wird nur korrigiert, wenn m
 das Bild verteilt sind. Die Buttons stehen im Tab „Objektiv“ unter „Perspektive“; das Ergebnis ist ein
 Rückgängig-Schritt und lässt sich mit den Reglern nachjustieren.
 
+Wie beim Geraderichten zoomt die Perspektivkorrektur automatisch gerade so weit hinein, dass der ganze
+Rahmen im Bild liegt: Es entstehen keine leeren Ränder, und ein eigener Zuschnitt liegt immer innerhalb.
+
 ### Bild auf dem Zweitmonitor
 
 **Ansicht → „Bild in eigenem Fenster“** (Umschalt+F11) öffnet das Bild als eigenes Fenster,
@@ -368,6 +372,16 @@ auf einem Drucker herauskommt. Eingestellt wird im Tab **„Ausgabe“ → Softp
 
 Die Umrechnung übernimmt Little CMS (statisch eingebunden). Der Softproof betrifft nur die
 Anzeige, nicht den Export.
+
+### Fisheye entzerren
+
+Der Regler **Fisheye** (Tab „Objektiv“, Objektivkorrektur) rechnet ein Fisheye-Bild in ein normales
+(rektilineares) Weitwinkelbild um: Gerade Linien, die das Fisheye krümmt, werden wieder gerade. Der Wert
+ist der Bildwinkel des Fisheyes über die Diagonale – bei den meisten Vollformat-Fisheyes 180°, bei
+Zirkular-Fisheyes eher 220°. Angenommen wird die übliche winkeltreue (äquidistante) Abbildung. Ein
+rektilineares Bild kann nicht so weit reichen wie ein Fisheye; Silberkorn zoomt so weit hinein, dass
+keine leeren Ränder entstehen (bis 80° von der Bildmitte). Geraderichten und Perspektive wirken danach
+auf das entzerrte Bild.
 
 ### Objektivkorrektur aus den Kameradaten
 

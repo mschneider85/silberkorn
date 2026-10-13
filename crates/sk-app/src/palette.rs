@@ -76,7 +76,7 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Lens, "Zuschnitt", "crop beschneiden seitenverhältnis format"),
     (Tab::Lens, "Drehen & Spiegeln", "rotate flip geraderichten horizont straighten"),
     (Tab::Lens, "Perspektive", "perspektive stürzende linien upright keystone"),
-    (Tab::Lens, "Objektivkorrektur", "lens verzeichnung chromatische aberration ca vignette lensfun profil"),
+    (Tab::Lens, "Objektivkorrektur", "lens verzeichnung chromatische aberration ca vignette lensfun profil fisheye fischauge entzerren defish"),
     (Tab::Exposure, "Belichtung", "exposure kontrast helligkeit sättigung"),
     (Tab::Exposure, "Lichter und Tiefen", "hdr lichter tiefen weiß schwarz highlights shadows"),
     (Tab::Exposure, "Tonwerte", "levels schwarzpunkt weißpunkt"),

@@ -1237,7 +1237,7 @@ mod tests {
                         crop: CropRect { x: 0.1, y: 0.05, w: 0.8, h: 0.85 },
                         ..Default::default()
                     },
-                    lens: LensCorrection { distortion: 30.0, ca_red: 40.0, ca_blue: -30.0, vignetting: 40.0, ..Default::default() },
+                    lens: LensCorrection { distortion: 30.0, fisheye: 150.0, ca_red: 40.0, ca_blue: -30.0, vignetting: 40.0, ..Default::default() },
                     ..plain.clone()
                 },
                 Default::default(),

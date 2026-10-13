@@ -399,7 +399,9 @@ mod tests {
             for x in 0..w {
                 // Where this source pixel lands in the straight output.
                 let (ox, oy) = map.output_point(x as f32, y as f32);
-                let (u, v) = (ox / map.out_w as f32, oy / map.out_h as f32);
+                // Undo the keystone zoom, so that the scene is the same whatever it is.
+                let k = map.keystone_zoom();
+                let (u, v) = (0.5 + (ox / map.out_w as f32 - 0.5) * k, 0.5 + (oy / map.out_h as f32 - 0.5) * k);
                 let bars = (u * 12.0).fract() < 0.3;
                 let bands = (v * 6.0).fract() < 0.15;
                 let val = if bars || bands { 0.05 } else { 0.6 };
