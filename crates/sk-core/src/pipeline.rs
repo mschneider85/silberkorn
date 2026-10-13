@@ -99,6 +99,8 @@ struct Plan {
     region: Region,
     /// `region` plus the margin needed by neighborhood operations.
     ext: Region,
+    /// That margin (pixels per side, before clipping to the image).
+    margin: usize,
     /// Source resolution relative to the sensor.
     scale: f32,
     r_hdr: f32,
@@ -643,7 +645,7 @@ impl Processor {
         let m = margin.ceil() as usize;
         let (x0, y0) = (region.x.saturating_sub(m) / align * align, region.y.saturating_sub(m) / align * align);
         let ext = Region { x: x0, y: y0, w: (region.x + region.w + m).min(full.0) - x0, h: (region.y + region.h + m).min(full.1) - y0 };
-        Plan { geo, full, region, ext, scale, r_hdr, r_clarity, r_structure, hdr_active, clarity_active, structure_active, dehaze_active }
+        Plan { geo, full, region, ext, margin: m, scale, r_hdr, r_clarity, r_structure, hdr_active, clarity_active, structure_active, dehaze_active }
     }
 
     /// Processes `region` (default: whole output) into encoded working RGB (sRGB transfer).

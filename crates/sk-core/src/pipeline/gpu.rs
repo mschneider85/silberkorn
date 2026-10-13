@@ -6,7 +6,7 @@
 
 use std::sync::{LazyLock, Weak};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use bytemuck::{Pod, Zeroable};
 use wgpu::Buffer;
 
@@ -958,11 +958,13 @@ impl Processor {
             let tiles: Vec<Region> = if ext_px <= MAX_PIXELS && ext_px as u64 * 16 <= g.max_binding {
                 vec![r]
             } else {
-                (0..r.h.div_ceil(TILE))
-                    .flat_map(|ty| (0..r.w.div_ceil(TILE)).map(move |tx| (tx, ty)))
+                let tile = tile_size(whole.margin, g.max_binding)
+                    .with_context(|| format!("Rand von {} Pixeln zu groß für die Grafikkarte", whole.margin))?;
+                (0..r.h.div_ceil(tile))
+                    .flat_map(|ty| (0..r.w.div_ceil(tile)).map(move |tx| (tx, ty)))
                     .map(|(tx, ty)| {
-                        let (x, y) = (r.x + tx * TILE, r.y + ty * TILE);
-                        Region { x, y, w: TILE.min(r.x + r.w - x), h: TILE.min(r.y + r.h - y) }
+                        let (x, y) = (r.x + tx * tile, r.y + ty * tile);
+                        Region { x, y, w: tile.min(r.x + r.w - x), h: tile.min(r.y + r.h - y) }
                     })
                     .collect()
             };
@@ -997,6 +999,10 @@ impl Processor {
                     }
                 }
             }
+            // Over the whole image: a single tile may well be black (e.g. a panorama's corner).
+            if out.iter().all(|p| *p == [0.0; 3]) {
+                bail!("Grafikkarte: schwarzes Ergebnis, wird auf dem Prozessor geprüft");
+            }
             Ok(LinearImage::new(r.w, r.h, out))
         })
     }
@@ -1018,15 +1024,22 @@ fn check_display(g: &Gpu, rgba: &[u8]) -> Result<()> {
 }
 
 /// Like [`check_display`] for converted output: the kernel marks each written pixel with w = 1.
+/// (An all-black result is checked over the whole image, see `process_gpu`.)
 fn check_output(g: &Gpu, data: &[[f32; 4]]) -> Result<()> {
     if data.iter().any(|p| p[3] != 1.0 || !p[..3].iter().all(|v| v.is_finite())) {
         g.fail("Grafikkarte lieferte ein unvollständiges Ergebnis");
         bail!("Grafikkarte: unvollständiges Ergebnis");
     }
-    if data.iter().all(|p| p[..3] == [0.0, 0.0, 0.0]) {
-        bail!("Grafikkarte: schwarzes Ergebnis, wird auf dem Prozessor geprüft");
-    }
     Ok(())
+}
+
+/// Output pixels per side of an export tile: at most [`TILE`], and small enough that the tile
+/// with `margin` on every side fits into one buffer binding (16 bytes per pixel). `None` if not
+/// even a small tile fits.
+fn tile_size(margin: usize, max_binding: u64) -> Option<usize> {
+    const MIN: usize = 256;
+    let fits = |t: usize| ((t + 2 * margin) as u64).pow(2) * 16 <= max_binding;
+    (MIN..=TILE).rev().step_by(64).find(|&t| fits(t))
 }
 
 #[cfg(test)]
@@ -1049,6 +1062,29 @@ mod tests {
             eprintln!("keine Grafikkarte: Vergleich übersprungen");
         }
         g
+    }
+
+    #[test]
+    fn export_tiles_leave_room_for_the_margin() {
+        assert_eq!(tile_size(0, 1 << 31), Some(TILE));
+        // 6 % clarity margin of a 40000 px panorama on a card with 2 GB bindings.
+        assert_eq!(tile_size(2400, 1 << 31), Some(TILE));
+        let t = tile_size(500, 128 << 20).unwrap();
+        assert!(((t + 1000) as u64).pow(2) * 16 <= 128 << 20 && ((t + 64 + 1000) as u64).pow(2) * 16 > 128 << 20, "{t}");
+        assert_eq!(tile_size(2400, 256 << 20), None);
+    }
+
+    #[test]
+    fn a_black_tile_does_not_send_the_export_to_the_cpu() {
+        // A device of its own with small bindings, for small tiles.
+        let Some(mut g) = Gpu::new_for_test() else { return };
+        g.max_binding = 4 << 20;
+        // Black left part (like a panorama's empty corner), wide enough for whole black tiles.
+        let (w, h) = (TILE * 2 + 64, 300);
+        let src = LinearImage::new(w, h, (0..w * h).map(|i| if i % w < TILE + 32 { [0.0; 3] } else { [0.3; 3] }).collect());
+        let p = Processor::new(&meta(w, h), &Adjustments::default());
+        let out = p.process_gpu(&g, &src, None, OutputSpace::Srgb).expect("auf der Grafikkarte");
+        assert!(out.data[w - 1][0] > 0.1);
     }
 
     #[test]
