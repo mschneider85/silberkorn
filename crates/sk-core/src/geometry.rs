@@ -279,6 +279,21 @@ impl GeoMap {
         1.0 / c.max(0.2)
     }
 
+    /// Whether any vignetting correction brightens the image (manual or the camera's).
+    fn has_vignetting(&self) -> bool {
+        self.vig != [0.0; 3] || self.camera.as_ref().is_some_and(|c| c.has_vignette())
+    }
+
+    /// Vignetting gain applied to the source pixel at `(sx, sy)`, e.g. for content cloned from
+    /// there to another place.
+    pub fn source_gain(&self, sx: f32, sy: f32) -> f32 {
+        if !self.has_vignetting() {
+            return 1.0;
+        }
+        let (ox, oy) = self.output_point(sx, sy);
+        self.map(ox, oy).1
+    }
+
     /// Output position -> source pixel position (green channel), e.g. for color pickers.
     pub fn source_point(&self, ox: f32, oy: f32) -> (f32, f32) {
         let ([_, g, _], _) = self.map(ox, oy);

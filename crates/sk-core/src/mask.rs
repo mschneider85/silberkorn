@@ -465,9 +465,13 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
         let oy = (region.y + ry) as f32 + 0.5;
         for (rx, px) in line.iter_mut().enumerate() {
             let ox = (region.x + rx) as f32 + 0.5;
-            let mut pt: Option<(f32, f32)> = None;
+            // Source position and the vignetting gain `resample` applied there.
+            let mut pt: Option<(f32, f32, f32)> = None;
             for s in &prepared {
-                let (sx, sy) = *pt.get_or_insert_with(|| geo.source_point(ox, oy));
+                let (sx, sy, vig) = *pt.get_or_insert_with(|| {
+                    let ([_, g, _], gain) = geo.map(ox, oy);
+                    (g[0], g[1], gain)
+                });
                 let (x0, y0, x1, y1) = s.bounds;
                 if sx < x0 || sx > x1 || sy < y0 || sy > y1 {
                     continue;
@@ -478,7 +482,13 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
                 }
                 let w = (1.0 - smoothstep(s.inner, s.r, d)) * s.opacity;
                 let v = bilinear(src, sx + s.offset.0, sy + s.offset.1);
-                let gain = s.heal.as_ref().map_or([1.0; 3], |h| h.sample(sx, sy));
+                // The source pixels lack the vignetting correction: heal matches the target's
+                // uncorrected surroundings and then gets the target's correction, clone keeps the
+                // brightness the source shows.
+                let gain = match &s.heal {
+                    Some(h) => h.sample(sx, sy).map(|g| g * vig),
+                    None => [geo.source_gain(sx + s.offset.0, sy + s.offset.1); 3],
+                };
                 for c in 0..3 {
                     let repl = v[c] * gain[c];
                     px[c] += (repl - px[c]) * w;
@@ -670,11 +680,13 @@ pub fn apply_removals(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, re
         let oy = (region.y + ry) as f32 + 0.5;
         for (rx, px) in line.iter_mut().enumerate() {
             let ox = (region.x + rx) as f32 + 0.5;
-            let mut uv: Option<(f32, f32)> = None;
+            // Source position and the vignetting gain `resample` applied there: the patch is
+            // made in camera space without it.
+            let mut uv: Option<(f32, f32, f32)> = None;
             for (r, p) in &patches {
-                let (u, v) = *uv.get_or_insert_with(|| {
-                    let (sx, sy) = geo.source_point(ox, oy);
-                    ((sx + 0.5) / sw, (sy + 0.5) / sh)
+                let (u, v, vig) = *uv.get_or_insert_with(|| {
+                    let ([_, g, _], gain) = geo.map(ox, oy);
+                    ((g[0] + 0.5) / sw, (g[1] + 0.5) / sh, gain)
                 });
                 let [x, y, w, h] = r.rect;
                 if u < x || v < y || u >= x + w || v >= y + h {
@@ -683,7 +695,7 @@ pub fn apply_removals(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, re
                 let q = p.sample((u - x) / w * p.w as f32, (v - y) / h * p.h as f32);
                 let q3 = q[3];
                 for (v, q) in px.iter_mut().zip(q) {
-                    *v += (q - *v) * q3;
+                    *v += (q * vig - *v) * q3;
                 }
             }
         }
@@ -762,6 +774,31 @@ mod tests {
         apply_retouch(&mut img, &src, &geo, region, &[spot]);
         assert!(img.data[10 * w + 10][0] > 0.7);
         assert!(img.data[10 * w + 2][0] < 0.15);
+    }
+
+    #[test]
+    fn retouch_gets_the_vignetting_correction() {
+        // Uniform grey with a blemish in a corner, vignetting correction on: the healed area
+        // must match its corrected surroundings, a clone from the center the center's brightness.
+        let (w, h) = (80, 60);
+        let src = LinearImage::new(w, h, (0..w * h).map(|i| if (i % w, i / w) == (8, 8) { [0.9; 3] } else { [0.2; 3] }).collect());
+        let lens = crate::params::LensCorrection { vignetting: 80.0, ..Default::default() };
+        let geo = GeoMap::new(&Default::default(), &lens, None, 0, w, h, false);
+        let region = Region { x: 0, y: 0, w, h };
+        let resampled = geo.resample(&src, region);
+        // What the corrected grey is at the blemish and at the center.
+        let around = 0.2 * geo.map(8.5, 8.5).1;
+        let center = resampled.data[30 * w + 40][0];
+        assert!(around > center * 1.1, "Ecke {around}, Mitte {center}");
+        let spot = |mode, source: [f32; 2]| Spot { mode, target: [8.5 / 80.0, 8.5 / 60.0], source, radius: 0.04, feather: 0.2, opacity: 1.0, path: Vec::new() };
+        let mut img = resampled.clone();
+        apply_retouch(&mut img, &src, &geo, region, &[spot(SpotMode::Heal, [40.5 / 80.0, 30.5 / 60.0])]);
+        let v = img.data[8 * w + 8][0];
+        assert!((v / around - 1.0).abs() < 0.05, "geheilt {v}, Umgebung {around}");
+        let mut img = resampled.clone();
+        apply_retouch(&mut img, &src, &geo, region, &[spot(SpotMode::Clone, [40.5 / 80.0, 30.5 / 60.0])]);
+        let v = img.data[8 * w + 8][0];
+        assert!((v / center - 1.0).abs() < 0.05, "geklont {v}, Quelle {center}");
     }
 
     #[test]
