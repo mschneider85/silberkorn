@@ -285,6 +285,17 @@ impl GeoMap {
         (g[0], g[1])
     }
 
+    /// Source pixels per output pixel in the middle of the output: straightening, keystone and
+    /// fisheye correction enlarge the image, so a brush of a given size on screen covers less
+    /// of the source.
+    pub fn source_scale(&self) -> f32 {
+        let (cx, cy) = (self.out_w as f32 / 2.0, self.out_h as f32 / 2.0);
+        let p = self.source_point(cx, cy);
+        let dist = |q: (f32, f32)| ((q.0 - p.0).powi(2) + (q.1 - p.1).powi(2)).sqrt();
+        let k = (dist(self.source_point(cx + 1.0, cy)) + dist(self.source_point(cx, cy + 1.0))) / 2.0;
+        if k.is_finite() && k > 0.0 { k } else { 1.0 }
+    }
+
     /// Inverse of `source_point`: output position of a source pixel position (Newton iteration).
     pub fn output_point(&self, sx: f32, sy: f32) -> (f32, f32) {
         // Initial guess: proportional position in the output frame.
@@ -546,6 +557,16 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn source_scale_follows_straightening() {
+        let map = |g: &Geometry| GeoMap::new(g, &LensCorrection::default(), None, 0, 6000, 4000, false);
+        assert!((map(&Geometry::default()).source_scale() - 1.0).abs() < 1e-3);
+        // Straightening zooms in: one output pixel covers less than one source pixel.
+        let tilted = Geometry { straighten: 10.0, ..Default::default() };
+        let k = map(&tilted).source_scale();
+        assert!(k > 0.6 && k < 0.95, "{k}");
+    }
 
     fn gradient(w: usize, h: usize) -> LinearImage {
         LinearImage::new(w, h, (0..w * h).map(|i| [(i % w) as f32, (i / w) as f32, 0.0]).collect())

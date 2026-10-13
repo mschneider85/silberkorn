@@ -257,15 +257,21 @@ impl App {
         Some(UvToScreen { geo, pw, ph, origin: img_rect.min, scale })
     }
 
-    /// Screen radius -> radius relative to the long source edge.
+    /// Screen radius -> radius relative to the long source edge (the brush on screen and what
+    /// it paints are the same size also with straightening or perspective correction).
     pub(crate) fn radius_norm(&self, px: f32, scale: f32) -> f32 {
         let long = self.current.as_ref().map_or(1.0, |c| c.preview.width.max(c.preview.height) as f32);
-        px / scale / long
+        px / scale * self.source_scale() / long
     }
 
     pub(crate) fn radius_screen(&self, r: f32, scale: f32) -> f32 {
         let long = self.current.as_ref().map_or(1.0, |c| c.preview.width.max(c.preview.height) as f32);
-        r * long * scale
+        r * long * scale / self.source_scale()
+    }
+
+    /// Source pixels per output pixel (see `GeoMap::source_scale`).
+    fn source_scale(&self) -> f32 {
+        self.mapping().map_or(1.0, |(geo, ..)| geo.source_scale())
     }
 
     /// Index of the active layer, creating one if there is none.

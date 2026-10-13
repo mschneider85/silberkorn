@@ -597,6 +597,28 @@ fn wave_correct(rot: &mut [M3]) {
         }
     }
     let mut up = smallest_eigenvector(&cov);
+    // With all horizontal axes (nearly) alike – a vertical panorama, or two frames side by side –
+    // two eigenvalues are about zero and "up" would be a random mix of the cameras' up and
+    // viewing directions. Then the cameras' mean up direction is taken (made perpendicular to
+    // their horizontal axis): the middle frame's horizon stays level.
+    let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let normalized = |a: [f64; 3]| {
+        let n = dot(a, a).sqrt();
+        (n > 1e-9).then(|| a.map(|v| v / n))
+    };
+    let sum = |k: usize| rot.iter().fold([0.0; 3], |s, r| [s[0] + r[k][0], s[1] + r[k][1], s[2] + r[k][2]]);
+    if let Some(mx) = normalized(sum(0)) {
+        let other = [mx[1] * up[2] - mx[2] * up[1], mx[2] * up[0] - mx[0] * up[2], mx[0] * up[1] - mx[1] * up[0]];
+        let cov_other = [dot(cov[0], other), dot(cov[1], other), dot(cov[2], other)];
+        // Mean squared sine of the horizontal axes' spread around their mean: below ~10°.
+        if dot(other, cov_other) / rot.len() as f64 <= 0.03 {
+            let y = sum(1);
+            let d = dot(y, mx);
+            if let Some(y) = normalized([y[0] - d * mx[0], y[1] - d * mx[1], y[2] - d * mx[2]]) {
+                up = y;
+            }
+        }
+    }
     // Pointing like the cameras' y axes (down in image coordinates).
     let ysum: f64 = rot.iter().map(|r| r[1][0] * up[0] + r[1][1] * up[1] + r[1][2] * up[2]).sum();
     if ysum < 0.0 {
@@ -951,6 +973,22 @@ pub fn stitch_files(paths: &[PathBuf], opts: &PanoramaOptions, progress: &dyn Fn
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vertical_panorama_keeps_the_middle_frame_level() {
+        // Three frames tilted upwards (about the shared x axis), with a little jitter.
+        let frame = |pitch: f64, jitter: f64| -> M3 {
+            let (c, s) = (pitch.to_radians().cos(), pitch.to_radians().sin());
+            let x = [1.0, jitter, 0.0];
+            let n = (1.0 + jitter * jitter).sqrt();
+            [x.map(|v| v / n), [-jitter / n * c, c / n, -s], [-jitter / n * s, s / n, c]]
+        };
+        let mut rot = vec![frame(0.0, 1e-4), frame(30.0, -2e-4), frame(60.0, 1e-4)];
+        wave_correct(&mut rot);
+        // The middle frame looks straight ahead: its up axis is the world's.
+        assert!(rot[1][1][1] > 0.99, "{:?}", rot[1]);
+        assert!(rot[1][0][0] > 0.99, "{:?}", rot[1]);
+    }
     use crate::detail::value_noise;
 
     /// A textured world: brightness as a function of the viewing direction.

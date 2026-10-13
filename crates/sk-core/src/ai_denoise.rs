@@ -255,6 +255,9 @@ const BLEND_BUDGET: usize = 600 << 20;
 /// A few pixels of the source: tells a freed and newly allocated buffer at the same address apart.
 pub(crate) fn fingerprint(img: &LinearImage) -> u64 {
     let n = img.data.len();
+    if n == 0 {
+        return 0;
+    }
     let samples: Vec<u8> = (0..64).flat_map(|i| img.data[i * n / 64].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>()).collect();
     crate::cache::fnv1a(&samples)
 }

@@ -412,10 +412,10 @@ fn display_tables(g: &Gpu) -> &(Buffer, Buffer) {
 }
 
 impl DarkChannel {
-    /// From block minima (before dividing by the airlight) and airlight samples.
-    pub(super) fn from_parts(mut samples: Vec<f32>, pooled: Vec<f32>, lw: usize, lh: usize, step: usize) -> Self {
-        let idx = ((samples.len() as f32 * 0.997) as usize).min(samples.len().saturating_sub(1));
-        let airlight = if samples.is_empty() { 1.0 } else { *samples.select_nth_unstable_by(idx, |a, b| a.total_cmp(b)).1 }.max(0.05);
+    /// From block minima (before dividing by the airlight) and airlight samples; `airlight`
+    /// given (that of the whole image, for a part of it) the samples are not used.
+    pub(super) fn from_parts(samples: Vec<f32>, pooled: Vec<f32>, lw: usize, lh: usize, step: usize, airlight: Option<f32>) -> Self {
+        let airlight = airlight.unwrap_or_else(|| airlight_of(samples));
         let plane = gaussian_blur(&Plane::new(lw, lh, pooled.into_iter().map(|m| (m / airlight).clamp(0.0, 1.0)).collect()), 1.5);
         Self { plane, step, airlight }
     }
@@ -433,9 +433,15 @@ struct DarkPool {
     dom: (usize, usize),
 }
 
+/// Airlight: the bright end of the minimum channel.
+pub(super) fn airlight_of(mut samples: Vec<f32>) -> f32 {
+    let idx = ((samples.len() as f32 * 0.997) as usize).min(samples.len().saturating_sub(1));
+    if samples.is_empty() { 1.0 } else { *samples.select_nth_unstable_by(idx, |a, b| a.total_cmp(b)).1 }.max(0.05)
+}
+
 impl DarkPool {
-    fn new(g: &Gpu, dom: (usize, usize)) -> Self {
-        let step = (dom.0.max(dom.1) / 256).max(1);
+    /// `step`: block size (see `dark_step`).
+    fn new(g: &Gpu, dom: (usize, usize), step: usize) -> Self {
         let (lw, lh) = (dom.0.div_ceil(step), dom.1.div_ceil(step));
         Self {
             pooled: g.upload(&vec![f32::MAX.to_bits(); lw * lh]),
@@ -466,11 +472,11 @@ impl DarkPool {
         ops.enc.run_2d(DARK_POOL, &[&a, &min_c, &self.pooled, &self.samples, &self.count], own.w, own.h);
     }
 
-    fn finish(self, g: &Gpu) -> Result<DarkChannel> {
+    fn finish(self, g: &Gpu, airlight: Option<f32>) -> Result<DarkChannel> {
         let count = g.read::<u32>(&self.count, 1)?[0] as usize;
         let samples = g.read::<f32>(&self.samples, count)?;
         let pooled = g.read::<f32>(&self.pooled, self.lw * self.lh)?;
-        Ok(DarkChannel::from_parts(samples, pooled, self.lw, self.lh, self.step))
+        Ok(DarkChannel::from_parts(samples, pooled, self.lw, self.lh, self.step, airlight))
     }
 }
 
@@ -492,7 +498,7 @@ impl Processor {
         let input = if self.adj.retouch.is_empty() && self.adj.removals.is_empty() {
             let win = plan.geo.source_window(ext);
             args.win = [win.0 as u32, win.1 as u32, win.2 as u32, win.3 as u32];
-            let k = key(&format!("{:p}|{}x{}|{win:?}", src.data.as_ptr(), src.width, src.height));
+            let k = key(&format!("{:p}|{}x{}|{}|{win:?}", src.data.as_ptr(), src.width, src.height, crate::ai_denoise::fingerprint(src)));
             let mut c = cache.map(|c| c.gpu.lock().unwrap());
             match c.as_mut().and_then(|c| c.source.as_ref().filter(|(ck, _)| *ck == k).map(|(_, b)| b.clone())) {
                 Some(b) => b,
@@ -549,7 +555,7 @@ impl Processor {
     }
 
     /// Local operator planes (smoothed log luminance, clarity, structure, dark channel).
-    fn local_gpu(&self, ops: &mut Ops, working: &Buffer, plan: &Plan, global_dark: Option<&DarkChannel>) -> Result<Local> {
+    fn local_gpu(&self, ops: &mut Ops, working: &Buffer, plan: &Plan, global_dark: Option<&DarkChannel>, airlight: Option<f32>) -> Result<Local> {
         let (w, h) = (plan.ext.w, plan.ext.h);
         let n = w * h;
         let log_l = ops.img_planes(IMG_LOG_LUMA, working, n).0;
@@ -574,10 +580,10 @@ impl Processor {
         } else if let Some(dc) = global_dark {
             Some((dc.plane.clone(), dc.step, dc.airlight, (plan.ext.x as u32, plan.ext.y as u32)))
         } else {
-            let pool = DarkPool::new(ops.g, (w, h));
+            let pool = DarkPool::new(ops.g, (w, h), super::dark_step(plan.full));
             pool.add(ops, working, plan.ext, Region { x: 0, y: 0, w, h }, (0, 0));
             ops.flush();
-            let dc = pool.finish(ops.g)?;
+            let dc = pool.finish(ops.g, airlight)?;
             Some((dc.plane, dc.step, dc.airlight, (0, 0)))
         };
         let planes = [ev.as_ref(), clarity.as_ref(), structure.as_ref()];
@@ -632,7 +638,9 @@ impl Processor {
             match cached {
                 Some(l) if global_dark.is_none() => Some(l),
                 _ => {
-                    let l = Arc::new(self.local_gpu(ops, &working, plan, global_dark)?);
+                    // A part of the image: haze measured on the whole, or the tiles differ.
+                    let airlight = (plan.dehaze_active && plan.partial()).then(|| self.whole_airlight(src));
+                    let l = Arc::new(self.local_gpu(ops, &working, plan, global_dark, airlight)?);
                     if let Some(c) = cache.filter(|_| global_dark.is_none()) {
                         ops.keep(&l.buf);
                         c.gpu.lock().unwrap().local = Some((k, l.clone()));
@@ -963,7 +971,7 @@ impl Processor {
             let align = if tiles.len() > 1 { 8 } else { 1 };
             // Dehaze needs the dark channel and airlight of the whole image.
             let dark = if tiles.len() > 1 && whole.dehaze_active {
-                let pool = DarkPool::new(g, whole.full);
+                let pool = DarkPool::new(g, whole.full, super::dark_step(whole.full));
                 for t in &tiles {
                     let plan = self.plan(src, Some(*t), align);
                     let mut ops = Ops::new(g);
@@ -972,7 +980,7 @@ impl Processor {
                     pool.add(&mut ops, &working, plan.ext, own, (plan.ext.x, plan.ext.y));
                     ops.flush();
                 }
-                Some(pool.finish(g)?)
+                Some(pool.finish(g, None)?)
             } else {
                 None
             };

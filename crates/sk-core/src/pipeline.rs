@@ -110,6 +110,13 @@ struct Plan {
     dehaze_active: bool,
 }
 
+impl Plan {
+    /// Only a part of the image is rendered (a tile, the zoomed view).
+    fn partial(&self) -> bool {
+        self.ext.w < self.full.0 || self.ext.h < self.full.1
+    }
+}
+
 /// Neighborhood planes derived from log luminance; independent of exposure and tone settings.
 struct LocalPlanes {
     /// Smoothed log2 luminance relative to middle grey (before exposure).
@@ -128,10 +135,16 @@ struct DarkChannel {
     airlight: f32,
 }
 
+/// Block size of the dark channel for an output of `full` pixels: the same for every part of
+/// the image, so that tiles match.
+fn dark_step(full: (usize, usize)) -> usize {
+    (full.0.max(full.1) / 256).max(1)
+}
+
 impl DarkChannel {
-    fn new(img: &LinearImage) -> Self {
+    /// `airlight`: that of the whole image when `img` is only a part of it.
+    fn new(img: &LinearImage, step: usize, airlight: Option<f32>) -> Self {
         let (w, h) = (img.width, img.height);
-        let step = (w.max(h) / 256).max(1);
         let min_c: Vec<f32> = img.data.par_iter().map(|p| p[0].min(p[1]).min(p[2])).collect();
         // Airlight: bright end of the minimum channel (sampled).
         let samples: Vec<f32> = min_c.iter().step_by(7).copied().collect();
@@ -150,7 +163,7 @@ impl DarkChannel {
                 m
             })
             .collect();
-        Self::from_parts(samples, pooled, lw, lh, step)
+        Self::from_parts(samples, pooled, lw, lh, step, airlight)
     }
 
     #[inline]
@@ -487,6 +500,33 @@ impl Processor {
 
     // ------------------------------------------------------------ image stages
 
+    /// Airlight (the haze's brightness) of the whole image, for renderings of a part of it:
+    /// estimated from a small copy, cached per image and settings.
+    fn whole_airlight(&self, src: &LinearImage) -> f32 {
+        static CACHE: Mutex<Vec<(u64, f32)>> = Mutex::new(Vec::new());
+        let key = self.stage_key(src, Region { x: 0, y: 0, w: 0, h: 0 });
+        if let Some((_, a)) = CACHE.lock().unwrap().iter().find(|(k, _)| *k == key) {
+            return *a;
+        }
+        let level = (src.width.max(src.height) / 768).max(1);
+        let small;
+        let img = if level > 1 {
+            small = src.box_downscaled(level);
+            &small
+        } else {
+            src
+        };
+        let plan = self.plan(img, None, 1);
+        let working = self.early_stages(img, &plan.geo, plan.ext, plan.scale);
+        let a = gpu::airlight_of(working.data.iter().step_by(7).map(|p| p[0].min(p[1]).min(p[2])).collect());
+        let mut cache = CACHE.lock().unwrap();
+        cache.push((key, a));
+        if cache.len() > 8 {
+            cache.remove(0);
+        }
+        a
+    }
+
     fn stage_key(&self, src: &LinearImage, region: Region) -> u64 {
         let relevant = serde_json::json!({
             "g": self.adj.geometry, "l": self.adj.lens, "r": self.adj.rotation, "ic": self.opts.ignore_crop,
@@ -495,7 +535,8 @@ impl Processor {
             // Depends on the process version and the light, not only on the multipliers.
             "cw": self.cam_to_working,
         });
-        let key = format!("{:p}|{}x{}|{region:?}|{relevant}", src.data.as_ptr(), src.width, src.height);
+        // The address alone could be that of a freed image whose memory went to the next one.
+        let key = format!("{:p}|{}x{}|{}|{region:?}|{relevant}", src.data.as_ptr(), src.width, src.height, crate::ai_denoise::fingerprint(src));
         crate::cache::fnv1a(key.as_bytes())
     }
 
@@ -613,8 +654,9 @@ impl Processor {
         region: Option<Region>,
         cache: Option<&StageCache>,
     ) -> (LinearImage, (usize, usize), Option<Vec<f32>>) {
-        let Plan { geo, full, region, ext, scale, r_hdr, r_clarity, r_structure, hdr_active, clarity_active, structure_active, dehaze_active, .. } =
-            self.plan(src, region, 1);
+        let plan = self.plan(src, region, 1);
+        let partial = plan.partial();
+        let Plan { geo, full, region, ext, scale, r_hdr, r_clarity, r_structure, hdr_active, clarity_active, structure_active, dehaze_active, .. } = plan;
         let d = &self.adj.detail;
 
         let mut timer = Timer::start();
@@ -660,7 +702,9 @@ impl Processor {
                         let base = gaussian_blur(&log_l, r_structure);
                         log_l.zip(&base, |a, b| (a - b).clamp(-2.0, 2.0))
                     }),
-                    dehaze: dehaze_active.then(|| DarkChannel::new(&working)),
+                    // A part of the image: haze measured on the whole, or the tiles differ.
+                    dehaze: dehaze_active
+                        .then(|| DarkChannel::new(&working, dark_step(full), partial.then(|| self.whole_airlight(src)))),
                 }
             };
             Some(match cache {
@@ -1378,6 +1422,46 @@ mod tests {
             }
         }
         assert!(max_diff <= 2, "tile differs from full render by {max_diff}");
+    }
+
+    #[test]
+    fn dehaze_tiles_match_full_render() {
+        // Bright haze on the left, dark ground on the right: a tile of the ground alone would
+        // estimate a much darker airlight.
+        let (w, h) = (512, 96);
+        let src = LinearImage::new(
+            w,
+            h,
+            (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    let base = if x < w / 2 { 0.8 } else { 0.08 };
+                    let v = base + 0.04 * (((x / 4 + y / 4) % 2) as f32);
+                    [v, v * 0.95, v * 0.9]
+                })
+                .collect(),
+        );
+        let adj = Adjustments { detail: Detail { dehaze: 60.0, ..Default::default() }, ..Default::default() };
+        let p = Processor::new(&meta(), &adj);
+        let region = Region { x: 470, y: 40, w: 24, h: 24 };
+        // On the processor and (if there is one) on the graphics card.
+        type Render<'a> = &'a dyn Fn(Option<Region>) -> Rendered;
+        let renderers: [(&str, Render); 2] = [("CPU", &|r| p.render_cpu(&src, r, None)), ("GPU", &|r| p.render(&src, r, None))];
+        for (name, render) in renderers {
+            let full = render(None);
+            let tile = render(Some(region));
+            let mut max_diff = 0i32;
+            for y in 0..region.h {
+                for x in 0..region.w {
+                    for c in 0..3 {
+                        let a = tile.rgba[(y * region.w + x) * 4 + c] as i32;
+                        let b = full.rgba[((y + region.y) * full.width + x + region.x) * 4 + c] as i32;
+                        max_diff = max_diff.max((a - b).abs());
+                    }
+                }
+            }
+            assert!(max_diff <= 3, "{name}: Kachel weicht um {max_diff} vom ganzen Bild ab");
+        }
     }
 
     #[test]

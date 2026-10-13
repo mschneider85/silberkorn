@@ -742,10 +742,10 @@ impl Catalog {
                     // The whole session.
                 } else if *recursive {
                     sql += " AND (i.folder = ? OR i.folder LIKE ? ESCAPE '\\')";
-                    let escaped = folder.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
                     let sep = if relative { '/' } else { std::path::MAIN_SEPARATOR };
-                    args.push(Value::Text(folder.clone()));
-                    args.push(Value::Text(format!("{escaped}{sep}%")));
+                    let pattern = subfolder_pattern(&folder, sep);
+                    args.push(Value::Text(folder));
+                    args.push(Value::Text(pattern));
                 } else {
                     sql += " AND i.folder = ?";
                     args.push(Value::Text(folder));
@@ -938,6 +938,14 @@ pub fn scan_folder(folder: &Path, recursive: bool) -> Vec<PathBuf> {
     }
     out.sort();
     out
+}
+
+/// LIKE pattern (escape character `\`) for everything below `folder`. The separator is
+/// escaped too: on Windows it is `\`, which would otherwise escape the `%`.
+fn subfolder_pattern(folder: &str, sep: char) -> String {
+    let escape = |s: &str| s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+    let folder = folder.strip_suffix(sep).unwrap_or(folder);
+    format!("{}{}%", escape(folder), escape(&sep.to_string()))
 }
 
 #[cfg(test)]
@@ -1250,5 +1258,12 @@ mod tests {
         assert!(c.image_id(offline).unwrap().is_some());
         assert!(c.image_id(&dir.join("da.ARW")).unwrap().is_some());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn subfolder_pattern_escapes_the_separator() {
+        assert_eq!(subfolder_pattern("/f/a_b", '/'), "/f/a\\_b/%");
+        assert_eq!(subfolder_pattern("C:\\Fotos", '\\'), "C:\\\\Fotos\\\\%");
+        assert_eq!(subfolder_pattern("C:\\", '\\'), "C:\\\\%");
     }
 }

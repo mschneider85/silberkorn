@@ -276,6 +276,9 @@ struct PreparedSpot {
 /// smooth (harmonic) interpolation of that edge. Like a Poisson blend, this keeps the
 /// source texture while brightness and color gradients flow in from the edge, so no seam
 /// remains even where the surroundings change across the area.
+/// Grid cells of a heal area at most (about 40 bytes each).
+const MAX_HEAL_CELLS: usize = 2_000_000;
+
 struct HealField {
     origin: (f32, f32),
     cell: f32,
@@ -286,13 +289,16 @@ struct HealField {
 
 impl HealField {
     fn solve(src: &LinearImage, segments: &[((f32, f32), (f32, f32), (f32, f32, f32, f32))], offset: (f32, f32), r: f32) -> Self {
-        let cell = (r / 10.0).max(1.0);
-        // Cells up to this far from the center line are unknown, the next ring is the edge.
-        let (inside, edge) = (r + 0.75 * cell, r + 1.75 * cell);
-        let margin = edge + cell;
         let b = segments.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |b, (p, q, _)| {
             (b.0.min(p.0.min(q.0)), b.1.min(p.1.min(q.1)), b.2.max(p.0.max(q.0)), b.3.max(p.1.max(q.1)))
         });
+        // The grid covers the stroke's bounding box: a thin stroke across the whole image would
+        // take millions of cells (hundreds of MB) at the usual fineness, so it gets coarser there.
+        let area = (b.2 - b.0 + 4.0 * r + 4.0) * (b.3 - b.1 + 4.0 * r + 4.0);
+        let cell = (r / 10.0).max(1.0).max((area / MAX_HEAL_CELLS as f32).sqrt());
+        // Cells up to this far from the center line are unknown, the next ring is the edge.
+        let (inside, edge) = (r + 0.75 * cell, r + 1.75 * cell);
+        let margin = edge + cell;
         let origin = (b.0 - margin, b.1 - margin);
         let w = ((b.2 - b.0 + 2.0 * margin) / cell).ceil() as usize + 1;
         let h = ((b.3 - b.1 + 2.0 * margin) / cell).ceil() as usize + 1;
@@ -687,6 +693,17 @@ pub fn apply_removals(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_thin_heal_stroke_stays_within_the_cell_limit() {
+        let src = LinearImage::new(64, 64, vec![[0.5; 3]; 64 * 64]);
+        let r = 5.0;
+        let (a, b) = ((0.0, 0.0), (6000.0, 4000.0));
+        let seg = (a, b, (-r, -r, 6000.0 + r, 4000.0 + r));
+        let f = HealField::solve(&src, &[seg], (0.0, 0.0), r);
+        assert!(f.w * f.h <= MAX_HEAL_CELLS * 11 / 10, "{} Zellen", f.w * f.h);
+        assert!(f.gain.iter().all(|g| g.iter().all(|v| v.is_finite())));
+    }
     use crate::params::{BrushStroke, LinearGradient, RadialGradient};
 
     #[test]
