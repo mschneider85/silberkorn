@@ -476,6 +476,8 @@ pub struct App {
     pub zoom: Option<f32>,
     pub pan: Vec2,
     pub scroll_to_primary: bool,
+    /// Whether the filmstrip was shown last frame; when it appears, it scrolls to the image.
+    pub filmstrip_shown: bool,
 
     // compare view (see `compare.rs`)
     /// Pinned reference image, shown next to the current one; also the source for matching.
@@ -809,6 +811,7 @@ impl App {
             zoom: None,
             pan: Vec2::ZERO,
             scroll_to_primary: false,
+            filmstrip_shown: false,
             compare_ref: None,
             multi_view: true,
             compare_textures: HashMap::new(),
@@ -2491,7 +2494,13 @@ impl eframe::App for App {
                 .exact_size(crate::side_column::WIDTH)
                 .show(ui, |ui| self.side_column(ui));
         }
-        if !grid && self.show_filmstrip && !self.entries.is_empty() {
+        let filmstrip = !grid && self.show_filmstrip && !self.entries.is_empty();
+        // Coming from the grid (or with the strip switched on) the strip starts at the image.
+        if filmstrip && !self.filmstrip_shown {
+            self.scroll_to_primary = true;
+        }
+        self.filmstrip_shown = filmstrip;
+        if filmstrip {
             egui::Panel::bottom("filmstrip")
                 .frame(egui::Frame::new().fill(theme::BROWSER).inner_margin(egui::Margin::same(6)))
                 .resizable(true)

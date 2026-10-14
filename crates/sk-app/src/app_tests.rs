@@ -2325,3 +2325,39 @@ fn grid_rows_are_stepped_with_up_and_down() {
     f.app.grid_view = false;
     assert!(!(crate::commands::get("row-down").unwrap().enabled)(&f.app));
 }
+
+/// Switching from the grid to the single image shows the filmstrip at the selected image,
+/// even when it lies far outside the strip's visible part.
+#[test]
+fn filmstrip_starts_at_the_image_from_the_grid() {
+    let Some(mut f) = Fixture::new("filmstrip_scroll") else { return };
+    let photos = f.dir.join("photos");
+    let source = f.photo("_DSC0009.dng");
+    for i in 0..30 {
+        let target = photos.join(format!("_KOP{i:04}.dng"));
+        if std::fs::hard_link(&source, &target).is_err() {
+            std::fs::copy(&source, &target).unwrap();
+        }
+    }
+    f.app.open_folder(photos);
+    assert!(f.app.visible.len() >= 32);
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut t = 10.0;
+    f.app.splash = None;
+    f.app.grid_view = true;
+    window_frame(&mut f, &mut frame, t, vec![]);
+    let (first, last) = (f.app.entries[f.app.visible[0]].path.clone(), f.app.entries[*f.app.visible.last().unwrap()].path.clone());
+    f.app.select_path(&last, egui::Modifiers::NONE);
+    window_frame(&mut f, &mut frame, t, vec![]);
+
+    // The strip scrolls there animated, so give it a second.
+    f.app.grid_view = false;
+    for _ in 0..10 {
+        t += 0.1;
+        window_frame(&mut f, &mut frame, t, vec![]);
+    }
+    let pass = f.ctx.cumulative_pass_nr();
+    window_frame(&mut f, &mut frame, t + 0.1, vec![]);
+    assert!(f.app.thumb_seen.get(&last).is_some_and(|&p| p >= pass), "Das gewählte Bild sollte im Filmstreifen zu sehen sein");
+    assert!(f.app.thumb_seen.get(&first).is_none_or(|&p| p < pass), "Der Filmstreifen sollte zum Bild gescrollt sein");
+}

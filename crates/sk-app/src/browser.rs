@@ -773,6 +773,10 @@ impl App {
     /// Paints one browser cell; returns the click modifiers if clicked, and whether it was double-clicked.
     fn thumb_cell(&mut self, ui: &mut Ui, idx: usize, cell: Vec2, primary: Option<&PathBuf>) -> (Option<Modifiers>, bool) {
         let (rect, resp) = ui.allocate_exact_size(cell, Sense::click());
+        // Before the visibility check: the image may lie far outside the visible part.
+        if Some(&self.entries[idx].path) == primary && self.scroll_to_primary {
+            resp.scroll_to_me(Some(egui::Align::Center));
+        }
         if !ui.is_rect_visible(rect) {
             return (None, false);
         }
@@ -830,9 +834,6 @@ impl App {
         .flatten()
         .collect::<Vec<_>>()
         .join("\n");
-        if Some(&entry.path) == primary && self.scroll_to_primary {
-            resp.scroll_to_me(Some(egui::Align::Center));
-        }
         let resp = resp.on_hover_text_at_pointer(tooltip);
         // Right-click acts on the selection; an unselected image becomes the selection first.
         // It also becomes the image in the viewer, which the variant commands act on.
