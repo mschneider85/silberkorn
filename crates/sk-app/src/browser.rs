@@ -165,7 +165,7 @@ impl App {
             }
         }
         // Holding the space bar: dragging moves the image, whatever tool is active.
-        let space_pan = ui.input(|i| i.key_down(egui::Key::Space)) && !ui.ctx().egui_wants_keyboard_input();
+        let space_pan = ui.input(|i| i.key_down(egui::Key::Space)) && !ui.ctx().text_edit_focused();
         if space_pan && (response.hovered() || response.dragged()) {
             ui.ctx().set_cursor_icon(if response.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
         }

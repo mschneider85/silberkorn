@@ -2385,3 +2385,35 @@ fn another_tab_ends_the_retouch_tool() {
     window_frame(&mut f, &mut frame, 10.3, vec![]);
     assert_eq!(f.app.local_tool, Some(LocalTool::Brush));
 }
+
+/// Holding the space bar shows the move cursor over a mask brush, also while a control (such
+/// as the brush size slider just used) has the keyboard focus.
+#[test]
+fn space_bar_pans_with_a_focused_control() {
+    use crate::layers::LocalTool;
+    let Some(mut f) = Fixture::new("space_focus") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    let mut frame = eframe::Frame::_new_kittest();
+    f.app.splash = None;
+    f.app.tab = crate::app::Tab::Layers;
+    f.app.set_local_tool(LocalTool::Brush);
+    let p = egui::pos2(800.0, 400.0);
+    let key = |key, pressed| egui::Event::Key { key, physical_key: None, pressed, repeat: false, modifiers: Default::default() };
+    let mut cursor = |f: &mut Fixture, i: usize, events| {
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1500.0, 950.0))), time: Some(10.0 + i as f64 * 0.1), events, ..Default::default() };
+        let app = &mut f.app;
+        let out = f.ctx.run_ui(input, |ui| eframe::App::ui(app, ui, &mut frame));
+        let mut delta = out.textures_delta;
+        delta.clear();
+        out.platform_output.cursor_icon
+    };
+    cursor(&mut f, 0, vec![egui::Event::PointerMoved(p)]);
+    // Tab gives a control the keyboard focus, as a click on a slider does.
+    cursor(&mut f, 1, vec![key(egui::Key::Tab, true), key(egui::Key::Tab, false)]);
+    cursor(&mut f, 2, vec![]);
+    assert!(f.ctx.memory(|m| m.focused()).is_some(), "Ein Bedienelement sollte den Fokus haben");
+    assert_eq!(cursor(&mut f, 3, vec![key(egui::Key::Space, true)]), egui::CursorIcon::Grab);
+    assert_eq!(cursor(&mut f, 4, vec![]), egui::CursorIcon::Grab);
+    assert_eq!(f.app.local_tool, Some(LocalTool::Brush));
+    assert_eq!(cursor(&mut f, 5, vec![key(egui::Key::Space, false)]), egui::CursorIcon::None, "Danach wieder der Pinselkreis");
+}

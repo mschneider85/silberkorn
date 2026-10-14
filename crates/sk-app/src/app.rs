@@ -2434,7 +2434,7 @@ impl eframe::App for App {
         }
         // The space bar pans the image: it must not also press the focused button again.
         if ctx.input(|i| i.key_pressed(egui::Key::Space))
-            && !ctx.egui_wants_keyboard_input()
+            && !ctx.text_edit_focused()
             && let Some(id) = ctx.memory(|m| m.focused())
         {
             ctx.memory_mut(|m| m.surrender_focus(id));
