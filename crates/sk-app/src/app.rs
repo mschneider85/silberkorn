@@ -889,7 +889,8 @@ impl App {
         if let Ok(tab) = std::env::var("SILBERKORN_TAB") {
             app.tab = Tab::ALL.into_iter().find(|t| t.title().to_lowercase().contains(&tab.to_lowercase())).unwrap_or(app.tab);
         }
-        app.grid_view = std::env::var_os("SILBERKORN_GRID").is_some();
+        // With the viewer on its own window, the main window starts with the grid.
+        app.grid_view = std::env::var_os("SILBERKORN_GRID").is_some() || app.viewer_window.open;
         match std::env::var("SILBERKORN_DIALOG").as_deref() {
             Ok("shortcuts") => app.show_shortcuts = true,
             Ok("about") => app.splash = Some(crate::splash::Splash::about()),
@@ -2495,7 +2496,7 @@ impl eframe::App for App {
             .default_size(340.0)
             .size_range(280.0..=560.0)
             .show(ui, |ui| self.tool_panel(ui));
-        let grid = self.grid_view || self.viewer_detached();
+        let grid = self.grid_view;
         self.side_column_shown = self.side_column_wanted(grid);
         if self.side_column_shown {
             egui::Panel::right("side_column")
@@ -2518,7 +2519,15 @@ impl eframe::App for App {
                 .min_size(100.0)
                 .show(ui, |ui| self.filmstrip(ui));
         }
-        egui::CentralPanel::no_frame().show(ui, |ui| if grid { self.grid(ui) } else { self.viewer(ui) });
+        egui::CentralPanel::no_frame().show(ui, |ui| {
+            if grid {
+                self.grid(ui);
+            } else if self.viewer_detached() {
+                self.viewer_preview(ui);
+            } else {
+                self.viewer(ui);
+            }
+        });
         self.show_viewer_window(&ctx);
         crate::chrome::resize_edges(ui);
         self.dialogs(&ctx);

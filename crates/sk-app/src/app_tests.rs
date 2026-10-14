@@ -2417,3 +2417,23 @@ fn space_bar_pans_with_a_focused_control() {
     assert_eq!(f.app.local_tool, Some(LocalTool::Brush));
     assert_eq!(cursor(&mut f, 5, vec![key(egui::Key::Space, false)]), egui::CursorIcon::None, "Danach wieder der Pinselkreis");
 }
+
+/// With the viewer on a second screen the main window starts with the grid, but can show the
+/// single image (with filmstrip) too; the viewer window keeps zoom and tools.
+#[test]
+fn main_window_switches_to_the_image_with_the_viewer_window_open() {
+    let Some(mut f) = Fixture::new("viewer_window_grid") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    let mut frame = eframe::Frame::_new_kittest();
+    f.app.splash = None;
+    f.app.grid_view = false;
+    f.app.toggle_viewer_window();
+    assert!(f.app.viewer_detached());
+    assert!(f.app.grid_view, "Beim Öffnen des Bildfensters zeigt das Hauptfenster das Raster");
+    window_frame(&mut f, &mut frame, 10.0, vec![]);
+    assert!(!f.app.filmstrip_shown);
+    f.app.grid_view = false;
+    window_frame(&mut f, &mut frame, 10.1, vec![]);
+    assert!(f.app.viewer_detached(), "Das Bildfenster bleibt offen");
+    assert!(f.app.filmstrip_shown, "Im Einzelbild zeigt das Hauptfenster den Filmstreifen");
+}

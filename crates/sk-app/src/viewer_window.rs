@@ -1,4 +1,6 @@
-//! The viewer in a window of its own, e.g. on a second monitor. While it is open, the main window shows the browser grid.
+//! The viewer in a window of its own, e.g. on a second monitor. While it is open,
+//! the main window starts with the browser grid; switched to the single image, it shows the image only to look at (zoom and tools stay
+//! in the viewer window, one viewer state can't serve two windows).
 
 use egui::{Color32, Key, Modifiers, ViewportBuilder, ViewportClass, ViewportCommand, ViewportId};
 use serde::{Deserialize, Serialize};
@@ -21,9 +23,12 @@ pub fn viewport_id() -> ViewportId {
 }
 
 impl App {
-    /// Umschalt+F11: opens or closes the viewer window.
+    /// Umschalt+F11: opens or closes the viewer window. Opening it shows the grid in the main window.
     pub fn toggle_viewer_window(&mut self) {
         self.viewer_window.open = !self.viewer_window.open;
+        if self.viewer_window.open {
+            self.grid_view = true;
+        }
         self.viewer_window_shown = false;
         self.save_settings();
     }
@@ -88,6 +93,28 @@ impl App {
         });
         self.pixels_per_point = main_ppp;
         self.viewer_window_shown = self.viewer_window.open;
+    }
+
+    /// The single image in the main window while the viewer window is open: fitted, without
+    /// zoom or tools (those work in the viewer window).
+    pub(crate) fn viewer_preview(&mut self, ui: &mut egui::Ui) {
+        let rect = ui.available_rect_before_wrap();
+        let response = ui.allocate_rect(rect, egui::Sense::click());
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 0.0, crate::theme::VIEWER);
+        // While the next image loads: its placeholder, as in the viewer.
+        let loading = self.texture.is_none() || self.loading.is_some();
+        let tex = if loading { self.placeholder.as_ref().or(self.texture.as_ref()) } else { self.texture.as_ref() };
+        let Some(tex) = tex else {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(egui::vec2(0.0, rect.height() * 0.25))));
+            crate::widgets::no_image(&mut child);
+            return;
+        };
+        let size = tex.size_vec2();
+        let fit = ((rect.width() - 20.0) / size.x).min((rect.height() - 20.0) / size.y).max(0.01);
+        let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
+        painter.image(tex.id(), egui::Rect::from_center_size(rect.center(), size * fit), uv, Color32::WHITE);
+        response.on_hover_text("Zoomen und Werkzeuge im Bildfenster (Umschalt+F11 schließt es)");
     }
 
     /// Remembers where the window is (saved when it changes).
