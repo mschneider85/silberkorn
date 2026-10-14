@@ -700,6 +700,12 @@ impl App {
             // (and never finer than the screen), so it keeps up but stays as sharp as possible.
             let level = match self.drag_view_level {
                 Some(l) => l,
+                // Sharpening, noise and grain work on single pixels: a reduced draft shows them
+                // wrongly, so they are rendered at full resolution even if that lags behind.
+                None if only_fine_detail_changed(&cur.committed, &cur.adjustments) => {
+                    self.drag_view_level = Some(min_level);
+                    min_level
+                }
                 None => {
                     let perf = ((region.w * region.h) as f32 / self.draft_budget()).sqrt().ceil();
                     let screen = (region.w as f32 / (vis.width() * self.pixels_per_point).max(1.0)).floor();
@@ -1020,4 +1026,15 @@ impl App {
             self.grid_view = false;
         }
     }
+}
+
+/// Whether `now` differs from `before` only in settings that act on single pixels (sharpening,
+/// noise reduction, grain), which a reduced draft can't show.
+fn only_fine_detail_changed(before: &sk_core::params::Adjustments, now: &sk_core::params::Adjustments) -> bool {
+    let mut a = before.clone();
+    let (d, n) = (&mut a.detail, &now.detail);
+    (d.sharpen_amount, d.sharpen_radius, d.sharpen_threshold) = (n.sharpen_amount, n.sharpen_radius, n.sharpen_threshold);
+    (d.nr_luma, d.nr_color, d.ai_denoise) = (n.nr_luma, n.nr_color, n.ai_denoise);
+    (d.grain_amount, d.grain_size) = (n.grain_amount, n.grain_size);
+    a == *now && before != now
 }

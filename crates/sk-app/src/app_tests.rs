@@ -2094,6 +2094,48 @@ fn released_drag_shows_screen_resolution_before_full_resolution() {
     assert!(levels.contains(&2), "Stufen: {levels:?}");
 }
 
+#[test]
+fn dragging_sharpening_at_100_percent_renders_the_view_sharp() {
+    let Some(mut f) = Fixture::full_size("sharpen-drag") else { return };
+    let step = |f: &mut Fixture, events: Vec<egui::Event>| {
+        let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
+        run_viewer(f, egui::RawInput { screen_rect, max_texture_side: Some(8192), events, ..Default::default() });
+        f.app.handle_events(&f.ctx.clone());
+        f.app.send_render();
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    let start = Instant::now();
+    while f.app.image_size().is_none() || f.app.view_geometry.is_none() {
+        assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: Bild");
+        step(&mut f, vec![]);
+    }
+    f.app.toggle_zoom_100();
+    while !f.app.tiles.view.as_ref().is_some_and(|v| v.level == 1 && v.version == f.app.edit_version) {
+        assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: scharfe Ansicht");
+        step(&mut f, vec![]);
+    }
+    let p = egui::pos2(600.0, 400.0);
+    step(&mut f, vec![egui::Event::PointerMoved(p)]);
+    let drag = |f: &mut Fixture, edit: fn(&mut sk_core::params::Adjustments)| {
+        // Without a measured speed: drafts would be coarse.
+        f.app.workers.draft_speed = Default::default();
+        step(f, vec![press(p, true)]);
+        f.app.edit(edit);
+        while !f.app.tiles.view.as_ref().is_some_and(|v| v.version == f.app.edit_version) {
+            assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: Ansicht beim Ziehen");
+            step(f, vec![]);
+        }
+        let level = f.app.tiles.view.as_ref().unwrap().level;
+        step(f, vec![press(p, false)]);
+        // As the app does once the mouse is up.
+        (f.app.drag_draft_level, f.app.drag_view_level) = (None, None);
+        f.app.commit_and_save();
+        level
+    };
+    assert_eq!(drag(&mut f, |a| a.detail.sharpen_amount = 300.0), 1, "Schärfen in voller Auflösung");
+    assert!(drag(&mut f, |a| a.exposure = 0.4) > 1, "andere Regler weiter als Entwurf");
+}
+
 /// A GPU whose textures are smaller than the view at full resolution: the tiles show it sharp
 /// (one texture of the whole view would be too large for the GPU).
 #[test]
