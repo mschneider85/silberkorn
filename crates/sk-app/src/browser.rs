@@ -980,6 +980,7 @@ impl App {
         }
         let gap = 8.0;
         let cols = ((rect.width() - 24.0 + gap) / (self.grid_thumb + gap)).floor().max(1.0) as usize;
+        self.grid_cols = cols;
         // Stretch the cells so the rows fill the width.
         let w = ((rect.width() - 24.0 + gap) / cols as f32 - gap).max(60.0);
         let cell = vec2(w, (w * 0.78 + 24.0).round());

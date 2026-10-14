@@ -533,6 +533,8 @@ pub struct App {
     pub show_filmstrip: bool,
     /// Thumbnail size (long edge) in the grid.
     pub grid_thumb: f32,
+    /// Columns of the grid as last drawn (for the up/down keys).
+    pub grid_cols: usize,
     /// Command palette (Ctrl+K).
     pub palette: crate::palette::Palette,
     /// Minimap of the whole image while zoomed in.
@@ -780,6 +782,7 @@ impl App {
             clipboard: None,
             show_filmstrip: true,
             grid_thumb: settings.grid_thumb.unwrap_or(190.0).clamp(GRID_THUMB.0, GRID_THUMB.1),
+            grid_cols: 1,
             palette: Default::default(),
             fullscreen: false,
             fullscreen_hint_until: None,
@@ -1434,6 +1437,23 @@ impl App {
         self.step_dir = delta.signum();
         self.scroll_to_primary = true;
         self.select_path(&path, Modifiers::NONE);
+    }
+
+    /// One row up or down in the grid. Above the first row nothing happens; below the last full
+    /// column the last image of the next row is taken, as in file managers.
+    pub fn step_row(&mut self, dir: isize) {
+        if self.visible.is_empty() {
+            return;
+        }
+        let cols = self.grid_cols.max(1) as isize;
+        let primary = self.primary_path();
+        let pos = self.visible.iter().position(|&i| Some(&self.entries[i].path) == primary.as_ref()).unwrap_or(0) as isize;
+        let last = self.visible.len() as isize - 1;
+        let target = pos + dir * cols;
+        let target = if target > last && last / cols > pos / cols { last } else { target };
+        if (0..=last).contains(&target) && target != pos {
+            self.step(target - pos);
+        }
     }
 
     // ---------------------------------------------------------------- editing

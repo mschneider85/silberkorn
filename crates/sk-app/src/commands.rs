@@ -40,6 +40,9 @@ fn has_selection(a: &App) -> bool {
 fn has_images(a: &App) -> bool {
     !a.visible.is_empty()
 }
+fn in_grid(a: &App) -> bool {
+    a.grid_view && has_images(a)
+}
 fn several_files(a: &App) -> bool {
     sk_core::variant::files_of(&a.selected_paths()).len() >= 2
 }
@@ -123,6 +126,8 @@ pub const COMMANDS: &[Command] = &[
     cmd!("reference", icon::PUSH_PIN, "Referenzbild festlegen / entfernen", "Entwickeln", [SHIFT => Key::Enter], "vergleich compare", has_image, |a, _| a.toggle_reference()),
     cmd!("previous", icon::CARET_LEFT, "Vorheriges Bild", "Foto", [NONE => Key::ArrowLeft], "zurück previous", has_images, |a, _| a.step(-1)),
     cmd!("next", icon::CARET_RIGHT, "Nächstes Bild", "Foto", [NONE => Key::ArrowRight], "weiter next", has_images, |a, _| a.step(1)),
+    cmd!("row-up", icon::CARET_UP, "Bild darüber", "Foto", [NONE => Key::ArrowUp], "raster zeile hoch up", in_grid, |a, _| a.step_row(-1)),
+    cmd!("row-down", icon::CARET_DOWN, "Bild darunter", "Foto", [NONE => Key::ArrowDown], "raster zeile runter down", in_grid, |a, _| a.step_row(1)),
     cmd!("to-selects", icon::FOLDER_SIMPLE_STAR, "Nach „Auswahl“ verschieben", "Foto", [CTRL => Key::J], "selects session", in_session, |a, _| a.move_to_session_folder(sk_core::session::SessionFolder::Selects)),
     cmd!("trash", icon::TRASH, "In den Papierkorb", "Foto", [CTRL => Key::Delete, CTRL => Key::Backspace], "löschen delete", has_selection, |a, _| a.trash_selection()),
     // Ebenen und Retusche
@@ -209,6 +214,8 @@ pub fn key_text((m, k): (Modifiers, Key)) -> String {
         Key::CloseBracket => "]".to_string(),
         Key::ArrowLeft => icon::ARROW_LEFT.to_string(),
         Key::ArrowRight => icon::ARROW_RIGHT.to_string(),
+        Key::ArrowUp => icon::ARROW_UP.to_string(),
+        Key::ArrowDown => icon::ARROW_DOWN.to_string(),
         Key::Escape => "Esc".to_string(),
         k => k.symbol_or_name().to_string(),
     };

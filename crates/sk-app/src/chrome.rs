@@ -42,6 +42,7 @@ const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
         "Bild",
         &[
             ("\u{E058} / \u{E06C}", "Vorheriges / nächstes Bild"),
+            ("\u{E08E} / \u{E03E}", "Bild darüber / darunter (Raster)"),
             ("0 – 5", "Bewertung"),
             ("6 – 9", "Farb-Label Rot, Gelb, Grün, Blau"),
             ("Strg+J", "Nach Auswahl (Selects) verschieben"),

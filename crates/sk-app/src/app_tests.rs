@@ -2298,3 +2298,30 @@ fn wheel_adjusts_a_slider_only_when_the_gesture_starts_on_it() {
     h.wheel(rail, 1.0);
     assert!((h.value - 51.0).abs() < 0.005, "{}", h.value);
 }
+
+#[test]
+fn grid_rows_are_stepped_with_up_and_down() {
+    let Some(mut f) = Fixture::new("grid-rows") else { return };
+    let (a, b) = (f.photo("_DSC0009.dng"), f.photo("_DSC0010.dng"));
+    // Wait until the background work is done (the neighbour prepared), as the other tests do.
+    f.pump("Nachbar vorbereitet", |app| app.current.is_some() && app.is_prepared(&b));
+    f.app.grid_view = true;
+    // Two columns: both images in one row, so there is nothing above or below.
+    f.app.grid_cols = 2;
+    f.app.step_row(1);
+    assert_eq!(f.app.current_path().as_ref(), Some(&a));
+    f.app.step_row(-1);
+    assert_eq!(f.app.current_path().as_ref(), Some(&a));
+    // One column: down is the next image, nothing past the end, up goes back.
+    f.app.grid_cols = 1;
+    f.app.step_row(1);
+    assert_eq!(f.app.primary_path().as_ref(), Some(&b));
+    f.app.step_row(1);
+    assert_eq!(f.app.primary_path().as_ref(), Some(&b));
+    f.app.step_row(-1);
+    assert_eq!(f.app.primary_path().as_ref(), Some(&a));
+    // ↑/↓ belong to the grid only; in the single view they stay free.
+    assert!((crate::commands::get("row-down").unwrap().enabled)(&f.app));
+    f.app.grid_view = false;
+    assert!(!(crate::commands::get("row-down").unwrap().enabled)(&f.app));
+}
