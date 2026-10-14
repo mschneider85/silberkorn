@@ -397,6 +397,8 @@ pub struct App {
     full_due: Option<Instant>,
     pub histogram: Option<Histogram>,
     pub tab: Tab,
+    /// The tab of the last frame, to notice a change of tab.
+    tab_shown: Tab,
     pub curve_channel: CurveChannel,
     /// Selected hue band in the color editor.
     pub color_band: usize,
@@ -734,6 +736,7 @@ impl App {
             full_due: None,
             histogram: None,
             tab: Tab::Exposure,
+            tab_shown: Tab::Exposure,
             curve_channel: CurveChannel::Rgb,
             color_band: 0,
             color_view: Default::default(),
@@ -2440,6 +2443,13 @@ impl eframe::App for App {
             self.speed_message = None;
         }
         self.handle_events(&ctx);
+        // Another tab: a layer or retouch tool of the old one ends (its panel is gone).
+        if self.tab != self.tab_shown {
+            self.tab_shown = self.tab;
+            if let Some(t) = self.local_tool.filter(|t| t.tab() != self.tab) {
+                self.set_local_tool(t);
+            }
+        }
         self.confirm_quit(&ctx);
         self.prune_view_caches();
         self.style_hovered = false;

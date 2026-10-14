@@ -2361,3 +2361,27 @@ fn filmstrip_starts_at_the_image_from_the_grid() {
     assert!(f.app.thumb_seen.get(&last).is_some_and(|&p| p >= pass), "Das gewählte Bild sollte im Filmstreifen zu sehen sein");
     assert!(f.app.thumb_seen.get(&first).is_none_or(|&p| p < pass), "Der Filmstreifen sollte zum Bild gescrollt sein");
 }
+
+/// Changing to another tab ends the layer or retouch tool of the old one.
+#[test]
+fn another_tab_ends_the_retouch_tool() {
+    use crate::app::Tab;
+    use crate::layers::LocalTool;
+    let Some(mut f) = Fixture::new("tool_tab") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    let mut frame = eframe::Frame::_new_kittest();
+    f.app.splash = None;
+    f.app.tab = Tab::Retouch;
+    window_frame(&mut f, &mut frame, 10.0, vec![]);
+    f.app.set_local_tool(LocalTool::Heal);
+    window_frame(&mut f, &mut frame, 10.1, vec![]);
+    assert_eq!(f.app.local_tool, Some(LocalTool::Heal), "Im eigenen Bereich bleibt das Werkzeug aktiv");
+    f.app.tab = Tab::Color;
+    window_frame(&mut f, &mut frame, 10.2, vec![]);
+    assert_eq!(f.app.local_tool, None, "Im Farbe-Bereich ist Reparieren aus");
+    // A command that opens a tool's tab and the tool together keeps it.
+    f.app.tab = Tab::Layers;
+    f.app.set_local_tool(LocalTool::Brush);
+    window_frame(&mut f, &mut frame, 10.3, vec![]);
+    assert_eq!(f.app.local_tool, Some(LocalTool::Brush));
+}
