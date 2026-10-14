@@ -263,6 +263,8 @@ pub struct Processor {
     balance_active: bool,
     /// display-linear working 0..1 -> encoded 0..1, per channel (brightness, levels, curves)
     lut: [Vec<f32>; 3],
+    /// The luma curve (`None` when it is a straight line).
+    luma_lut: Option<Vec<f32>>,
     /// Precomputed tone functions of the background settings (layers may deviate per pixel).
     tone_luts: ToneLuts,
     /// Ratio of the rendered source to the full sensor resolution (for radii in full-res pixels).
@@ -331,6 +333,7 @@ impl Processor {
             skin_active: !adj.skin_tone.is_neutral(),
             balance_active: !adj.color_balance.is_neutral(),
             lut: build_output_luts(adj),
+            luma_lut: (!adj.curves.luma.is_identity()).then(|| adj.curves.luma.build_lut(LUT_SIZE)),
             tone_luts: ToneLuts::new(&base, adj.base_curve),
             sensor_long_edge: meta.info.width.max(meta.info.height).max(1) as f32,
             hdr: meta.hdr,
@@ -424,6 +427,7 @@ impl Processor {
 
         let ed = &self.adj.color_editor;
         if self.editor_active {
+            let h_in = h;
             let w = band_weights(h);
             let (mut dh, mut ds, mut dl) = (0.0, 0.0, 0.0);
             for (i, band) in ed.bands.iter().enumerate() {
@@ -434,6 +438,15 @@ impl Processor {
             h += dh * chroma_w;
             c *= (1.0 + ds * chroma_w).max(0.0);
             l *= 1.0 + dl * 0.4 * chroma_w;
+            // Ranges of one's own select by the color as it comes in (as picked in the image).
+            for z in ed.active_zones() {
+                let w = z.weight(h_in) * chroma_w;
+                if w > 0.0 {
+                    h += z.adjust.hue * w;
+                    c *= (1.0 + z.adjust.saturation / 100.0 * w).max(0.0);
+                    l *= 1.0 + z.adjust.lightness / 100.0 * 0.4 * w;
+                }
+            }
         }
 
         if self.skin_active {
@@ -507,7 +520,11 @@ impl Processor {
 
     #[inline]
     fn encode(&self, rgb: [f32; 3]) -> [f32; 3] {
-        [lut_lookup(&self.lut[0], rgb[0]), lut_lookup(&self.lut[1], rgb[1]), lut_lookup(&self.lut[2], rgb[2])]
+        let e = [lut_lookup(&self.lut[0], rgb[0]), lut_lookup(&self.lut[1], rgb[1]), lut_lookup(&self.lut[2], rgb[2])];
+        match &self.luma_lut {
+            Some(lut) => apply_luma_curve(lut, e),
+            None => e,
+        }
     }
 
     // ------------------------------------------------------------ image stages
@@ -1268,6 +1285,25 @@ fn build_output_luts(adj: &Adjustments) -> [Vec<f32>; 3] {
     })
 }
 
+/// The luma curve on encoded RGB: the luminance follows the curve, the channels are scaled with
+/// it (same hue and saturation); a channel that would pass white pulls the color towards the
+/// new gray instead, so the luminance still lands where the curve says.
+#[inline]
+fn apply_luma_curve(lut: &[f32], e: [f32; 3]) -> [f32; 3] {
+    let y = dot(e, LUMA).clamp(0.0, 1.0);
+    let y2 = lut_lookup(lut, y);
+    if y < 1e-5 {
+        return [y2; 3];
+    }
+    let mut out = e.map(|v| v * (y2 / y));
+    let max = out[0].max(out[1]).max(out[2]);
+    if max > 1.0 {
+        let t = ((max - 1.0) / (max - y2).max(1e-6)).clamp(0.0, 1.0);
+        out = out.map(|v| v + (y2 - v) * t);
+    }
+    out.map(|v| v.clamp(0.0, 1.0))
+}
+
 #[inline]
 fn lut_lookup(lut: &[f32], v: f32) -> f32 {
     let f = v.clamp(0.0, 1.0) * (lut.len() - 1) as f32;
@@ -1529,6 +1565,67 @@ mod tests {
         let red = [0.4, 0.03, 0.02];
         assert!(chroma(px(&p, blue)) < chroma(px(&base, blue)) * 0.3);
         assert!((chroma(px(&p, red)) - chroma(px(&base, red))).abs() < 0.01);
+    }
+
+    #[test]
+    fn luma_curve_changes_brightness_not_color() {
+        let base = Processor::new(&meta(), &plain());
+        let mut adj = plain();
+        // Brighter midtones.
+        adj.curves.luma = crate::params::Curve { points: vec![[0.0, 0.0], [0.4, 0.55], [1.0, 1.0]] };
+        let p = Processor::new(&meta(), &adj);
+        let ok = Oklab::default();
+        let lch = |v: [f32; 3]| {
+            let [l, a, b] = ok.from_linear(v.map(srgb_decode));
+            (l, (a * a + b * b).sqrt(), b.atan2(a).to_degrees())
+        };
+        for v in [[0.2, 0.08, 0.04], [0.03, 0.06, 0.15], [0.1, 0.1, 0.1]] {
+            let ((l0, c0, h0), (l1, c1, h1)) = (lch(px(&base, v)), lch(px(&p, v)));
+            assert!(l1 > l0 + 0.03, "{v:?}: {l0} -> {l1}");
+            if c0 > 0.02 {
+                assert!((h1 - h0).abs() < 1.5, "{v:?}: Farbton {h0} -> {h1}");
+                // Saturation (chroma relative to lightness) stays about the same.
+                assert!(((c1 / l1) / (c0 / l0) - 1.0).abs() < 0.12, "{v:?}: {} -> {}", c0 / l0, c1 / l1);
+            } else {
+                assert!(c1 < 0.01);
+            }
+        }
+        // A bright saturated color that would pass white stays inside, with its hue.
+        let lut = crate::params::Curve { points: vec![[0.0, 0.0], [0.5, 0.9], [1.0, 1.0]] }.build_lut(LUT_SIZE);
+        let out = apply_luma_curve(&lut, [1.0, 0.5, 0.2]);
+        assert!(out.iter().all(|v| (0.0..=1.0).contains(v)) && out[0] >= out[1] && out[1] >= out[2]);
+        assert!((dot(out, LUMA) - lut_lookup(&lut, dot([1.0, 0.5, 0.2], LUMA))).abs() < 1e-3);
+        // A straight line costs nothing.
+        assert!(base.luma_lut.is_none());
+    }
+
+    #[test]
+    fn color_zone_changes_only_its_range() {
+        let base = Processor::new(&meta(), &plain());
+        let hue_of = |p: &Processor, v: [f32; 3]| {
+            let [_, a, b] = p.oklab.from_linear(px(p, v).map(srgb_decode));
+            (b.atan2(a).to_degrees().rem_euclid(360.0), (a * a + b * b).sqrt())
+        };
+        // A narrow range around an orange; a yellow 40° away stays.
+        let (orange, yellow) = ([0.5, 0.2, 0.03], [0.45, 0.4, 0.03]);
+        let (h_orange, _) = hue_of(&base, orange);
+        let (h_yellow, c_yellow) = hue_of(&base, yellow);
+        assert!((h_yellow - h_orange).abs() > 30.0);
+        let mut adj = plain();
+        let zone = crate::params::ColorZone { hue: h_orange, width: 15.0, softness: 50.0, adjust: HslBand { saturation: -100.0, ..Default::default() }, ..Default::default() };
+        adj.color_editor.zones.push(zone);
+        let p = Processor::new(&meta(), &adj);
+        assert!(hue_of(&p, orange).1 < 0.01, "{:?}", hue_of(&p, orange));
+        let (h, c) = hue_of(&p, yellow);
+        assert!((h - h_yellow).abs() < 0.5 && (c - c_yellow).abs() < 0.002);
+        // Switched off, it does nothing (and no hue work is done at all).
+        adj.color_editor.zones[0].enabled = false;
+        assert!(adj.color_editor.is_neutral());
+        // The weight: full inside, soft edge, nothing beyond, across 0°.
+        let z = crate::params::ColorZone { hue: 355.0, width: 20.0, softness: 50.0, ..Default::default() };
+        assert_eq!(z.weight(5.0), 1.0);
+        assert!(z.weight(10.0) > 0.0 && z.weight(10.0) < 1.0);
+        assert_eq!(z.weight(16.0), 0.0);
     }
 
     #[test]

@@ -146,7 +146,7 @@ impl App {
             if ui.selectable_label(!zoomed, "Einpassen").clicked() && zoomed {
                 self.zoom_fit();
             }
-            if ui.selectable_label(zoomed, "100 %").on_hover_text("Z").clicked() && !zoomed {
+            if ui.selectable_label(zoomed, "100 %").on_hover_text(crate::commands::hint("100 %", "zoom-100")).clicked() && !zoomed {
                 self.toggle_zoom_100();
             }
             if let Some(pct) = self.zoom_pct {

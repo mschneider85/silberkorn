@@ -54,8 +54,8 @@ Pipeline (Arbeitsfarbraum: lineares Rec.2020):
 2. Weißabgleich mit Highlight-Rekonstruktion, Kameramatrix
 3. Rauschreduzierung (Luminanz: Guided Filter, Farbe: Chroma-Glättung)
 4. Belichtung, lokales HDR, Klarheit/Struktur, Kontrast, Basiskurve
-5. Farbe in Oklab: Farbeditor (8 Farbbereiche), Farbbalance, Sättigung/Dynamik, Schwarzweiß mit Tonung
-6. Helligkeit, Tonwerte, Kurven
+5. Farbe in Oklab: Farbeditor (8 Farbbereiche und bis zu 8 eigene), Farbbalance, Sättigung/Dynamik, Schwarzweiß mit Tonung
+6. Helligkeit, Tonwerte, Kurven (RGB, Rot, Grün, Blau, danach die Luma-Kurve: nur die Helligkeit folgt ihr, die Farben werden mitskaliert, Farbton und Sättigung bleiben)
 7. Schärfen, Vignette, Körnung
 8. Ausgabefarbraum (sRGB, Adobe RGB, Display P3, ProPhoto) mit eingebettetem ICC-Profil
 
@@ -169,7 +169,7 @@ Statusleiste mit Fortschritt an; Export, Zusammenfügen und Entrauschen lassen s
 abbrechen, und beim Beenden fragt Silberkorn nach, solange sie laufen; worauf man im Bild wartet (Maske, Entfernen, Angleichen),
 erscheint zusätzlich oben im Bild.
 
-- **KI-Entrauschen** (Tab „Details“, Abschnitt „Rauschen“; „Auf N Bilder übertragen“ gilt für die Auswahl): RawNIND (UtNet2, Benoit
+- **KI-Entrauschen** (Tab „Details“, Abschnitt „Rauschen“; das Übertragen-Symbol im Kopf des Abschnitts gilt für die Auswahl): RawNIND (UtNet2, Benoit
   Brummer, UCLouvain) in der Fassung von darktable (darktable-ai 5.6.0). Die Gewichte stehen unter
   **GPL-3.0**; sie werden nicht mitgeliefert, sondern erst geladen, nachdem man den Lizenzhinweis
   bestätigt hat (etwa 57 MB, per Teil-Download nur die beiden ONNX-Dateien aus dem Archiv).
@@ -239,6 +239,28 @@ im Katalog bzw. in der Session:
 
 Die drei Modelle (zusammen etwa 40 MB) werden beim ersten Analysieren geladen.
 Kommandozeile: `cargo run --release -p sk-ai --example faces -- <bild>...`
+
+### Anpassungen kopieren und übertragen
+
+Silberkorn kopiert und überträgt Werkzeuge statt immer den ganzen Satz:
+
+- **Strg+Umschalt+C** kopiert die bearbeiteten Werkzeuge des Bildes, **Strg+Umschalt+V** wendet
+  genau diese auf die Auswahl an; alles andere behalten die Bilder. Zuschnitt, Drehen & Spiegeln,
+  Perspektive, Ebenen und Retusche gehören zum Bildinhalt und sind nur dabei, wenn man sie wählt.
+- **Anpassungen auswählen und kopieren …** (Menü „Bearbeiten“ oder Rechtsklick auf das
+  Kopieren-Symbol der Werkzeugleiste) zeigt alle Werkzeuge zum Ankreuzen; bearbeitete sind heller.
+  „Kopieren“ legt die Wahl in die Zwischenablage, „Auf N Bilder anwenden“ überträgt sie gleich.
+- **Übertragen-Symbol im Kopf eines Werkzeugs** (erscheint, wenn mehrere Bilder ausgewählt sind):
+  überträgt nur dieses Werkzeug auf die anderen ausgewählten Bilder.
+
+### Eigene Farbbereiche
+
+Im Farbeditor (Tab „Farbe“) zeigt **„Eigene“** frei festgelegte Farbbereiche: **Aufnehmen** und auf eine Farbe im Bild klicken legt einen Bereich um ihren Farbton an
+(bis zu acht). **Farbe**, **Breite** und **Weichheit** bestimmen, welche Farbtöne er erfasst; der
+Streifen darüber zeigt es auf dem Farbkreis. **Farbton**, **Sättigung** und **Helligkeit** ändern
+dann nur diese Farben. Gewählt wird nach der Farbe, wie sie in den Farbeditor kommt, also so, wie sie
+aufgenommen wurde, auch wenn die acht festen Bereiche sie schon verschieben. Fast neutrale Farben
+bleiben unberührt. Die Bereiche rechnen auf Grafikkarte und Prozessor gleich.
 
 ### Vergleichen und Angleichen
 
@@ -527,6 +549,10 @@ beziehen sich aber nur auf die Bilder der Session.
 - **Keywords** im Tab „Metadaten“ (mit Vorschlägen aus dem Katalog); Bewertung, Label und
   Keywords wirken auf die ganze Auswahl.
 - **Stile:** Anpassungen als Preset speichern (`~/.config/silberkorn/styles`) und auf die Auswahl anwenden.
+  Beim Speichern („Enthält: …“) wählt man die Werkzeuge; vorgewählt sind die bearbeiteten. Ein Stil
+  setzt nur seine Werkzeuge, alle anderen bleiben, wie sie sind, so lassen sich Stile übereinander
+  anwenden (etwa ein Farblook und danach ein Körnungs-Stil). Stile von vor dieser Funktion setzen
+  weiterhin alles außer Zuschnitt, Drehen, Perspektive, Ebenen und Retusche.
 - **Eingebettete Vorschauen** werden direkt gelesen: nur die TIFF-Struktur und das JPEG, nicht die
   ganze RAW-Datei (ARW, NEF, CR2, DNG, ORF, RW2, PEF, RAF). Über Netzlaufwerke oder USB ein
   Vielfaches schneller; andere Formate (z. B. CR3) wie bisher über die volle Datei.
@@ -573,6 +599,13 @@ Daten aus der Zeit als „Capture Room“ werden übernommen: Ordner `capture-ro
 `<Bild>.crs.json`-Sidecars werden gelesen und beim nächsten Speichern durch `.sk.json` ersetzt.
 
 ## Tastenkürzel
+
+Die Tabelle zeigt die Voreinstellung. Im Fenster **Hilfe → Tastenkürzel** (F1) lässt sich jedem Befehl
+ein anderes oder ein weiteres Kürzel geben: Klick auf ein Kürzel und die neue Taste drücken, „+“
+fügt eines hinzu, Rechtsklick entfernt es. Ist die Taste schon vergeben, wechselt sie zum neuen
+Befehl (das Fenster sagt, von welchem). Menüs, Befehlssuche und Tooltips zeigen die geänderten
+Kürzel; gespeichert werden sie in `settings.json`. Fest bleiben Strg+K, Strg+1 … Strg+0, Esc,
+die Leertaste und die Tasten der Schnellbearbeitung.
 
 | Taste | Funktion |
 |---|---|
@@ -655,3 +688,4 @@ Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verklei
 - **Phase 9 (fertig):** automatisches Geraderichten (Drehung, vertikaler/horizontaler Keystone)
 - **Phase 10 (fertig):** Lupe, Verlauf und Schnappschüsse, Umbenennen mit Platzhaltern (auch im Ausgaberezept)
 - **Phase 11 (fertig):** XMP-Austausch, Stapel, Viewer auf dem Zweitmonitor, Softproof, HDR und Panorama, KI-Entrauschen, Entfernen, Gesichter und Sichtung
+- **Phase 12 (fertig):** Anpassungen werkzeugweise kopieren und übertragen, Stile mit Werkzeugauswahl (übereinander anwendbar), eigene Tastenkürzel, eigene Farbbereiche im Farbeditor, Luma-Kurve

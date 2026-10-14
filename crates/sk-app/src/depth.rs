@@ -196,7 +196,7 @@ impl App {
         let picking = self.picking_focus;
         let state = self.depth_state(&path);
         let help = "Zeichnet Vorder- und Hintergrund weich wie eine offene Blende. Wie nah jede Stelle ist, schätzt ein neuronales Netz einmal je Bild; die Tiefenkarte wird im Hintergrund berechnet und zwischengespeichert.\n\nFokus: Pipette oder Regler (0 ist der fernste, 1 der nächste Teil des Bildes). Schärfebereich: wie weit davor und dahinter es scharf bleibt. Lichter: helle Stellen werden in der Unschärfe zu leuchtenden Scheiben.";
-        crate::widgets::section_help(ui, "Objektivunschärfe", help, Some(&mut || reset = true), |ui| {
+        crate::widgets::tool_section_help(ui, sk_core::tools::Tool::LensBlur, help, Some(&mut || reset = true), |ui| {
             let d = LensBlur::default();
             slider_row(ui, "Stärke", &mut lb.amount, 0.0..=100.0, 0.0, 0);
             ui.horizontal(|ui| {

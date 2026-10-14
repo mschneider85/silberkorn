@@ -314,6 +314,7 @@ struct DevelopParams {
     lut_curve: u32,
     lut_out: [u32; 3],
     lut_out_len: u32,
+    lut_luma: u32,
     exposure_ev: f32,
     contrast: f32,
     hdr: [f32; 4],
@@ -332,6 +333,9 @@ struct DevelopParams {
     balance: [f32; 12],
     bw_mix: [f32; 8],
     bw_tint: [f32; 4],
+    /// Color ranges of one's own: center hue, inner and outer edge, hue, saturation, lightness.
+    n_zones: u32,
+    zones: [f32; 6 * crate::params::MAX_COLOR_ZONES],
     to_lms: [f32; 9],
     from_lms: [f32; 9],
     src_w: f32,
@@ -665,6 +669,7 @@ impl Processor {
         };
         let lut_curve = self.tone_luts.curve.as_ref().map_or(NO_LUT, |c| push(c));
         let lut_out = [push(&self.lut[0]), push(&self.lut[1]), push(&self.lut[2])];
+        let lut_luma = self.luma_lut.as_ref().map_or(NO_LUT, |l| push(l));
         let luts = g.upload(&luts);
 
         // Layers and their masks.
@@ -757,6 +762,7 @@ impl Processor {
             lut_curve,
             lut_out,
             lut_out_len: LUT_SIZE as u32,
+            lut_luma,
             exposure_ev: self.base.exposure_ev,
             contrast: self.base.contrast,
             hdr: self.base.hdr,
@@ -789,6 +795,15 @@ impl Processor {
                 .expect("4 wheels"),
             bw_mix: bw.mix,
             bw_tint: [bw.shadow_tint.hue, bw.shadow_tint.amount, bw.highlight_tint.hue, bw.highlight_tint.amount],
+            n_zones: adj.color_editor.active_zones().count() as u32,
+            zones: {
+                let mut z = [0.0; 6 * crate::params::MAX_COLOR_ZONES];
+                for (i, zone) in adj.color_editor.active_zones().enumerate() {
+                    let (inner, outer) = zone.edges();
+                    z[i * 6..i * 6 + 6].copy_from_slice(&[zone.hue, inner, outer, zone.adjust.hue, zone.adjust.saturation, zone.adjust.lightness]);
+                }
+                z
+            },
             to_lms: flat(&oklab_to),
             from_lms: flat(&mat_inv(&oklab_to).expect("invertible")),
             src_w: src.width as f32,
@@ -1275,6 +1290,19 @@ mod tests {
                 None,
             ),
             (
+                "Kurven und Luma-Kurve",
+                {
+                    let mut a = Adjustments { brightness: 15.0, ..plain.clone() };
+                    a.levels.in_black = 0.03;
+                    a.curves.rgb = Curve { points: vec![[0.0, 0.0], [0.3, 0.25], [1.0, 1.0]] };
+                    a.curves.red = Curve { points: vec![[0.0, 0.02], [0.6, 0.65], [1.0, 1.0]] };
+                    a.curves.luma = Curve { points: vec![[0.0, 0.05], [0.25, 0.18], [0.75, 0.88], [1.0, 1.0]] };
+                    a
+                },
+                Default::default(),
+                None,
+            ),
+            (
                 "Farbe",
                 {
                     let mut a = Adjustments { saturation: 25.0, vibrance: 30.0, ..plain.clone() };
@@ -1284,6 +1312,12 @@ mod tests {
                     a.color_balance.highlights = ColorWheel { hue: 50.0, amount: 30.0, lightness: -5.0 };
                     a.skin_tone.saturation = 30.0;
                     a.skin_tone.hue_uniformity = 50.0;
+                    let zone = |hue, width, softness, adjust| crate::params::ColorZone { hue, width, softness, adjust, enabled: true };
+                    a.color_editor.zones = vec![
+                        zone(60.0, 20.0, 60.0, HslBand { hue: -12.0, saturation: 40.0, lightness: 15.0 }),
+                        zone(350.0, 35.0, 0.0, HslBand { hue: 8.0, saturation: -50.0, lightness: -10.0 }),
+                        crate::params::ColorZone { enabled: false, ..zone(200.0, 30.0, 50.0, HslBand { saturation: -100.0, ..Default::default() }) },
+                    ];
                     a
                 },
                 Default::default(),

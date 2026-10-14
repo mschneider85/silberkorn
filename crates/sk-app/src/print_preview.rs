@@ -130,7 +130,7 @@ impl App {
             (false, _) => "",
             (true, true) => "  ·  Druckgröße",
             (true, false) => {
-                hints.push("Druckgröße ≈: Bildschirm nicht kalibriert, die Größe ist geschätzt (Tab „Ausgabe“ → Bildschirm kalibrieren).");
+                hints.push("Druckgröße ≈: Bildschirm nicht kalibriert, die Größe ist geschätzt (Tab „Ausgabe“ → Bildschirm kalibrieren).".to_string());
                 "  ·  Druckgröße ≈"
             }
         };
@@ -145,7 +145,7 @@ impl App {
         let colors = if self.softproof.on {
             ""
         } else {
-            hints.push("Softproof aus: Die Farben zeigen den Bildschirm, nicht das Papier (Umschalt+P).");
+            hints.push(crate::commands::hint("Softproof aus: Die Farben zeigen den Bildschirm, nicht das Papier", "softproof") + ".");
             "  ·  Softproof aus"
         };
         let text = format!("DRUCK  ·  {}  ·  {}  ·  {:.0} ppi{off}{zoom}{colors}", s.format.label(), s.fit.label(), l.ppi);
@@ -165,7 +165,7 @@ impl App {
         let mut s = self.print.settings.clone();
         let (mut toggle, mut zoom, mut calibrate) = (false, false, false);
         section(ui, "Druckvorschau", None, |ui| {
-            if ui.checkbox(&mut self.print.on.clone(), "Druckvorschau in Druckgröße (Strg+P)").changed() {
+            if ui.checkbox(&mut self.print.on.clone(), crate::commands::hint("Druckvorschau in Druckgröße", "print-preview")).changed() {
                 toggle = true;
             }
             widgets::combo_field(ui, "Papierformat", s.format.label(), |ui| {
@@ -187,7 +187,7 @@ impl App {
                 ui.selectable_value(&mut s.fit, Fit::Fill, Fit::Fill.label()).on_hover_text("Randlos wie im Fotolabor, das Bild wird beschnitten");
             });
             ui.horizontal(|ui| {
-                if ui.selectable_label(self.print.zoom, "Druckgröße (Umschalt+Z)").clicked() {
+                if ui.selectable_label(self.print.zoom, crate::commands::hint("Druckgröße", "print-zoom")).clicked() {
                     zoom = true;
                 }
                 if ui.button("Bildschirm kalibrieren …").clicked() {

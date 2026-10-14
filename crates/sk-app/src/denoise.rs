@@ -156,25 +156,19 @@ impl App {
     }
 
     /// The "Rauschen" section of the Details panel: KI-Entrauschen and the classic noise
-    /// reduction, which can be carried over to the other selected images; returns whether
-    /// something changed.
+    /// reduction (carried over to the other selected images with the button in its header, see
+    /// `App::transfer_tool`); returns whether something changed.
     pub(crate) fn noise_section(&mut self, ui: &mut egui::Ui) -> bool {
         let Some(cur) = self.current.as_ref() else { return false };
         let (path, hdr) = (cur.meta.path.clone(), cur.meta.hdr);
         let mut d = cur.adjustments.detail.clone();
         let defaults = Detail::default();
-        let n = self.selected_paths().len();
-        let (mut reset, mut transfer, mut changed) = (false, false, false);
+        let (mut reset, mut changed) = (false, false);
         let help = "KI-Entrauschen: ein neuronales Netz säubert die RAW-Daten, einmal je Bild im Hintergrund; das Original bleibt unverändert.\n\nLuminanz und Farbe: die klassische Rauschreduzierung, auch zusätzlich.";
-        crate::widgets::section_help(ui, NOISE_SECTION, help, Some(&mut || reset = true), |ui| {
+        crate::widgets::tool_section_help(ui, sk_core::tools::Tool::NoiseReduction, help, Some(&mut || reset = true), |ui| {
             changed |= self.denoise_controls(ui, &mut d.ai_denoise, &path, hdr);
             changed |= slider_row(ui, "Luminanz", &mut d.nr_luma, 0.0..=100.0, defaults.nr_luma, 0);
             changed |= slider_row(ui, "Farbe", &mut d.nr_color, 0.0..=100.0, defaults.nr_color, 0);
-            if n > 1 {
-                ui.add_space(4.0);
-                let hover = "KI-Entrauschen, Luminanz und Farbe dieses Bildes für alle ausgewählten Bilder übernehmen";
-                transfer = ui.button(format!("Auf {} übertragen", image_count(n))).on_hover_text(hover).clicked();
-            }
         });
         if reset {
             (d.ai_denoise, d.nr_luma, d.nr_color) = (0.0, defaults.nr_luma, defaults.nr_color);
@@ -184,9 +178,6 @@ impl App {
         if let Some(cur) = self.current.as_mut() {
             let c = &mut cur.adjustments.detail;
             (c.ai_denoise, c.nr_luma, c.nr_color) = noise;
-        }
-        if transfer {
-            self.transfer_noise(noise);
         }
         changed
     }

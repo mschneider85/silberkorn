@@ -74,20 +74,20 @@ impl LocalTool {
         }
     }
 
-    /// Icon, short name and key for the tool tiles.
+    /// Icon, short name and command (for the shortcut) of the tool tiles.
     pub fn tile(self) -> (&'static str, &'static str, &'static str) {
         use crate::theme::icon;
         match self {
-            LocalTool::Brush => (icon::PAINT_BRUSH, "Pinsel", "B"),
-            LocalTool::Eraser => (icon::ERASER, "Radierer", "N"),
-            LocalTool::Linear => (icon::GRADIENT, "Linear", "L"),
-            LocalTool::Radial => (icon::CIRCLE_DASHED, "Radial", "R"),
-            LocalTool::Heal => (icon::BANDAIDS, "Reparieren", "H"),
-            LocalTool::Clone => (icon::STAMP, "Klonen", "S"),
-            LocalTool::Magic => (icon::MAGIC_WAND, "Zauberpinsel", "J"),
-            LocalTool::Object => (icon::CURSOR_CLICK, "Objekt", ""),
+            LocalTool::Brush => (icon::PAINT_BRUSH, "Pinsel", "tool-brush"),
+            LocalTool::Eraser => (icon::ERASER, "Radierer", "tool-eraser"),
+            LocalTool::Linear => (icon::GRADIENT, "Linear", "tool-linear"),
+            LocalTool::Radial => (icon::CIRCLE_DASHED, "Radial", "tool-radial"),
+            LocalTool::Heal => (icon::BANDAIDS, "Reparieren", "tool-heal"),
+            LocalTool::Clone => (icon::STAMP, "Klonen", "tool-clone"),
+            LocalTool::Magic => (icon::MAGIC_WAND, "Zauberpinsel", "tool-magic"),
+            LocalTool::Object => (icon::CURSOR_CLICK, "Objekt", "tool-object"),
             LocalTool::ColorPick => (icon::EYEDROPPER, "Farbe", ""),
-            LocalTool::Remove => (icon::SPARKLE, "Entfernen", "X"),
+            LocalTool::Remove => (icon::SPARKLE, "Entfernen", "tool-remove"),
         }
     }
 
@@ -737,7 +737,7 @@ impl App {
                     *changed = true;
                 }
                 *changed |= ui.checkbox(&mut layer.mask.invert, "Invertieren").changed();
-                if ui.selectable_label(*show_mask, "Maske anzeigen (M)").clicked() {
+                if ui.selectable_label(*show_mask, crate::commands::hint("Maske anzeigen", "show-mask")).clicked() {
                     *show_mask = !*show_mask;
                     *changed = true;
                 }
@@ -1215,9 +1215,10 @@ impl App {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = gap;
                 for &t in row {
-                    let (ic, name, key) = t.tile();
-                    let hover = if key.is_empty() { name.to_string() } else { format!("{name} ({key})") };
-                    if crate::widgets::tool_tile(ui, ic, name, key, self.local_tool == Some(t), w).on_hover_text(hover).clicked() {
+                    let (ic, name, id) = t.tile();
+                    let key = crate::commands::get(id).map(|c| c.shortcut()).unwrap_or_default();
+                    let hover = crate::commands::hint(name, id);
+                    if crate::widgets::tool_tile(ui, ic, name, &key, self.local_tool == Some(t), w).on_hover_text(hover).clicked() {
                         tool_click = Some(t);
                     }
                 }

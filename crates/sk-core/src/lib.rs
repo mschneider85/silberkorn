@@ -38,6 +38,7 @@ pub mod softproof;
 pub mod spots;
 pub mod stack;
 pub mod styles;
+pub mod tools;
 pub mod upright;
 pub mod upscale;
 pub mod variant;

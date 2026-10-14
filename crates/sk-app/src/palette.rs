@@ -80,7 +80,7 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Exposure, "Belichtung", "exposure kontrast helligkeit sättigung"),
     (Tab::Exposure, "Lichter und Tiefen", "hdr lichter tiefen weiß schwarz highlights shadows"),
     (Tab::Exposure, "Tonwerte", "levels schwarzpunkt weißpunkt"),
-    (Tab::Exposure, "Gradationskurve", "curve kurve tonkurve"),
+    (Tab::Exposure, "Gradationskurve", "curve kurve tonkurve luma helligkeitskurve"),
     (Tab::Color, "Basismerkmale", "basiskurve kameraprofil"),
     (Tab::Color, "Weißabgleich", "white balance wb kelvin temperatur tint"),
     (Tab::Color, "Farbe", "sättigung dynamik vibrance saturation"),

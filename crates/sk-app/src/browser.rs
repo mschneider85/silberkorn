@@ -406,7 +406,10 @@ impl App {
         } else if self.picking_wb {
             Some("Weißabgleich – auf eine neutrale Fläche klicken".into())
         } else if self.picking_skin {
-            Some("Hautton – auf eine typische Hautstelle klicken".into())
+            Some(match self.color_pick {
+                crate::develop_tools::ColorPick::Skin => "Hautton – auf eine typische Hautstelle klicken".into(),
+                _ => "Farbbereich – auf die Farbe klicken, die geändert werden soll".into(),
+            })
         } else if self.picking_focus {
             Some("Fokus – auf die Stelle klicken, die scharf bleiben soll".into())
         } else if self.show_before {
@@ -902,7 +905,7 @@ impl App {
         let fill = if is_top || !expanded { theme::ACCENT.gamma_multiply(if resp.hovered() { 1.0 } else { 0.85 }) } else { Color32::from_black_alpha(150) };
         ui.painter().rect_filled(rect, 3.0, fill);
         ui.painter().galley(rect.min + vec2(4.0, 2.0), galley, Color32::WHITE);
-        let hover = if expanded { "Stapel zuklappen (Umschalt+G)" } else { "Stapel aufklappen (Umschalt+G)" };
+        let hover = crate::commands::hint(if expanded { "Stapel zuklappen" } else { "Stapel aufklappen" }, "stack-toggle");
         resp.on_hover_text(hover).clicked().then(|| s.id.clone())
     }
 

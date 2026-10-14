@@ -6,11 +6,17 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::params::{Adjustments, BaseCurve, ColorWheel, Curve, HslBand};
+use crate::tools::Tool;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 pub struct Style {
     pub name: String,
     pub adjustments: Adjustments,
+    /// The tools the style sets; the image keeps all others, so styles can be applied on top of
+    /// each other. Styles saved before this existed have none and set everything but the
+    /// image-specific settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Vec<Tool>>,
 }
 
 pub fn styles_dir() -> PathBuf {
@@ -61,8 +67,12 @@ pub fn delete_in(dir: &Path, name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Applies a style to existing adjustments. Geometry (rotation, crop) is kept.
+/// Applies a style to existing adjustments: only its tools, or (styles without a tool list)
+/// everything but geometry, layers and retouching.
 pub fn apply(style: &Style, target: &Adjustments) -> Adjustments {
+    if let Some(tools) = &style.tools {
+        return crate::tools::apply(tools, &style.adjustments, target);
+    }
     let mut out = style.adjustments.clone();
     out.keep_geometry_from(target);
     out
@@ -121,7 +131,7 @@ fn film(name: &str, f: impl FnOnce(&mut Adjustments)) -> Style {
     let mut a = Adjustments::default();
     a.detail.grain_amount = 0.0;
     f(&mut a);
-    Style { name: name.into(), adjustments: a }
+    Style { name: name.into(), adjustments: a, tools: None }
 }
 
 /// Built-in looks inspired by well-known film stocks (approximations, not official
@@ -293,7 +303,7 @@ mod tests {
     #[test]
     fn save_list_delete() {
         let dir = std::env::temp_dir().join(format!("skstyles-{}", std::process::id()));
-        let s = Style { name: "Warm / Kontrast".into(), adjustments: Adjustments { contrast: 20.0, ..Default::default() } };
+        let s = Style { name: "Warm / Kontrast".into(), adjustments: Adjustments { contrast: 20.0, ..Default::default() }, tools: None };
         save_in(&dir, &s).unwrap();
         assert_eq!(list_in(&dir), vec![s.clone()]);
         delete_in(&dir, &s.name).unwrap();
@@ -305,7 +315,7 @@ mod tests {
     fn names_with_the_same_file_name_stay_apart() {
         let dir = std::env::temp_dir().join(format!("sk-styles-clash-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        let style = |name: &str, contrast: f32| Style { name: name.into(), adjustments: Adjustments { contrast, ..Default::default() } };
+        let style = |name: &str, contrast: f32| Style { name: name.into(), adjustments: Adjustments { contrast, ..Default::default() }, tools: None };
         for (i, name) in ["S/W", "S&W", "S_W"].into_iter().enumerate() {
             save_in(&dir, &style(name, i as f32)).unwrap();
         }
@@ -355,8 +365,25 @@ mod tests {
 
     #[test]
     fn apply_keeps_rotation() {
-        let s = Style { name: "x".into(), adjustments: Adjustments { contrast: 20.0, rotation: 2, ..Default::default() } };
+        let s = Style { name: "x".into(), adjustments: Adjustments { contrast: 20.0, rotation: 2, ..Default::default() }, tools: None };
         let r = apply(&s, &Adjustments { rotation: 1, ..Default::default() });
         assert_eq!((r.contrast, r.rotation), (20.0, 1));
+    }
+
+    #[test]
+    fn styles_with_tools_stack() {
+        let warm = Style {
+            name: "Warm".into(),
+            adjustments: Adjustments { contrast: 50.0, color_balance: crate::params::ColorBalance { master: wheel(WARM, 20.0), ..Default::default() }, ..Default::default() },
+            tools: Some(vec![Tool::ColorBalance]),
+        };
+        let grain = Style { name: "Korn".into(), adjustments: film("k", |a| a.detail.grain_amount = 40.0).adjustments, tools: Some(vec![Tool::Grain]) };
+        let target = Adjustments { exposure: 0.5, contrast: 10.0, ..Default::default() };
+        let r = apply(&grain, &apply(&warm, &target));
+        assert_eq!((r.exposure, r.contrast, r.detail.grain_amount), (0.5, 10.0, 40.0));
+        assert_eq!(r.color_balance.master.amount, 20.0);
+        // Saved and read back with its tools.
+        let back: Style = serde_json::from_str(&serde_json::to_string(&warm).unwrap()).unwrap();
+        assert_eq!(back, warm);
     }
 }

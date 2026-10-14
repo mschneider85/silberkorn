@@ -13,88 +13,6 @@ use crate::library::scope_label;
 use crate::theme::{self, icon};
 use crate::widgets::image_count;
 
-/// Keyboard shortcuts as shown in menus and in the help dialog.
-const SHORTCUTS: &[(&str, &[(&str, &str)])] = &[
-    (
-        "Datei",
-        &[
-            ("Strg+N", "Neue Session"),
-            ("Strg+Umschalt+O", "Session öffnen"),
-            ("Strg+O", "Ordner öffnen"),
-            ("Strg+D", "Auswahl exportieren"),
-            ("Strg+K", "Befehl oder Werkzeug suchen"),
-            ("Strg+1 – Strg+0", "Werkzeug-Tabs"),
-            ("F1", "Diese Übersicht"),
-            ("Alt+F4", "Beenden"),
-        ],
-    ),
-    (
-        "Bearbeiten",
-        &[
-            ("Strg+Z", "Rückgängig"),
-            ("Strg+Y", "Wiederholen"),
-            ("Strg+Umschalt+C", "Anpassungen kopieren"),
-            ("Strg+Umschalt+V", "Anpassungen auf Auswahl anwenden"),
-            ("Strg+A", "Alle auswählen"),
-        ],
-    ),
-    (
-        "Bild",
-        &[
-            ("\u{E058} / \u{E06C}", "Vorheriges / nächstes Bild"),
-            ("\u{E08E} / \u{E03E}", "Bild darüber / darunter (Raster)"),
-            ("0 – 5", "Bewertung"),
-            ("6 – 9", "Farb-Label Rot, Gelb, Grün, Blau"),
-            ("Strg+J", "Nach Auswahl (Selects) verschieben"),
-            ("Strg+Entf", "In den Session-Papierkorb"),
-            ("Strg+[ / Strg+]", "Links / rechts drehen"),
-            ("C", "Zuschneiden (Enter übernimmt)"),
-            ("F2 / F3", "Neue Variante / Variante klonen"),
-            ("Strg+G / Strg+Umschalt+G", "Stapel bilden / auflösen"),
-            ("Umschalt+G", "Stapel auf-/zuklappen"),
-            ("W", "Weißabgleich-Pipette"),
-        ],
-    ),
-    (
-        "Ansicht",
-        &[
-            ("G", "Raster / Einzelbild"),
-            ("Z", "100 % / Einpassen (auch Doppelklick)"),
-            ("Y", "Vorher / Nachher"),
-            ("U", "Geteilter Vergleich"),
-            ("Umschalt+U", "Vorher | Nachher nebeneinander"),
-            ("Umschalt+Enter", "Referenzbild festlegen / entfernen"),
-            ("Strg/Umschalt+Klick", "Mehrere Bilder nebeneinander vergleichen"),
-            ("E", "Belichtungswarnung"),
-            ("K", "Fokusmaske (scharfe Bereiche grün)"),
-            ("P", "Ausgabevorschau: Bild wie vom Ausgabe-Rezept geschrieben"),
-            ("Umschalt+P", "Softproof: Bild wie im Farbraum oder auf dem Drucker, mit Farbumfang-Warnung"),
-            ("Strg+P", "Druckvorschau: Papierformat und Auflösung im Druck"),
-            ("Umschalt+Z", "Druckgröße: Bild so groß wie gedruckt (Bildschirm kalibrieren im Tab „Ausgabe“)"),
-            ("O", "Hilfslinien wechseln (Drittel, Goldener Schnitt, Raster, Diagonalen)"),
-            ("Umschalt+O", "Eigenes Overlay (Layout-PNG) ein/aus"),
-            ("Umschalt+A", "Automatisch geraderichten (Drehung und stürzende Linien)"),
-            ("Strg+Umschalt+R", "Auswahl umbenennen (mit Platzhaltern)"),
-            ("F11 / Strg+Umschalt+F", "Vollbild ohne Ablenkung (Esc beendet)"),
-            ("Umschalt+F11", "Bild in eigenem Fenster, z. B. auf dem Zweitmonitor (dort F11: Vollbild)"),
-        ],
-    ),
-    (
-        "Ebenen und Retusche",
-        &[
-            ("B / N", "Pinsel / Radierer"),
-            ("L / R", "Linearer / radialer Verlauf"),
-            ("J", "Zauberpinsel"),
-            ("H / S", "Reparieren / Klonen"),
-            ("X", "Entfernen (KI): übermalen, die Stelle wird passend gefüllt"),
-            ("[ / ]", "Pinselgröße"),
-            ("M", "Maske anzeigen"),
-            ("Entf", "Retuschepunkt löschen"),
-            ("Taste halten + Mausrad", "Schnellbearbeitung (Q, A, S, D …)"),
-        ],
-    ),
-];
-
 impl App {
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty() || self.current.as_ref().is_some_and(|c| c.adjustments != c.committed)
@@ -275,6 +193,7 @@ impl App {
         self.command_item(ui, "redo");
         ui.separator();
         self.command_item(ui, "copy-adjustments");
+        self.command_item(ui, "copy-adjustments-choose");
         self.command_item_labeled(ui, "paste-adjustments", "Anpassungen anwenden");
         self.command_item(ui, "reset");
         ui.separator();
@@ -494,7 +413,7 @@ impl App {
         let wide = ui.available_width() > 1350.0;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
-            if tool(ui, icon::FOLDER_OPEN, "Ordner öffnen (Strg+O)", false, true).clicked() {
+            if tool(ui, icon::FOLDER_OPEN, &crate::commands::hint("Ordner öffnen", "open-folder"), false, true).clicked() {
                 self.open_folder_dialog();
             }
             let import = if self.session.is_some() { "Bilder in die Session importieren" } else { "Ordner in den Katalog importieren" };
@@ -503,43 +422,47 @@ impl App {
             }
             group_gap(ui);
             let modes = [
-                Seg { icon: icon::SQUARES_FOUR, label: "Raster", hover: "Raster: alle Bilder im Überblick (G)", active: self.grid_view, enabled: true },
-                Seg { icon: icon::IMAGE, label: "Einzelbild", hover: "Einzelbild: ein Bild groß bearbeiten (G)", active: !self.grid_view, enabled: true },
+                Seg { icon: icon::SQUARES_FOUR, label: "Raster", hover: &crate::commands::hint("Raster: alle Bilder im Überblick", "grid"), active: self.grid_view, enabled: true },
+                Seg { icon: icon::IMAGE, label: "Einzelbild", hover: &crate::commands::hint("Einzelbild: ein Bild groß bearbeiten", "grid"), active: !self.grid_view, enabled: true },
             ];
             if let Some(i) = segmented(ui, &modes) {
                 self.grid_view = i == 0;
             }
             group_gap(ui);
-            if tool(ui, icon::ARROW_U_UP_LEFT, "Rückgängig (Strg+Z)", false, self.can_undo()).clicked() {
+            if tool(ui, icon::ARROW_U_UP_LEFT, &crate::commands::hint("Rückgängig", "undo"), false, self.can_undo()).clicked() {
                 self.undo();
             }
-            if tool(ui, icon::ARROW_U_UP_RIGHT, "Wiederholen (Strg+Y)", false, !self.redo.is_empty()).clicked() {
+            if tool(ui, icon::ARROW_U_UP_RIGHT, &crate::commands::hint("Wiederholen", "redo"), false, !self.redo.is_empty()).clicked() {
                 self.redo();
             }
             group_gap(ui);
-            if tool(ui, icon::ARROW_COUNTER_CLOCKWISE, "Links drehen (Strg+[)", false, has).clicked() {
+            if tool(ui, icon::ARROW_COUNTER_CLOCKWISE, &crate::commands::hint("Links drehen", "rotate-left"), false, has).clicked() {
                 self.rotate(3);
             }
-            if tool(ui, icon::ARROW_CLOCKWISE, "Rechts drehen (Strg+])", false, has).clicked() {
+            if tool(ui, icon::ARROW_CLOCKWISE, &crate::commands::hint("Rechts drehen", "rotate-right"), false, has).clicked() {
                 self.rotate(1);
             }
-            if labeled_tool(ui, wide, icon::CROP, "Zuschneiden", "Zuschneiden (C, Enter übernimmt)", self.crop_tool.is_some(), has).clicked() {
+            if labeled_tool(ui, wide, icon::CROP, "Zuschneiden", &format!("{}, {}", crate::commands::hint("Zuschneiden", "crop"), crate::commands::hint("übernehmen", "finish-crop")), self.crop_tool.is_some(), has).clicked() {
                 self.toggle_crop();
             }
             if labeled_tool(ui, wide, icon::RULER, "Geraderichten", "Geraderichten: eine Linie entlang des Horizonts ziehen", self.straighten_tool.is_some(), has).clicked() {
                 self.toggle_straighten();
             }
-            if labeled_tool(ui, wide, icon::EYEDROPPER, "Weißabgleich", "Weißabgleich-Pipette: auf eine neutrale Stelle klicken (W)", self.picking_wb, has).clicked() {
+            if labeled_tool(ui, wide, icon::EYEDROPPER, "Weißabgleich", &crate::commands::hint("Weißabgleich-Pipette: auf eine neutrale Stelle klicken", "wb-picker"), self.picking_wb, has).clicked() {
                 self.toggle_wb_picker();
                 if self.picking_wb {
                     self.tab = Tab::Color;
                 }
             }
             group_gap(ui);
-            if tool(ui, icon::COPY, "Anpassungen kopieren (Strg+Umschalt+C)", false, has).clicked() {
+            let copy = tool(ui, icon::COPY, &format!("{}\nRechtsklick: Werkzeuge auswählen", crate::commands::hint("Anpassungen kopieren", "copy-adjustments")), false, has);
+            if copy.clicked() {
                 self.copy_adjustments();
             }
-            if tool(ui, icon::CLIPBOARD_TEXT, "Anpassungen auf Auswahl anwenden (Strg+Umschalt+V)", false, self.clipboard.is_some()).clicked() {
+            if copy.secondary_clicked() {
+                self.open_copy_dialog();
+            }
+            if tool(ui, icon::CLIPBOARD_TEXT, &crate::commands::hint("Anpassungen auf Auswahl anwenden", "paste-adjustments"), false, self.clipboard.is_some()).clicked() {
                 self.paste_adjustments();
             }
             if tool(ui, icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", false, has).clicked() {
@@ -551,17 +474,17 @@ impl App {
                 let n = self.selected_paths().len();
                 let text = RichText::new(format!("{}  Exportieren", icon::EXPORT)).color(Color32::WHITE).strong();
                 let button = Button::new(text).fill(theme::ACCENT).corner_radius(6).min_size(vec2(0.0, 28.0));
-                if ui.add_enabled(n > 0, button).on_hover_text(format!("{} mit den gewählten Rezepten exportieren (Strg+D)", image_count(n))).clicked() {
+                if ui.add_enabled(n > 0, button).on_hover_text(crate::commands::hint(&format!("{} mit den gewählten Rezepten exportieren", image_count(n)), "export")).clicked() {
                     self.export_selection();
                 }
                 ui.add_space(6.0);
-                if tool(ui, icon::ARROWS_OUT, "Vollbild ohne Ablenkung (F11)", false, has).clicked() {
+                if tool(ui, icon::ARROWS_OUT, &crate::commands::hint("Vollbild ohne Ablenkung", "fullscreen"), false, has).clicked() {
                     self.toggle_fullscreen(&ctx);
                 }
                 group_gap(ui);
                 // Right to left: the segments are listed in reverse.
                 let zoom = [
-                    Seg { icon: icon::MAGNIFYING_GLASS_PLUS, label: "", hover: "100 % (Z, Doppelklick ins Bild)", active: self.zoom.is_some(), enabled: has },
+                    Seg { icon: icon::MAGNIFYING_GLASS_PLUS, label: "", hover: &crate::commands::hint("100 % (auch Doppelklick ins Bild)", "zoom-100"), active: self.zoom.is_some(), enabled: has },
                     Seg { icon: icon::CORNERS_OUT, label: "", hover: "Einpassen", active: self.zoom.is_none(), enabled: has },
                 ];
                 match segmented(ui, &zoom) {
@@ -574,7 +497,7 @@ impl App {
                 }
                 group_gap(ui);
                 let guides_on = self.guides != crate::guides::Guides::Off || self.overlay.shown;
-                let resp = tool(ui, icon::GRID_NINE, "Hilfslinien und Overlay (O)", guides_on, true);
+                let resp = tool(ui, icon::GRID_NINE, &crate::commands::hint("Hilfslinien und Overlay", "guides-next"), guides_on, true);
                 Popup::menu(&resp).show(|ui| {
                     for g in crate::guides::Guides::ALL {
                         if check(ui, self.guides == g, g.label(), "") {
@@ -590,20 +513,20 @@ impl App {
                         self.choose_overlay();
                     }
                 });
-                if tool(ui, icon::FILE_MAGNIFYING_GLASS, "Ausgabevorschau: so, wie das Ausgabe-Rezept das Bild schreibt (P)", self.proof_view, has).clicked() {
+                if tool(ui, icon::FILE_MAGNIFYING_GLASS, &crate::commands::hint("Ausgabevorschau: so, wie das Ausgabe-Rezept das Bild schreibt", "proof"), self.proof_view, has).clicked() {
                     self.toggle_proof();
                 }
-                if tool(ui, icon::CROSSHAIR, "Fokusmaske: scharfe Bereiche markieren (K)", self.focus_mask, has).clicked() {
+                if tool(ui, icon::CROSSHAIR, &crate::commands::hint("Fokusmaske: scharfe Bereiche markieren", "focus-mask"), self.focus_mask, has).clicked() {
                     self.toggle_focus_mask();
                 }
-                if tool(ui, icon::WARNING, "Belichtungswarnung: ausgefressene und abgesoffene Stellen (E)", self.clip_warning, has).clicked() {
+                if tool(ui, icon::WARNING, &crate::commands::hint("Belichtungswarnung: ausgefressene und abgesoffene Stellen", "clip-warning"), self.clip_warning, has).clicked() {
                     self.toggle_clip_warning();
                 }
                 group_gap(ui);
                 let compare = [
-                    Seg { icon: icon::COLUMNS, label: "", hover: "Vorher | Nachher nebeneinander (Umschalt+U)", active: self.split_view && self.split_side, enabled: has },
-                    Seg { icon: icon::SQUARE_SPLIT_HORIZONTAL, label: "", hover: "Geteilter Vergleich mit Trennlinie (U)", active: self.split_view && !self.split_side, enabled: has },
-                    Seg { icon: icon::CIRCLE_HALF, label: "", hover: "Vorher / Nachher (Y)", active: self.show_before, enabled: has },
+                    Seg { icon: icon::COLUMNS, label: "", hover: &crate::commands::hint("Vorher | Nachher nebeneinander", "side-by-side"), active: self.split_view && self.split_side, enabled: has },
+                    Seg { icon: icon::SQUARE_SPLIT_HORIZONTAL, label: "", hover: &crate::commands::hint("Geteilter Vergleich mit Trennlinie", "split"), active: self.split_view && !self.split_side, enabled: has },
+                    Seg { icon: icon::CIRCLE_HALF, label: "", hover: &crate::commands::hint("Vorher / Nachher", "before"), active: self.show_before, enabled: has },
                 ];
                 match segmented(ui, &compare) {
                     Some(0) => self.toggle_side_by_side(),
@@ -740,33 +663,8 @@ impl App {
     pub fn dialogs(&mut self, ctx: &egui::Context) {
         self.rename_dialog(ctx);
         self.gpu_dialog(ctx);
-        if self.show_shortcuts {
-            let mut open = true;
-            egui::Window::new(format!("{}  Tastenkürzel", icon::KEYBOARD))
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
-                .show(ctx, |ui| {
-                    egui::ScrollArea::vertical().max_height(ctx.content_rect().height() - 120.0).show(ui, |ui| {
-                        ui.columns(3, |cols| {
-                            for (i, (group, keys)) in SHORTCUTS.iter().enumerate() {
-                                let ui = &mut cols[[0, 0, 1, 1, 2][i]];
-                                ui.label(RichText::new(*group).strong().color(Color32::WHITE));
-                                egui::Grid::new(group).num_columns(2).spacing(vec2(16.0, 3.0)).show(ui, |ui| {
-                                    for (key, what) in *keys {
-                                        ui.label(RichText::new(*key).monospace().color(theme::ACCENT));
-                                        ui.label(*what);
-                                        ui.end_row();
-                                    }
-                                });
-                                ui.add_space(10.0);
-                            }
-                        });
-                    });
-                });
-            self.show_shortcuts = open && !ctx.input(|i| i.key_pressed(egui::Key::Escape));
-        }
+        self.copy_dialog(ctx);
+        self.shortcut_editor(ctx);
     }
 }
 

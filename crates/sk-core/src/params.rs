@@ -143,6 +143,9 @@ pub struct Curves {
     pub red: Curve,
     pub green: Curve,
     pub blue: Curve,
+    /// Brightness only (luma curve): applied after the others to the
+    /// luminance, colors are scaled with it, so hue and saturation stay.
+    pub luma: Curve,
 }
 
 /// Process versions of the renderer: edits keep the look
@@ -699,11 +702,65 @@ pub struct HslBand {
 #[serde(default)]
 pub struct ColorEditor {
     pub bands: [HslBand; 8],
+    /// Color ranges of one's own, applied after
+    /// the bands.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub zones: Vec<ColorZone>,
 }
+
+/// The most color ranges of one's own (the GPU reserves room for these).
+pub const MAX_COLOR_ZONES: usize = 8;
 
 impl ColorEditor {
     pub fn is_neutral(&self) -> bool {
-        self.bands.iter().all(|b| *b == HslBand::default())
+        self.bands.iter().all(|b| *b == HslBand::default()) && self.zones.iter().all(|z| !z.is_active())
+    }
+
+    /// The zones that change something, at most [`MAX_COLOR_ZONES`].
+    pub fn active_zones(&self) -> impl Iterator<Item = &ColorZone> {
+        self.zones.iter().filter(|z| z.is_active()).take(MAX_COLOR_ZONES)
+    }
+}
+
+/// A color range of one's own: a hue (Oklab degrees) with a width and a soft edge, and how its
+/// colors change.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ColorZone {
+    pub enabled: bool,
+    /// Center hue in degrees, 0..360.
+    pub hue: f32,
+    /// Half width in degrees, 3..90: fully affected up to the soft edge, not at all beyond.
+    pub width: f32,
+    /// Share of the width that fades out, 0..100.
+    pub softness: f32,
+    pub adjust: HslBand,
+}
+
+impl Default for ColorZone {
+    fn default() -> Self {
+        Self { enabled: true, hue: 30.0, width: 25.0, softness: 50.0, adjust: HslBand::default() }
+    }
+}
+
+impl ColorZone {
+    pub fn is_active(&self) -> bool {
+        self.enabled && self.adjust != HslBand::default()
+    }
+
+    /// Hue distance (degrees) up to which the range has full effect, and where it ends.
+    pub fn edges(&self) -> (f32, f32) {
+        let outer = self.width.max(0.5);
+        let inner = outer * (1.0 - (self.softness / 100.0).clamp(0.0, 1.0));
+        (inner, outer.max(inner + 0.01))
+    }
+
+    /// How much a hue (degrees) belongs to the range, 0..1.
+    pub fn weight(&self, h: f32) -> f32 {
+        let d = ((h - self.hue + 540.0).rem_euclid(360.0) - 180.0).abs();
+        let (inner, outer) = self.edges();
+        let t = ((d - inner) / (outer - inner)).clamp(0.0, 1.0);
+        1.0 - t * t * (3.0 - 2.0 * t)
     }
 }
 

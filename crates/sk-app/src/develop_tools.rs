@@ -1,12 +1,12 @@
 //! Tool tabs for geometry/lens, details and the advanced color tools.
 
 use sk_core::auto;
-use sk_core::params::{AspectRatio, ColorWheel, CropRect, Detail, HUE_BANDS, HslBand, LensCorrection, SkinTone};
+use sk_core::params::{AspectRatio, ColorWheel, ColorZone, CropRect, Detail, HUE_BANDS, HslBand, LensCorrection, MAX_COLOR_ZONES, SkinTone};
 use egui::{Color32, RichText, Ui};
 
 use crate::app::App;
 use crate::theme::icon;
-use crate::widgets::{self, section, slider_row};
+use crate::widgets::{self, slider_row};
 
 /// Approximate display color of a hue band (for swatches).
 fn band_color(hue: f32) -> Color32 {
@@ -27,10 +27,12 @@ pub enum ColorView {
     Saturation,
     Lightness,
     Single,
+    /// Color ranges of one's own.
+    Zones,
 }
 
 impl ColorView {
-    const ALL: [ColorView; 4] = [ColorView::Hue, ColorView::Saturation, ColorView::Lightness, ColorView::Single];
+    const ALL: [ColorView; 5] = [ColorView::Hue, ColorView::Saturation, ColorView::Lightness, ColorView::Single, ColorView::Zones];
 
     fn label(self) -> &'static str {
         match self {
@@ -38,8 +40,43 @@ impl ColorView {
             ColorView::Saturation => "Sättigung",
             ColorView::Lightness => "Helligkeit",
             ColorView::Single => "Einzeln",
+            ColorView::Zones => "Eigene",
         }
     }
+}
+
+/// What the color pipette picks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ColorPick {
+    #[default]
+    Skin,
+    /// A new color range of one's own.
+    NewZone,
+    /// The color of this range.
+    Zone(usize),
+}
+
+/// The hue circle as a strip, darkened outside the range (soft edge included).
+fn zone_strip(ui: &mut Ui, zone: &ColorZone) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 12.0), egui::Sense::hover());
+    let p = ui.painter();
+    let n = 120;
+    let w = rect.width() / n as f32;
+    for i in 0..n {
+        let h = (i as f32 + 0.5) * 360.0 / n as f32;
+        let r = egui::Rect::from_min_size(egui::pos2(rect.left() + i as f32 * w, rect.top()), egui::vec2(w + 0.5, rect.height()));
+        p.rect_filled(r, 0.0, band_hsv(h, 0.75, 0.9));
+        let shade = 1.0 - zone.weight(h);
+        if shade > 0.0 {
+            p.rect_filled(r, 0.0, Color32::from_black_alpha((shade * 200.0) as u8));
+        }
+    }
+    p.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, Color32::from_gray(70)), egui::StrokeKind::Outside);
+}
+
+/// Colors of the hue circle, for the rail of the center slider.
+fn hue_rail() -> Vec<Color32> {
+    (0..=12).map(|i| band_hsv(i as f32 * 30.0, 0.75, 0.9)).collect()
 }
 
 /// Rail colors of a band slider: the neighbouring hues, grey to color, or dark to light.
@@ -47,7 +84,7 @@ fn band_rail(view: ColorView, hue: f32) -> [Color32; 3] {
     match view {
         ColorView::Hue => [band_hsv(hue - 30.0, 0.75, 0.9), band_hsv(hue, 0.75, 0.9), band_hsv(hue + 30.0, 0.75, 0.9)],
         ColorView::Saturation => [Color32::from_gray(140), band_hsv(hue, 0.45, 0.85), band_hsv(hue, 0.95, 0.95)],
-        ColorView::Lightness | ColorView::Single => [band_hsv(hue, 0.8, 0.3), band_hsv(hue, 0.75, 0.7), band_hsv(hue, 0.35, 1.0)],
+        ColorView::Lightness | ColorView::Single | ColorView::Zones => [band_hsv(hue, 0.8, 0.3), band_hsv(hue, 0.75, 0.7), band_hsv(hue, 0.35, 1.0)],
     }
 }
 
@@ -58,7 +95,7 @@ fn band_slider(ui: &mut Ui, label: &str, band: &mut HslBand, view: ColorView, hu
     match view {
         ColorView::Hue => widgets::slider_row_with(ui, label, &mut band.hue, -30.0..=30.0, 0.0, 1, opts),
         ColorView::Saturation => widgets::slider_row_with(ui, label, &mut band.saturation, -100.0..=100.0, 0.0, 0, opts),
-        ColorView::Lightness | ColorView::Single => widgets::slider_row_with(ui, label, &mut band.lightness, -100.0..=100.0, 0.0, 0, opts),
+        ColorView::Lightness | ColorView::Single | ColorView::Zones => widgets::slider_row_with(ui, label, &mut band.lightness, -100.0..=100.0, 0.0, 0, opts),
     }
 }
 
@@ -134,13 +171,13 @@ impl App {
         let mut changed = false;
 
         let mut reset_crop = false;
-        section(ui, "Zuschnitt", Some(&mut || reset_crop = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::Crop, Some(&mut || reset_crop = true), |ui| {
             ui.horizontal(|ui| {
                 if crop_active {
                     if ui.button("\u{E182}  Übernehmen").on_hover_text("Enter").clicked() {
                         finish_crop = true;
                     }
-                } else if ui.button("\u{E1D4}  Zuschneiden").on_hover_text("C").clicked() {
+                } else if ui.button("\u{E1D4}  Zuschneiden").on_hover_text(crate::commands::hint("Zuschneiden", "crop")).clicked() {
                     start_crop = true;
                 }
             });
@@ -166,7 +203,7 @@ impl App {
         }
 
         let mut reset_rot = false;
-        section(ui, "Drehen & Spiegeln", Some(&mut || reset_rot = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::Rotation, Some(&mut || reset_rot = true), |ui| {
             let g = &mut adj.geometry;
             changed |= slider_row(ui, "Geraderichten", &mut g.straighten, -45.0..=45.0, 0.0, 1);
             ui.horizontal(|ui| {
@@ -196,7 +233,7 @@ impl App {
         }
 
         let mut reset_key = false;
-        section(ui, "Perspektive", Some(&mut || reset_key = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::Perspective, Some(&mut || reset_key = true), |ui| {
             use sk_core::upright::UprightMode;
             ui.horizontal(|ui| {
                 ui.label("Automatisch");
@@ -225,7 +262,7 @@ impl App {
         let focal = cur.meta.info.focal_length.clone();
         let camera_source = cur.meta.lens.as_ref().map(|l| l.source);
         let mut profile_action: Option<bool> = None;
-        section(ui, "Objektivkorrektur", Some(&mut || reset_lens = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::LensCorrection, Some(&mut || reset_lens = true), |ui| {
             ui.label(RichText::new(lens_name.clone().unwrap_or_else(|| "Objektiv unbekannt".into())).color(Color32::from_gray(170)));
             let l = &mut adj.lens;
             if let Some(source) = camera_source {
@@ -326,28 +363,28 @@ impl App {
         let defaults = Detail::default();
 
         let (mut r_sharp, mut r_clarity, mut r_vig, mut r_grain) = (false, false, false, false);
-        section(ui, "Schärfen", Some(&mut || r_sharp = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::Sharpening, Some(&mut || r_sharp = true), |ui| {
             changed |= slider_row(ui, "Stärke", &mut d.sharpen_amount, 0.0..=500.0, defaults.sharpen_amount, 0);
             changed |= slider_row(ui, "Radius", &mut d.sharpen_radius, 0.2..=3.0, defaults.sharpen_radius, 1);
             changed |= slider_row(ui, "Schwelle", &mut d.sharpen_threshold, 0.0..=20.0, defaults.sharpen_threshold, 1);
-            ui.label(RichText::new("Wirkung bei 100 % prüfen (Z)").small().color(crate::theme::TEXT_FAINT));
+            ui.label(RichText::new(crate::commands::hint("Wirkung bei 100 % prüfen", "zoom-100")).small().color(crate::theme::TEXT_FAINT));
         });
-        section(ui, "Klarheit", Some(&mut || r_clarity = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::Clarity, Some(&mut || r_clarity = true), |ui| {
             changed |= slider_row(ui, "Klarheit", &mut d.clarity, -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Struktur", &mut d.structure, -100.0..=100.0, 0.0, 0);
         });
         let mut r_haze = false;
-        section(ui, "Dunst entfernen", Some(&mut || r_haze = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::Dehaze, Some(&mut || r_haze = true), |ui| {
             changed |= slider_row(ui, "Stärke", &mut d.dehaze, -100.0..=100.0, 0.0, 0);
         });
         if r_haze {
             d.dehaze = 0.0;
             changed = true;
         }
-        section(ui, "Vignettierung", Some(&mut || r_vig = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::Vignette, Some(&mut || r_vig = true), |ui| {
             changed |= slider_row(ui, "Stärke", &mut d.vignette_amount, -100.0..=100.0, 0.0, 0);
         });
-        section(ui, "Körnung", Some(&mut || r_grain = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::Grain, Some(&mut || r_grain = true), |ui| {
             changed |= slider_row(ui, "Stärke", &mut d.grain_amount, 0.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Größe", &mut d.grain_size, 0.0..=100.0, defaults.grain_size, 0);
         });
@@ -373,24 +410,91 @@ impl App {
     pub fn color_advanced(&mut self, ui: &mut Ui) {
         let band = &mut self.color_band;
         let view = &mut self.color_view;
-        let picking_skin = &mut self.picking_skin;
-        let mut toggle_skin = false;
+        let zone_sel = &mut self.color_zone;
+        let picking = |t: ColorPick| self.picking_skin && self.color_pick == t;
+        let (picking_skin, picking_new_zone) = (picking(ColorPick::Skin), picking(ColorPick::NewZone));
+        let picking_zone = match self.color_pick {
+            ColorPick::Zone(i) if self.picking_skin => Some(i),
+            _ => None,
+        };
+        let mut toggle_pick: Option<ColorPick> = None;
         let Some(cur) = self.current.as_mut() else { return };
         let adj = &mut cur.adjustments;
         let mut changed = false;
 
         let mut reset_ed = false;
-        section(ui, "Farbeditor", Some(&mut || reset_ed = true), |ui| {
-            ui.horizontal(|ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::ColorEditor, Some(&mut || reset_ed = true), |ui| {
+            ui.horizontal_wrapped(|ui| {
                 for v in ColorView::ALL {
-                    if ui.selectable_label(*view == v, v.label()).clicked() {
+                    let r = ui.selectable_label(*view == v, v.label());
+                    let r = if v == ColorView::Zones { r.on_hover_text("Eigene Farbbereiche: eine Farbe im Bild aufnehmen und nur sie ändern") } else { r };
+                    if r.clicked() {
                         *view = v;
                     }
                 }
             });
             ui.add_space(4.0);
-            let bands = &mut adj.color_editor.bands;
-            if *view == ColorView::Single {
+            if *view == ColorView::Zones {
+                let zones = &mut adj.color_editor.zones;
+                ui.horizontal_wrapped(|ui| {
+                    for (i, z) in zones.iter().enumerate() {
+                        let name = format!("Bereich {}", i + 1);
+                        let color = if z.enabled { band_color(z.hue) } else { band_hsv(z.hue, 0.2, 0.5) };
+                        if band_swatch(ui, color, *zone_sel == i, z.is_active(), &name).clicked() {
+                            *zone_sel = i;
+                        }
+                    }
+                    let full = zones.len() >= MAX_COLOR_ZONES;
+                    let r = ui
+                        .add_enabled(!full, egui::Button::new(format!("{}  Aufnehmen", icon::EYEDROPPER)).selected(picking_new_zone))
+                        .on_hover_text("Neuer Bereich: auf die Farbe im Bild klicken")
+                        .on_disabled_hover_text(format!("Höchstens {MAX_COLOR_ZONES} Bereiche"));
+                    if r.clicked() {
+                        toggle_pick = Some(ColorPick::NewZone);
+                    }
+                });
+                *zone_sel = (*zone_sel).min(zones.len().saturating_sub(1));
+                if zones.is_empty() {
+                    ui.label(
+                        RichText::new("Eine Farbe im Bild aufnehmen; nur sie und ähnliche Farbtöne ändern sich dann, Breite und Weichheit bestimmen wie viele.")
+                            .small()
+                            .color(crate::theme::TEXT_FAINT),
+                    );
+                } else {
+                    let i = *zone_sel;
+                    let mut delete = false;
+                    let z = &mut zones[i];
+                    ui.add_space(2.0);
+                    ui.horizontal(|ui| {
+                        changed |= ui.checkbox(&mut z.enabled, format!("Bereich {}", i + 1)).changed();
+                        if ui.selectable_label(picking_zone == Some(i), icon::EYEDROPPER).on_hover_text("Farbe neu aufnehmen").clicked() {
+                            toggle_pick = Some(ColorPick::Zone(i));
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            delete = widgets::small_button(ui, icon::TRASH, "Bereich löschen").clicked();
+                        });
+                    });
+                    zone_strip(ui, z);
+                    let d = ColorZone::default();
+                    let rail = hue_rail();
+                    let deg = widgets::SliderOpts { suffix: "°", ..Default::default() };
+                    let picked = z.hue;
+                    changed |= widgets::slider_row_with(ui, "Farbe", &mut z.hue, 0.0..=360.0, picked, 0, widgets::SliderOpts { suffix: "°", rail: Some(&rail) });
+                    changed |= widgets::slider_row_with(ui, "Breite", &mut z.width, 3.0..=90.0, d.width, 0, deg);
+                    changed |= widgets::slider_row_with(ui, "Weichheit", &mut z.softness, 0.0..=100.0, d.softness, 0, widgets::SliderOpts { suffix: " %", ..Default::default() });
+                    ui.label(RichText::new("Ändern").strong());
+                    let hue = z.hue;
+                    changed |= band_slider(ui, "Farbton", &mut z.adjust, ColorView::Hue, hue);
+                    changed |= band_slider(ui, "Sättigung", &mut z.adjust, ColorView::Saturation, hue);
+                    changed |= band_slider(ui, "Helligkeit", &mut z.adjust, ColorView::Lightness, hue);
+                    if delete {
+                        zones.remove(i);
+                        *zone_sel = i.saturating_sub(1);
+                        changed = true;
+                    }
+                }
+            } else if *view == ColorView::Single {
+                let bands = &mut adj.color_editor.bands;
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = ((ui.available_width() - 8.0 * 28.0) / 7.0).max(0.0);
                     for (i, (name, hue)) in HUE_BANDS.iter().enumerate() {
@@ -407,6 +511,7 @@ impl App {
                 changed |= band_slider(ui, "Sättigung", b, ColorView::Saturation, hue);
                 changed |= band_slider(ui, "Helligkeit", b, ColorView::Lightness, hue);
             } else {
+                let bands = &mut adj.color_editor.bands;
                 for (i, (name, hue)) in HUE_BANDS.iter().enumerate() {
                     changed |= band_slider(ui, name, &mut bands[i], *view, *hue);
                 }
@@ -418,15 +523,15 @@ impl App {
         }
 
         let mut reset_skin = false;
-        section(ui, "Hauttöne", Some(&mut || reset_skin = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::SkinTone, Some(&mut || reset_skin = true), |ui| {
             let st = &mut adj.skin_tone;
             ui.horizontal(|ui| {
                 let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
                 ui.painter().rect_filled(rect, 3.0, skin_color(st));
                 ui.painter().rect_stroke(rect, 3.0, egui::Stroke::new(1.0, Color32::from_gray(90)), egui::StrokeKind::Inside);
                 let pipette = format!("{}  Hautton aufnehmen", crate::theme::icon::EYEDROPPER);
-                if ui.selectable_label(*picking_skin, pipette).on_hover_text("Auf eine typische Hautstelle im Bild klicken").clicked() {
-                    toggle_skin = true;
+                if ui.selectable_label(picking_skin, pipette).on_hover_text("Auf eine typische Hautstelle im Bild klicken").clicked() {
+                    toggle_pick = Some(ColorPick::Skin);
                 }
             });
             changed |= slider_row(ui, "Bereich", &mut st.range, 10.0..=60.0, SkinTone::default().range, 0);
@@ -447,7 +552,7 @@ impl App {
         }
 
         let mut reset_cb = false;
-        section(ui, "Farbbalance", Some(&mut || reset_cb = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::ColorBalance, Some(&mut || reset_cb = true), |ui| {
             let cb = &mut adj.color_balance;
             changed |= wheel_ui(ui, "Master", &mut cb.master, false);
             changed |= wheel_ui(ui, "Schatten", &mut cb.shadows, true);
@@ -460,7 +565,7 @@ impl App {
         }
 
         let mut reset_bw = false;
-        section(ui, "Schwarzweiß", Some(&mut || reset_bw = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::BlackWhite, Some(&mut || reset_bw = true), |ui| {
             let bw = &mut adj.black_white;
             changed |= ui.checkbox(&mut bw.enabled, "Schwarzweiß aktivieren").changed();
             if bw.enabled {
@@ -480,8 +585,8 @@ impl App {
         if changed {
             self.request_render();
         }
-        if toggle_skin {
-            self.toggle_skin_picker();
+        if let Some(target) = toggle_pick {
+            self.toggle_color_picker(target);
         }
     }
 

@@ -53,6 +53,8 @@ struct Params {
     lut_curve: u32,
     lut_out: array<u32, 3>,
     lut_out_len: u32,
+    // The luma curve (NO_LUT: a straight line), same length as the output curves.
+    lut_luma: u32,
     // Background tone parameters (ToneParams).
     exposure_ev: f32,
     contrast: f32,
@@ -81,6 +83,9 @@ struct Params {
     bw_mix: array<f32, 8>,
     // shadow tint hue, amount, highlight tint hue, amount
     bw_tint: array<f32, 4>,
+    // Color ranges of one's own: center hue, inner and outer edge, hue, saturation, lightness.
+    n_zones: u32,
+    zones: array<f32, 48>,
     to_lms: array<f32, 9>,
     from_lms: array<f32, 9>,
     src_w: f32,
@@ -167,11 +172,27 @@ fn lut_lookup(off: u32, len: u32, v: f32) -> f32 {
 }
 
 fn encode(rgb: vec3<f32>) -> vec3<f32> {
-    return vec3<f32>(
+    let e = vec3<f32>(
         lut_lookup(P.lut_out[0], P.lut_out_len, rgb.x),
         lut_lookup(P.lut_out[1], P.lut_out_len, rgb.y),
         lut_lookup(P.lut_out[2], P.lut_out_len, rgb.z),
     );
+    if P.lut_luma == NO_LUT {
+        return e;
+    }
+    // Luma curve (apply_luma_curve): luminance along the curve, hue and saturation kept.
+    let y = clamp(dot(e, LUMA), 0.0, 1.0);
+    let y2 = lut_lookup(P.lut_luma, P.lut_out_len, y);
+    if y < 1e-5 {
+        return vec3<f32>(y2);
+    }
+    var o = e * (y2 / y);
+    let m = max(o.x, max(o.y, o.z));
+    if m > 1.0 {
+        let t = clamp((m - 1.0) / max(m - y2, 1e-6), 0.0, 1.0);
+        o = o + (vec3<f32>(y2) - o) * t;
+    }
+    return clamp(o, vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 // ------------------------------------------------------------------ tone
@@ -354,6 +375,7 @@ fn color(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
     let chroma_w = sstep(0.0, 0.05, c);
 
     if P.editor_active != 0u {
+        let h_in = h;
         let w = band_weights(h);
         var dh = 0.0;
         var ds = 0.0;
@@ -366,6 +388,18 @@ fn color(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
         h += dh * chroma_w;
         c *= max(1.0 + ds * chroma_w, 0.0);
         l *= 1.0 + dl * 0.4 * chroma_w;
+        // Ranges of one's own select by the color as it comes in.
+        for (var i = 0u; i < P.n_zones; i++) {
+            let o = i * 6u;
+            let d = abs(rem_euclid(h_in - P.zones[o] + 540.0, 360.0) - 180.0);
+            let t = clamp((d - P.zones[o + 1u]) / (P.zones[o + 2u] - P.zones[o + 1u]), 0.0, 1.0);
+            let zw = (1.0 - t * t * (3.0 - 2.0 * t)) * chroma_w;
+            if zw > 0.0 {
+                h += P.zones[o + 3u] * zw;
+                c *= max(1.0 + P.zones[o + 4u] / 100.0 * zw, 0.0);
+                l *= 1.0 + P.zones[o + 5u] / 100.0 * 0.4 * zw;
+            }
+        }
     }
 
     if P.skin_active != 0u {

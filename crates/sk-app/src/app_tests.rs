@@ -186,6 +186,35 @@ fn noise_settings_carry_over_to_the_selection() {
 }
 
 #[test]
+fn copy_some_tools_and_transfer_one() {
+    let Some(mut f) = Fixture::new("copytools") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let other = f.app.entries.iter().map(|e| e.path.clone()).find(|p| Some(p) != f.app.current_path().as_ref()).unwrap();
+    f.app.set_adjustments_on(std::slice::from_ref(&other), |a| sk_core::params::Adjustments { exposure: -0.5, contrast: 10.0, rotation: 1, ..a.clone() });
+
+    // Copying takes the edited tools only; the other image keeps its exposure and rotation.
+    f.app.edit(|a| {
+        a.contrast = 40.0;
+        a.detail.grain_amount = 20.0;
+        a.rotation = 2;
+    });
+    f.app.copy_adjustments();
+    let tools = &f.app.clipboard.as_ref().unwrap().tools;
+    assert_eq!(tools, &vec![sk_core::tools::Tool::Exposure, sk_core::tools::Tool::Grain]);
+    f.app.selection = [other.clone()].into_iter().collect();
+    f.app.clipboard.as_mut().unwrap().tools = vec![sk_core::tools::Tool::Grain];
+    f.app.paste_adjustments();
+    let a = sidecar::load(&other).adjustments;
+    assert_eq!((a.exposure, a.contrast, a.detail.grain_amount, a.rotation), (-0.5, 10.0, 20.0, 1));
+
+    // The button of a tool carries just that tool over to the other selected images.
+    f.app.selection = f.app.entries.iter().map(|e| e.path.clone()).collect();
+    f.app.transfer_tool(sk_core::tools::Tool::Exposure);
+    let a = sidecar::load(&other).adjustments;
+    assert_eq!((a.exposure, a.contrast, a.rotation), (0.0, 40.0, 1));
+}
+
+#[test]
 #[ignore = "langsam: läuft mit cargo t-all"]
 fn edit_copy_apply_style_and_export() {
     let Some(mut f) = Fixture::new("edit") else { return };
@@ -214,7 +243,7 @@ fn edit_copy_apply_style_and_export() {
 
     // Styles round-trip through a style directory.
     let style_dir = f.dir.join("styles");
-    let style = styles::Style { name: "Kontrast".into(), adjustments: sk_core::params::Adjustments { contrast: 30.0, ..Default::default() } };
+    let style = styles::Style { name: "Kontrast".into(), adjustments: sk_core::params::Adjustments { contrast: 30.0, ..Default::default() }, tools: None };
     styles::save_in(&style_dir, &style).unwrap();
     let loaded = styles::list_in(&style_dir);
     f.app.set_adjustments_on(std::slice::from_ref(&b), |adj| styles::apply(&loaded[0], adj));
@@ -1017,6 +1046,40 @@ fn compare_view_and_matching() {
 }
 
 #[test]
+fn color_zone_pipette_adds_and_moves_a_range() {
+    use crate::develop_tools::ColorPick;
+    let Some(mut f) = Fixture::new("zone") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let size = f.app.image_size().unwrap();
+    // The first colorful spot of a grid over the image.
+    let spots: Vec<egui::Vec2> = (1..6).flat_map(|y| (1..6).map(move |x| egui::vec2(x as f32 / 6.0, y as f32 / 6.0) * size)).collect();
+    let mut picked = None;
+    for &pos in &spots {
+        f.app.toggle_color_picker(ColorPick::NewZone);
+        assert!(f.app.picking_skin);
+        f.app.pick_skin_tone(pos);
+        if !f.app.current.as_ref().unwrap().adjustments.color_editor.zones.is_empty() {
+            picked = Some(pos);
+            break;
+        }
+        assert!(f.app.status.contains("zu farblos"), "{}", f.app.status);
+        f.app.end_viewer_tools();
+    }
+    let Some(_) = picked else { return };
+    assert!(!f.app.picking_skin);
+    let zones = f.app.current.as_ref().unwrap().adjustments.color_editor.zones.clone();
+    assert_eq!((zones.len(), f.app.color_zone), (1, 0));
+    // A new range changes nothing until one of its sliders moves.
+    assert!(f.app.current.as_ref().unwrap().adjustments.color_editor.is_neutral());
+    // Picking again for the range moves it instead of adding one.
+    f.app.current.as_mut().unwrap().adjustments.color_editor.zones[0].hue = (zones[0].hue + 90.0) % 360.0;
+    f.app.toggle_color_picker(ColorPick::Zone(0));
+    f.app.pick_skin_tone(picked.unwrap());
+    let again = &f.app.current.as_ref().unwrap().adjustments.color_editor.zones;
+    assert_eq!((again.len(), again[0].hue), (1, zones[0].hue));
+}
+
+#[test]
 fn skin_tone_pipette_sets_target() {
     let Some(mut f) = Fixture::new("skin") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
@@ -1655,7 +1718,7 @@ fn choosing_a_viewer_tool_ends_the_others() {
         ("Zuschneiden", |a| a.start_crop_tool(), |a| a.crop_tool.is_some()),
         ("Geraderichten", |a| a.toggle_straighten(), |a| a.straighten_tool.is_some()),
         ("WB-Pipette", |a| a.toggle_wb_picker(), |a| a.picking_wb),
-        ("Hautton-Pipette", |a| a.toggle_skin_picker(), |a| a.picking_skin),
+        ("Hautton-Pipette", |a| a.toggle_color_picker(crate::develop_tools::ColorPick::Skin), |a| a.picking_skin),
     ];
     for (first, on_first, _) in &tools {
         for (second, on_second, is_on) in &tools {

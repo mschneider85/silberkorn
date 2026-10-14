@@ -33,6 +33,8 @@ pub struct LibraryUi {
     pub new_album: String,
     pub renaming: Option<(i64, String)>,
     pub new_style: String,
+    /// The tools a new style takes; `None` until chosen: the edited ones.
+    pub new_style_tools: Option<std::collections::BTreeSet<sk_core::tools::Tool>>,
     /// Person being named, with the text typed so far.
     pub naming: Option<(i64, String)>,
 }
@@ -523,7 +525,7 @@ impl App {
         section(ui, "Ordner", None, |ui| {
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("\u{E256}  Durchsuchen …").on_hover_text("Ordner auswählen (Strg+O)").clicked() {
+                    if ui.button("\u{E256}  Durchsuchen …").on_hover_text(crate::commands::hint("Ordner auswählen", "open-folder")).clicked() {
                         browse = true;
                     }
                     let resp = ui.add(egui::TextEdit::singleline(&mut self.folder_input).desired_width(ui.available_width()));
@@ -643,7 +645,11 @@ impl App {
                     if ui.button("Anwenden").on_hover_text("Auf Auswahl anwenden").clicked() {
                         apply = Some((style.clone(), false));
                     }
-                    ui.label(&style.name);
+                    let sets = match &style.tools {
+                        Some(t) => format!("Setzt: {}", t.iter().map(|t| t.label()).collect::<Vec<_>>().join(", ")),
+                        None => "Setzt alle Werkzeuge außer Zuschnitt, Drehen, Perspektive, Ebenen und Retusche".into(),
+                    };
+                    ui.label(&style.name).on_hover_text(sets);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if widgets::small_button(ui, "\u{E4A6}", "Stil löschen").clicked() {
                             delete = Some(style.name.clone());
@@ -660,21 +666,42 @@ impl App {
         {
             self.preview_style(if look { styles::apply_look(&style, &current) } else { styles::apply(&style, &current) });
         }
+        let mut save = None;
         section(ui, "Neuer Stil", None, |ui| {
             ui.add(egui::TextEdit::singleline(&mut self.library_ui.new_style).hint_text("Name des Stils"));
             let name = self.library_ui.new_style.trim().to_string();
-            if ui.add_enabled(!name.is_empty() && self.current.is_some(), egui::Button::new("Aktuelle Anpassungen speichern")).clicked()
-                && let Some(cur) = &self.current
-            {
-                let style = Style { name, adjustments: cur.adjustments.clone() };
-                match styles::save_in(&styles::styles_dir(), &style) {
-                    Ok(()) => self.status = format!("Stil „{}“ gespeichert", style.name),
-                    Err(e) => self.status = format!("Fehler: {e:#}"),
-                }
-                self.library_ui.new_style.clear();
-                self.reload_styles();
+            let Some(cur) = &self.current else { return };
+            // Until chosen by hand: the edited tools of the image.
+            let auto: std::collections::BTreeSet<_> = sk_core::tools::edited(&cur.adjustments).into_iter().collect();
+            let mut chosen = self.library_ui.new_style_tools.clone().unwrap_or(auto);
+            let list: Vec<sk_core::tools::Tool> = chosen.iter().copied().collect();
+            egui::CollapsingHeader::new(format!("Enthält: {}", crate::clipboard::tool_list(&list)))
+                .id_salt("new_style_tools")
+                .show(ui, |ui| {
+                    ui.label(
+                        RichText::new("Nur diese Werkzeuge werden gesetzt, alle anderen bleiben, wie sie sind; so lassen sich Stile übereinander anwenden.")
+                            .small()
+                            .color(crate::theme::TEXT_FAINT),
+                    );
+                    let before = chosen.clone();
+                    crate::clipboard::tool_checkboxes(ui, &cur.adjustments, &mut chosen);
+                    if chosen != before {
+                        self.library_ui.new_style_tools = Some(chosen.clone());
+                    }
+                });
+            if ui.add_enabled(!name.is_empty() && !list.is_empty(), egui::Button::new("Aktuelle Anpassungen speichern")).clicked() {
+                save = Some(Style { name, adjustments: cur.adjustments.clone(), tools: Some(list) });
             }
         });
+        if let Some(style) = save {
+            match styles::save_in(&styles::styles_dir(), &style) {
+                Ok(()) => self.status = format!("Stil „{}“ gespeichert", style.name),
+                Err(e) => self.status = format!("Fehler: {e:#}"),
+            }
+            self.library_ui.new_style.clear();
+            self.library_ui.new_style_tools = None;
+            self.reload_styles();
+        }
         if let Some((style, look)) = apply {
             let paths = self.selected_paths();
             self.set_adjustments_on(&paths, |a| if look { styles::apply_look(&style, a) } else { styles::apply(&style, a) });

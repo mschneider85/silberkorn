@@ -36,6 +36,52 @@ pub fn section_full(
     reset: Option<&mut dyn FnMut()>,
     body: impl FnOnce(&mut Ui),
 ) {
+    section_inner(ui, title, default_open, help, None, reset, body);
+}
+
+fn copy_targets_id() -> egui::Id {
+    egui::Id::new("tool_copy_targets")
+}
+
+fn copy_clicked_id() -> egui::Id {
+    egui::Id::new("tool_copy_clicked")
+}
+
+/// How many other images the copy button of a tool section carries its settings to (0: no
+/// button); set before the tool tabs are drawn.
+pub fn set_copy_targets(ctx: &egui::Context, n: usize) {
+    ctx.data_mut(|d| d.insert_temp(copy_targets_id(), n));
+}
+
+/// The tool whose copy button was clicked since the last call.
+pub fn take_copy_clicked(ctx: &egui::Context) -> Option<sk_core::tools::Tool> {
+    ctx.data_mut(|d| {
+        let tool = d.get_temp(copy_clicked_id());
+        d.remove::<sk_core::tools::Tool>(copy_clicked_id());
+        tool
+    })
+}
+
+/// [`section`] of a develop tool: titled after it, with a button in the header that carries
+/// its settings over to the other selected images.
+pub fn tool_section(ui: &mut Ui, tool: sk_core::tools::Tool, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
+    section_inner(ui, tool.label(), true, None, Some(tool), reset, body);
+}
+
+/// [`tool_section`] with an explanation behind an info icon in the header.
+pub fn tool_section_help(ui: &mut Ui, tool: sk_core::tools::Tool, help: &str, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
+    section_inner(ui, tool.label(), true, Some(help), Some(tool), reset, body);
+}
+
+fn section_inner(
+    ui: &mut Ui,
+    title: &str,
+    default_open: bool,
+    help: Option<&str>,
+    copy: Option<sk_core::tools::Tool>,
+    reset: Option<&mut dyn FnMut()>,
+    body: impl FnOnce(&mut Ui),
+) {
     let id = ui.make_persistent_id(title);
     let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(id, default_open));
     let reveal = ui.data(|d| d.get_temp::<String>(reveal_id())).is_some_and(|t| t == title);
@@ -88,12 +134,25 @@ pub fn section_full(
             ui.label(help);
         });
     }
+    let has_reset = reset.is_some();
     if let Some(reset) = reset {
         let r = Rect::from_center_size(inner.right_center() - vec2(34.0, 0.0), vec2(24.0, 22.0));
         let color = if hovered || ui.rect_contains_pointer(r) { theme::TEXT } else { theme::TEXT_FAINT };
         let b = egui::Button::new(RichText::new(theme::icon::ARROW_COUNTER_CLOCKWISE).size(13.0).color(color)).frame_when_inactive(false);
         if ui.put(r, b).on_hover_text("Werkzeug zurücksetzen").clicked() {
             reset();
+            header_button_clicked = true;
+        }
+    }
+    let targets = ui.data(|d| d.get_temp::<usize>(copy_targets_id())).unwrap_or(0);
+    if let Some(tool) = copy.filter(|_| targets > 0) {
+        let x = if has_reset { 60.0 } else { 34.0 };
+        let r = Rect::from_center_size(inner.right_center() - vec2(x, 0.0), vec2(24.0, 22.0));
+        let color = if hovered || ui.rect_contains_pointer(r) { theme::TEXT } else { theme::TEXT_FAINT };
+        let b = egui::Button::new(RichText::new(theme::icon::COPY).size(13.0).color(color)).frame_when_inactive(false);
+        let hover = format!("„{title}“ auf {} übertragen", if targets == 1 { "das andere ausgewählte Bild".to_string() } else { format!("die anderen {targets} ausgewählten Bilder") });
+        if ui.put(r, b).on_hover_text(hover).clicked() {
+            ui.data_mut(|d| d.insert_temp(copy_clicked_id(), tool));
             header_button_clicked = true;
         }
     }
@@ -839,7 +898,7 @@ pub fn clip_triangles(ui: &mut Ui, rect: Rect, hist: Option<&Histogram>, warning
             ui.painter().add(Shape::closed_line(pts, stroke));
         }
         let state = if is_clipped { "vorhanden" } else { "keine" };
-        if resp.on_hover_text(format!("{hover}: {state}\nKlick: Belichtungswarnung im Bild (E)")).clicked() {
+        if resp.on_hover_text(format!("{hover}: {state}\nKlick: {}", crate::commands::hint("Belichtungswarnung im Bild", "clip-warning"))).clicked() {
             clicked = true;
         }
     }

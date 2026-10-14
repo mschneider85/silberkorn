@@ -124,7 +124,7 @@ impl App {
     /// Matches exposure and/or white balance of the selected images to the reference.
     pub fn match_selection(&mut self, what: MatchWhat) {
         let Some(reference) = self.compare_ref.clone() else {
-            self.status = "Zuerst ein Referenzbild festlegen (Umschalt+Enter)".into();
+            self.status = crate::commands::hint("Zuerst ein Referenzbild festlegen", "reference");
             return;
         };
         // The reference and the current image as they are now.

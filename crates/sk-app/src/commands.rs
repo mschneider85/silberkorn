@@ -2,6 +2,9 @@
 //! what it does. The keyboard, the command palette and the menus all run commands from here, so
 //! they can't drift apart (a shortcut shown in a menu is the one that works).
 
+use std::collections::BTreeMap;
+use std::sync::RwLock;
+
 use egui::{Key, Modifiers};
 use sk_core::sidecar::ColorLabel;
 
@@ -82,6 +85,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("undo", icon::ARROW_U_UP_LEFT, "Rückgängig", "Bearbeiten", [CTRL => Key::Z], "undo", |a| a.can_undo(), |a, _| a.undo()),
     cmd!("redo", icon::ARROW_U_UP_RIGHT, "Wiederholen", "Bearbeiten", [CTRL => Key::Y, CTRL_SHIFT => Key::Z], "redo", |a| !a.redo.is_empty(), |a, _| a.redo()),
     cmd!("copy-adjustments", icon::COPY, "Anpassungen kopieren", "Bearbeiten", [CTRL_SHIFT => Key::C], "copy", has_image, |a, _| a.copy_adjustments()),
+    cmd!("copy-adjustments-choose", icon::LIST_CHECKS, "Anpassungen auswählen und kopieren …", "Bearbeiten", [], "copy clipboard zwischenablage werkzeuge auswählen", has_image, |a, _| a.open_copy_dialog()),
     cmd!("paste-adjustments", icon::CLIPBOARD_TEXT, "Anpassungen auf Auswahl anwenden", "Bearbeiten", [CTRL_SHIFT => Key::V], "paste einfügen", |a| a.clipboard.is_some(), |a, _| a.paste_adjustments()),
     cmd!("reset", icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", "Bearbeiten", [], "reset", has_image, |a, _| a.reset_adjustments()),
     cmd!("select-all", icon::CHECK_SQUARE, "Alle auswählen", "Bearbeiten", [CTRL => Key::A], "select all", has_images, |a, _| a.select_all()),
@@ -195,6 +199,175 @@ pub fn get(id: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|c| c.id == id)
 }
 
+/// Shortcuts the user changed, by command id (see [`Command::bindings`]).
+static OVERRIDES: RwLock<Bindings> = RwLock::new(BTreeMap::new());
+
+/// Keys handled outside the command list, which a command can't take.
+pub fn reserved((m, k): (Modifiers, Key)) -> Option<&'static str> {
+    let none = m == NONE;
+    match k {
+        Key::K if m == CTRL => Some("Befehlssuche"),
+        Key::Num0 | Key::Num1 | Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5 | Key::Num6 | Key::Num7 | Key::Num8 | Key::Num9 if m == CTRL => {
+            Some("Werkzeug-Tabs")
+        }
+        Key::Escape => Some("Werkzeug beenden"),
+        Key::Space => Some("Bild verschieben"),
+        Key::Tab => Some("Tastaturnavigation"),
+        Key::F4 if m.alt => Some("Beenden"),
+        k if none && crate::browser::SPEED_KEYS.iter().any(|(s, _)| *s == k) => Some("Schnellbearbeitung (Taste halten + Mausrad)"),
+        _ => None,
+    }
+}
+
+type Bindings = BTreeMap<String, Vec<(Modifiers, Key)>>;
+
+fn bindings_in(map: &Bindings, c: &Command) -> Vec<(Modifiers, Key)> {
+    map.get(c.id).cloned().unwrap_or_else(|| c.keys.to_vec())
+}
+
+fn set_in(map: &mut Bindings, id: &str, keys: Vec<(Modifiers, Key)>) {
+    let Some(c) = get(id) else { return };
+    if keys == c.keys {
+        map.remove(id);
+    } else {
+        map.insert(id.to_string(), keys);
+    }
+}
+
+fn assign_in(map: &mut Bindings, id: &str, key: (Modifiers, Key), replace: Option<usize>) -> Option<&'static str> {
+    let c = get(id)?;
+    let mut previous = None;
+    for other in COMMANDS.iter().filter(|o| o.id != id) {
+        let keys = bindings_in(map, other);
+        if keys.contains(&key) {
+            set_in(map, other.id, keys.into_iter().filter(|k| *k != key).collect());
+            previous = Some(other.label);
+        }
+    }
+    let mut keys = bindings_in(map, c);
+    match replace {
+        Some(i) if i < keys.len() => keys[i] = key,
+        _ => keys.push(key),
+    }
+    // The same key twice (it was there already at another place) counts once.
+    let mut seen = Vec::new();
+    keys.retain(|k| !seen.contains(k) && {
+        seen.push(*k);
+        true
+    });
+    set_in(map, id, keys);
+    previous
+}
+
+fn overrides() -> std::sync::RwLockWriteGuard<'static, Bindings> {
+    OVERRIDES.write().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Sets the shortcuts of a command; the defaults again when they are the same.
+pub fn set_bindings(id: &str, keys: Vec<(Modifiers, Key)>) {
+    set_in(&mut overrides(), id, keys);
+}
+
+/// All shortcuts back to the defaults.
+pub fn reset_all_bindings() {
+    overrides().clear();
+}
+
+/// Whether the shortcuts of a command differ from its defaults.
+pub fn is_changed(id: &str) -> bool {
+    OVERRIDES.read().unwrap_or_else(|e| e.into_inner()).contains_key(id)
+}
+
+/// Assigns `key` to command `id` (as an additional shortcut, or instead of the one at `replace`)
+/// and takes it away from a command that had it; returns that command's label.
+pub fn assign(id: &str, key: (Modifiers, Key), replace: Option<usize>) -> Option<&'static str> {
+    assign_in(&mut overrides(), id, key, replace)
+}
+
+/// A shortcut as stored in the settings: "Ctrl+Shift+Alt+" and the key name of egui.
+fn key_code((m, k): (Modifiers, Key)) -> String {
+    let mut s = String::new();
+    if m.command || m.ctrl {
+        s += "Ctrl+";
+    }
+    if m.shift {
+        s += "Shift+";
+    }
+    if m.alt {
+        s += "Alt+";
+    }
+    s + k.name()
+}
+
+fn parse_key_code(code: &str) -> Option<(Modifiers, Key)> {
+    let mut m = NONE;
+    let mut rest = code;
+    loop {
+        if let Some(r) = rest.strip_prefix("Ctrl+") {
+            m = m.plus(CTRL);
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("Shift+") {
+            m = m.plus(SHIFT);
+            rest = r;
+        } else if let Some(r) = rest.strip_prefix("Alt+") {
+            m = m.plus(Modifiers::ALT);
+            rest = r;
+        } else {
+            break;
+        }
+    }
+    Some((m, Key::from_name(rest)?))
+}
+
+/// The changed shortcuts for the settings file.
+pub fn saved_bindings() -> BTreeMap<String, Vec<String>> {
+    OVERRIDES.read().unwrap_or_else(|e| e.into_inner()).iter().map(|(id, keys)| (id.clone(), keys.iter().map(|k| key_code(*k)).collect())).collect()
+}
+
+/// Takes the changed shortcuts from the settings file (unknown commands and keys are skipped).
+pub fn load_bindings(saved: &BTreeMap<String, Vec<String>>) {
+    *overrides() = parse_bindings(saved);
+}
+
+fn parse_bindings(saved: &BTreeMap<String, Vec<String>>) -> Bindings {
+    let mut map = Bindings::new();
+    for (id, codes) in saved {
+        set_in(&mut map, id, codes.iter().filter_map(|c| parse_key_code(c)).collect());
+    }
+    map
+}
+
+/// `text` with the shortcut of command `id` in brackets, e.g. "Rückgängig (Strg+Z)".
+pub fn hint(text: &str, id: &str) -> String {
+    match get(id).map(|c| c.shortcut()).unwrap_or_default() {
+        k if k.is_empty() => text.to_string(),
+        k => format!("{text} ({k})"),
+    }
+}
+
+/// The shortcut pressed in this frame, for recording one: modifiers are normalized (Ctrl is the
+/// command key) and a modifier on its own is no shortcut.
+pub fn pressed_key(ctx: &egui::Context) -> Option<(Modifiers, Key)> {
+    ctx.input(|i| {
+        i.events.iter().find_map(|e| match e {
+            egui::Event::Key { key, pressed: true, repeat: false, modifiers, .. } => {
+                let mut m = NONE;
+                if modifiers.command || modifiers.ctrl {
+                    m = m.plus(CTRL);
+                }
+                if modifiers.shift {
+                    m = m.plus(SHIFT);
+                }
+                if modifiers.alt {
+                    m = m.plus(Modifiers::ALT);
+                }
+                Some((m, *key))
+            }
+            _ => None,
+        })
+    })
+}
+
 /// A shortcut as shown in menus and the palette ("Strg+Umschalt+R").
 pub fn key_text((m, k): (Modifiers, Key)) -> String {
     let mut s = String::new();
@@ -223,9 +396,14 @@ pub fn key_text((m, k): (Modifiers, Key)) -> String {
 }
 
 impl Command {
+    /// The shortcuts in use: the user's (see [`set_bindings`]) or the defaults.
+    pub fn bindings(&self) -> Vec<(Modifiers, Key)> {
+        bindings_in(&OVERRIDES.read().unwrap_or_else(|e| e.into_inner()), self)
+    }
+
     /// The first shortcut, as text (empty without one).
     pub fn shortcut(&self) -> String {
-        self.keys.first().map(|k| key_text(*k)).unwrap_or_default()
+        self.bindings().first().map(|k| key_text(*k)).unwrap_or_default()
     }
 }
 
@@ -242,7 +420,7 @@ impl App {
     /// Runs the command whose shortcut was pressed. Shortcuts with more modifiers are checked
     /// first: egui matches a key without modifiers also when Shift is held.
     pub(crate) fn command_shortcuts(&mut self, ctx: &egui::Context) {
-        let mut keys: Vec<(&'static Command, (Modifiers, Key))> = COMMANDS.iter().flat_map(|c| c.keys.iter().map(move |k| (c, *k))).collect();
+        let mut keys: Vec<(&'static Command, (Modifiers, Key))> = COMMANDS.iter().flat_map(|c| c.bindings().into_iter().map(move |k| (c, k))).collect();
         let count = |m: Modifiers| m.command as u8 + m.ctrl as u8 + m.shift as u8 + m.alt as u8;
         keys.sort_by_key(|(_, (m, _))| std::cmp::Reverse(count(*m)));
         // A slider that was just clicked keeps the arrow keys; a click elsewhere
@@ -293,6 +471,39 @@ mod tests {
         keys.sort();
         let dups: Vec<&String> = keys.windows(2).filter(|w| w[0] == w[1]).map(|w| &w[0]).collect();
         assert!(dups.is_empty(), "Tastenkürzel doppelt belegt: {dups:?}");
+    }
+
+    #[test]
+    fn assigning_a_key_takes_it_from_the_other_command() {
+        let mut map = Bindings::new();
+        let ctrl_e = (CTRL, Key::E);
+        // An additional shortcut for "Exportieren".
+        assert_eq!(assign_in(&mut map, "export", ctrl_e, None), None);
+        assert_eq!(bindings_in(&map, get("export").unwrap()), vec![(CTRL, Key::D), ctrl_e]);
+        // E alone moves from the exposure warning to the crop tool, replacing C.
+        assert_eq!(assign_in(&mut map, "crop", (NONE, Key::E), Some(0)), Some("Belichtungswarnung"));
+        assert_eq!(bindings_in(&map, get("crop").unwrap()), vec![(NONE, Key::E)]);
+        assert!(bindings_in(&map, get("clip-warning").unwrap()).is_empty());
+        // Back to the default: no longer stored.
+        assign_in(&mut map, "crop", (NONE, Key::C), Some(0));
+        assert!(!map.contains_key("crop"));
+        // Saved and read back.
+        let saved: BTreeMap<String, Vec<String>> =
+            map.iter().map(|(id, keys)| (id.clone(), keys.iter().map(|k| key_code(*k)).collect())).collect();
+        assert_eq!(saved["export"], vec!["Ctrl+D".to_string(), "Ctrl+E".to_string()]);
+        assert_eq!(parse_bindings(&saved), map);
+    }
+
+    #[test]
+    fn key_codes_round_trip() {
+        for c in COMMANDS {
+            for k in c.keys {
+                assert_eq!(parse_key_code(&key_code(*k)), Some(*k), "{}", c.id);
+                assert_eq!(reserved(*k), None, "{} belegt eine feste Taste", c.id);
+            }
+        }
+        assert_eq!(parse_key_code("Ctrl+Shift+Alt+F5"), Some((CTRL_SHIFT.plus(Modifiers::ALT), Key::F5)));
+        assert_eq!(parse_key_code("Ctrl+Gibtsnicht"), None);
     }
 
     #[test]

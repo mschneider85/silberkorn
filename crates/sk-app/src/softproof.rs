@@ -99,7 +99,7 @@ impl App {
         let mut toggle = false;
         let mut pick = false;
         section(ui, "Softproof", None, |ui| {
-            if ui.checkbox(&mut self.softproof.on.clone(), "Softproof anzeigen (Umschalt+P)").changed() {
+            if ui.checkbox(&mut self.softproof.on.clone(), crate::commands::hint("Softproof anzeigen", "softproof")).changed() {
                 toggle = true;
             }
             let name = match &s.target {

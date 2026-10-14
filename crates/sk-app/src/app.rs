@@ -123,17 +123,20 @@ impl Tab {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CurveChannel {
     Rgb,
+    /// Brightness only, colors stay (see `Curves::luma`).
+    Luma,
     Red,
     Green,
     Blue,
 }
 
 impl CurveChannel {
-    pub const ALL: [CurveChannel; 4] = [CurveChannel::Rgb, CurveChannel::Red, CurveChannel::Green, CurveChannel::Blue];
+    pub const ALL: [CurveChannel; 5] = [CurveChannel::Rgb, CurveChannel::Luma, CurveChannel::Red, CurveChannel::Green, CurveChannel::Blue];
 
     pub fn label(self) -> &'static str {
         match self {
             CurveChannel::Rgb => "RGB",
+            CurveChannel::Luma => "Luma",
             CurveChannel::Red => "Rot",
             CurveChannel::Green => "Grün",
             CurveChannel::Blue => "Blau",
@@ -284,6 +287,9 @@ struct Settings {
     /// Thumbnail size in the grid.
     grid_thumb: Option<f32>,
     side_column: crate::side_column::SideColumn,
+    /// Shortcuts changed by the user, by command id (see `commands::saved_bindings`).
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    shortcuts: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// Thumbnail textures kept at most (see `App::trim_thumbs`).
@@ -404,6 +410,10 @@ pub struct App {
     pub color_band: usize,
     /// Color editor view: all colors for one property, or one color with all properties.
     pub color_view: crate::develop_tools::ColorView,
+    /// The selected color range of one's own in the color editor.
+    pub color_zone: usize,
+    /// What the color pipette (`picking_skin`) picks: the skin tone or a color range.
+    pub color_pick: crate::develop_tools::ColorPick,
     pub picking_wb: bool,
     /// The skin tone pipette is active (color tab).
     pub picking_skin: bool,
@@ -468,7 +478,8 @@ pub struct App {
     render_requested: bool,
     pub(crate) undo: Vec<Adjustments>,
     pub(crate) redo: Vec<Adjustments>,
-    pub(crate) clipboard: Option<Adjustments>,
+    pub(crate) clipboard: Option<crate::clipboard::Clipboard>,
+    pub(crate) copy_dialog: crate::clipboard::CopyDialog,
     pub sidecar_dirty: bool,
     /// Settings whose sidecar couldn't be written (read-only folder, newer version): kept here so
     /// that switching images doesn't lose them, and written again with the next change.
@@ -579,6 +590,7 @@ pub struct App {
     /// (generation, edit version, recipe key) of the last proof request.
     proof_requested: Option<(u64, u64, u64)>,
     pub show_shortcuts: bool,
+    pub shortcut_editor: crate::shortcut_editor::ShortcutEditor,
     /// Start screen (also the "about" dialog).
     pub splash: Option<crate::splash::Splash>,
     pub(crate) window_title: String,
@@ -644,6 +656,9 @@ impl App {
         let (settings, settings_error) = settings_path().filter(|_| opts.persist_settings).map_or((Settings::default(), None), |p| load_settings(&p));
         // Without an explicit folder, reopen the session that was open last time.
         sk_core::xmp::set_write_enabled(settings.write_xmp && opts.persist_settings);
+        if opts.persist_settings {
+            crate::commands::load_bindings(&settings.shortcuts);
+        }
         sk_ai::runtime::set_gpu_enabled(settings.ai_gpu.unwrap_or(true));
         sk_ai::denoise::register();
         sk_ai::upscale::register();
@@ -740,6 +755,8 @@ impl App {
             curve_channel: CurveChannel::Rgb,
             color_band: 0,
             color_view: Default::default(),
+            color_zone: 0,
+            color_pick: Default::default(),
             picking_wb: false,
             picking_skin: false,
             picking_focus: false,
@@ -785,6 +802,7 @@ impl App {
             undo: Vec::new(),
             redo: Vec::new(),
             clipboard: None,
+            copy_dialog: Default::default(),
             show_filmstrip: true,
             grid_thumb: settings.grid_thumb.unwrap_or(190.0).clamp(GRID_THUMB.0, GRID_THUMB.1),
             grid_cols: 1,
@@ -801,6 +819,7 @@ impl App {
             proof: None,
             proof_requested: None,
             show_shortcuts: false,
+            shortcut_editor: Default::default(),
             // Debug screenshots should show the app, not the start screen.
             splash: std::env::var_os("SILBERKORN_SCREENSHOT").is_none().then(crate::splash::Splash::startup),
             window_title: "Silberkorn".into(),
@@ -938,6 +957,7 @@ impl App {
             develop_gpu: Some(sk_core::gpu::enabled()),
             brushes: self.brushes.clone(),
             grid_thumb: Some(self.grid_thumb),
+            shortcuts: crate::commands::saved_bindings(),
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -1415,6 +1435,7 @@ impl App {
             self.picking_wb = false;
             self.picking_skin = false;
             self.picking_focus = false;
+            self.library_ui.new_style_tools = None;
             self.full_due = None;
             match self.prepared.iter().position(|r| r.meta.path == *path).map(|i| self.prepared.remove(i)) {
                 Some(r) => {
@@ -1593,24 +1614,6 @@ impl App {
         }
     }
 
-    pub(crate) fn copy_adjustments(&mut self) {
-        if let Some(cur) = &self.current {
-            self.clipboard = Some(cur.adjustments.clone());
-            self.status = "Anpassungen kopiert".into();
-        }
-    }
-
-    pub(crate) fn paste_adjustments(&mut self) {
-        let Some(clip) = self.clipboard.clone() else { return };
-        let targets = self.selected_paths();
-        self.set_adjustments_on(&targets, |a| {
-            let mut n = clip.clone();
-            n.keep_geometry_from(a);
-            n
-        });
-        self.status = format!("Anpassungen auf {} Bild(er) angewendet", targets.len());
-    }
-
     /// Renders the selected images with the latest process version (see
     /// `sk_core::params::PROCESS_LATEST`); their look may change slightly.
     pub(crate) fn update_process_version(&mut self) {
@@ -1741,6 +1744,9 @@ impl App {
 
     /// Skin tone target from a spot of skin; `image_pos` is in displayed preview pixels.
     pub fn pick_skin_tone(&mut self, image_pos: Vec2) {
+        if self.color_pick != crate::develop_tools::ColorPick::Skin {
+            return self.pick_color_zone(image_pos);
+        }
         let Some(avg) = self.sample_camera_rgb(image_pos) else { return };
         let Some(cur) = self.current.as_mut() else { return };
         // Where the color adjustments see it, before the skin tone tool itself.
@@ -1757,6 +1763,34 @@ impl App {
         st.chroma = (chroma * 1000.0).round() / 1000.0;
         st.lightness = (l * 1000.0).round() / 1000.0;
         self.status = format!("Hautton: Farbton {:.0}°", st.hue);
+        self.picking_skin = false;
+        self.request_render();
+    }
+
+    /// Picks the color of a range of one's own in the color editor (a new one, or the one being
+    /// picked again); `image_pos` is in displayed preview pixels.
+    pub fn pick_color_zone(&mut self, image_pos: Vec2) {
+        use crate::develop_tools::ColorPick;
+        let Some(avg) = self.sample_camera_rgb(image_pos) else { return };
+        let target = self.color_pick;
+        let Some(cur) = self.current.as_mut() else { return };
+        // As the color adjustments see it (zones select by the incoming color).
+        let [_, a, b] = Processor::new(&cur.meta, &cur.adjustments).color_input(avg);
+        if (a * a + b * b).sqrt() < 0.01 {
+            self.status = "Farbbereich: Stelle ist zu farblos".into();
+            return;
+        }
+        let hue = (b.atan2(a).to_degrees().rem_euclid(360.0) * 10.0).round() / 10.0;
+        let zones = &mut cur.adjustments.color_editor.zones;
+        match target {
+            ColorPick::Zone(i) if i < zones.len() => zones[i].hue = hue,
+            _ if zones.len() >= sk_core::params::MAX_COLOR_ZONES => return,
+            _ => {
+                zones.push(sk_core::params::ColorZone { hue, ..Default::default() });
+                self.color_zone = zones.len() - 1;
+            }
+        }
+        self.status = format!("Farbbereich {}: Farbton {hue:.0}°", self.color_zone + 1);
         self.picking_skin = false;
         self.request_render();
     }
@@ -2130,6 +2164,10 @@ impl App {
     }
 
     pub(crate) fn shortcuts(&mut self, ctx: &egui::Context) {
+        // A shortcut being recorded in the shortcut editor does nothing else.
+        if self.shortcut_editor.recording.is_some() {
+            return;
+        }
         if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::K)) {
             self.palette.toggle();
         }

@@ -12,6 +12,16 @@ use crate::widgets::{self, section, slider_row};
 
 impl App {
     pub fn tools_ui(&mut self, ui: &mut Ui) {
+        // The copy buttons of the tool headers carry a tool over to the other selected images.
+        let others = if self.current.is_some() { self.selected_paths().len().saturating_sub(1) } else { 0 };
+        widgets::set_copy_targets(ui.ctx(), others);
+        self.tool_tabs(ui);
+        if let Some(tool) = widgets::take_copy_clicked(ui.ctx()) {
+            self.transfer_tool(tool);
+        }
+    }
+
+    fn tool_tabs(&mut self, ui: &mut Ui) {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.tab {
             Tab::Library => self.library_tab(ui),
             Tab::Lens => self.lens_tab(ui),
@@ -53,7 +63,7 @@ impl App {
         let mut changed = false;
 
         let mut reset_exposure = false;
-        section(ui, "Belichtung", Some(&mut || reset_exposure = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::Exposure, Some(&mut || reset_exposure = true), |ui| {
             changed |= slider_row(ui, "Belichtung", &mut adj.exposure, -4.0..=4.0, 0.0, 2);
             changed |= slider_row(ui, "Kontrast", &mut adj.contrast, -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Helligkeit", &mut adj.brightness, -100.0..=100.0, 0.0, 0);
@@ -68,7 +78,7 @@ impl App {
         }
 
         let mut reset_hdr = false;
-        section(ui, "Lichter und Tiefen", Some(&mut || reset_hdr = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::HighlightsShadows, Some(&mut || reset_hdr = true), |ui| {
             changed |= slider_row(ui, "Lichter", &mut adj.highlights, -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Tiefen", &mut adj.shadows, -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Weiß", &mut adj.whites, -100.0..=100.0, 0.0, 0);
@@ -83,7 +93,7 @@ impl App {
         }
 
         let mut reset_levels = false;
-        section(ui, "Tonwerte", Some(&mut || reset_levels = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::Levels, Some(&mut || reset_levels = true), |ui| {
             let lv = &mut adj.levels;
             changed |= slider_row(ui, "Eingang Schwarz", &mut lv.in_black, 0.0..=0.5, 0.0, 3);
             changed |= slider_row(ui, "Eingang Weiß", &mut lv.in_white, 0.5..=1.0, 1.0, 3);
@@ -101,14 +111,18 @@ impl App {
 
         let mut reset_curve = false;
         let channel = &mut self.curve_channel;
-        section(ui, "Gradationskurve", Some(&mut || reset_curve = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::Curves, Some(&mut || reset_curve = true), |ui| {
             ui.horizontal(|ui| {
                 for ch in CurveChannel::ALL {
-                    ui.selectable_value(channel, ch, ch.label());
+                    let r = ui.selectable_value(channel, ch, ch.label());
+                    if ch == CurveChannel::Luma {
+                        r.on_hover_text("Nur die Helligkeit: Kontrast ohne Farbverschiebung, Farbton und Sättigung bleiben");
+                    }
                 }
             });
             let (curve, color, bins): (&mut Curve, Color32, Option<&[u32]>) = match channel {
                 CurveChannel::Rgb => (&mut adj.curves.rgb, Color32::from_gray(230), self.histogram.as_ref().map(|h| h.luma.as_slice())),
+                CurveChannel::Luma => (&mut adj.curves.luma, Color32::from_rgb(235, 220, 185), self.histogram.as_ref().map(|h| h.luma.as_slice())),
                 CurveChannel::Red => (&mut adj.curves.red, Color32::from_rgb(240, 80, 80), self.histogram.as_ref().map(|h| h.r.as_slice())),
                 CurveChannel::Green => (&mut adj.curves.green, Color32::from_rgb(80, 210, 80), self.histogram.as_ref().map(|h| h.g.as_slice())),
                 CurveChannel::Blue => (&mut adj.curves.blue, Color32::from_rgb(90, 130, 250), self.histogram.as_ref().map(|h| h.b.as_slice())),
@@ -118,6 +132,7 @@ impl App {
         if reset_curve {
             match self.curve_channel {
                 CurveChannel::Rgb => adj.curves.rgb = Curve::default(),
+                CurveChannel::Luma => adj.curves.luma = Curve::default(),
                 CurveChannel::Red => adj.curves.red = Curve::default(),
                 CurveChannel::Green => adj.curves.green = Curve::default(),
                 CurveChannel::Blue => adj.curves.blue = Curve::default(),
@@ -141,7 +156,7 @@ impl App {
         let adj = &mut cur.adjustments;
         let mut changed = false;
 
-        section(ui, "Basismerkmale", None, |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::BaseCurve, None, |ui| {
             widgets::combo_field(ui, "Kurve", adj.base_curve.label(), |ui| {
                     for c in BaseCurve::ALL {
                         changed |= ui.selectable_value(&mut adj.base_curve, c, c.label()).changed();
@@ -150,7 +165,7 @@ impl App {
         });
 
         let mut reset_wb = false;
-        section(ui, "Weißabgleich", Some(&mut || reset_wb = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::WhiteBalance, Some(&mut || reset_wb = true), |ui| {
             let wb = &mut adj.white_balance;
             ui.horizontal(|ui| {
                 ui.label("Modus");
@@ -189,7 +204,7 @@ impl App {
         let adj = &mut cur.adjustments;
 
         let mut reset_color = false;
-        section(ui, "Farbe", Some(&mut || reset_color = true), |ui| {
+        widgets::tool_section(ui, sk_core::tools::Tool::Color, Some(&mut || reset_color = true), |ui| {
             let rail = widgets::SliderOpts { rail: Some(widgets::RAIL_SATURATION), ..Default::default() };
             changed |= widgets::slider_row_with(ui, "Sättigung", &mut adj.saturation, -100.0..=100.0, 0.0, 0, rail);
             changed |= slider_row(ui, "Dynamik", &mut adj.vibrance, -100.0..=100.0, 0.0, 0);

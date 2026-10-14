@@ -118,11 +118,12 @@ impl App {
         self.picking_wb = on;
     }
 
-    /// The skin tone pipette on or off.
-    pub fn toggle_skin_picker(&mut self) {
-        let on = !self.picking_skin;
+    /// The color pipette for `target` on, or off when it is on for it already.
+    pub fn toggle_color_picker(&mut self, target: crate::develop_tools::ColorPick) {
+        let on = !(self.picking_skin && self.color_pick == target);
         self.end_viewer_tools();
         self.picking_skin = on;
+        self.color_pick = target;
     }
 
     pub fn start_crop_tool(&mut self) {
