@@ -62,6 +62,16 @@ struct Fixture {
     dir: PathBuf,
     ctx: egui::Context,
     app: App,
+    /// Last: removes the folder only after the app (and its catalog) is gone.
+    _cleanup: Cleanup,
+}
+
+struct Cleanup(PathBuf);
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 impl Fixture {
@@ -96,7 +106,7 @@ impl Fixture {
                 persist_settings: false,
             },
         );
-        Some(Self { dir, ctx, app })
+        Some(Self { _cleanup: Cleanup(dir.clone()), dir, ctx, app })
     }
 
     fn pump(&mut self, what: &str, done: impl Fn(&App) -> bool) {
@@ -115,11 +125,6 @@ impl Fixture {
     }
 }
 
-impl Drop for Fixture {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.dir);
-    }
-}
 
 #[test]
 fn library_workflow() {
