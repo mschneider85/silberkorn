@@ -2143,3 +2143,158 @@ fn sidecars_that_cant_be_read_or_saved() {
     assert!(file.is_dir());
     assert!(f.app.unsaved.is_empty());
 }
+
+/// A 200 pt wide slider over 0 … 100 at the top left (rail from x = 7 to 193, handle at 7 + 1.86 · value).
+struct SliderHarness {
+    ctx: egui::Context,
+    value: f32,
+    time: f64,
+    mods: egui::Modifiers,
+}
+
+impl SliderHarness {
+    fn new(value: f32) -> Self {
+        let ctx = egui::Context::default();
+        crate::theme::install(&ctx);
+        let mut h = SliderHarness { ctx, value, time: 0.0, mods: egui::Modifiers::NONE };
+        h.frame(vec![]);
+        h
+    }
+
+    fn x(v: f32) -> f32 {
+        7.0 + 1.86 * v
+    }
+
+    fn frame(&mut self, events: Vec<egui::Event>) {
+        self.time += 1.0 / 60.0;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+            events: std::iter::once(egui::Event::ModifiersChanged(self.mods)).chain(events).collect(),
+            time: Some(self.time),
+            ..Default::default()
+        };
+        let value = &mut self.value;
+        let out = self.ctx.run_ui(input, |ui| {
+            crate::widgets::begin_wheel_gesture(ui.ctx());
+            egui::CentralPanel::no_frame().show(ui, |ui| {
+                crate::widgets::compact_slider(ui, "x", value, 0.0..=100.0, 50.0, 200.0);
+            });
+        });
+        let mut delta = out.textures_delta;
+        delta.clear();
+    }
+
+    fn button(&mut self, p: egui::Pos2, pressed: bool) {
+        let modifiers = self.mods;
+        self.frame(vec![egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers }]);
+    }
+
+    fn drag(&mut self, from: egui::Pos2, to: egui::Pos2) {
+        self.frame(vec![egui::Event::PointerMoved(from)]);
+        self.button(from, true);
+        for i in 1..=10 {
+            self.frame(vec![egui::Event::PointerMoved(from + (to - from) * i as f32 / 10.0)]);
+        }
+        self.button(to, false);
+    }
+
+    fn key(&mut self, key: egui::Key) {
+        let modifiers = self.mods;
+        self.frame(vec![
+            egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers },
+            egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers },
+        ]);
+    }
+
+    fn wheel(&mut self, at: egui::Pos2, lines: f32) {
+        let modifiers = self.mods;
+        self.frame(vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: egui::vec2(0.0, lines), phase: egui::TouchPhase::Move, modifiers },
+        ]);
+    }
+}
+
+#[test]
+fn slider_handle_is_dragged_from_where_it_is() {
+    // Grabbing the handle a little off its centre does not jump, the value follows the motion.
+    let mut h = SliderHarness::new(50.0);
+    let grab = egui::pos2(SliderHarness::x(50.0) + 4.0, 10.0);
+    h.drag(grab, grab + egui::vec2(18.6, 0.0));
+    assert!((h.value - 60.0).abs() < 0.05, "{}", h.value);
+    // Shift: a tenth of that.
+    h.mods = egui::Modifiers::SHIFT;
+    let grab = egui::pos2(SliderHarness::x(60.0), 10.0);
+    h.drag(grab, grab + egui::vec2(18.6, 0.0));
+    assert!((h.value - 61.0).abs() < 0.05, "{}", h.value);
+    // Past the end and back: the handle is under the pointer again.
+    h.mods = egui::Modifiers::NONE;
+    let grab = egui::pos2(SliderHarness::x(61.0), 10.0);
+    h.frame(vec![egui::Event::PointerMoved(grab)]);
+    h.button(grab, true);
+    h.frame(vec![egui::Event::PointerMoved(egui::pos2(390.0, 10.0))]);
+    assert_eq!(h.value, 100.0);
+    h.frame(vec![egui::Event::PointerMoved(egui::pos2(SliderHarness::x(80.0), 10.0))]);
+    h.button(egui::pos2(SliderHarness::x(80.0), 10.0), false);
+    assert!((h.value - 80.0).abs() < 0.05, "{}", h.value);
+}
+
+#[test]
+fn slider_click_on_the_rail_jumps_there() {
+    let mut h = SliderHarness::new(50.0);
+    let p = egui::pos2(SliderHarness::x(10.0), 10.0);
+    h.frame(vec![egui::Event::PointerMoved(p)]);
+    h.button(p, true);
+    h.button(p, false);
+    assert!((h.value - 10.0).abs() < 0.05, "{}", h.value);
+}
+
+#[test]
+fn clicked_slider_takes_the_arrow_keys() {
+    let mut h = SliderHarness::new(50.0);
+    let p = egui::pos2(SliderHarness::x(50.0), 10.0);
+    h.frame(vec![egui::Event::PointerMoved(p)]);
+    h.button(p, true);
+    h.button(p, false);
+    h.frame(vec![]);
+    assert!(crate::widgets::slider_has_focus(&h.ctx));
+    h.key(egui::Key::ArrowRight);
+    assert!((h.value - 51.0).abs() < 0.005, "{}", h.value);
+    h.mods = egui::Modifiers::SHIFT;
+    h.key(egui::Key::ArrowLeft);
+    assert!((h.value - 46.0).abs() < 0.005, "{}", h.value);
+    h.mods = egui::Modifiers::ALT;
+    h.key(egui::Key::ArrowUp);
+    assert!((h.value - 46.1).abs() < 0.005, "{}", h.value);
+    // A click elsewhere gives the keys back.
+    h.mods = egui::Modifiers::NONE;
+    let away = egui::pos2(300.0, 200.0);
+    h.frame(vec![egui::Event::PointerMoved(away)]);
+    h.button(away, true);
+    h.button(away, false);
+    h.frame(vec![]);
+    assert!(!crate::widgets::slider_has_focus(&h.ctx));
+}
+
+#[test]
+fn wheel_adjusts_a_slider_only_when_the_gesture_starts_on_it() {
+    let rail = egui::pos2(SliderHarness::x(50.0) + 30.0, 10.0);
+    let mut h = SliderHarness::new(50.0);
+    h.frame(vec![egui::Event::PointerMoved(rail)]);
+    h.wheel(rail, 1.0);
+    assert!((h.value - 51.0).abs() < 0.005, "{}", h.value);
+    h.wheel(rail, -3.0);
+    assert!((h.value - 48.0).abs() < 0.005, "{}", h.value);
+    // A gesture that began elsewhere (scrolling the panel) passes over the slider unchanged.
+    let mut h = SliderHarness::new(50.0);
+    let elsewhere = egui::pos2(300.0, 200.0);
+    h.frame(vec![egui::Event::PointerMoved(elsewhere)]);
+    h.wheel(elsewhere, 1.0);
+    h.wheel(rail, 1.0);
+    h.wheel(rail, 1.0);
+    assert_eq!(h.value, 50.0);
+    // After a pause the next gesture over the rail adjusts again.
+    h.time += 1.0;
+    h.wheel(rail, 1.0);
+    assert!((h.value - 51.0).abs() < 0.005, "{}", h.value);
+}

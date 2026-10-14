@@ -238,7 +238,13 @@ impl App {
         let mut keys: Vec<(&'static Command, (Modifiers, Key))> = COMMANDS.iter().flat_map(|c| c.keys.iter().map(move |k| (c, *k))).collect();
         let count = |m: Modifiers| m.command as u8 + m.ctrl as u8 + m.shift as u8 + m.alt as u8;
         keys.sort_by_key(|(_, (m, _))| std::cmp::Reverse(count(*m)));
+        // A slider that was just clicked keeps the arrow keys; a click elsewhere
+        // or Esc gives them back to "previous/next image".
+        let slider = crate::widgets::slider_has_focus(ctx);
         for (c, (m, k)) in keys {
+            if slider && matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown) {
+                continue;
+            }
             // A key of an unavailable command stays for others (Enter of "finish crop" must still
             // reach a dialog); with modifiers it is taken anyway, or Shift+X would run X.
             let enabled = (c.enabled)(self);

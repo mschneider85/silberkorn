@@ -230,7 +230,9 @@ pub fn slider_row_with(
 }
 
 /// Slim slider: a thin rail filled from the default to the value, a small round handle.
-/// Click or drag to set; Shift while dragging for fine steps; double-click resets.
+/// Grabbing the handle moves it from where it is; a click elsewhere on the rail jumps there.
+/// Shift while dragging for fine steps; double-click resets. After a click the arrow keys and,
+/// over the rail, the mouse wheel change the value (Shift: coarse, Alt: fine).
 #[allow(clippy::too_many_arguments)]
 fn rail_slider(
     ui: &mut Ui,
@@ -254,28 +256,105 @@ fn rail_slider(
     let to_x = |v: f32| x0 + (x1 - x0) * ((v - lo) / span).clamp(0.0, 1.0);
     let from_x = |x: f32| lo + span * ((x - x0) / (x1 - x0)).clamp(0.0, 1.0);
     let before = *value;
-
-    if let Some(p) = resp.interact_pointer_pos() {
-        let fine = ui.input(|i| i.modifiers.shift);
-        if fine && resp.dragged() && !resp.drag_started() {
-            let dx = ui.input(|i| i.pointer.delta().x);
-            *value = (*value + dx / (x1 - x0) * span * 0.1).clamp(lo, hi);
+    let min_step = 1.0 / 10f32.powi(decimals as i32);
+    let step = |m: egui::Modifiers| {
+        let base = (span / 100.0).max(min_step);
+        if m.shift {
+            base * 5.0
+        } else if m.alt {
+            (base / 10.0).max(min_step)
         } else {
+            base
+        }
+    };
+
+    // Dragging is relative: the value follows the pointer's way from where it was pressed, with
+    // the value at that moment as the anchor. Shift re-anchors (fine steps from where the handle
+    // is), and the unclamped way keeps the handle under the pointer after it went past an end.
+    let anchor_id = resp.id.with("anchor");
+    let fine = ui.input(|i| i.modifiers.shift);
+    if resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed()) {
+        let p = resp.interact_pointer_pos().unwrap_or(rect.center());
+        let on_handle = (p.x - to_x(*value)).abs() <= 9.0;
+        if !on_handle && !fine {
             *value = from_x(p.x);
         }
-        let q = 10f32.powi(decimals as i32);
-        *value = (*value * q).round() / q;
+        ui.data_mut(|d| d.insert_temp(anchor_id, DragAnchor { x: p.x, value: *value, fine }));
+        resp.request_focus();
+    }
+    if resp.is_pointer_button_down_on()
+        && let Some(p) = resp.interact_pointer_pos()
+        && let Some(mut a) = ui.data(|d| d.get_temp::<DragAnchor>(anchor_id))
+    {
+        let scale = |fine: bool| span / (x1 - x0) * if fine { 0.1 } else { 1.0 };
+        if a.fine != fine {
+            a = DragAnchor { x: p.x, value: a.value + (p.x - a.x) * scale(a.fine), fine };
+            ui.data_mut(|d| d.insert_temp(anchor_id, a));
+        }
+        let v = (a.value + (p.x - a.x) * scale(fine)).clamp(lo, hi);
+        if (v - *value).abs() > f32::EPSILON && (p.x - a.x).abs() > 0.0 {
+            *value = v;
+        }
     }
     if resp.has_focus() {
-        let step = (span / 100.0).max(1.0 / 10f32.powi(decimals as i32));
-        let n = ui.input(|i| {
-            i.num_presses(egui::Key::ArrowRight) as i32 + i.num_presses(egui::Key::ArrowUp) as i32
-                - i.num_presses(egui::Key::ArrowLeft) as i32
-                - i.num_presses(egui::Key::ArrowDown) as i32
+        // Arrows in the slider's direction must not move the focus on (as in egui's slider);
+        // the app leaves left/right to a focused slider instead of switching images.
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(resp.id, egui::EventFilter { horizontal_arrows: true, vertical_arrows: true, ..Default::default() })
         });
-        if n != 0 {
-            *value = (*value + n as f32 * step).clamp(lo, hi);
+        ui.data_mut(|d| d.insert_temp(focused_slider_id(), resp.id));
+        let delta: f32 = ui.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Key { key, pressed: true, modifiers, .. } if !modifiers.command => match key {
+                        egui::Key::ArrowRight | egui::Key::ArrowUp => Some(step(*modifiers)),
+                        egui::Key::ArrowLeft | egui::Key::ArrowDown => Some(-step(*modifiers)),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .sum()
+        });
+        if delta != 0.0 {
+            *value = (*value + delta).clamp(lo, hi);
         }
+    }
+    if resp.hovered() {
+        let pass = ui.ctx().cumulative_pass_nr();
+        ui.data_mut(|d| d.insert_temp(hovered_rail_id(), HoveredRail(resp.id, pass)));
+    }
+    let owns_wheel = ui.data(|d| d.get_temp::<WheelGesture>(wheel_gesture_id())).is_some_and(|g| g.owner == Some(resp.id));
+    if ui.is_enabled() && resp.hovered() && owns_wheel {
+        let (notches, mods) = ui.input(|i| {
+            let n: f32 = i
+                .events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::MouseWheel { unit, delta, .. } => Some(match unit {
+                        egui::MouseWheelUnit::Line => delta.y,
+                        egui::MouseWheelUnit::Point => delta.y / 40.0,
+                        egui::MouseWheelUnit::Page => delta.y.signum(),
+                    }),
+                    _ => None,
+                })
+                .sum();
+            (n, i.modifiers)
+        });
+        // Touchpads send small deltas: collect them until a whole step is reached.
+        let acc_id = resp.id.with("wheel");
+        let total = ui.data(|d| d.get_temp::<f32>(acc_id)).unwrap_or(0.0) + notches;
+        let whole = total.trunc();
+        ui.data_mut(|d| d.insert_temp(acc_id, total - whole));
+        if whole != 0.0 && !mods.command {
+            *value = (*value + whole * step(mods)).clamp(lo, hi);
+        }
+        // The wheel belongs to the slider, not to the panel around it.
+        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+    }
+    if *value != before {
+        let q = 10f32.powi(decimals as i32);
+        *value = (*value * q).round() / q;
     }
     // Double-click resets.
     if resp.double_clicked() {
@@ -329,6 +408,72 @@ fn rail_slider(
         }
     }
     *value != before
+}
+
+/// Where a slider drag was pressed (or re-anchored when Shift changed) and the value then.
+#[derive(Clone, Copy)]
+struct DragAnchor {
+    x: f32,
+    value: f32,
+    fine: bool,
+}
+
+/// Which slider a mouse-wheel gesture belongs to: one that starts over a slider's rail adjusts
+/// it, one that starts elsewhere keeps scrolling the panel while sliders pass under the pointer.
+#[derive(Clone, Copy)]
+struct WheelGesture {
+    owner: Option<egui::Id>,
+    last: f64,
+}
+
+impl Default for WheelGesture {
+    fn default() -> Self {
+        // The clock starts at 0: the first wheel event must start a gesture too.
+        Self { owner: None, last: f64::NEG_INFINITY }
+    }
+}
+
+/// The slider rail under the pointer and the pass it was drawn in.
+#[derive(Clone, Copy)]
+struct HoveredRail(egui::Id, u64);
+
+/// Wheel events closer together than this belong to the same gesture.
+const WHEEL_GESTURE_GAP: f64 = 0.3;
+
+fn wheel_gesture_id() -> egui::Id {
+    egui::Id::new("slider_wheel_gesture")
+}
+
+fn hovered_rail_id() -> egui::Id {
+    egui::Id::new("slider_hovered_rail")
+}
+
+fn focused_slider_id() -> egui::Id {
+    egui::Id::new("slider_focused")
+}
+
+/// Assigns a starting mouse-wheel gesture to the slider under the pointer (or to none). Call once
+/// per frame before the panels are drawn.
+pub fn begin_wheel_gesture(ctx: &egui::Context) {
+    let (wheel, now) = ctx.input(|i| (i.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. })), i.time));
+    if !wheel {
+        return;
+    }
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| {
+        let hovered = d.get_temp::<HoveredRail>(hovered_rail_id()).filter(|h| h.1 + 1 >= pass).map(|h| h.0);
+        let g = d.get_temp_mut_or_default::<WheelGesture>(wheel_gesture_id());
+        if now - g.last > WHEEL_GESTURE_GAP {
+            g.owner = hovered;
+        }
+        g.last = now;
+    });
+}
+
+/// True while a slider has the keyboard focus (its arrow keys then change the value).
+pub fn slider_has_focus(ctx: &egui::Context) -> bool {
+    let focused = ctx.memory(|m| m.focused());
+    focused.is_some() && ctx.data(|d| d.get_temp::<egui::Id>(focused_slider_id())) == focused
 }
 
 /// Slider without label and number, e.g. for the thumbnail size; double-click resets.

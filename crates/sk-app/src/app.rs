@@ -2421,6 +2421,7 @@ impl eframe::App for App {
         self.prune_view_caches();
         self.style_hovered = false;
         self.shortcuts(&ctx);
+        crate::widgets::begin_wheel_gesture(&ctx);
         let title = self.session.as_ref().map_or_else(|| "Silberkorn".to_string(), |s| format!("{} – Silberkorn", s.name));
         if title != self.window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
