@@ -2905,9 +2905,11 @@ fn develop_tools_change_the_chosen_layer() {
     assert_eq!(adj(&f).exposure, 0.0);
     assert!(adj(&f).layers[0].adjustments.exposure > 0.5, "Ebene: {}", adj(&f).layers[0].adjustments.exposure);
 
-    // Levels only change the whole image: disabled and closed, so their sliders are not there.
+    // Levels only change the whole image: disabled and closed, so their handles are not there;
+    // opened (closed by default), they are.
     assert!(widget(&nodes, "Eingang Schwarz").is_none(), "Tonwerte sind zu");
     f.app.select_layer(None);
+    crate::widgets::reveal_section(&f.ctx, "Tonwerte");
     let nodes = tool_panel_frame(&mut f, vec![]);
     assert!(widget(&nodes, "Eingang Schwarz").is_some(), "Tonwerte wieder offen");
 

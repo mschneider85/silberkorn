@@ -117,12 +117,11 @@ impl App {
                 }
                 MergeKind::FocusStack => {
                     ui.label(format!(
-                        "{n} Aufnahmen mit unterschiedlicher Schärfeebene werden zu einem DNG zusammengefügt, das überall scharf ist. \
-                         Jede Stelle wird aus den Bildern genommen, die dort am schärfsten sind."
+                        "{n} Aufnahmen mit unterschiedlicher Schärfeebene werden zu einem überall scharfen DNG zusammengefügt."
                     ));
                     ui.add_space(8.0);
                     ui.label(
-                        RichText::new("Die Bilder werden am mittleren ausgerichtet: kleine Verschiebungen aus der Hand und die Größenänderung beim Fokussieren werden ausgeglichen.")
+                        RichText::new("Verwacklung und die Größenänderung beim Fokussieren werden ausgeglichen.")
                             .small()
                             .color(Color32::from_gray(150)),
                     );

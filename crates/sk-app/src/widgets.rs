@@ -1,6 +1,6 @@
 //! Custom widgets: histogram, curve editor, star rating, slider rows.
 
-use sk_core::params::Curve;
+use sk_core::params::{Curve, LevelSet};
 use sk_core::pipeline::Histogram;
 use egui::{Color32, Pos2, Rect, Response, RichText, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
@@ -115,10 +115,10 @@ pub fn tool_section_help(ui: &mut Ui, tool: sk_core::tools::Tool, help: &str, re
 
 /// Sections of functions that not everyone uses: closed until opened (then they stay open).
 const SPECIALIZED: &[&str] = &[
+    "Tonwerte",
     "Gesichter & Sichtung",
     "Hauttöne",
     "Schwarzweiß",
-    "Neu ausleuchten",
     "Objektivunschärfe",
     "Atmosphäre",
     "Leuchten",
@@ -752,6 +752,162 @@ pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>) -> Rect {
         painter.circle_filled(rect.left_top() + vec2(8.0, 8.0), 4.0, Color32::from_rgb(60, 120, 255));
     }
     rect
+}
+
+/// Levels: the histogram of what goes into them (`bins`, 256) with handles below it for the black
+/// point, the midtones and the white point, then a gray bar with handles for the output range,
+/// and the values as numbers (0–255, midtones as gamma). Double click on a handle resets it.
+pub fn levels_editor(ui: &mut Ui, set: &mut LevelSet, bins: Option<&[f32]>, color: Color32) -> bool {
+    const MIN_GAP: f32 = 2.0 / 255.0;
+    let before = *set;
+    let width = ui.available_width();
+    let (hist, _) = ui.allocate_exact_size(vec2(width, 80.0), Sense::hover());
+    let (input, _) = ui.allocate_exact_size(vec2(width, 14.0), Sense::hover());
+    ui.add_space(4.0);
+    let (bar, _) = ui.allocate_exact_size(vec2(width, 8.0), Sense::hover());
+    let (output, _) = ui.allocate_exact_size(vec2(width, 14.0), Sense::hover());
+    let x_of = |v: f32| hist.left() + v * hist.width();
+    let v_of = |x: f32| ((x - hist.left()) / hist.width()).clamp(0.0, 1.0);
+    let painter = ui.painter();
+
+    // What the black and white points cut off is dimmed.
+    painter.rect_filled(hist, 3.0, theme::BROWSER);
+    if let Some(bins) = bins.filter(|b| b.len() >= 256) {
+        let max = bins[1..255].iter().copied().fold(0.0, f32::max).max(1e-6);
+        let mut pts = vec![hist.left_bottom()];
+        for (i, &n) in bins.iter().enumerate() {
+            let h = hist.height() * (n / max).sqrt().min(1.0);
+            pts.push(pos2(x_of((i as f32 + 0.5) / 256.0), hist.bottom() - h));
+        }
+        pts.push(hist.right_bottom());
+        // One mesh of columns (the outline is not convex); separate shapes would leave seams.
+        let fill = color.gamma_multiply(0.45);
+        let mut mesh = egui::Mesh::default();
+        for p in &pts {
+            mesh.colored_vertex(pos2(p.x, hist.bottom()), fill);
+            mesh.colored_vertex(*p, fill);
+        }
+        for i in 0..pts.len() as u32 - 1 {
+            let k = i * 2;
+            mesh.add_triangle(k, k + 1, k + 2);
+            mesh.add_triangle(k + 1, k + 2, k + 3);
+        }
+        painter.add(mesh);
+    }
+    let shade = Color32::from_black_alpha(130);
+    painter.rect_filled(Rect::from_min_max(hist.min, pos2(x_of(set.in_black), hist.bottom())), 0.0, shade);
+    painter.rect_filled(Rect::from_min_max(pos2(x_of(set.in_white), hist.top()), hist.max), 0.0, shade);
+    // Output: from the darkest to the brightest tone it produces.
+    let mut mesh = egui::Mesh::default();
+    for (x, g) in [(bar.left(), 0u8), (bar.right(), 255)] {
+        mesh.colored_vertex(pos2(x, bar.top()), Color32::from_gray(g));
+        mesh.colored_vertex(pos2(x, bar.bottom()), Color32::from_gray(g));
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 2, 3);
+    painter.add(mesh);
+    painter.rect_stroke(bar, 0.0, Stroke::new(1.0, theme::BORDER), StrokeKind::Outside);
+
+    // Midtone handle: where the input maps to middle gray, i.e. 0.5^gamma of the input range.
+    let mid_x = |s: &LevelSet| x_of(s.in_black + 0.5f32.powf(s.midtone) * (s.in_white - s.in_black));
+    let id = ui.id().with("levels");
+    let handle = |ui: &mut Ui, track: Rect, x: f32, fill: Color32, name: &str| -> Option<Option<f32>> {
+        let r = Rect::from_center_size(pos2(x, track.center().y), vec2(14.0, track.height()));
+        let resp = ui.interact(r, id.with(name), Sense::click_and_drag());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, name));
+        let resp = resp.on_hover_text(format!("{name} – Doppelklick: zurücksetzen"));
+        let hot = resp.hovered() || resp.dragged();
+        let tip = pos2(x, track.top());
+        let size = if hot { 7.0 } else { 6.0 };
+        let tri = vec![tip, pos2(x + size, track.top() + size * 1.6), pos2(x - size, track.top() + size * 1.6)];
+        ui.painter().add(Shape::convex_polygon(tri, fill, Stroke::new(1.0, if hot { theme::ACCENT } else { Color32::from_gray(120) })));
+        if hot {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        if resp.double_clicked() {
+            Some(None)
+        } else if resp.dragged() {
+            resp.interact_pointer_pos().map(|p| Some(v_of(p.x)))
+        } else {
+            None
+        }
+    };
+    let d = LevelSet::default();
+    match handle(ui, input, x_of(set.in_black), Color32::from_gray(20), "Eingang Schwarz") {
+        Some(Some(v)) => set.in_black = v.min(set.in_white - MIN_GAP),
+        Some(None) => set.in_black = d.in_black,
+        None => {}
+    }
+    match handle(ui, input, x_of(set.in_white), Color32::from_gray(245), "Eingang Weiß") {
+        Some(Some(v)) => set.in_white = v.max(set.in_black + MIN_GAP),
+        Some(None) => set.in_white = d.in_white,
+        None => {}
+    }
+    match handle(ui, input, mid_x(set), Color32::from_gray(128), "Mitteltöne") {
+        Some(Some(v)) => {
+            let p = ((v - set.in_black) / (set.in_white - set.in_black).max(1e-4)).clamp(0.01, 0.99);
+            set.midtone = ((p.ln() / 0.5f32.ln()).clamp(0.2, 5.0) * 100.0).round() / 100.0;
+        }
+        Some(None) => set.midtone = d.midtone,
+        None => {}
+    }
+    match handle(ui, output, x_of(set.out_black), Color32::from_gray(20), "Ausgang Schwarz") {
+        Some(Some(v)) => set.out_black = v.min(set.out_white - MIN_GAP),
+        Some(None) => set.out_black = d.out_black,
+        None => {}
+    }
+    match handle(ui, output, x_of(set.out_white), Color32::from_gray(245), "Ausgang Weiß") {
+        Some(Some(v)) => set.out_white = v.max(set.out_black + MIN_GAP),
+        Some(None) => set.out_white = d.out_white,
+        None => {}
+    }
+
+    // The values as numbers, for exact input.
+    let byte = |ui: &mut Ui, v: &mut f32, lo: f32, hi: f32| {
+        let mut n = (*v * 255.0).round() as i32;
+        let r = ui.add(egui::DragValue::new(&mut n).range((lo * 255.0).ceil() as i32..=(hi * 255.0).floor() as i32).speed(0.5));
+        if r.changed() {
+            *v = n as f32 / 255.0;
+        }
+    };
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Eingang").color(theme::TEXT_DIM));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let (b, w) = (set.in_black, set.in_white);
+            byte(ui, &mut set.in_white, b + MIN_GAP, 1.0);
+            ui.add(egui::DragValue::new(&mut set.midtone).range(0.2..=5.0).speed(0.01).fixed_decimals(2))
+                .on_hover_text("Mitteltöne: über 1 heller, unter 1 dunkler");
+            byte(ui, &mut set.in_black, 0.0, w - MIN_GAP);
+        });
+    });
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Ausgang").color(theme::TEXT_DIM));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let (b, w) = (set.out_black, set.out_white);
+            byte(ui, &mut set.out_white, b + MIN_GAP, 1.0);
+            byte(ui, &mut set.out_black, 0.0, w - MIN_GAP);
+        });
+    });
+    *set != before
+}
+
+/// `bins` (256, over 0..1) after the monotonic `f`: each bin spread over the range it lands in.
+pub fn remap_bins(bins: &[u32], f: impl Fn(f32) -> f32) -> Vec<f32> {
+    let mut out = vec![0.0f32; 256];
+    for (i, &n) in bins.iter().enumerate().take(256) {
+        if n == 0 {
+            continue;
+        }
+        let lo = f(i as f32 / 256.0).clamp(0.0, 1.0) * 256.0;
+        let hi = (f((i + 1) as f32 / 256.0).clamp(0.0, 1.0) * 256.0).max(lo + 1e-3);
+        let (a, b) = (lo.floor() as usize, (hi.ceil() as usize).min(256));
+        for (j, slot) in out.iter_mut().enumerate().take(b).skip(a) {
+            let overlap = (hi.min((j + 1) as f32) - lo.max(j as f32)).max(0.0);
+            *slot += n as f32 * overlap / (hi - lo);
+        }
+    }
+    out
 }
 
 /// Interactive curve editor. Click to add a point, drag to move, right-click to remove.

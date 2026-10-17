@@ -327,7 +327,7 @@ impl App {
         // Over the before image of the divider view as well.
         // The crop and straighten tools draw their own guides.
         if self.crop_tool.is_none() && self.straighten_tool.is_none() {
-            self.draw_guides(ui.ctx(), &painter, img_rect);
+            self.draw_guides(&painter, img_rect);
         }
 
         // Not in distraction-free full screen.

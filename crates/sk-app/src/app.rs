@@ -283,8 +283,6 @@ struct Settings {
     hide_navigator: bool,
     focus_sensitivity: Option<f32>,
     guides: crate::guides::Guides,
-    overlay_file: Option<PathBuf>,
-    overlay_opacity: Option<f32>,
     rename_template: String,
     /// The image selected when the app was closed.
     last_image: Option<PathBuf>,
@@ -446,6 +444,9 @@ pub struct App {
     /// The tab of the last frame, to notice a change of tab.
     tab_shown: Tab,
     pub curve_channel: CurveChannel,
+    /// Channel shown in the levels (not `Luma`).
+    pub levels_channel: CurveChannel,
+    pub levels_hist: crate::levels::LevelsHistogram,
     /// Selected hue band in the color editor.
     pub color_band: usize,
     /// Color editor view: all colors for one property, or one color with all properties.
@@ -634,7 +635,6 @@ pub struct App {
     /// painted after it can be rendered alone.
     whole_sent: Option<u64>,
     pub guides: crate::guides::Guides,
-    pub overlay: crate::guides::Overlay,
     /// Distraction-free full screen: only the image.
     pub fullscreen: bool,
     /// The "Esc / F11" hint in full screen is shown until then.
@@ -792,7 +792,6 @@ impl App {
             paint_prev: None,
             whole_sent: None,
             guides: settings.guides,
-            overlay: crate::guides::Overlay::new(settings.overlay_file.clone(), settings.overlay_opacity),
             folder: PathBuf::new(),
             catalog_folder: folder.clone(),
             folder_input: String::new(),
@@ -828,6 +827,8 @@ impl App {
             tab: Tab::Exposure,
             tab_shown: Tab::Exposure,
             curve_channel: CurveChannel::Rgb,
+            levels_channel: CurveChannel::Rgb,
+            levels_hist: Default::default(),
             color_band: 0,
             color_view: Default::default(),
             color_zone: 0,
@@ -980,7 +981,7 @@ impl App {
         app.reload_styles();
         if opts.persist_settings {
             app.workers.load_lens_db();
-            app.preload_small_ai();
+            app.preload_ai();
             app.start_update_check();
         }
         match session {
@@ -1031,8 +1032,6 @@ impl App {
             side_column: self.side_column,
             focus_sensitivity: Some(self.focus_sensitivity),
             guides: self.guides,
-            overlay_file: self.overlay.file.clone(),
-            overlay_opacity: Some(self.overlay.opacity),
             rename_template: self.rename_template.clone(),
             last_image: self.primary_path().or_else(|| self.restore_image.clone()),
             write_xmp: sk_core::xmp::write_enabled(),
@@ -2512,9 +2511,6 @@ impl App {
             }
             if std::env::var_os("SILBERKORN_GUIDES").is_some() {
                 self.guides = crate::guides::Guides::Thirds;
-            }
-            if let Some(f) = std::env::var_os("SILBERKORN_OVERLAY") {
-                (self.overlay.file, self.overlay.shown) = (Some(f.into()), true);
             }
             if let Some(text) = std::env::var("SILBERKORN_WATERMARK").ok()
                 && let Some(r) = self.recipes.get_mut(self.selected_recipe)

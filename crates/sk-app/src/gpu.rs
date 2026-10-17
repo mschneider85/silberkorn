@@ -22,7 +22,7 @@ impl App {
         }
     }
 
-    fn install_gpu_job(&mut self) {
+    pub(crate) fn install_gpu_job(&mut self) {
         if self.jobs.iter().any(|j| j.label == GPU_JOB) {
             return;
         }
@@ -64,8 +64,7 @@ impl App {
             ui.add_space(10.0);
             ui.label(RichText::new("KI-Berechnung").strong());
             ui.label(
-                "Entrauschen, Vergrößern, Entfernen, Motivmasken und die Gesichtserkennung können auf der Grafikkarte rechnen \
-                 (DirectML: jede Karte mit DirectX 12, auch AMD und Intel). Das ist ein Vielfaches schneller als auf dem Prozessor.",
+                "KI-Werkzeuge rechnen auf der Grafikkarte (jede Karte mit DirectX 12) ein Vielfaches schneller als auf dem Prozessor.",
             );
             ui.add_space(8.0);
             if !runtime::gpu_supported() {
@@ -78,7 +77,7 @@ impl App {
                     }
                     None => {
                         ui.label(format!(
-                            "Dazu werden ONNX Runtime und DirectML von Microsoft geladen (einmalig etwa {} MB, Lizenzen MIT bzw. Microsoft-Redistributable).",
+                            "Dazu werden einmalig etwa {} MB von Microsoft geladen.",
                             runtime::GPU_DOWNLOAD_MB
                         ));
                         if ui.button(format!("{}  Laden", icon::DOWNLOAD_SIMPLE)).clicked() {
@@ -90,7 +89,7 @@ impl App {
                 ui.checkbox(&mut enabled, "Grafikkarte verwenden");
                 let status = match (runtime::gpu_problem(), runtime::last_device()) {
                     (_, _) if !enabled => "Aus: alles rechnet auf dem Prozessor.".to_string(),
-                    (Some(p), _) => format!("Grafikkarte nicht verwendbar: {p}. Es wird auf dem Prozessor gerechnet (ONNX Runtime, schneller als ohne)."),
+                    (Some(p), _) => format!("Grafikkarte nicht verwendbar: {p}. Es wird auf dem Prozessor gerechnet."),
                     (None, Some(d)) => format!("Zuletzt verwendet: {d}"),
                     (None, None) => "Bereit; wird beim nächsten KI-Werkzeug verwendet.".to_string(),
                 };
@@ -98,7 +97,7 @@ impl App {
             }
             ui.add_space(10.0);
             ui.label(RichText::new("KI-Modelle").strong());
-            ui.label("Jedes Modell wird beim ersten Gebrauch der Funktion geladen, die kleinen gleich beim Start; hier lässt sich das auch vorab erledigen.");
+            ui.label("Jedes Modell wird beim ersten Gebrauch geladen; hier lässt es sich auch vorab laden.");
             ui.add_space(4.0);
             model_action = self.models_ui(ui);
             self.denoise_cache_ui(ui);
@@ -131,7 +130,7 @@ impl App {
     }
 }
 
-const GPU_JOB: &str = "KI-Beschleunigung laden";
+pub(crate) const GPU_JOB: &str = "KI-Beschleunigung laden";
 
 /// Menu entry and title of the dialog.
 pub const DIALOG_TITLE: &str = "Grafikkarte und KI-Modelle …";

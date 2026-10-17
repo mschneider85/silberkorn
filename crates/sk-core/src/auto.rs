@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::detail::Plane;
 use crate::image::LinearImage;
 use crate::params::{Adjustments, Levels, WbMode, WhiteBalance};
-use crate::pipeline::{Processor, Rendered, StageCache};
+use crate::pipeline::{Histogram, Processor, Rendered, StageCache};
 use crate::raw::RawMeta;
 
 /// White balance from the nearly neutral pixels of the developed (cropped) image (see
@@ -99,11 +99,10 @@ impl AutoOptions {
             out.blacks = whole(before.blacks, auto.blacks);
             let (a, b) = (&before.levels, &auto.levels);
             out.levels = Levels {
-                in_black: lerp(a.in_black, b.in_black),
-                in_white: lerp(a.in_white, b.in_white),
-                midtone: lerp(a.midtone, b.midtone),
-                out_black: lerp(a.out_black, b.out_black),
-                out_white: lerp(a.out_white, b.out_white),
+                rgb: a.rgb.lerp(&b.rgb, t),
+                red: a.red.lerp(&b.red, t),
+                green: a.green.lerp(&b.green, t),
+                blue: a.blue.lerp(&b.blue, t),
             };
         }
         if self.contrast {
@@ -212,6 +211,33 @@ fn measuring(adj: &Adjustments) -> Adjustments {
     a.relight = Default::default();
     a.atmosphere = Default::default();
     a
+}
+
+/// What the histogram of the levels depends on: `adj` as measured, with neutral levels and curves.
+/// Equal for two settings, equal histograms (so dragging the levels doesn't measure again).
+pub fn levels_input_settings(adj: &Adjustments) -> Adjustments {
+    let mut a = measuring(adj);
+    a.levels = Levels::default();
+    a.curves = Default::default();
+    a
+}
+
+/// Histogram of what goes into the levels (encoded working RGB, as the levels see it), measured
+/// on a reduced `preview` with `settings` from [`levels_input_settings`]. Unlike the histogram of
+/// the rendering, it shows what the black and white points cut off.
+pub fn levels_input_histogram(meta: &RawMeta, settings: &Adjustments, preview: &LinearImage) -> Histogram {
+    let src = reduced(preview, 400);
+    let img = Processor::new(meta, settings).encoded_cpu(&src, None);
+    let mut h = Histogram { r: vec![0; 256], g: vec![0; 256], b: vec![0; 256], luma: vec![0; 256] };
+    let bin = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as usize;
+    for p in &img.data {
+        h.r[bin(p[0])] += 1;
+        h.g[bin(p[1])] += 1;
+        h.b[bin(p[2])] += 1;
+        // Weights as in the display histogram.
+        h.luma[bin((p[0] * 54.0 + p[1] * 183.0 + p[2] * 19.0) / 256.0)] += 1;
+    }
+    h
 }
 
 fn reduced(preview: &LinearImage, edge: usize) -> LinearImage {
@@ -713,6 +739,23 @@ mod tests {
                 })
                 .collect(),
         )
+    }
+
+    #[test]
+    fn levels_histogram_shows_what_the_levels_cut_off() {
+        let m = meta();
+        let img = scene(120, 80, 0.3, [1.0; 3]);
+        let plain = Adjustments::default();
+        let mut cut = plain.clone();
+        cut.levels.rgb.in_black = 0.5;
+        cut.curves.rgb.points.insert(1, [0.5, 0.7]);
+        // Levels and curves don't change what goes into the levels: no new measurement.
+        assert_eq!(levels_input_settings(&plain), levels_input_settings(&cut));
+        let h = levels_input_histogram(&m, &levels_input_settings(&cut), &img);
+        assert_eq!(h.luma.iter().sum::<u32>(), 120 * 80);
+        // The dark half that the black point turns black is still there.
+        let below: u32 = h.luma[..120].iter().sum();
+        assert!(below > 120 * 80 / 10, "{below}");
     }
 
     #[test]

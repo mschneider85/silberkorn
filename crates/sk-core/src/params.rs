@@ -99,10 +99,32 @@ impl Default for WhiteBalance {
     }
 }
 
-/// Levels in sRGB-encoded 0..1 space.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// Levels in sRGB-encoded 0..1 space: for all channels, then per channel.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Levels {
+    /// All channels; stored at the top level as before there were channels.
+    #[serde(flatten)]
+    pub rgb: LevelSet,
+    #[serde(skip_serializing_if = "LevelSet::is_neutral")]
+    pub red: LevelSet,
+    #[serde(skip_serializing_if = "LevelSet::is_neutral")]
+    pub green: LevelSet,
+    #[serde(skip_serializing_if = "LevelSet::is_neutral")]
+    pub blue: LevelSet,
+}
+
+impl Levels {
+    /// `v` of channel `c` (0 red, 1 green, 2 blue) through the levels of all, then of `c`.
+    pub fn apply(&self, c: usize, v: f32) -> f32 {
+        [&self.red, &self.green, &self.blue][c].apply(self.rgb.apply(v))
+    }
+}
+
+/// Black and white point, midtones and output range of one channel.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LevelSet {
     pub in_black: f32,
     pub in_white: f32,
     /// Midtone gamma, 1.0 = neutral; >1 brightens.
@@ -111,9 +133,40 @@ pub struct Levels {
     pub out_white: f32,
 }
 
-impl Default for Levels {
+impl Default for LevelSet {
     fn default() -> Self {
         Self { in_black: 0.0, in_white: 1.0, midtone: 1.0, out_black: 0.0, out_white: 1.0 }
+    }
+}
+
+impl LevelSet {
+    pub fn is_neutral(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Input range, midtone gamma, output range.
+    pub fn apply(&self, v: f32) -> f32 {
+        if self.is_neutral() {
+            return v;
+        }
+        let range = (self.in_white - self.in_black).max(1e-4);
+        let mut v = ((v - self.in_black) / range).clamp(0.0, 1.0);
+        if self.midtone != 1.0 {
+            v = v.powf(1.0 / self.midtone.max(0.05));
+        }
+        self.out_black + v * (self.out_white - self.out_black)
+    }
+
+    /// Between `self` (t = 0) and `other` (t = 1).
+    pub fn lerp(&self, other: &Self, t: f32) -> Self {
+        let l = |a: f32, b: f32| a + (b - a) * t;
+        Self {
+            in_black: l(self.in_black, other.in_black),
+            in_white: l(self.in_white, other.in_white),
+            midtone: l(self.midtone, other.midtone),
+            out_black: l(self.out_black, other.out_black),
+            out_white: l(self.out_white, other.out_white),
+        }
     }
 }
 
@@ -1176,6 +1229,22 @@ impl Adjustments {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn levels_of_old_files_load_and_channels_stay_out_until_used() {
+        let old: Levels = serde_json::from_str(r#"{"in_black":0.1,"in_white":0.9,"midtone":1.2,"out_black":0.0,"out_white":1.0}"#).unwrap();
+        assert_eq!((old.rgb.in_black, old.rgb.midtone), (0.1, 1.2));
+        assert!(old.red.is_neutral() && old.blue.is_neutral());
+        let json = serde_json::to_string(&old).unwrap();
+        assert!(json.starts_with(r#"{"in_black":0.1"#) && !json.contains("red"), "{json}");
+        let mut lv = Levels::default();
+        lv.red.in_white = 0.5;
+        let back: Levels = serde_json::from_str(&serde_json::to_string(&lv).unwrap()).unwrap();
+        assert_eq!(back, lv);
+        // Only the red channel: 0.25 becomes 0.5 there, the others stay.
+        assert!((lv.apply(0, 0.25) - 0.5).abs() < 1e-6);
+        assert_eq!(lv.apply(1, 0.25), 0.25);
+    }
 
     #[test]
     fn layer_adjustments_of_old_files_load_and_new_fields_stay_out_until_used() {

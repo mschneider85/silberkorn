@@ -1,6 +1,7 @@
-//! The AI functions and the models they need. Using a function downloads its model on first
-//! use and then carries on; the small models are fetched quietly at startup. Model names and
-//! licenses appear only in the dialog for the graphics card and the AI models.
+//! The AI functions and the models they need. All models (and on Windows the AI acceleration)
+//! are fetched quietly at startup, without asking; the start screen shows the progress, then the
+//! status bar. A function used before its model is there downloads it first and then carries on.
+//! Model names and licenses appear only in the dialog for the graphics card and the AI models.
 
 use sk_ai::models::{self, ModelInfo};
 
@@ -117,8 +118,7 @@ pub struct AiDownloads {
 /// Pause before a failed download is tried again.
 const RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Models small enough to fetch at startup without asking (together about 5 MB).
-const AT_STARTUP: [AiFeature; 1] = [AiFeature::Subject];
+/// The face models that the face analysis needs besides `AiFeature::Faces`'s.
 const FACES_AT_STARTUP: [&ModelInfo; 2] = [&models::FACE_DETECT, &models::EYE_STATE];
 
 impl App {
@@ -157,14 +157,19 @@ impl App {
         self.jobs.iter().find(|j| j.label == label).map(|j| j.progress)
     }
 
-    /// Fetches the small models in the background (at startup); quiet also without network.
-    pub fn preload_small_ai(&mut self) {
+    /// Fetches every missing model in the background (at startup), and on Windows the AI
+    /// acceleration; quiet also without network (a function used later tries again).
+    pub fn preload_ai(&mut self) {
         let status = self.status.clone();
-        for f in AT_STARTUP {
+        for f in AiFeature::ALL {
             if !f.available() {
                 self.ai_downloads.quiet.push(f);
                 self.ensure_ai(f);
             }
+        }
+        if sk_ai::runtime::gpu_supported() && !sk_ai::runtime::gpu_installed() {
+            self.install_gpu_job();
+            self.quiet_jobs.push(crate::gpu::GPU_JOB.to_string());
         }
         if FACES_AT_STARTUP.iter().any(|m| !models::available(m)) {
             let label = "KI-Modell laden: Gesichtserkennung";
@@ -184,6 +189,16 @@ impl App {
         for f in AiFeature::ALL {
             self.ensure_ai(f);
         }
+    }
+
+    /// Progress of the downloads started at startup (by size), while any runs.
+    pub fn ai_preload_progress(&self) -> Option<f32> {
+        let mut parts: Vec<(f32, f32)> =
+            AiFeature::ALL.iter().filter_map(|f| self.ai_download_progress(*f).map(|p| (f.download_mb() as f32, p))).collect();
+        let gpu = self.jobs.iter().find(|j| j.label == crate::gpu::GPU_JOB).map(|j| (sk_ai::runtime::GPU_DOWNLOAD_MB as f32, j.progress));
+        parts.extend(gpu);
+        let total: f32 = parts.iter().map(|(mb, _)| mb).sum();
+        (total > 0.0).then(|| parts.iter().map(|(mb, p)| mb * p).sum::<f32>() / total)
     }
 
     /// Total size of the models still missing, in MB.

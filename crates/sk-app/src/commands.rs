@@ -222,8 +222,6 @@ pub const COMMANDS: &[Command] = &[
         a.guides = a.guides.next();
         a.save_settings();
     }),
-    cmd!("overlay", icon::IMAGE, "Overlay ein/aus", "Ansicht", [SHIFT => Key::O], "layout png", always, |a, _| a.toggle_overlay()),
-    cmd!("overlay-choose", icon::IMAGE, "Overlay wählen …", "Ansicht", [], "layout png", always, |a, _| a.choose_overlay()),
     cmd!("viewer-window", icon::MONITOR, "Bild in eigenem Fenster", "Ansicht", [SHIFT => Key::F11], "zweitmonitor viewer", always, |a, _| a.toggle_viewer_window()),
     cmd!("fullscreen", icon::ARROWS_OUT, "Vollbild ohne Ablenkung", "Ansicht", [NONE => Key::F11, CTRL_SHIFT => Key::F], "fullscreen", always, |a, ctx| a.toggle_fullscreen(ctx)),
     cmd!("find", icon::MAGNIFYING_GLASS, "Suchen (Bibliothek)", "Ansicht", [CTRL => Key::F], "filter suche", always, |a, _| a.tab = Tab::Library),

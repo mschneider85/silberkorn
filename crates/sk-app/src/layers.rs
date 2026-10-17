@@ -180,7 +180,7 @@ pub fn brush_controls(ui: &mut Ui, b: &mut BrushSettings, tool: Option<LocalTool
     if flow_and_auto {
         slider_row(ui, "Fluss", &mut b.flow, 0.02..=1.0, d.flow, 2);
         ui.checkbox(&mut b.auto_mask, "Kanten beachten")
-            .on_hover_text("Wirkt nur dort, wo das Bild der Stelle unter der Pinselmitte ähnelt – so bleibt man an Kanten wie dem Horizont sauber");
+            .on_hover_text("Wirkt nur, wo das Bild der Pinselmitte ähnelt – hält Kanten wie den Horizont sauber");
     }
     *b != before
 }
@@ -986,7 +986,7 @@ impl App {
         let selected = self.selected_spot;
         let Some(cur) = self.current.as_mut() else { return };
         let spots = &mut cur.adjustments.retouch;
-        let help = "Mit Reparieren (H) oder Klonen (S) über eine Stelle malen; die Quelle wird automatisch gewählt. Pins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · Entf: löschen\n\nStaub und Flecken finden: kleine, runde, dunklere Stellen auf ruhigen Flächen (Sensorstaub im Himmel, Unreinheiten auf der Haut) werden zu Reparieren-Stellen. Höhere Empfindlichkeit findet auch schwächere.";
+        let help = "Mit Reparieren (H) oder Klonen (S) über eine Stelle malen. Pins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · Entf: löschen\n\nStaub und Flecken finden: repariert kleine dunkle Flecken auf ruhigen Flächen, etwa Sensorstaub.";
         let searching = self.spot_search.is_some();
         let sensitivity = &mut self.spot_sensitivity;
         crate::widgets::section_help(ui, "Reparieren & Klonen", help, None, |ui| {
@@ -1157,7 +1157,7 @@ impl App {
         let mut action = None;
         let mut changed = false;
         let title = if layers.is_empty() { "Ebenen".to_string() } else { format!("Ebenen ({})", layers.len()) };
-        let help = "Oberste Ebene zuerst. Klick: Ebene wählen, ihre Einstellungen erscheinen darunter · Klick auf den Namen der gewählten Ebene oder Doppelklick: umbenennen · Auge: ein-/ausblenden.\n\n+ legt eine Ebene an (leer oder als Stilpinsel mit fertigen Anpassungen), − löscht die gewählte.\n\nPinsel, Verlauf und Zauberpinsel legen automatisch eine Ebene an, wenn keine gewählt ist.";
+        let help = "Oberste Ebene zuerst. Klick wählt, Doppelklick benennt um, das Auge blendet aus.\n\nPinsel, Verlauf und Zauberpinsel legen selbst eine Ebene an, wenn keine gewählt ist.";
         crate::widgets::section_help(ui, &title, help, None, |ui| {
             // Opacity of the chosen layer; greyed out for the background.
             match active {
@@ -1385,7 +1385,7 @@ impl App {
         }
         let action = self.layer_list(ui);
         let mut changed = false;
-        let help = "Wo die gewählte Ebene wirkt.\n\nPinsel, Radierer, Verläufe, Zauberpinsel und Objekt malen bzw. wählen die Maske; ist keine Ebene gewählt, wird eine angelegt. [ und ] ändern die Pinselgröße; mit der rechten Maustaste ziehen: links/rechts Größe, hoch/runter Härte.\n\nZauberpinsel: ähnliche, zusammenhängende Farben werden ausgewählt; weitere Striche erweitern die Auswahl.\n\nObjekt: auf ein Objekt klicken, es wird ausgewählt; weitere Klicks verfeinern, Alt+Klick nimmt Teile aus.\n\nEingrenzen: beschränkt die Maske zusätzlich auf einen Helligkeits- oder Farbbereich – mit „Füllen“ ohne Malen aufs ganze Bild.";
+        let help = "Wo die gewählte Ebene wirkt: mit Pinsel, Verlauf, Zauberpinsel oder Objekt malen bzw. auswählen.\n\n[ und ] oder Ziehen mit der rechten Maustaste: Pinselgröße und Härte. Bei Objekt nimmt Alt+Klick Teile aus. Eingrenzen beschränkt auf einen Helligkeits- oder Farbbereich.";
         crate::widgets::section_help(ui, "Maske", help, None, |ui| self.mask_body(ui, &mut changed));
 
         let mut jump = None;
@@ -1394,8 +1394,8 @@ impl App {
         let mut reset = false;
         let mut on_reset = || reset = true;
         let on_reset: Option<&mut dyn FnMut()> = if layer.is_some() { Some(&mut on_reset) } else { None };
-        let help = "Was die gewählte Ebene ändert. Die Regler dafür stehen in den Werkzeugen Belichtung, Farbe und Details: \
-                    solange eine Ebene gewählt ist, wirken sie auf diese Ebene. Ein Klick auf einen Eintrag springt zum Werkzeug.";
+        let help = "Was die gewählte Ebene ändert. Die Regler in Belichtung, Farbe und Details wirken auf sie; \
+                    ein Klick auf einen Eintrag springt zum Werkzeug.";
         crate::widgets::section_full(ui, "Anpassungen", true, Some(help), on_reset, |ui| {
             let Some(layer) = layer.as_deref_mut() else {
                 crate::widgets::hint(ui, "Eine Ebene wählen oder anlegen.");
@@ -1449,7 +1449,7 @@ impl App {
             crate::widgets::no_image(ui);
             return;
         }
-        let help = "Reparieren (H) und Klonen (S): über eine Stelle malen, die Quelle wird automatisch gewählt.\n\nEntfernen (X): über das Störende malen; die KI füllt die Stelle passend zur Umgebung.\n\n[ und ] ändern die Pinselgröße; mit der rechten Maustaste ziehen: links/rechts Größe, hoch/runter Härte.";
+        let help = "Reparieren (H) und Klonen (S): über eine Stelle malen. Entfernen (X): die KI füllt die Stelle passend zur Umgebung.\n\n[ und ] oder Ziehen mit der rechten Maustaste: Pinselgröße und Härte.";
         self.tools_section(ui, help, &[LocalTool::Heal, LocalTool::Clone, LocalTool::Remove]);
         self.remove_section(ui);
         self.retouch_section(ui);

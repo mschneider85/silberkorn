@@ -42,7 +42,7 @@ pub enum Tool {
 /// The tools in groups as in the tool tabs.
 pub const GROUPS: &[(&str, &[Tool])] = &[
     ("Farbe", &[Tool::BaseCurve, Tool::WhiteBalance, Tool::Color, Tool::ColorEditor, Tool::SkinTone, Tool::ColorBalance, Tool::BlackWhite]),
-    ("Belichtung", &[Tool::Exposure, Tool::HighlightsShadows, Tool::Levels, Tool::Curves, Tool::Relight]),
+    ("Belichtung", &[Tool::Exposure, Tool::HighlightsShadows, Tool::Relight, Tool::Levels, Tool::Curves]),
     ("Details", &[Tool::NoiseReduction, Tool::Sharpening, Tool::Clarity, Tool::Dehaze]),
     ("Effekte", &[Tool::LensBlur, Tool::Atmosphere, Tool::Glow, Tool::Vignette, Tool::Grain]),
     ("Objektiv", &[Tool::LensCorrection, Tool::Crop, Tool::Rotation, Tool::Perspective]),

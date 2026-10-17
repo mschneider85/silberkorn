@@ -1,6 +1,9 @@
 ﻿; Installer for Windows (Inno Setup 6), built by .github/workflows/release.yml:
 ;   iscc /DVersion=0.2.0 /DExe=<pfad\zu\silberkorn.exe> /O<ausgabeordner> installer\silberkorn.iss
 ;
+; As simple as possible: no questions, it installs right away (Start menu and desktop) and offers
+; to start the app on its last page.
+;
 ; Installs for the current user only (%LOCALAPPDATA%\Programs\Silberkorn), so neither the
 ; installation nor the updates need administrator rights: the app's update downloads this
 ; installer and runs it with /SILENT (see crates/sk-core/src/update.rs). /start=0 leaves the
@@ -30,7 +33,8 @@ VersionInfoVersion={#Version}
 PrivilegesRequired=lowest
 DefaultDirName={autopf}\Silberkorn
 DisableProgramGroupPage=yes
-DisableDirPage=auto
+DisableDirPage=yes
+DisableWelcomePage=yes
 DisableReadyPage=yes
 UninstallDisplayIcon={app}\silberkorn.exe
 UninstallDisplayName=Silberkorn
@@ -46,15 +50,13 @@ OutputBaseFilename=silberkorn-setup-x64
 [Languages]
 Name: "de"; MessagesFile: "compiler:Languages\German.isl"
 
-[Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-
 [Files]
 Source: "{#Exe}"; DestDir: "{app}"; DestName: "silberkorn.exe"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Silberkorn"; Filename: "{app}\silberkorn.exe"
-Name: "{autodesktop}\Silberkorn"; Filename: "{app}\silberkorn.exe"; Tasks: desktopicon
+; Not again with an update (silent): a desktop icon the user deleted stays deleted.
+Name: "{autodesktop}\Silberkorn"; Filename: "{app}\silberkorn.exe"; Check: not WizardSilent
 
 [Run]
 ; Interactive: a checkbox on the last page. Silent (update): starts the app unless /start=0.

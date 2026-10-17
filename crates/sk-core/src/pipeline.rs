@@ -1482,7 +1482,6 @@ fn aces_fit(x: f32) -> f32 {
 }
 
 fn build_output_luts(adj: &Adjustments) -> [Vec<f32>; 3] {
-    let lv = &adj.levels;
     let bright_gamma = 2f32.powf(-adj.brightness / 100.0 * 0.6);
     let master = adj.curves.rgb.build_lut(LUT_SIZE);
     let chans = [&adj.curves.red, &adj.curves.green, &adj.curves.blue].map(|c| c.build_lut(LUT_SIZE));
@@ -1494,13 +1493,7 @@ fn build_output_luts(adj: &Adjustments) -> [Vec<f32>; 3] {
                 if adj.brightness != 0.0 {
                     v = v.powf(bright_gamma);
                 }
-                // Levels: input range, midtone gamma, output range.
-                let range = (lv.in_white - lv.in_black).max(1e-4);
-                v = ((v - lv.in_black) / range).clamp(0.0, 1.0);
-                if lv.midtone != 1.0 {
-                    v = v.powf(1.0 / lv.midtone.max(0.05));
-                }
-                v = lv.out_black + v * (lv.out_white - lv.out_black);
+                v = adj.levels.apply(c, v);
                 v = lut_lookup(&master, v);
                 v = lut_lookup(&chans[c], v);
                 v.clamp(0.0, 1.0)

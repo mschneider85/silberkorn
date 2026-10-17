@@ -1,8 +1,6 @@
-//! Composition guides and a custom layout overlay over the viewer image.
+//! Composition guides over the viewer image.
 
-use std::path::PathBuf;
-
-use egui::{Color32, Painter, Pos2, Rect, Stroke, TextureHandle, TextureOptions, pos2};
+use egui::{Color32, Painter, Pos2, Rect, Stroke, pos2};
 use serde::{Deserialize, Serialize};
 
 use crate::app::App;
@@ -60,79 +58,9 @@ impl Guides {
     }
 }
 
-/// The custom overlay (a layout PNG with transparency).
-#[derive(Default)]
-pub struct Overlay {
-    pub file: Option<PathBuf>,
-    pub shown: bool,
-    pub opacity: f32,
-    texture: Option<(PathBuf, TextureHandle)>,
-    pub error: Option<String>,
-}
-
-impl Overlay {
-    pub fn new(file: Option<PathBuf>, opacity: Option<f32>) -> Self {
-        Self { file, opacity: opacity.unwrap_or(0.8).clamp(0.05, 1.0), ..Default::default() }
-    }
-
-    fn texture(&mut self, ctx: &egui::Context) -> Option<&TextureHandle> {
-        let file = self.file.clone()?;
-        if self.texture.as_ref().is_none_or(|(p, _)| *p != file) {
-            self.texture = None;
-            match image::open(&file) {
-                Ok(img) => {
-                    // Larger textures than the GPU allows would abort the app.
-                    let side = ctx.input(|i| i.max_texture_side).min(4096) as u32;
-                    let img = if img.width().max(img.height()) > side { img.resize(side, side, image::imageops::FilterType::Triangle) } else { img };
-                    let rgba = img.to_rgba8();
-                    let image = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
-                    self.texture = Some((file, ctx.load_texture("layout overlay", image, TextureOptions::LINEAR)));
-                    self.error = None;
-                }
-                Err(e) => {
-                    self.error = Some(format!("Overlay nicht lesbar: {e}"));
-                    self.shown = false;
-                    return None;
-                }
-            }
-        }
-        self.texture.as_ref().map(|(_, t)| t)
-    }
-}
-
 impl App {
-    /// Shift+O: the layout overlay on or off; asks for a file the first time.
-    pub fn toggle_overlay(&mut self) {
-        if self.overlay.shown {
-            self.overlay.shown = false;
-        } else if self.overlay.file.is_some() {
-            self.overlay.shown = true;
-        } else {
-            self.choose_overlay();
-        }
-    }
-
-    pub fn choose_overlay(&mut self) {
-        if let Some(f) = rfd::FileDialog::new().set_title("Overlay wählen (PNG mit Transparenz)").add_filter("Bilder", &["png", "jpg", "jpeg", "tif", "tiff"]).pick_file() {
-            self.overlay.file = Some(f);
-            self.overlay.shown = true;
-            // Also reload a file of the same name that was changed in the meantime.
-            self.overlay.texture = None;
-            self.save_settings();
-        }
-    }
-
-    /// Draws the overlay (fitted into the image, centered) and the guides over `img`.
-    pub fn draw_guides(&mut self, ctx: &egui::Context, painter: &Painter, img: Rect) {
-        if self.overlay.shown {
-            let opacity = self.overlay.opacity;
-            if let Some(t) = self.overlay.texture(ctx) {
-                let size = t.size_vec2();
-                let fit = (img.width() / size.x).min(img.height() / size.y);
-                let r = Rect::from_center_size(img.center(), size * fit);
-                painter.image(t.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::from_white_alpha((opacity * 255.0) as u8));
-            }
-        }
+    /// Draws the guides over `img`.
+    pub fn draw_guides(&self, painter: &Painter, img: Rect) {
         let to_screen = |p: Pos2| img.min + (p.to_vec2() * img.size());
         for [a, b] in self.guides.lines(img.width() / img.height().max(1.0)) {
             let (a, b) = (to_screen(a), to_screen(b));

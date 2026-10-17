@@ -25,6 +25,7 @@ mod history;
 mod jobs;
 mod layer_target;
 mod layers;
+mod levels;
 mod library;
 mod look;
 mod look_worker;

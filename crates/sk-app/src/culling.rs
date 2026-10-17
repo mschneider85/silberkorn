@@ -249,7 +249,7 @@ impl App {
             ui.label(RichText::new(format!("Gesichter von „{}“ ({})", person_name(person), faces.len())).strong());
         })
         .response
-        .on_hover_text("Gehört ein Gesicht zu jemand anderem: anklicken (Strg+Klick für mehrere) und auf die richtige Person ziehen, oder als neue Person abtrennen. Doppelklick öffnet das Bild.");
+        .on_hover_text("Falsch zugeordnete Gesichter auf die richtige Person ziehen oder abtrennen (Strg+Klick für mehrere). Doppelklick öffnet das Bild.");
         let mut open_image = None;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
@@ -419,7 +419,7 @@ impl App {
         let analysed = self.visible.iter().filter(|&&i| self.entries[i].culling.is_some()).count();
         let counts: Vec<usize> = CullFilter::ALL.iter().map(|f| self.entries.iter().filter(|r| f.matches(r.culling.as_ref())).count()).collect();
         let count = |f: CullFilter| CullFilter::ALL.iter().position(|x| *x == f).map_or(0, |i| counts[i]);
-        let help = "Erkennt Gesichter, geschlossene Augen und unscharfe Bilder und ordnet Gesichter Personen zu.\n\nBeim ersten Mal werden die Modelle geladen (YuNet, SFace, open-closed-eye; zusammen etwa 40 MB).";
+        let help = "Erkennt Gesichter, geschlossene Augen und unscharfe Bilder und ordnet Gesichter Personen zu.\n\nBeim ersten Mal werden etwa 40 MB geladen.";
         section_help_ai(ui, "Gesichter & Sichtung", help, None, |ui| {
             ui.horizontal(|ui| {
                 if ui.button(format!("{}  Ansicht analysieren", icon::SCAN)).on_hover_text("Noch nicht analysierte Bilder dieser Ansicht").clicked() {
@@ -489,9 +489,9 @@ impl App {
                             move_faces = Some((drag.0.clone(), Some(p.id)));
                         }
                         let resp = resp.on_hover_text(format!(
-                            "{}: {}\nKlick: nur Bilder dieser Person, noch einmal: wieder alle Bilder des Ordners\n\
-                             Doppelklick: benennen (der Name wird Keyword der Bilder)\n\
-                             Auf eine andere Person ziehen: beide zusammenführen (dieselbe Person doppelt erkannt)",
+                            "{}: {}\nKlick: nur diese Person, noch einmal: alle\n\
+                             Doppelklick: benennen (wird Keyword der Bilder)\n\
+                             Auf eine andere Person ziehen: zusammenführen",
                             person_name(p),
                             crate::widgets::image_count(p.count)
                         ));

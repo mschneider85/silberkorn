@@ -2,7 +2,21 @@
 
 RAW-Entwickler und Bildverwaltung in Rust.
 
-## Starten
+## Herunterladen
+
+**[⬇ Silberkorn für Windows herunterladen](https://github.com/mschneider85/silberkorn/releases/latest/download/silberkorn-setup-x64.exe)** (Installer, Windows 10 und 11, 64 Bit)
+
+Doppelklick auf die Datei, fertig: Der Installer fragt nichts, braucht keine Administratorrechte,
+legt Startmenü- und Desktop-Symbol an und startet Silberkorn auf Wunsch gleich. Die KI-Modelle lädt
+Silberkorn beim ersten Start im Hintergrund, Updates installiert es selbst.
+
+Warnt Windows beim ersten Öffnen („Der Computer wurde durch Windows geschützt“), auf „Weitere
+Informationen“ und dann „Trotzdem ausführen“ klicken. Das ist nur einmal nötig, weil der Installer
+noch nicht signiert ist.
+
+Webseite: <https://mschneider85.github.io/silberkorn/> · Alle Versionen: [Releases](https://github.com/mschneider85/silberkorn/releases)
+
+## Selbst bauen
 
 ```bash
 cargo run --release -p sk-app -- /pfad/zu/raws
@@ -204,13 +218,14 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
 ### KI-Werkzeuge: Entrauschen und Entfernen
 
 Die neuronalen Netze werden nicht mitgeliefert, sondern nach `~/.local/share/silberkorn/models/`
-geladen (`SILBERKORN_MODELS=<ordner>` überschreibt den Ort): die kleinen (Motiv/Himmel, Gesichtserkennung,
-Augen; zusammen etwa 5 MB) still beim Programmstart, die großen beim ersten Gebrauch der Funktion. Es gibt
-keinen eigenen Schritt „Modell laden“: Wer „Motiv“ klickt, KI-Entrauschen einschaltet oder mit „Entfernen“
-malt, sieht den Fortschritt am Werkzeug, danach läuft die Funktion von selbst weiter (ein Export mit
-KI-Vergrößern startet nach dem Download). Modellnamen und Lizenzen stehen nur im Dialog Bearbeiten →
-„Grafikkarte und KI-Modelle …“; dort lassen sich mit „Alle vorab laden“ auch alle Modelle für die Arbeit
-ohne Internet holen. Jede Datei wird gegen Größe und SHA-256 geprüft (Hugging-Face-Links auf einen festen Stand
+geladen (`SILBERKORN_MODELS=<ordner>` überschreibt den Ort), und zwar alle still beim Programmstart, ohne
+Nachfrage (zusammen etwa 400 MB, unter Windows samt KI-Beschleunigung). Der Startbildschirm zeigt den
+Fortschritt, danach läuft der Download in der Statusleiste weiter; man kann sofort arbeiten. Wird eine
+Funktion benutzt, bevor ihr Modell da ist (oder fehlte beim Start das Internet), sieht man den Fortschritt
+am Werkzeug, danach läuft die Funktion von selbst weiter (ein Export mit KI-Vergrößern startet nach dem
+Download). Modellnamen und Lizenzen stehen nur im Dialog Bearbeiten → „Grafikkarte und KI-Modelle …“; dort
+lässt sich ein fehlgeschlagener Download auch von Hand wiederholen, etwa um alles für die Arbeit
+ohne Internet zu holen. Jede Datei wird gegen Größe und SHA-256 geprüft (Hugging-Face-Links auf einen festen Stand
 festgelegt); ein abgebrochener Download wird beim nächsten Versuch fortgesetzt.
 
 **Kennzeichnung:** KI-Funktionen tragen ein gelbes Funken-Symbol hinter ihrem Namen, in den
@@ -220,7 +235,7 @@ und in der Befehlspalette.
 
 **KI-Beschleunigung** (Bearbeiten → „Grafikkarte und KI-Modelle …“, Abschnitt „KI-Berechnung“, Windows): Die Netze rechnen dann über
 ONNX Runtime mit DirectML auf der Grafikkarte (jede DirectX-12-Karte). ONNX Runtime wird nicht
-gelinkt, sondern zur Laufzeit geladen: Auf Wunsch lädt Silberkorn `onnxruntime.dll` (1.24.4) und
+gelinkt, sondern zur Laufzeit geladen: Beim ersten Start lädt Silberkorn `onnxruntime.dll` (1.24.4) und
 `DirectML.dll` (1.15.4) aus Microsofts NuGet-Paketen nach `%LOCALAPPDATA%\silberkorn\gpu`, und zwar
 per Teil-Download nur diese beiden Dateien (etwa 28 MB statt über 200 MB). Die EXE bleibt eine
 einzelne Datei, der Cross-Build aus WSL funktioniert weiter. Steht DirectML nicht zur Verfügung,
@@ -539,12 +554,10 @@ mit Vorschau. Platzhalter: `{Name}`, `{Zähler}` (`{Zähler:3}` dreistellig, Sta
 ist ein Name vergeben, wird „-2“ usw. angehängt. Dieselben Platzhalter gibt es im Ausgaberezept
 als **Dateiname** der verarbeiteten Bilder (der Zähler zählt dort die Bilder eines Durchgangs).
 
-### Hilfslinien und Overlay
+### Hilfslinien
 
-- **Hilfslinien** (O wechselt, oder Ansicht → „Hilfslinien“): Drittel, goldener Schnitt, Raster mit
-  annähernd quadratischen Feldern, Diagonalen.
-- **Overlay** (Umschalt+O, Ansicht → „Overlay wählen …“): ein eigenes Layout-PNG, z. B. Titelseite
-  oder Beschnittzugabe, wird eingepasst über das Bild gelegt; Deckkraft im Menü einstellbar.
+O wechselt (oder Ansicht → „Hilfslinien“): Drittel, goldener Schnitt, Raster mit annähernd
+quadratischen Feldern, Diagonalen.
 
 ### Wasserzeichen und Metadaten (Ausgaberezept)
 
@@ -815,7 +828,7 @@ die Leertaste und die Tasten der Schnellbearbeitung.
 | M | Maske anzeigen · [ / ]: Pinselgröße · rechte Maustaste ziehen: Größe (links/rechts) und Härte (hoch/runter) · mittlere Maustaste: verschieben |
 | J | Zauberpinsel |
 | U / Umschalt+U | Vorher/Nachher geteilt / nebeneinander |
-| O / Umschalt+O | Hilfslinien wechseln / eigenes Overlay |
+| O | Hilfslinien wechseln |
 | Umschalt+A | automatisch geraderichten |
 | Strg+Umschalt+R | Auswahl umbenennen |
 | Umschalt+F11 | Bild in eigenem Fenster (Zweitmonitor) |
@@ -867,7 +880,7 @@ Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verklei
 - **Phase 5 (fertig):** Luma Range, Farbbereichsmasken, Style Brushes, KI-Motivmaske (ONNX), Himmelmaske, Magic Brush, Dunst entfernen, Speed Edit, Vergleichsansicht, mehrere Ausgaberezepte
 - **Phase 6 (fertig):** Mehrfachansicht mit Referenzbild und synchronem Zoom, Look angleichen (Referenzbild oder Bilddatei), Hauttöne vereinheitlichen
 - **Phase 7 (fertig):** Varianten (virtuelle Kopien), Fokusmaske
-- **Phase 8 (fertig):** Vorher/Nachher nebeneinander, Wasserzeichen (Text/Logo), EXIF und Copyright im Export, Hilfslinien und Layout-Overlay
+- **Phase 8 (fertig):** Vorher/Nachher nebeneinander, Wasserzeichen (Text/Logo), EXIF und Copyright im Export, Hilfslinien
 - **Phase 9 (fertig):** automatisches Geraderichten (Drehung, vertikaler/horizontaler Keystone)
 - **Phase 10 (fertig):** Lupe, Verlauf und Schnappschüsse, Umbenennen mit Platzhaltern (auch im Ausgaberezept)
 - **Phase 11 (fertig):** XMP-Austausch, Stapel, Viewer auf dem Zweitmonitor, Softproof, HDR und Panorama, KI-Entrauschen, Entfernen, Gesichter und Sichtung

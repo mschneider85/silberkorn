@@ -5,13 +5,14 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use egui::{RichText, Ui, Vec2};
+use egui::{Color32, RichText, Ui, Vec2};
 use sk_core::params::{Atmosphere, DepthRange, LensBlur, Relight};
 use sk_core::pipeline::{Processor, RenderOptions};
 
 use crate::ai_models::{self, AiFeature};
 use crate::app::App;
-use crate::widgets::slider_row;
+use crate::theme::icon;
+use crate::widgets::{RAIL_KELVIN, SliderOpts, slider_row, slider_row_with};
 
 const JOB_LABEL: &str = "Tiefenkarte";
 /// Long edge of depth masks (like the other masks from image content).
@@ -195,7 +196,7 @@ impl App {
         let mut toggle_pick = false;
         let picking = self.picking_focus;
         let state = self.depth_state(&path);
-        let help = "Zeichnet Vorder- und Hintergrund weich wie eine offene Blende. Wie nah jede Stelle ist, schätzt ein neuronales Netz einmal je Bild; die Tiefenkarte wird im Hintergrund berechnet und zwischengespeichert.\n\nFokus: Pipette oder Regler (0 ist der fernste, 1 der nächste Teil des Bildes). Schärfebereich: wie weit davor und dahinter es scharf bleibt. Lichter: helle Stellen werden in der Unschärfe zu leuchtenden Scheiben.";
+        let help = "Zeichnet Vorder- und Hintergrund weich wie eine offene Blende.\n\nFokus: Pipette oder Regler (0 fern, 1 nah). Schärfebereich: wie viel davor und dahinter scharf bleibt. Lichter: helle Stellen werden zu leuchtenden Scheiben.";
         crate::widgets::tool_section_help(ui, sk_core::tools::Tool::LensBlur, help, Some(&mut || reset = true), |ui| {
             let d = LensBlur::default();
             slider_row(ui, "Stärke", &mut lb.amount, 0.0..=100.0, 0.0, 0);
@@ -243,17 +244,16 @@ impl App {
         let before = rl;
         let mut reset = false;
         let state = self.depth_state(&path);
-        let help = "Hellt den Vordergrund und den Hintergrund getrennt auf oder ab und macht sie wärmer oder kühler, etwa bei einem Porträt im Gegenlicht. Wie nah jede Stelle ist, schätzt ein neuronales Netz einmal je Bild (dieselbe Tiefenkarte wie bei der Objektivunschärfe).\n\nGrenze: wo der Vordergrund aufhört (0 ist der fernste, 1 der nächste Teil des Bildes). Übergang: wie weich er in den Hintergrund übergeht.";
+        let help = "Hellt Vorder- und Hintergrund getrennt auf oder ab und färbt sie wärmer oder kühler, etwa bei Gegenlicht.\n\nGrenze: wo der Vordergrund aufhört (0 fern, 1 nah). Übergang: wie weich er in den Hintergrund übergeht.";
         crate::widgets::tool_section_help(ui, sk_core::tools::Tool::Relight, help, Some(&mut || reset = true), |ui| {
             let d = Relight::default();
-            crate::widgets::subheading(ui, "Vordergrund");
-            slider_row(ui, "Belichtung", &mut rl.near, -2.0..=2.0, 0.0, 2);
-            slider_row(ui, "Wärme", &mut rl.near_warmth, -100.0..=100.0, 0.0, 0);
-            crate::widgets::subheading(ui, "Hintergrund");
-            slider_row(ui, "Belichtung", &mut rl.far, -2.0..=2.0, 0.0, 2);
-            slider_row(ui, "Wärme", &mut rl.far_warmth, -100.0..=100.0, 0.0, 0);
+            ui.add_space(4.0);
+            relight_card(ui, icon::PERSON_SIMPLE, "Vordergrund", NEAR_COLOR, &mut rl.near, &mut rl.near_warmth);
+            ui.add_space(6.0);
+            relight_card(ui, icon::MOUNTAINS, "Hintergrund", FAR_COLOR, &mut rl.far, &mut rl.far_warmth);
             ui.add_space(4.0);
             ui.add_enabled_ui(!rl.is_off(), |ui| {
+                crate::widgets::subheading(ui, "Trennung");
                 slider_row(ui, "Grenze", &mut rl.split, 0.0..=1.0, d.split, 2);
                 slider_row(ui, "Übergang", &mut rl.falloff, 0.02..=1.0, d.falloff, 2);
             });
@@ -276,7 +276,7 @@ impl App {
         let before = at;
         let mut reset = false;
         let state = self.depth_state(&path);
-        let help = "Legt Dunst über das Bild, der mit der Entfernung dichter wird, wie Nebel über einer Landschaft. Wie nah jede Stelle ist, schätzt ein neuronales Netz einmal je Bild (dieselbe Tiefenkarte wie bei der Objektivunschärfe).\n\nReichweite: wie weit nach vorn der Dunst reicht. Helligkeit und Wärme färben ihn.";
+        let help = "Legt Dunst über das Bild, der mit der Entfernung dichter wird.\n\nReichweite: wie weit nach vorn er reicht. Helligkeit und Wärme färben ihn.";
         crate::widgets::tool_section_help(ui, sk_core::tools::Tool::Atmosphere, help, Some(&mut || reset = true), |ui| {
             let d = Atmosphere::default();
             slider_row(ui, "Stärke", &mut at.amount, 0.0..=100.0, 0.0, 0);
@@ -335,6 +335,28 @@ impl App {
 }
 
 /// Progress of the depth map below a tool that uses it (`active`: the tool is switched on).
+/// Marks of the near and the far part of "Neu ausleuchten": warm near, cool and hazy far, as in
+/// a landscape painting.
+const NEAR_COLOR: Color32 = Color32::from_rgb(232, 170, 92);
+const FAR_COLOR: Color32 = Color32::from_rgb(118, 150, 220);
+
+/// One part of "Neu ausleuchten": a card with a colored edge, its name and its two sliders.
+fn relight_card(ui: &mut Ui, symbol: &str, title: &str, color: Color32, ev: &mut f32, warmth: &mut f32) {
+    let active = *ev != 0.0 || *warmth != 0.0;
+    let fill = if active { color.gamma_multiply(0.10) } else { Color32::from_white_alpha(6) };
+    let frame = egui::Frame::new().fill(fill).corner_radius(6).inner_margin(egui::Margin { left: 12, right: 4, top: 6, bottom: 4 });
+    let resp = frame.show(ui, |ui| {
+        ui.label(RichText::new(format!("{symbol}  {title}")).size(12.5).strong().color(if active { color } else { color.gamma_multiply(0.8) }));
+        ui.add_space(2.0);
+        slider_row(ui, "Belichtung", ev, -2.0..=2.0, 0.0, 2);
+        let opts = SliderOpts { rail: Some(RAIL_KELVIN), ..Default::default() };
+        slider_row_with(ui, "Wärme", warmth, -100.0..=100.0, 0.0, 0, opts);
+    });
+    let r = resp.response.rect;
+    let edge = egui::Rect::from_min_max(r.left_top(), egui::pos2(r.left() + 3.0, r.bottom()));
+    ui.painter().rect_filled(edge, egui::CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, color);
+}
+
 fn depth_status(ui: &mut Ui, state: &DepthState, active: bool) {
     let faint = |t: &str| RichText::new(t).small().color(crate::theme::TEXT_FAINT);
     match state {

@@ -359,24 +359,6 @@ impl App {
                 }
             }
         });
-        if check(ui, self.overlay.shown, "Overlay anzeigen", &shortcut("overlay")) {
-            self.toggle_overlay();
-        }
-        if item(ui, icon::IMAGE, "Overlay wählen …", "", true) {
-            self.choose_overlay();
-        }
-        if let Some(e) = &self.overlay.error {
-            ui.label(RichText::new(e).small().color(theme::DANGER));
-        }
-        if self.overlay.file.is_some() {
-            ui.horizontal(|ui| {
-                ui.add_space(24.0);
-                ui.label("Deckkraft");
-                if ui.add(egui::Slider::new(&mut self.overlay.opacity, 0.05..=1.0).fixed_decimals(2)).drag_stopped() {
-                    self.save_settings();
-                }
-            });
-        }
         ui.separator();
         if check(ui, self.viewer_window.open, "Bild in eigenem Fenster (Zweitmonitor)", &shortcut("viewer-window")) {
             self.toggle_viewer_window();
@@ -496,21 +478,14 @@ impl App {
                     None => {}
                 }
                 group_gap(ui);
-                let guides_on = self.guides != crate::guides::Guides::Off || self.overlay.shown;
-                let resp = tool(ui, icon::GRID_NINE, &crate::commands::hint("Hilfslinien und Overlay", "guides-next"), guides_on, true);
+                let guides_on = self.guides != crate::guides::Guides::Off;
+                let resp = tool(ui, icon::GRID_NINE, &crate::commands::hint("Hilfslinien", "guides-next"), guides_on, true);
                 Popup::menu(&resp).show(|ui| {
                     for g in crate::guides::Guides::ALL {
                         if check(ui, self.guides == g, g.label(), "") {
                             self.guides = g;
                             self.save_settings();
                         }
-                    }
-                    ui.separator();
-                    if check(ui, self.overlay.shown, "Overlay anzeigen", &shortcut("overlay")) {
-                        self.toggle_overlay();
-                    }
-                    if item(ui, icon::IMAGE, "Overlay wählen …", "", true) {
-                        self.choose_overlay();
                     }
                 });
                 if tool(ui, icon::FILE_MAGNIFYING_GLASS, &crate::commands::hint("Ausgabevorschau: so, wie das Ausgabe-Rezept das Bild schreibt", "proof"), self.proof_view, has).clicked() {

@@ -102,18 +102,39 @@ impl App {
             changed = true;
         }
         t.store(adj);
+        if changed {
+            self.request_render();
+        }
+
+        // Near the top: one of the most effective tools for portraits against the light.
+        self.relight_section(ui);
+        let Some(cur) = self.current.as_mut() else { return };
+        let adj = &mut cur.adjustments;
+        let mut changed = false;
 
         let mut reset_levels = false;
+        let levels_channel = &mut self.levels_channel;
+        let (meta, preview, levels_hist) = (cur.meta.clone(), cur.preview.clone(), &mut self.levels_hist);
         widgets::tool_section(ui, sk_core::tools::Tool::Levels, Some(&mut || reset_levels = true), |ui| {
+            let levels_hist = levels_hist.get(&meta, &preview, adj, &ui.ctx().clone());
+            ui.horizontal(|ui| {
+                for ch in CurveChannel::ALL.into_iter().filter(|c| *c != CurveChannel::Luma) {
+                    ui.selectable_value(levels_channel, ch, ch.label());
+                }
+            });
+            ui.add_space(4.0);
             let lv = &mut adj.levels;
-            changed |= slider_row(ui, "Eingang Schwarz", &mut lv.in_black, 0.0..=0.5, 0.0, 3);
-            changed |= slider_row(ui, "Eingang Weiß", &mut lv.in_white, 0.5..=1.0, 1.0, 3);
-            changed |= slider_row(ui, "Mitteltöne", &mut lv.midtone, 0.2..=5.0, 1.0, 2);
-            changed |= slider_row(ui, "Ausgang Schwarz", &mut lv.out_black, 0.0..=0.5, 0.0, 3);
-            changed |= slider_row(ui, "Ausgang Weiß", &mut lv.out_white, 0.5..=1.0, 1.0, 3);
-            if lv.in_white <= lv.in_black + 0.01 {
-                lv.in_white = lv.in_black + 0.01;
-            }
+            let h = levels_hist.as_ref();
+            // A channel gets what the levels of all channels made of it.
+            let rgb = lv.rgb;
+            let through_rgb = |bins: &[u32]| widgets::remap_bins(bins, |v| rgb.apply(v));
+            let (set, color, bins) = match levels_channel {
+                CurveChannel::Red => (&mut lv.red, Color32::from_rgb(240, 80, 80), h.map(|h| through_rgb(&h.r))),
+                CurveChannel::Green => (&mut lv.green, Color32::from_rgb(80, 210, 80), h.map(|h| through_rgb(&h.g))),
+                CurveChannel::Blue => (&mut lv.blue, Color32::from_rgb(90, 130, 250), h.map(|h| through_rgb(&h.b))),
+                CurveChannel::Rgb | CurveChannel::Luma => (&mut lv.rgb, Color32::from_gray(220), h.map(|h| h.luma.iter().map(|&n| n as f32).collect())),
+            };
+            changed |= widgets::levels_editor(ui, set, bins.as_deref(), color);
         });
         if reset_levels {
             adj.levels = Levels::default();
@@ -154,7 +175,6 @@ impl App {
         if changed {
             self.request_render();
         }
-        self.relight_section(ui);
     }
 
     fn color_tab(&mut self, ui: &mut Ui) {
@@ -456,7 +476,7 @@ impl App {
             r.long_edge = resize.then_some(edge);
             let mut upscale = r.upscale.is_some();
             ui.checkbox(&mut upscale, widgets::ai_text(ui, "KI-Vergrößern")).on_hover_text(
-                "Vergrößert das fertige Bild mit einem neuronalen Netz, bevor es gespeichert wird (wie „Super Resolution“). Eine lange Kante verkleinert es danach wieder.",
+                "Vergrößert das fertige Bild vor dem Speichern mit KI; eine lange Kante verkleinert es danach wieder.",
             );
             let mut factor = r.upscale.unwrap_or_default().factor;
             ui.add_enabled_ui(upscale, |ui| {

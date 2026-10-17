@@ -164,7 +164,7 @@ impl App {
         let mut d = cur.adjustments.detail.clone();
         let defaults = Detail::default();
         let (mut reset, mut changed) = (false, false);
-        let help = "KI-Entrauschen: ein neuronales Netz säubert die RAW-Daten, einmal je Bild im Hintergrund; das Original bleibt unverändert.\n\nLuminanz und Farbe: die klassische Rauschreduzierung, auch zusätzlich.";
+        let help = "KI-Entrauschen säubert die RAW-Daten im Hintergrund; das Original bleibt unverändert.\n\nLuminanz und Farbe: klassische Rauschreduzierung, auch zusätzlich.";
         crate::widgets::tool_section_help(ui, sk_core::tools::Tool::NoiseReduction, help, Some(&mut || reset = true), |ui| {
             changed |= self.denoise_controls(ui, &mut d.ai_denoise, &path, hdr);
             changed |= slider_row(ui, "Luminanz", &mut d.nr_luma, 0.0..=100.0, defaults.nr_luma, 0);

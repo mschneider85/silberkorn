@@ -1484,7 +1484,11 @@ mod tests {
                     base_curve: BaseCurve::Linear,
                     contrast: -30.0,
                     brightness: 20.0,
-                    levels: Levels { in_black: 0.05, in_white: 0.9, midtone: 1.2, out_black: 0.02, out_white: 0.97 },
+                    levels: Levels {
+                        rgb: LevelSet { in_black: 0.05, in_white: 0.9, midtone: 1.2, out_black: 0.02, out_white: 0.97 },
+                        red: LevelSet { in_white: 0.95, midtone: 1.1, ..Default::default() },
+                        ..Default::default()
+                    },
                     ..plain.clone()
                 },
                 Default::default(),
@@ -1534,7 +1538,7 @@ mod tests {
                 "Kurven und Luma-Kurve",
                 {
                     let mut a = Adjustments { brightness: 15.0, ..plain.clone() };
-                    a.levels.in_black = 0.03;
+                    a.levels.rgb.in_black = 0.03;
                     a.curves.rgb = Curve { points: vec![[0.0, 0.0], [0.3, 0.25], [1.0, 1.0]] };
                     a.curves.red = Curve { points: vec![[0.0, 0.02], [0.6, 0.65], [1.0, 1.0]] };
                     a.curves.luma = Curve { points: vec![[0.0, 0.05], [0.25, 0.18], [0.75, 0.88], [1.0, 1.0]] };

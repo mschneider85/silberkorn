@@ -424,7 +424,7 @@ impl App {
         let mut changed = false;
 
         let (mut r_glow, mut r_vig, mut r_grain) = (false, false, false);
-        let glow_help = "Ein weichgezeichnetes Abbild der hellen Bildteile wird über das Bild gelegt: Lichter leuchten und strahlen in ihre Umgebung, wie beim Orton-Effekt in der Landschaftsfotografie.\n\nGröße: wie weit das Leuchten reicht.";
+        let glow_help = "Lässt Lichter leuchten und in ihre Umgebung strahlen, wie der Orton-Effekt.\n\nGröße: wie weit das Leuchten reicht.";
         widgets::tool_section_help(ui, sk_core::tools::Tool::Glow, glow_help, Some(&mut || r_glow = true), |ui| {
             changed |= slider_row(ui, "Stärke", &mut d.glow_amount, 0.0..=100.0, 0.0, 0);
             ui.add_enabled_ui(d.glow_amount > 0.0, |ui| {
@@ -667,9 +667,8 @@ impl App {
         ui.horizontal(|ui| {
             let busy = self.auto_progress.is_some();
             let text = if busy { "Passe an …" } else { "Automatisch anpassen" };
-            let hover = "Weißabgleich, Belichtung, Lichter und Schatten, Kontrast und Dynamik zusammen einstellen (Strg+L). \
-                         Gesichter und das Hauptmotiv zählen mehr, wenn die KI-Modelle geladen sind. \
-                         Sind mehrere Bilder ausgewählt, werden alle angepasst.";
+            let hover = "Weißabgleich, Belichtung, Kontrast und Dynamik in einem Schritt einstellen (Strg+L), \
+                         bei mehreren ausgewählten Bildern für alle.";
             if ui.add_enabled(!busy, egui::Button::new(format!("{}  {text}", icon::MAGIC_WAND))).on_hover_text(hover).clicked() {
                 self.auto_adjust_selection();
             }

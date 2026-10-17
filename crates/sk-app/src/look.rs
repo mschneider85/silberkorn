@@ -514,8 +514,7 @@ impl App {
                 let rect = Rect::from_min_size(pos, g.size()).union(bar);
                 painter.galley(pos, g, color);
                 ui.interact(rect, row_resp.id.with("similarity"), Sense::hover()).on_hover_text(
-                    "Wie sehr die Referenz dem aktuellen Bild gleicht (Bildaufbau, Helligkeitsverteilung, Farben, Himmel). \
-                     Ähnliche Referenzen bestimmen den Look stärker, und ein ähnliches Bild wird vollständiger angeglichen.",
+                    "Wie sehr die Referenz dem aktuellen Bild gleicht. Ähnliche Referenzen bestimmen den Look stärker.",
                 );
             }
             _ => {
