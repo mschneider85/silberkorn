@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Silberkorn – RAW-Entwicklung und Bildverwaltung</title>
-<meta name="description" content="Silberkorn entwickelt RAW-Fotos und verwaltet deine Bilder – mit Ebenen, KI-Masken, Entrauschen und mehr. Kostenlos für Windows.">
+<meta name="description" content="RAW-Fotos entwickeln, verwalten und exportieren. Für Windows.">
 <meta property="og:title" content="Silberkorn – RAW-Entwicklung und Bildverwaltung">
-<meta property="og:description" content="RAW-Fotos entwickeln und verwalten. Kostenlos für Windows.">
+<meta property="og:description" content="RAW-Fotos entwickeln, verwalten und exportieren. Für Windows.">
 <meta property="og:image" content="https://mschneider85.github.io/silberkorn/screenshot.jpg">
 <meta name="theme-color" content="#0d0d0f">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -120,27 +120,6 @@
   h2 { font-size: clamp(32px, 4.4vw, 50px); line-height: 1.08; letter-spacing: -0.03em; font-weight: 600; margin: 10px 0 18px; }
   .sub { color: var(--dim); max-width: 620px; margin: 0; }
 
-  /* Steps */
-  .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin-top: 48px; counter-reset: step; }
-  .step {
-    position: relative; padding: 30px 28px 28px; border-radius: var(--radius);
-    background: linear-gradient(180deg, var(--card), var(--bg-2));
-    border: 1px solid var(--line);
-  }
-  .step::before {
-    counter-increment: step; content: counter(step);
-    display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%;
-    background: rgba(78, 146, 230, 0.14); color: var(--accent-hi); font-weight: 600; font-size: 16px; margin-bottom: 18px;
-  }
-  .step h3 { margin: 0 0 8px; font-size: 20px; letter-spacing: -0.01em; }
-  .step p { margin: 0; color: var(--dim); font-size: 15.5px; }
-  .note {
-    margin-top: 22px; padding: 16px 20px; border-radius: 12px; font-size: 15px; color: var(--dim);
-    background: rgba(232, 170, 92, 0.07); border: 1px solid rgba(232, 170, 92, 0.2);
-    display: flex; gap: 12px; align-items: flex-start;
-  }
-  .note i { color: var(--warm); font-size: 20px; margin-top: 1px; }
-  .note b { color: var(--text); font-weight: 500; }
 
   /* Screenshot */
   .shot { padding-top: 20px; }
@@ -178,9 +157,6 @@
   }
   .final .cta { justify-content: center; margin-top: 30px; }
   .final .sub { margin: 0 auto; }
-  .pills { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 26px; }
-  .pill { font-size: 14px; color: var(--dim); padding: 7px 14px; border-radius: 999px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.02); }
-  .pill i { color: var(--accent-hi); margin-right: 6px; vertical-align: -2px; }
 
   footer { border-top: 1px solid var(--line); padding: 34px 0 44px; color: var(--faint); font-size: 13.5px; }
   footer .wrap { display: flex; flex-wrap: wrap; gap: 10px 28px; justify-content: space-between; }
@@ -190,7 +166,6 @@
     .features { grid-template-columns: repeat(2, 1fr); }
   }
   @media (max-width: 860px) {
-    .steps { grid-template-columns: 1fr; }
     .nav-links { display: none; }
     nav { padding: 18px 20px; }
     section { padding: 80px 0; }
@@ -214,7 +189,6 @@
   <nav>
     <a class="brand" href="#"><i class="ph ph-aperture"></i>Silberkorn</a>
     <div class="nav-links">
-      <a href="#installieren">Installieren</a>
       <a href="#funktionen">Funktionen</a>
       <a href="https://github.com/mschneider85/silberkorn">GitHub</a>
     </div>
@@ -223,7 +197,7 @@
     <div class="wrap">
       <div class="eyebrow">RAW-Entwicklung und Bildverwaltung</div>
       <h1 class="wordmark">silberkorn<span class="dot">.</span></h1>
-      <p class="lead">Fotos entwickeln, ordnen und ausgeben – mit Ebenen, KI-Masken, Entrauschen und allem, was ein Bild braucht. Kostenlos.</p>
+      <p class="lead">RAW-Fotos entwickeln, verwalten und exportieren.</p>
       <div class="cta">
         <a class="btn" href="https://github.com/mschneider85/silberkorn/releases/latest/download/silberkorn-setup-x64.exe" data-download>
           <i class="ph ph-windows-logo"></i>
@@ -236,54 +210,23 @@
 </header>
 
 <main>
-  <section id="installieren">
-    <div class="wrap">
-      <div class="kicker">In einer Minute startklar</div>
-      <h2>Herunterladen, doppelklicken, loslegen.</h2>
-      <p class="sub">Keine Fragen, keine Administratorrechte, kein Konto. Updates kommen von selbst.</p>
-      <div class="steps">
-        <div class="step">
-          <h3>Herunterladen</h3>
-          <p>Ein Klick auf den Knopf oben lädt den Installer, etwa 18 MB.</p>
-        </div>
-        <div class="step">
-          <h3>Doppelklick</h3>
-          <p>Der Installer richtet Silberkorn ein, mit Startmenü- und Desktop-Symbol, und startet es auf Wunsch gleich.</p>
-        </div>
-        <div class="step">
-          <h3>Ordner öffnen</h3>
-          <p>Ordner mit RAW-Dateien wählen und entwickeln. Die KI-Modelle lädt Silberkorn beim ersten Start im Hintergrund.</p>
-        </div>
-      </div>
-      <div class="note">
-        <i class="ph ph-shield-warning"></i>
-        <span><b>Windows warnt beim ersten Start?</b> Silberkorn ist noch nicht signiert. Auf „Weitere Informationen“ und dann „Trotzdem ausführen“ klicken – das ist nur einmal nötig, Updates laufen danach ohne Rückfrage.</span>
-      </div>
-    </div>
-  </section>
-
   <section class="shot">
     <div class="wrap">
-      <div class="kicker">Ruhig und aufgeräumt</div>
-      <h2>Das Bild steht im Mittelpunkt.</h2>
-      <p class="sub">Eine dunkle, ruhige Oberfläche, die nicht vom Bild ablenkt. Jede Funktion ist mit <kbd>Strg</kbd>+<kbd>K</kbd> zu finden.</p>
       <div class="window"><img src="screenshot.jpg" width="1500" height="918" alt="Silberkorn mit einem geöffneten Schwarzweißfoto und den Belichtungswerkzeugen" loading="lazy"></div>
     </div>
   </section>
 
   <section id="funktionen">
     <div class="wrap">
-      <div class="kicker">Funktionen</div>
-      <h2>Alles für die Entwicklung.</h2>
-      <p class="sub">Von der ersten Sichtung bis zum fertigen Export – ohne Abo und ohne Cloud.</p>
+      <h2>Funktionen</h2>
       <div class="features">
-        <div class="feature"><i class="ph ph-aperture"></i><h3>RAW-Entwicklung</h3><p>Belichtung, Farbe, Kurven, Tonwerte und Details für die Dateien aller gängigen Kameras – berechnet auf der Grafikkarte.</p></div>
-        <div class="feature"><i class="ph ph-stack"></i><h3>Ebenen und Masken</h3><p>Pinsel, Verlauf und Zauberpinsel, eingegrenzt nach Helligkeit oder Farbe. Jede Ebene mit eigenen Reglern.</p></div>
-        <div class="feature ai"><i class="ph ph-sparkle"></i><h3>KI-Auswahl</h3><p>Motiv, Himmel oder ein Objekt per Klick auswählen. Die KI rechnet lokal auf deinem Rechner.</p></div>
-        <div class="feature ai"><i class="ph ph-magic-wand"></i><h3>Entrauschen und Entfernen</h3><p>Rauschen bei hohen ISO-Werten wegrechnen, Störendes übermalen und verschwinden lassen, Bilder vergrößern.</p></div>
-        <div class="feature ai"><i class="ph ph-sun-horizon"></i><h3>Neu ausleuchten</h3><p>Vorder- und Hintergrund getrennt aufhellen und färben – ideal für Porträts im Gegenlicht.</p></div>
+        <div class="feature"><i class="ph ph-aperture"></i><h3>RAW-Entwicklung</h3><p>Belichtung, Farbe, Kurven, Tonwerte und Details für die Dateien aller gängigen Kameras.</p></div>
+        <div class="feature"><i class="ph ph-stack"></i><h3>Ebenen und Masken</h3><p>Pinsel, Verlauf und Zauberpinsel, eingegrenzt nach Helligkeit oder Farbe.</p></div>
+        <div class="feature ai"><i class="ph ph-sparkle"></i><h3>KI-Auswahl</h3><p>Motiv, Himmel oder ein Objekt per Klick auswählen.</p></div>
+        <div class="feature ai"><i class="ph ph-magic-wand"></i><h3>Entrauschen und Entfernen</h3><p>Rauschen entfernen, Störendes wegretuschieren, Bilder vergrößern.</p></div>
+        <div class="feature ai"><i class="ph ph-sun-horizon"></i><h3>Neu ausleuchten</h3><p>Vorder- und Hintergrund getrennt aufhellen und färben.</p></div>
         <div class="feature"><i class="ph ph-images-square"></i><h3>HDR, Panorama, Fokus</h3><p>Belichtungsreihen, Panoramen und Fokusreihen zu einem Bild zusammenfügen.</p></div>
-        <div class="feature"><i class="ph ph-users-three"></i><h3>Sichtung</h3><p>Geschlossene Augen und unscharfe Bilder erkennen, Gesichter Personen zuordnen, die besten Aufnahmen schnell finden.</p></div>
+        <div class="feature"><i class="ph ph-users-three"></i><h3>Sichtung</h3><p>Geschlossene Augen und unscharfe Bilder erkennen, Gesichter Personen zuordnen.</p></div>
         <div class="feature"><i class="ph ph-books"></i><h3>Bibliothek</h3><p>Katalog, Sessions, Stapel und Varianten. Bewertungen und Stichwörter auch als XMP für Lightroom und Capture One.</p></div>
         <div class="feature"><i class="ph ph-export"></i><h3>Ausgabe</h3><p>Rezepte für JPEG, TIFF, WebP und AVIF, mit Wasserzeichen, Softproof und Druckvorschau.</p></div>
       </div>
@@ -292,19 +235,13 @@
 
   <section class="final">
     <div class="wrap">
-      <h2>Bereit für das erste Bild?</h2>
-      <p class="sub">Silberkorn ist kostenlos und aktualisiert sich selbst.</p>
+      <h2>Silberkorn herunterladen</h2>
+      <p class="sub">Windows 10 und 11 · 64 Bit</p>
       <div class="cta">
         <a class="btn" href="https://github.com/mschneider85/silberkorn/releases/latest/download/silberkorn-setup-x64.exe" data-download>
           <i class="ph ph-download-simple"></i>
-          <span>Silberkorn herunterladen <small data-version></small></span>
+          <span>Herunterladen <small data-version></small></span>
         </a>
-      </div>
-      <div class="pills">
-        <span class="pill"><i class="ph ph-user"></i>Ohne Administratorrechte</span>
-        <span class="pill"><i class="ph ph-arrows-clockwise"></i>Automatische Updates</span>
-        <span class="pill"><i class="ph ph-cloud-slash"></i>Keine Cloud, kein Konto</span>
-        <span class="pill"><i class="ph ph-trash"></i>Sauber deinstallierbar</span>
       </div>
     </div>
   </section>

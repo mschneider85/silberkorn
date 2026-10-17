@@ -4,15 +4,7 @@ RAW-Entwickler und Bildverwaltung in Rust.
 
 ## Herunterladen
 
-**[⬇ Silberkorn für Windows herunterladen](https://github.com/mschneider85/silberkorn/releases/latest/download/silberkorn-setup-x64.exe)** (Installer, Windows 10 und 11, 64 Bit)
-
-Doppelklick auf die Datei, fertig: Der Installer fragt nichts, braucht keine Administratorrechte,
-legt Startmenü- und Desktop-Symbol an und startet Silberkorn auf Wunsch gleich. Die KI-Modelle lädt
-Silberkorn beim ersten Start im Hintergrund, Updates installiert es selbst.
-
-Warnt Windows beim ersten Öffnen („Der Computer wurde durch Windows geschützt“), auf „Weitere
-Informationen“ und dann „Trotzdem ausführen“ klicken. Das ist nur einmal nötig, weil der Installer
-noch nicht signiert ist.
+**[Silberkorn für Windows herunterladen](https://github.com/mschneider85/silberkorn/releases/latest/download/silberkorn-setup-x64.exe)** (Windows 10 und 11, 64 Bit)
 
 Webseite: <https://mschneider85.github.io/silberkorn/> · Alle Versionen: [Releases](https://github.com/mschneider85/silberkorn/releases)
 
