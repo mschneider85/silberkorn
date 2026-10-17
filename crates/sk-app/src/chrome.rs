@@ -374,6 +374,7 @@ impl App {
         }
         self.command_item(ui, "shortcuts");
         ui.separator();
+        self.command_item(ui, "update");
         self.command_item(ui, "about");
     }
 
