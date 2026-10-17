@@ -106,7 +106,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("rotate-left", icon::ARROW_COUNTER_CLOCKWISE, "Links drehen", "Entwickeln", [CTRL => Key::OpenBracket], "rotate", image_tool, |a, _| a.rotate(3)),
     cmd!("rotate-right", icon::ARROW_CLOCKWISE, "Rechts drehen", "Entwickeln", [CTRL => Key::CloseBracket], "rotate", image_tool, |a, _| a.rotate(1)),
     cmd!("crop", icon::CROP, "Zuschneiden", "Entwickeln", [NONE => Key::C], "crop", image_tool, |a, _| a.toggle_crop()),
-    cmd!("finish-crop", icon::CHECK, "Zuschnitt übernehmen", "Entwickeln", [NONE => Key::Enter], "crop fertig", |a| a.crop_tool.is_some(), |a, _| a.finish_crop_tool()),
+    cmd!("finish-crop", icon::CHECK, "Zuschnitt bzw. Trapezkorrektur übernehmen", "Entwickeln", [NONE => Key::Enter], "crop fertig trapez anwenden", |a| a.crop_tool.is_some() || a.keystone_guides_active(), |a, _| a.finish_viewer_tool()),
     cmd!("straighten", icon::RULER, "Geraderichten (Linie ziehen)", "Entwickeln", [], "straighten horizont", image_tool, |a, _| {
         a.tab = Tab::Lens;
         a.toggle_straighten();

@@ -463,6 +463,8 @@ pub struct App {
     /// Active crop tool state (the viewer shows the uncropped frame).
     pub crop_tool: Option<crate::crop::CropTool>,
     pub straighten_tool: Option<crate::crop::StraightenTool>,
+    /// Until when (egui time) the viewer shows a grid: while the keystone sliders move.
+    pub keystone_grid_until: f64,
     pub local_tool: Option<crate::layers::LocalTool>,
     pub local_drag: crate::layers::LocalDrag,
     pub active_layer: Option<usize>,
@@ -838,6 +840,7 @@ impl App {
             picking_focus: false,
             crop_tool: None,
             straighten_tool: None,
+            keystone_grid_until: 0.0,
             local_tool: None,
             local_drag: Default::default(),
             active_layer: None,
@@ -2508,6 +2511,9 @@ impl App {
             }
             if std::env::var_os("SILBERKORN_UPRIGHT").is_some() {
                 self.auto_upright(sk_core::upright::UprightMode::Vertical);
+            }
+            if std::env::var_os("SILBERKORN_KEYSTONE").is_some() {
+                self.start_keystone_guides(crate::crop::GuideMode::Both);
             }
             if std::env::var_os("SILBERKORN_GUIDES").is_some() {
                 self.guides = crate::guides::Guides::Thirds;

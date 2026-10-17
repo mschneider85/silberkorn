@@ -165,8 +165,12 @@ impl App {
         let mut apply_aspect = false;
         let mut toggle_straighten = false;
         let mut upright = None;
+        // Keystone lines: start (with their mode), apply or cancel.
+        let mut guides: Option<Option<crate::crop::GuideMode>> = None;
+        let (mut apply_guides, mut keystone_moved) = (false, false);
+        let guide_mode = self.straighten_tool.as_ref().and_then(|t| t.guides.as_ref()).map(|g| g.mode);
         let crop_active = self.crop_tool.is_some();
-        let straighten_active = self.straighten_tool.is_some();
+        let straighten_active = self.straightening();
         let downloading = self.lens_db_downloading;
         let db_loaded = self.lens_db.is_some();
         let match_name = self.lens_profile_name();
@@ -320,13 +324,41 @@ impl App {
                     }
                 }
             });
+            ui.horizontal(|ui| {
+                use crate::crop::GuideMode;
+                ui.label("Linien");
+                for (mode, label, tip) in [
+                    (GuideMode::Vertical, "Vertikal", "Zwei Linien an Kanten legen, die senkrecht sein sollen"),
+                    (GuideMode::Horizontal, "Horizontal", "Zwei Linien an Kanten legen, die waagerecht sein sollen"),
+                    (GuideMode::Both, "Beides", "Je zwei Linien für senkrechte und waagerechte Kanten"),
+                ] {
+                    if ui.selectable_label(guide_mode == Some(mode), label).on_hover_text(tip).clicked() {
+                        guides = Some((guide_mode != Some(mode)).then_some(mode));
+                    }
+                }
+            });
+            if guide_mode.is_some() {
+                ui.horizontal(|ui| {
+                    if ui.button(format!("{}  Anwenden", icon::CHECK)).on_hover_text("Enter").clicked() {
+                        apply_guides = true;
+                    }
+                    if ui.button("Abbrechen").on_hover_text("Esc").clicked() {
+                        guides = Some(None);
+                    }
+                });
+            }
             let g = &mut adj.geometry;
-            changed |= slider_row(ui, "Vertikal", &mut g.keystone_v, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Horizontal", &mut g.keystone_h, -100.0..=100.0, 0.0, 0);
+            let mut moved = slider_row(ui, "Vertikal", &mut g.keystone_v, -100.0..=100.0, 0.0, 0);
+            moved |= slider_row(ui, "Horizontal", &mut g.keystone_h, -100.0..=100.0, 0.0, 0);
+            let pct = widgets::SliderOpts { suffix: " %", ..Default::default() };
+            moved |= widgets::slider_row_with(ui, "Stärke", &mut g.keystone_amount, 0.0..=100.0, 100.0, 0, pct);
+            changed |= moved;
+            keystone_moved = moved;
         });
         if reset_key {
             adj.geometry.keystone_v = 0.0;
             adj.geometry.keystone_h = 0.0;
+            adj.geometry.keystone_amount = 100.0;
             changed = true;
         }
 
@@ -347,6 +379,18 @@ impl App {
         }
         if let Some(mode) = upright {
             self.auto_upright(mode);
+        }
+        match guides {
+            Some(Some(mode)) => self.start_keystone_guides(mode),
+            Some(None) => self.straighten_tool = None,
+            None => {}
+        }
+        if apply_guides {
+            self.apply_keystone_guides();
+        }
+        if keystone_moved {
+            // A grid over the image while the keystone sliders move (see `viewer_content`).
+            self.keystone_grid_until = ui.input(|i| i.time) + 0.6;
         }
         if toggle_straighten {
             self.toggle_straighten();

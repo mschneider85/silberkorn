@@ -335,7 +335,7 @@ Silberkorn kopiert und überträgt Werkzeuge statt immer den ganzen Satz:
 
 - **Strg+Umschalt+C** kopiert die bearbeiteten Werkzeuge des Bildes, **Strg+Umschalt+V** wendet
   genau diese auf die Auswahl an; alles andere behalten die Bilder. Zuschnitt, Drehen & Spiegeln,
-  Perspektive, Ebenen und Retusche gehören zum Bildinhalt und sind nur dabei, wenn man sie wählt.
+  Trapezkorrektur, Ebenen und Retusche gehören zum Bildinhalt und sind nur dabei, wenn man sie wählt.
 - **Anpassungen auswählen und kopieren …** (Menü „Bearbeiten“ oder Rechtsklick auf das
   Kopieren-Symbol der Werkzeugleiste) zeigt alle Werkzeuge zum Ankreuzen; bearbeitete sind heller.
   „Kopieren“ legt die Wahl in die Zwischenablage, „Auf N Bilder anwenden“ überträgt sie gleich.
@@ -494,9 +494,19 @@ einer automatischen Anpassung des Bildes: Er blendet zwischen den Einstellungen 
 
 Kommandozeile (Vorher | Nachher nebeneinander): `cargo run --release -p sk-ai --example auto -- <Ordner> <raw>...`
 
-### Automatisch geraderichten
+### Trapezkorrektur und automatisches Geraderichten
 
-Silberkorn sucht gerade Kanten im Bild (Linienerkennung nach dem
+Der Abschnitt **Trapezkorrektur** (Tab „Objektiv“) richtet stürzende Linien auf: mit den Reglern
+**Vertikal** und **Horizontal**, mit gezogenen Linien oder automatisch. **Stärke** (0–100 %) schwächt
+die Korrektur ab, etwa damit ein Gebäude oben noch leicht zuläuft. Solange man an den Reglern zieht,
+liegt ein Raster über dem Bild.
+
+**Linien:** „Vertikal“, „Horizontal“ oder „Beides“ legt zwei bzw. vier Linien ins Bild. Ihre Enden
+(oder die ganze Linie) auf Kanten ziehen, die senkrecht bzw. waagerecht sein sollen; **Anwenden** (Enter)
+berechnet Drehung und Trapezkorrektur so, dass die Linien genau ausgerichtet sind, Esc bricht ab. Eine
+gezogene Linie je Richtung dreht nur, zwei korrigieren auch die Perspektive.
+
+**Automatisch:** Silberkorn sucht gerade Kanten im Bild (Linienerkennung nach dem
 LSD-Prinzip) und bestimmt Drehung und Perspektive so, dass sie waagerecht bzw. senkrecht stehen.
 Bewertet wird jede Lösung über die echte Geometrie-Kette, einschließlich Objektivkorrektur.
 
@@ -506,7 +516,7 @@ Bewertet wird jede Lösung über die echte Geometrie-Kette, einschließlich Obje
 
 Waagerechte zählen bis 8° Abweichung, Senkrechte bis 15°; deutlich schräge Kanten wie Dächer
 oder Wege bleiben unberücksichtigt. Die Perspektive wird nur korrigiert, wenn mehrere passende Kanten über
-das Bild verteilt sind. Die Buttons stehen im Tab „Objektiv“ unter „Perspektive“; das Ergebnis ist ein
+das Bild verteilt sind. Das Ergebnis ist ein
 Rückgängig-Schritt und lässt sich mit den Reglern nachjustieren.
 
 Wie beim Geraderichten zoomt die Perspektivkorrektur automatisch gerade so weit hinein, dass der ganze

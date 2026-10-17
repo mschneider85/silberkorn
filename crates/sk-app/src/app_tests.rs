@@ -1539,6 +1539,32 @@ fn auto_upright_sets_geometry_as_one_undo_step() {
     }
 }
 
+/// Keystone lines: two converging lines laid on "edges" become vertical in one undo step; the
+/// amount the user set stays and weakens the correction.
+#[test]
+fn keystone_lines_correct_converging_verticals() {
+    let Some(mut f) = Fixture::new("keystone-lines") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    f.app.edit(|a| a.geometry.keystone_amount = 80.0);
+    f.app.commit_and_save();
+    let undo = f.app.undo.len();
+    f.app.start_keystone_guides(crate::crop::GuideMode::Vertical);
+    assert!(f.app.keystone_guides_active() && !f.app.straightening());
+    // Lines leaning towards each other at the top, as in a building shot from below.
+    let lines = &mut f.app.straighten_tool.as_mut().unwrap().guides.as_mut().unwrap().lines;
+    assert_eq!(lines.len(), 2);
+    let dx = (lines[1].0[0][0] - lines[0].0[0][0]) * 0.1;
+    lines[0].0[0][0] += dx;
+    lines[1].0[0][0] -= dx;
+    f.app.finish_viewer_tool();
+    assert!(f.app.straighten_tool.is_none());
+    let g = f.app.current.as_ref().unwrap().adjustments.geometry.clone();
+    assert!(g.keystone_v.abs() > 5.0 && g.keystone_h == 0.0, "{g:?}");
+    assert_eq!(g.keystone_amount, 80.0);
+    assert!(f.app.status.starts_with("Trapezkorrektur"), "{}", f.app.status);
+    assert_eq!(f.app.undo.len(), undo + 1);
+}
+
 #[test]
 fn batch_rename_keeps_settings_variants_and_selection() {
     let Some(mut f) = Fixture::new("rename") else { return };

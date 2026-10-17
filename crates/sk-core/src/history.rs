@@ -124,7 +124,7 @@ pub fn changes(before: &Adjustments, after: &Adjustments) -> Vec<(&'static str, 
     push(g.crop != h.crop || g.aspect != h.aspect || g.aspect_portrait != h.aspect_portrait, "Zuschnitt", None);
     push(g.straighten != h.straighten, "Geraderichten", Some(h.straighten));
     push(g.flip_h != h.flip_h || g.flip_v != h.flip_v, "Spiegeln", None);
-    push(g.keystone_v != h.keystone_v || g.keystone_h != h.keystone_h, "Perspektive", None);
+    push(g.keystone_v != h.keystone_v || g.keystone_h != h.keystone_h || g.keystone_amount != h.keystone_amount, "Trapezkorrektur", None);
     push(a.lens != b.lens, "Objektivkorrektur", None);
     let (d, e) = (&a.detail, &b.detail);
     for (name, x, y) in [
@@ -174,7 +174,7 @@ mod tests {
         let mut c = b.clone();
         c.geometry.straighten = 2.0;
         c.geometry.keystone_v = 10.0;
-        assert_eq!(describe(&b, &c), "Geraderichten, Perspektive");
+        assert_eq!(describe(&b, &c), "Geraderichten, Trapezkorrektur");
         let d = Adjustments { contrast: 10.0, highlights: 20.0, shadows: 5.0, ..c.clone() };
         assert_eq!(describe(&c, &d), "Kontrast, Lichter +1");
         let mut e = d.clone();

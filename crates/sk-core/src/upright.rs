@@ -222,6 +222,8 @@ struct Problem<'a> {
     /// Weight of horizontal edges (verticals have weight 1).
     horizontal_weight: f32,
     soft: f32,
+    /// Restraint on large keystone values (none for lines the user drew).
+    restraint: f32,
 }
 
 impl Problem<'_> {
@@ -246,8 +248,130 @@ impl Problem<'_> {
         if weight == 0.0 {
             return f32::MAX;
         }
-        sum / weight + 0.01 * ((p[1] / 100.0).powi(2) + (p[2] / 100.0).powi(2))
+        sum / weight + self.restraint * ((p[1] / 100.0).powi(2) + (p[2] / 100.0).powi(2))
     }
+
+    /// The parameters `free` (0 straighten, 1 vertical, 2 horizontal keystone) that minimize the
+    /// cost: a coarse grid (rotation and the first keystone together, as they depend on each
+    /// other; the second keystone on its own), then a pattern search with shrinking steps, from
+    /// the wide robust cost to `soft`.
+    fn search(&mut self, free: &[usize], limits: [f32; 3], soft: f32) -> [f32; 3] {
+        let coarse = [1.0f32, 10.0, 10.0];
+        let grid = |k: usize| {
+            let n = (limits[k] / coarse[k]) as i32;
+            (-n..=n).map(move |i| i as f32 * coarse[k])
+        };
+        self.soft = SOFT_COARSE;
+        let mut p = [0.0f32; 3];
+        let mut best = f32::MAX;
+        let second = free.get(1).copied();
+        for a in grid(0) {
+            for b in second.map_or(vec![0.0], |k| grid(k).collect()) {
+                let mut q = [0.0; 3];
+                q[0] = a;
+                if let Some(k) = second {
+                    q[k] = b;
+                }
+                let c = self.cost(q);
+                if c < best {
+                    (best, p) = (c, q);
+                }
+            }
+        }
+        if let Some(&k) = free.get(2) {
+            for v in grid(k) {
+                let mut q = p;
+                q[k] = v;
+                let c = self.cost(q);
+                if c < best {
+                    (best, p) = (c, q);
+                }
+            }
+        }
+        let mut steps = coarse.map(|s| s / 2.0);
+        for soft in [SOFT_COARSE, soft] {
+            self.soft = soft;
+            best = self.cost(p);
+            while steps[0] > 0.01 {
+                let mut moved = false;
+                for &k in free {
+                    for sign in [-1.0, 1.0] {
+                        let mut q = p;
+                        q[k] = (q[k] + sign * steps[k]).clamp(-limits[k], limits[k]);
+                        let c = self.cost(q);
+                        if c < best {
+                            (best, p, moved) = (c, q, true);
+                        }
+                    }
+                }
+                if !moved {
+                    steps = steps.map(|s| s / 2.0);
+                }
+            }
+            steps = [0.25, 2.5, 2.5];
+        }
+        p
+    }
+}
+
+/// `geometry` with the solved straighten and keystone values `p`, rounded like the sliders.
+fn solved(geometry: &Geometry, p: [f32; 3]) -> Geometry {
+    let round = |v: f32, k: f32| (v * k).round() / k;
+    let mut out = geometry.clone();
+    out.straighten = round(p[0], 100.0);
+    out.keystone_v = round(p[1], 10.0);
+    out.keystone_h = round(p[2], 10.0);
+    out
+}
+
+/// Straighten angle and keystone values that make the lines the user drew vertical (`true`)
+/// or horizontal: both keystones are free as far as there are lines for them. Solved for the
+/// full keystone, so that a smaller `keystone_amount` still weakens the result.
+pub fn solve_guides(
+    guides: &[(Segment, bool)],
+    geometry: &Geometry,
+    lens: &LensCorrection,
+    camera: Option<&crate::camera_lens::CameraLens>,
+    turns: u8,
+    src: (usize, usize),
+) -> Option<Geometry> {
+    let guides: Vec<(&Segment, bool)> = guides.iter().filter(|(s, _)| s.length() > 2.0).map(|(s, v)| (s, *v)).collect();
+    if guides.is_empty() {
+        return None;
+    }
+    let mut problem = Problem {
+        segments: guides,
+        geometry: Geometry { keystone_amount: 100.0, ..geometry.clone() },
+        lens,
+        camera,
+        turns,
+        src,
+        horizontal_weight: 1.0,
+        soft: SOFT_COARSE,
+        restraint: 0.0,
+    };
+    // Keystone works in sensor coordinates: with a quarter turn the "vertical" one is the
+    // horizontal slider.
+    let (vertical, horizontal) = if turns % 2 == 1 { (2, 1) } else { (1, 2) };
+    let count = |axis: bool| problem.segments.iter().filter(|(_, v)| *v == axis).count();
+    let mut free = vec![0];
+    // One line only sets the rotation; two converging ones also the keystone.
+    if count(true) >= 2 {
+        free.push(vertical);
+    }
+    if count(false) >= 2 {
+        free.push(horizontal);
+    }
+    // Exact lines: a cost that keeps growing with the deviation.
+    let p = problem.search(&free, [45.0, 100.0, 100.0], 20.0);
+    let mut out = solved(geometry, p);
+    if !free.contains(&1) {
+        out.keystone_v = geometry.keystone_v;
+    }
+    if !free.contains(&2) {
+        out.keystone_h = geometry.keystone_h;
+    }
+    Some(out)
 }
 
 /// Straighten angle and keystone values for `mode`, starting from the current geometry (only
@@ -283,13 +407,15 @@ pub fn solve(
     }
     let mut problem = Problem {
         segments,
-        geometry: geometry.clone(),
+        // Solved for the full keystone (see `solve_guides`).
+        geometry: Geometry { keystone_amount: 100.0, ..geometry.clone() },
         lens,
         camera,
         turns,
         src,
         horizontal_weight: if mode == UprightMode::Vertical { 0.3 } else { 1.0 },
         soft: SOFT_COARSE,
+        restraint: 0.01,
     };
     // Keystone works in sensor coordinates: with a quarter turn the "vertical" one is the
     // horizontal slider.
@@ -319,67 +445,8 @@ pub fn solve(
     if mode == UprightMode::Full && supported(false) {
         free.push(horizontal);
     }
-    let limits = [NEAR_VERTICAL, 100.0, 100.0];
-    let coarse = [1.0f32, 10.0, 10.0];
-    // Coarse: rotation and the first keystone together (they depend on each other), the
-    // second keystone on its own; then a pattern search with shrinking steps.
-    let grid = |k: usize| {
-        let n = (limits[k] / coarse[k]) as i32;
-        (-n..=n).map(move |i| i as f32 * coarse[k])
-    };
-    let mut p = [0.0f32; 3];
-    let mut best = f32::MAX;
-    let second = free.get(1).copied();
-    for a in grid(0) {
-        for b in second.map_or(vec![0.0], |k| grid(k).collect()) {
-            let mut q = [0.0; 3];
-            q[0] = a;
-            if let Some(k) = second {
-                q[k] = b;
-            }
-            let c = problem.cost(q);
-            if c < best {
-                (best, p) = (c, q);
-            }
-        }
-    }
-    if let Some(&k) = free.get(2) {
-        for v in grid(k) {
-            let mut q = p;
-            q[k] = v;
-            let c = problem.cost(q);
-            if c < best {
-                (best, p) = (c, q);
-            }
-        }
-    }
-    let mut steps = coarse.map(|s| s / 2.0);
-    for soft in [SOFT_COARSE, SOFT] {
-        problem.soft = soft;
-        best = problem.cost(p);
-        while steps[0] > 0.01 {
-            let mut moved = false;
-            for &k in &free {
-                for sign in [-1.0, 1.0] {
-                    let mut q = p;
-                    q[k] = (q[k] + sign * steps[k]).clamp(-limits[k], limits[k]);
-                    let c = problem.cost(q);
-                    if c < best {
-                        (best, p, moved) = (c, q, true);
-                    }
-                }
-            }
-            if !moved {
-                steps = steps.map(|s| s / 2.0);
-            }
-        }
-        steps = [0.25, 2.5, 2.5];
-    }
-    let round = |v: f32, k: f32| (v * k).round() / k;
-    let mut out = geometry.clone();
-    out.straighten = round(p[0], 100.0);
-    out.keystone_v = round(p[1], 10.0);
-    out.keystone_h = round(p[2], 10.0);
+    let p = problem.search(&free, [NEAR_VERTICAL, 100.0, 100.0], SOFT);
+    let mut out = solved(geometry, p);
     if mode == UprightMode::Level {
         (out.keystone_v, out.keystone_h) = (geometry.keystone_v, geometry.keystone_h);
     }
@@ -434,6 +501,55 @@ mod tests {
         let g = solve_scene(&truth, UprightMode::Vertical);
         assert!((g.straighten + 1.5).abs() < 0.3, "{}", g.straighten);
         assert!((g.keystone_v - 30.0).abs() < 4.0, "{}", g.keystone_v);
+    }
+
+    /// Lines that `truth` makes vertical (`v`) or horizontal, in source coordinates.
+    fn guides_of(truth: &Geometry, w: usize, h: usize) -> Vec<(Segment, bool)> {
+        let map = GeoMap::new(truth, &LensCorrection::default(), None, 0, w, h, true);
+        let (ow, oh) = (map.out_w as f32, map.out_h as f32);
+        let seg = |a: (f32, f32), b: (f32, f32)| {
+            let (a, b) = (map.source_point(a.0, a.1), map.source_point(b.0, b.1));
+            Segment { a: [a.0, a.1], b: [b.0, b.1] }
+        };
+        vec![
+            (seg((0.25 * ow, 0.2 * oh), (0.25 * ow, 0.8 * oh)), true),
+            (seg((0.75 * ow, 0.15 * oh), (0.75 * ow, 0.85 * oh)), true),
+            (seg((0.2 * ow, 0.3 * oh), (0.8 * ow, 0.3 * oh)), false),
+            (seg((0.2 * ow, 0.7 * oh), (0.8 * ow, 0.7 * oh)), false),
+        ]
+    }
+
+    #[test]
+    fn drawn_lines_give_their_correction() {
+        let (w, h) = (600, 400);
+        let solve = |truth: &Geometry, lines: &[(Segment, bool)]| {
+            let start = Geometry { keystone_amount: 80.0, ..Default::default() };
+            solve_guides(lines, &start, &LensCorrection::default(), None, 0, (w, h)).expect("Lösung")
+        };
+        // Two vertical lines: rotation and vertical keystone; the amount stays as it was.
+        let truth = Geometry { straighten: 2.0, keystone_v: 35.0, ..Default::default() };
+        let g = solve(&truth, &guides_of(&truth, w, h)[..2]);
+        assert!((g.straighten - 2.0).abs() < 0.3 && (g.keystone_v - 35.0).abs() < 2.0 && g.keystone_h == 0.0, "{g:?}");
+        assert_eq!(g.keystone_amount, 80.0);
+        // Four lines: both keystones.
+        let truth = Geometry { straighten: -1.0, keystone_v: -20.0, keystone_h: 25.0, ..Default::default() };
+        let g = solve(&truth, &guides_of(&truth, w, h));
+        assert!((g.straighten + 1.0).abs() < 0.3 && (g.keystone_v + 20.0).abs() < 2.0 && (g.keystone_h - 25.0).abs() < 2.0, "{g:?}");
+    }
+
+    #[test]
+    fn keystone_amount_weakens_the_correction() {
+        let at = |amount: f32| {
+            let g = Geometry { keystone_v: 40.0, keystone_amount: amount, ..Default::default() };
+            GeoMap::new(&g, &LensCorrection::default(), None, 0, 600, 400, true).source_point(100.0, 50.0)
+        };
+        let plain = GeoMap::new(&Geometry::default(), &LensCorrection::default(), None, 0, 600, 400, true).source_point(100.0, 50.0);
+        let (full, half, none) = (at(100.0), at(50.0), at(0.0));
+        assert_eq!(none, plain);
+        assert!((half.0 - plain.0).abs() > 1.0 && (half.0 - plain.0).abs() < (full.0 - plain.0).abs(), "{plain:?} {half:?} {full:?}");
+        // Settings saved before the amount existed apply in full.
+        let old: Geometry = serde_json::from_str(r#"{"keystone_v":40.0}"#).unwrap();
+        assert_eq!(old.keystone_amount, 100.0);
     }
 
     #[test]

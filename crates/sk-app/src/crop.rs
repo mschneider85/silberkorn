@@ -26,11 +26,37 @@ pub struct CropTool {
     drag: Option<(Handle, CropRect, Pos2)>,
 }
 
-/// Straighten tool: the user draws a line that should become horizontal or vertical.
+/// Straighten tool: the user draws a line that should become horizontal or vertical. With
+/// `guides`, it is the keystone tool instead.
 #[derive(Clone, Debug, Default)]
 pub struct StraightenTool {
     line: Option<(Pos2, Pos2)>,
+    pub guides: Option<KeystoneGuides>,
 }
+
+/// Which lines the keystone tool places.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuideMode {
+    Vertical,
+    Horizontal,
+    Both,
+}
+
+/// Keystone lines: the user lays them on edges that should become vertical or horizontal, then
+/// applies them (see `sk_core::upright::solve_guides`).
+#[derive(Clone, Debug)]
+pub struct KeystoneGuides {
+    pub mode: GuideMode,
+    /// End points in source pixels of the preview (so they stay on the image content), with
+    /// the axis: `true` vertical.
+    pub(crate) lines: Vec<([[f32; 2]; 2], bool)>,
+    /// Line and end being dragged (2: the whole line), and the last pointer position.
+    drag: Option<(usize, usize, Pos2)>,
+}
+
+/// Grabbing distance of a line's end points and of the line itself, in screen points.
+const GRAB_END: f32 = 12.0;
+const GRAB_LINE: f32 = 7.0;
 
 impl App {
     /// Straighten angle and keystone from the image's straight edges.
@@ -44,13 +70,171 @@ impl App {
             return;
         };
         let keystone = if g.keystone_v != 0.0 || g.keystone_h != 0.0 {
-            format!(", Perspektive {:.0} / {:.0}", g.keystone_v, g.keystone_h)
+            format!(", Trapezkorrektur {:.0} / {:.0}", g.keystone_v, g.keystone_h)
         } else {
             String::new()
         };
         self.status = format!("Automatisch geraderichten: {:.1}°{keystone}", g.straighten).replace('.', ",");
         self.edit(|a| a.geometry = g);
         self.commit_and_save();
+    }
+}
+
+impl App {
+    /// The geometric map of the image as the viewer shows it (preview pixels).
+    fn shown_geomap(&self) -> Option<sk_core::geometry::GeoMap> {
+        let cur = self.current.as_ref()?;
+        let p = &cur.preview;
+        Some(sk_core::pipeline::Processor::new(&cur.meta, &cur.adjustments).geomap(p.width, p.height))
+    }
+
+    /// The keystone tool with lines for `mode`, placed over the middle of the image.
+    pub fn start_keystone_guides(&mut self, mode: GuideMode) {
+        self.end_viewer_tools();
+        let Some(geo) = self.shown_geomap() else { return };
+        let (w, h) = (geo.out_w as f32, geo.out_h as f32);
+        let src = |x: f32, y: f32| {
+            let (sx, sy) = geo.source_point(x * w, y * h);
+            [sx, sy]
+        };
+        let mut lines = Vec::new();
+        if mode != GuideMode::Horizontal {
+            lines.extend([0.3, 0.7].map(|x| ([src(x, 0.2), src(x, 0.8)], true)));
+        }
+        if mode != GuideMode::Vertical {
+            lines.extend([0.3, 0.7].map(|y| ([src(0.2, y), src(0.8, y)], false)));
+        }
+        self.straighten_tool = Some(StraightenTool { line: None, guides: Some(KeystoneGuides { mode, lines, drag: None }) });
+    }
+
+    /// The straighten line tool is open (not the keystone lines).
+    pub fn straightening(&self) -> bool {
+        self.straighten_tool.as_ref().is_some_and(|t| t.guides.is_none())
+    }
+
+    pub fn keystone_guides_active(&self) -> bool {
+        self.straighten_tool.as_ref().is_some_and(|t| t.guides.is_some())
+    }
+
+    /// Enter: takes the crop or the keystone lines, whichever tool is open.
+    pub fn finish_viewer_tool(&mut self) {
+        if self.keystone_guides_active() {
+            self.apply_keystone_guides();
+        } else {
+            self.finish_crop_tool();
+        }
+    }
+
+    /// Straightens and corrects the keystone so that the lines become vertical or horizontal.
+    pub fn apply_keystone_guides(&mut self) {
+        let Some(guides) = self.straighten_tool.take().and_then(|t| t.guides) else { return };
+        let Some(cur) = &self.current else { return };
+        let segments: Vec<_> = guides.lines.iter().map(|([a, b], v)| (sk_core::upright::Segment { a: *a, b: *b }, *v)).collect();
+        let adj = &cur.adjustments;
+        let src = (cur.preview.width, cur.preview.height);
+        let Some(g) = sk_core::upright::solve_guides(&segments, &adj.geometry, &adj.lens, cur.meta.lens.as_ref(), adj.rotation, src) else { return };
+        self.status = format!("Trapezkorrektur: vertikal {:.0}, horizontal {:.0}, Drehung {:.1}°", g.keystone_v, g.keystone_h, g.straighten).replace('.', ",");
+        self.edit(|a| a.geometry = g);
+        self.commit_and_save();
+    }
+
+    /// Keystone lines in the viewer: their ends and the lines themselves can be dragged.
+    fn keystone_overlay(&mut self, ui: &mut Ui, response: &Response, img_rect: Rect) {
+        let Some(geo) = self.shown_geomap() else { return };
+        let Some(guides) = self.straighten_tool.as_mut().and_then(|t| t.guides.as_mut()) else { return };
+        let scale = img_rect.width() / geo.out_w as f32;
+        let to_screen = |p: [f32; 2]| {
+            let (x, y) = geo.output_point(p[0], p[1]);
+            img_rect.min + vec2(x, y) * scale
+        };
+        let to_source = |p: Pos2| {
+            let o = (p - img_rect.min) / scale;
+            let (x, y) = geo.source_point(o.x, o.y);
+            [x, y]
+        };
+        let screen: Vec<[Pos2; 2]> = guides.lines.iter().map(|(l, _)| [to_screen(l[0]), to_screen(l[1])]).collect();
+        // What the pointer would take: an end point first, else a line.
+        let grab = |p: Pos2| {
+            let end = screen.iter().enumerate().flat_map(|(i, l)| [(i, 0, l[0]), (i, 1, l[1])]).map(|(i, e, q)| (i, e, q.distance(p))).filter(|t| t.2 < GRAB_END).min_by(|a, b| a.2.total_cmp(&b.2));
+            end.map(|(i, e, _)| (i, e)).or_else(|| {
+                screen.iter().position(|l| distance_to_segment(p, l[0], l[1]) < GRAB_LINE).map(|i| (i, 2))
+            })
+        };
+        let hover = response.hover_pos().and_then(grab);
+        if response.drag_started()
+            && let Some(p) = ui.input(|i| i.pointer.press_origin())
+        {
+            guides.drag = grab(p).map(|(i, e)| (i, e, p));
+        }
+        if response.dragged()
+            && let (Some(p), Some((i, e, last))) = (response.interact_pointer_pos(), guides.drag)
+        {
+            let line = &mut guides.lines[i].0;
+            match e {
+                2 => {
+                    let d = p - last;
+                    *line = [to_source(screen[i][0] + d), to_source(screen[i][1] + d)];
+                }
+                e => line[e] = to_source(p),
+            }
+            guides.drag = Some((i, e, p));
+        }
+        if response.drag_stopped() {
+            guides.drag = None;
+        }
+        let active = guides.drag.map(|(i, e, _)| (i, e)).or(hover);
+        ui.ctx().set_cursor_icon(match active {
+            Some((_, 2)) if guides.drag.is_some() => egui::CursorIcon::Grabbing,
+            Some((_, 2)) => egui::CursorIcon::Grab,
+            Some(_) => egui::CursorIcon::Crosshair,
+            None => egui::CursorIcon::Default,
+        });
+
+        let painter = ui.painter_at(img_rect);
+        draw_fine_grid(&painter, img_rect);
+        for (i, ((_, vertical), s)) in guides.lines.iter().zip(&screen).enumerate() {
+            let color = if *vertical { Color32::from_rgb(255, 210, 0) } else { Color32::from_rgb(80, 200, 255) };
+            let hot = active.is_some_and(|(j, _)| j == i);
+            painter.line_segment([s[0], s[1]], Stroke::new(3.0, Color32::from_black_alpha(120)));
+            painter.line_segment([s[0], s[1]], Stroke::new(if hot { 2.0 } else { 1.5 }, color));
+            for (e, q) in s.iter().enumerate() {
+                let r = if active == Some((i, e)) { 7.0 } else { 5.0 };
+                painter.circle(*q, r, Color32::from_black_alpha(140), Stroke::new(1.5, color));
+            }
+        }
+
+        // Apply and cancel, at the bottom of the image.
+        let size = vec2(110.0, 28.0);
+        let at = pos2(img_rect.center().x, img_rect.bottom().min(ui.clip_rect().bottom()) - 44.0);
+        let apply = ui.put(Rect::from_center_size(at - vec2(size.x / 2.0 + 4.0, 0.0), size), egui::Button::new(format!("{}  Anwenden", crate::theme::icon::CHECK)));
+        let cancel = ui.put(Rect::from_center_size(at + vec2(size.x / 2.0 + 4.0, 0.0), size), egui::Button::new("Abbrechen"));
+        if apply.on_hover_text("Enter").clicked() {
+            self.apply_keystone_guides();
+        } else if cancel.on_hover_text("Esc").clicked() {
+            self.straighten_tool = None;
+        }
+    }
+}
+
+/// Shortest distance from `p` to the segment `a`–`b`.
+fn distance_to_segment(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let ab = b - a;
+    let t = ((p - a).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0, 1.0);
+    p.distance(a + ab * t)
+}
+
+/// A fine grid over the image, for judging verticals and horizontals while correcting.
+pub fn draw_fine_grid(painter: &egui::Painter, r: Rect) {
+    let cell = (r.width().max(r.height()) / 16.0).max(12.0);
+    let stroke = Stroke::new(1.0, Color32::from_white_alpha(45));
+    let (nx, ny) = ((r.width() / cell).ceil() as i32, (r.height() / cell).ceil() as i32);
+    for i in 1..nx {
+        let x = r.left() + r.width() * i as f32 / nx as f32;
+        painter.line_segment([pos2(x, r.top()), pos2(x, r.bottom())], stroke);
+    }
+    for i in 1..ny {
+        let y = r.top() + r.height() * i as f32 / ny as f32;
+        painter.line_segment([pos2(r.left(), y), pos2(r.right(), y)], stroke);
     }
 }
 
@@ -104,7 +288,7 @@ impl App {
 
     /// The straighten tool (draw a line along the horizon) on or off.
     pub fn toggle_straighten(&mut self) {
-        let on = self.straighten_tool.is_none();
+        let on = !self.straightening();
         self.end_viewer_tools();
         if on {
             self.straighten_tool = Some(Default::default());
@@ -328,7 +512,10 @@ impl App {
     }
 
     /// Straighten line tool: drag along a horizon or vertical edge.
-    pub fn straighten_overlay(&mut self, ui: &mut Ui, response: &Response) {
+    pub fn straighten_overlay(&mut self, ui: &mut Ui, response: &Response, img_rect: Rect) {
+        if self.keystone_guides_active() {
+            return self.keystone_overlay(ui, response, img_rect);
+        }
         let Some(tool) = &mut self.straighten_tool else { return };
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         if response.drag_started()

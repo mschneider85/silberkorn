@@ -328,6 +328,11 @@ impl App {
         // The crop and straighten tools draw their own guides.
         if self.crop_tool.is_none() && self.straighten_tool.is_none() {
             self.draw_guides(&painter, img_rect);
+            let now = ui.input(|i| i.time);
+            if now < self.keystone_grid_until {
+                crate::crop::draw_fine_grid(&painter, img_rect);
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(self.keystone_grid_until - now));
+            }
         }
 
         // Not in distraction-free full screen.
@@ -363,7 +368,7 @@ impl App {
         } else if self.crop_tool.is_some() {
             self.crop_overlay(ui, &response, img_rect);
         } else if self.straighten_tool.is_some() {
-            self.straighten_overlay(ui, &response);
+            self.straighten_overlay(ui, &response, img_rect);
         } else if self.picking_wb {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
             if response.clicked()
@@ -412,6 +417,8 @@ impl App {
             Some(msg.trim().to_string())
         } else if self.crop_tool.is_some() {
             Some("Zuschneiden – Enter übernimmt, Esc beendet".into())
+        } else if self.keystone_guides_active() {
+            Some("Trapezkorrektur – Linien an Kanten legen, Enter wendet an, Esc bricht ab".into())
         } else if self.straighten_tool.is_some() {
             Some("Geraderichten – Linie entlang des Horizonts ziehen".into())
         } else if self.picking_wb {

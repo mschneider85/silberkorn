@@ -319,7 +319,7 @@ fn tool_of(name: &'static str) -> Option<(Tab, Option<&'static str>)> {
         "Farbeditor" | "Hauttöne" | "Farbbalance" | "Schwarzweiß" => (Tab::Color, Some(name)),
         "Zuschnitt" => (Tab::Lens, Some("Zuschnitt")),
         "Drehen" | "Geraderichten" | "Spiegeln" => (Tab::Lens, Some("Drehen & Spiegeln")),
-        "Perspektive" => (Tab::Lens, Some("Perspektive")),
+        "Trapezkorrektur" => (Tab::Lens, Some("Trapezkorrektur")),
         "Objektivkorrektur" => (Tab::Lens, Some("Objektivkorrektur")),
         "Neu ausleuchten" => (Tab::Exposure, Some("Neu ausleuchten")),
         "Schärfen" | "Dunst entfernen" => (Tab::Details, Some(name)),

@@ -123,7 +123,7 @@ impl Tool {
             Tool::LensCorrection => "Objektivkorrektur",
             Tool::Crop => "Zuschnitt",
             Tool::Rotation => "Drehen & Spiegeln",
-            Tool::Perspective => "Perspektive",
+            Tool::Perspective => "Trapezkorrektur",
             Tool::Layers => "Ebenen",
             Tool::Retouch => "Retusche",
         }
@@ -190,7 +190,10 @@ impl Tool {
                 let (f, t) = (&from.geometry, &mut to.geometry);
                 (t.straighten, t.flip_h, t.flip_v) = (f.straighten, f.flip_h, f.flip_v);
             }
-            Tool::Perspective => (to.geometry.keystone_v, to.geometry.keystone_h) = (from.geometry.keystone_v, from.geometry.keystone_h),
+            Tool::Perspective => {
+                let (t, f) = (&mut to.geometry, &from.geometry);
+                (t.keystone_v, t.keystone_h, t.keystone_amount) = (f.keystone_v, f.keystone_h, f.keystone_amount);
+            }
             Tool::Layers => to.layers = from.layers.clone(),
             Tool::Retouch => (to.retouch, to.removals) = (from.retouch.clone(), from.removals.clone()),
         }

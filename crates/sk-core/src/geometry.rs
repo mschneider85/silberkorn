@@ -107,8 +107,8 @@ impl GeoMap {
         let whole = |v: f32| (v - v.round()).abs() < 1e-3;
         let pixel_exact = theta == 0.0
             && fish_f == 0.0
-            && geom.keystone_v == 0.0
-            && geom.keystone_h == 0.0
+            && geom.keystone_v * geom.keystone_amount == 0.0
+            && geom.keystone_h * geom.keystone_amount == 0.0
             && identity_lens
             && vig == [0.0; 3]
             && camera.is_none()
@@ -129,8 +129,8 @@ impl GeoMap {
             turns,
             flip_h: geom.flip_h,
             flip_v: geom.flip_v,
-            kv: geom.keystone_v / 100.0 * 0.6,
-            kh: geom.keystone_h / 100.0 * 0.6,
+            kv: geom.keystone_v / 100.0 * 0.6 * geom.keystone_amount / 100.0,
+            kh: geom.keystone_h / 100.0 * 0.6 * geom.keystone_amount / 100.0,
             ks: 1.0,
             fish_f,
             fish_fr,

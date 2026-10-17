@@ -426,7 +426,7 @@ impl App {
             if labeled_tool(ui, wide, icon::CROP, "Zuschneiden", &image_hover(&crop_hover), self.crop_tool.is_some(), image).clicked() {
                 self.toggle_crop();
             }
-            if labeled_tool(ui, wide, icon::RULER, "Geraderichten", &image_hover("Geraderichten: eine Linie entlang des Horizonts ziehen"), self.straighten_tool.is_some(), image).clicked() {
+            if labeled_tool(ui, wide, icon::RULER, "Geraderichten", &image_hover("Geraderichten: eine Linie entlang des Horizonts ziehen"), self.straightening(), image).clicked() {
                 self.toggle_straighten();
             }
             let wb_hover = crate::commands::hint("Weißabgleich-Pipette: auf eine neutrale Stelle klicken", "wb-picker");

@@ -796,7 +796,7 @@ impl AspectRatio {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Geometry {
     pub crop: CropRect,
@@ -810,6 +810,25 @@ pub struct Geometry {
     /// Perspective (keystone) correction, -100..100.
     pub keystone_v: f32,
     pub keystone_h: f32,
+    /// How much of the keystone correction is applied, 0..100 %: a little less than all
+    /// often looks more natural (a building still narrowing slightly towards the top).
+    pub keystone_amount: f32,
+}
+
+impl Default for Geometry {
+    fn default() -> Self {
+        Self {
+            crop: CropRect::default(),
+            aspect: AspectRatio::default(),
+            aspect_portrait: false,
+            straighten: 0.0,
+            flip_h: false,
+            flip_v: false,
+            keystone_v: 0.0,
+            keystone_h: 0.0,
+            keystone_amount: 100.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
