@@ -1,6 +1,6 @@
-// Dark channel input: block minimum (as float bits, all values are >= 0) and every 7th
-// pixel of the domain (for the airlight estimate). The domain is the working region, or
-// the whole image when rendering in tiles.
+// Dehaze input: per block the minimum of each channel and of the luminance (as float bits,
+// all values are >= 0), and the color of every 7th pixel of the domain (for the airlight estimate). The domain is the working
+// region, or the whole image when rendering in tiles.
 
 struct Args {
     // Pixels of the working region that belong to this rendering.
@@ -19,8 +19,9 @@ struct Args {
 }
 
 @group(0) @binding(0) var<storage, read> a: Args;
-@group(0) @binding(1) var<storage, read> min_c: array<f32>;
-@group(0) @binding(2) var<storage, read_write> pooled: array<atomic<u32>>;
+@group(0) @binding(1) var<storage, read> img: array<vec4<f32>>;
+// Per block: minimum of r, g, b and luminance.
+@group(0) @binding(2) var<storage, read_write> blocks: array<atomic<u32>>;
 @group(0) @binding(3) var<storage, read_write> samples: array<f32>;
 @group(0) @binding(4) var<storage, read_write> count: array<atomic<u32>>;
 
@@ -31,12 +32,18 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let x = a.own_x + gid.x;
     let y = a.own_y + gid.y;
-    let v = min_c[y * a.w + x];
+    let p = img[y * a.w + x].xyz;
     let dx = a.off_x + x;
     let dy = a.off_y + y;
-    atomicMin(&pooled[(dy / a.step) * a.lw + dx / a.step], bitcast<u32>(max(v, 0.0)));
+    let b = ((dy / a.step) * a.lw + dx / a.step) * 4u;
+    atomicMin(&blocks[b], bitcast<u32>(max(p.x, 0.0)));
+    atomicMin(&blocks[b + 1u], bitcast<u32>(max(p.y, 0.0)));
+    atomicMin(&blocks[b + 2u], bitcast<u32>(max(p.z, 0.0)));
+    atomicMin(&blocks[b + 3u], bitcast<u32>(max(dot(p, LUMA), 0.0)));
     if (dy * a.dom_w + dx) % 7u == 0u {
         let k = atomicAdd(&count[0], 1u);
-        samples[k] = v;
+        samples[k * 3u] = p.x;
+        samples[k * 3u + 1u] = p.y;
+        samples[k * 3u + 2u] = p.z;
     }
 }

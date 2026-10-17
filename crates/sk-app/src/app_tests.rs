@@ -400,6 +400,57 @@ fn viewer_tools_brush_heal_crop() {
     f.app.finish_crop_tool();
 }
 
+/// Dragging with the right mouse button changes the brush instead of painting: left/right
+/// the size, up/down the hardness; in the remove tool it does not mark anything either.
+#[test]
+fn right_drag_changes_brush_size_and_hardness() {
+    let Some(mut f) = Fixture::new("brush_adjust") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    viewer_frame(&mut f, vec![]);
+    let c = egui::pos2(600.0, 400.0);
+    let right = |p, pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
+    let right_drag = |f: &mut Fixture, d: egui::Vec2| {
+        viewer_frame(f, vec![egui::Event::PointerMoved(c)]);
+        viewer_frame(f, vec![right(c, true)]);
+        for i in 1..=6 {
+            viewer_frame(f, vec![egui::Event::PointerMoved(c + d * (i as f32 / 6.0))]);
+        }
+        viewer_frame(f, vec![right(c + d, false)]);
+        viewer_frame(f, vec![]);
+    };
+
+    f.app.set_local_tool(crate::layers::LocalTool::Brush);
+    // Sideways (drifting a little up): only the size.
+    let (size, hardness) = (f.app.brushes.paint.size, f.app.brushes.paint.hardness);
+    right_drag(&mut f, egui::vec2(60.0, -15.0));
+    assert!((f.app.brushes.paint.size - (size + 60.0)).abs() < 1.0, "{} -> {}", size, f.app.brushes.paint.size);
+    assert_eq!(f.app.brushes.paint.hardness, hardness);
+    // Up (drifting sideways): only the hardness.
+    let size = f.app.brushes.paint.size;
+    right_drag(&mut f, egui::vec2(-20.0, -40.0));
+    assert!(f.app.brushes.paint.hardness > hardness + 0.1, "up is harder: {hardness} -> {}", f.app.brushes.paint.hardness);
+    assert_eq!(f.app.brushes.paint.size, size);
+    // Both in one drag: first sideways, then down.
+    let (size, hardness) = (f.app.brushes.paint.size, f.app.brushes.paint.hardness);
+    let path = [c, c + egui::vec2(15.0, 0.0), c + egui::vec2(30.0, 2.0), c + egui::vec2(31.0, 20.0), c + egui::vec2(29.0, 40.0)];
+    viewer_frame(&mut f, vec![egui::Event::PointerMoved(c)]);
+    viewer_frame(&mut f, vec![right(c, true)]);
+    for p in &path[1..] {
+        viewer_frame(&mut f, vec![egui::Event::PointerMoved(*p)]);
+    }
+    viewer_frame(&mut f, vec![right(path[4], false)]);
+    viewer_frame(&mut f, vec![]);
+    assert!(f.app.brushes.paint.size > size + 20.0 && f.app.brushes.paint.hardness < hardness - 0.15, "beides: {} {}", f.app.brushes.paint.size, f.app.brushes.paint.hardness);
+    assert!(f.app.current.as_ref().unwrap().adjustments.layers.iter().all(|l| l.mask.strokes.is_empty()), "nothing painted");
+    assert!(!f.app.adjusting_brush());
+
+    f.app.set_local_tool(crate::layers::LocalTool::Remove);
+    let size = f.app.brushes.remove.size;
+    right_drag(&mut f, egui::vec2(-20.0, 0.0));
+    assert!((f.app.brushes.remove.size - (size - 20.0)).abs() < 1.0);
+    assert!(f.app.remove_strokes.is_empty() && !f.app.inpaint_busy);
+}
+
 fn key(k: egui::Key, pressed: bool) -> egui::Event {
     egui::Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers: Default::default() }
 }
@@ -470,6 +521,14 @@ fn phase5_speed_edit_ai_masks_split_and_recipes() {
     f.app.toggle_split();
     f.app.send_render();
     f.pump("Vergleich", |a| a.before_texture.is_some());
+    // The divider (in the middle of the fitted image) moves when grabbed a little beside it,
+    // also where the held button would otherwise show the loupe.
+    f.app.local_tool = None;
+    f.app.split_pos = 0.5;
+    viewer_frame(&mut f, vec![]);
+    drag(&mut f, egui::pos2(611.0, 400.0), egui::pos2(800.0, 400.0), 4);
+    assert!(f.app.split_pos > 0.6, "Trennlinie bei {}", f.app.split_pos);
+    assert!(!f.app.split_dragging);
 
     // Two recipes -> two files per image.
     let out = f.dir.join("out5");
@@ -523,6 +582,12 @@ fn session_workflow() {
     let cat = f.app.catalog.as_ref().unwrap();
     let selects = Scope::Folder { path: s.folder(SessionFolder::Selects), recursive: false };
     assert_eq!(cat.query(&selects, &Filter::default(), SortKey::Name, false).unwrap().len(), 1);
+
+    // An empty folder of the session shows what it is, not the start screen.
+    f.app.open_folder(s.folder(SessionFolder::Trash));
+    assert!(f.app.entries.is_empty());
+    assert_eq!(f.app.empty_session_folder().map(|(_, t, _)| t).as_deref(), Some("Der Papierkorb ist leer"));
+    f.app.open_folder(capture.clone());
 
     // Favorites live in the session.
     let fav = s.root.join("Kunde");
@@ -734,6 +799,50 @@ fn dragging_renders_drafts_then_full_resolution() {
     assert_eq!(f.app.edit_version, v);
 }
 
+/// All movements the system reports in a frame go into the stroke, not only where the pointer
+/// ended up: a fast circle stays round.
+#[test]
+fn fast_strokes_keep_every_reported_movement() {
+    let Some(mut f) = Fixture::new("fast_stroke") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    viewer_frame(&mut f, vec![]);
+    f.app.set_local_tool(crate::layers::LocalTool::Brush);
+    let c = egui::pos2(600.0, 400.0);
+    let on_circle = |k: usize| c + egui::vec2(150.0 * (k as f32 * 0.3).cos(), 150.0 * (k as f32 * 0.3).sin());
+    viewer_frame(&mut f, vec![egui::Event::PointerMoved(on_circle(0))]);
+    viewer_frame(&mut f, vec![press(on_circle(0), true)]);
+    // One slow frame: the pointer went a third of the way round.
+    viewer_frame(&mut f, (1..=7).map(|k| egui::Event::PointerMoved(on_circle(k))).collect());
+    let n = f.app.current.as_ref().unwrap().adjustments.layers[0].mask.strokes[0].points.len();
+    assert_eq!(n, 8, "jede Bewegung ein Punkt");
+    viewer_frame(&mut f, vec![press(on_circle(7), false)]);
+}
+
+/// Painting with the brush renders only what it changed, at full resolution on top of the
+/// shown image, instead of drafts of the whole image.
+#[test]
+fn painting_renders_only_the_painted_part() {
+    let Some(mut f) = Fixture::new("paint_part") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    viewer_frame(&mut f, vec![]);
+    f.pump("volle Auflösung", |a| a.texture_version_shown() == a.edit_version && !a.texture_draft);
+    let full = f.app.texture.as_ref().unwrap().size();
+    // Without a measured speed, dragging a control would render a draft.
+    f.app.workers.draft_speed = Default::default();
+    f.app.set_local_tool(crate::layers::LocalTool::Brush);
+    let c = egui::pos2(600.0, 400.0);
+    viewer_frame(&mut f, vec![egui::Event::PointerMoved(c)]);
+    viewer_frame(&mut f, vec![press(c, true)]);
+    for i in 1..=6 {
+        viewer_frame(&mut f, vec![egui::Event::PointerMoved(c + egui::vec2(25.0 * i as f32, 8.0 * i as f32))]);
+        f.pump("Teil gerendert", |a| a.texture_version_shown() == a.edit_version);
+        assert!(!f.app.texture_draft && f.app.texture.as_ref().unwrap().size() == full, "Punkt {i}: kein Entwurf");
+    }
+    assert!(f.app.current.as_ref().unwrap().adjustments.layers[0].mask.strokes[0].points.len() >= 4);
+    viewer_frame(&mut f, vec![press(c + egui::vec2(150.0, 48.0), false)]);
+    f.pump("fertig", |a| a.texture_version_shown() == a.edit_version && !a.drag_rendered);
+}
+
 #[test]
 fn previews_are_generated_in_the_background_when_idle() {
     let Some(files) = samples() else { return };
@@ -885,6 +994,32 @@ fn hovering_a_film_look_previews_it_without_changing_the_image() {
     assert_eq!(f.app.current.as_ref().unwrap().adjustments, saved);
 }
 
+/// The style grid renders every film look on the current image in the background, and again
+/// once the image's adjustments are committed; results of an older request are dropped.
+#[test]
+fn style_grid_previews_the_current_image() {
+    let Some(mut f) = Fixture::new("stilraster") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    let n = f.app.film_looks.len();
+    f.app.pump_style_thumbs();
+    let first = f.app.style_grid_key_for_test();
+    f.pump("Vorschauen", |a| a.style_grid_count_for_test() == n);
+    // Nothing changed: no new request.
+    f.app.pump_style_thumbs();
+    assert_eq!(f.app.style_grid_key_for_test(), first);
+
+    // A committed edit renders them again; the old previews stay until replaced.
+    f.app.edit(|a| a.exposure = 1.0);
+    f.app.commit_and_save();
+    f.app.pump_style_thumbs();
+    let second = f.app.style_grid_key_for_test();
+    assert!(second > first);
+    assert_eq!(f.app.style_grid_count_for_test(), n);
+    let ctx = f.ctx.clone();
+    f.app.style_thumb_arrived(&ctx, first, "film:alt".into(), egui::ColorImage::filled([2, 2], egui::Color32::RED));
+    assert_eq!(f.app.style_grid_count_for_test(), n, "veraltetes Ergebnis verworfen");
+}
+
 #[test]
 #[ignore = "langsam: läuft mit cargo t-all"]
 fn proof_shows_the_image_as_the_recipe_writes_it() {
@@ -1027,10 +1162,13 @@ fn compare_view_and_matching() {
     // Leaving the edited image keeps its new rendering for the compare view.
     assert!(f.app.compare_textures.contains_key(&a));
 
-    // Matching changes exposure and white balance of the current image, as one undo step.
-    assert!(f.app.can_match());
-    f.app.match_selection(sk_core::auto::MatchWhat { exposure: true, white_balance: true });
-    f.pump("angeglichen", |app| app.match_progress.is_none());
+    // With the first image as look reference, "Look angleichen" changes exposure and white
+    // balance of the current image (the same scene: matched fully), as one undo step.
+    assert!(!f.app.can_match_look(), "noch keine Referenz");
+    f.app.add_look_ref(crate::look::LookRef::Image(a.clone()));
+    assert!(f.app.can_match_look());
+    f.app.match_look_selection();
+    f.pump("angeglichen", |app| app.look_progress.is_none());
     let adj = f.app.current.as_ref().unwrap().adjustments.clone();
     assert!(adj.exposure > 0.3, "Belichtung {}", adj.exposure);
     assert_eq!(adj.white_balance.mode, sk_core::params::WbMode::Custom);
@@ -1043,6 +1181,47 @@ fn compare_view_and_matching() {
     f.app.select_path(&a, egui::Modifiers::NONE);
     f.app.toggle_reference();
     assert_eq!(f.app.compare_ref, None);
+}
+
+#[test]
+fn look_from_a_picture_file_with_strength() {
+    let Some(mut f) = Fixture::new("look") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    // Without a reference nothing to match to.
+    f.app.look_refs.clear();
+    assert!(!f.app.can_match_look());
+    // A dark, warm, low-contrast picture.
+    let file = f.dir.join("look.png");
+    image::RgbImage::from_fn(96, 64, |x, y| {
+        let v = 40 + (x + y) as u8 / 2;
+        image::Rgb([v + 30, v + 10, v])
+    })
+    .save(&file)
+    .unwrap();
+    f.app.add_look_ref(crate::look::LookRef::File(file.clone()));
+    f.pump("Referenz gemessen", |app| matches!(app.look_ref_state.get(&crate::look::LookRef::File(file.clone())), Some(crate::look::LookRefState::Ready(_))));
+    assert!(f.app.can_match_look());
+    // Twice the same: kept once.
+    f.app.add_look_ref(crate::look::LookRef::File(file.clone()));
+    assert_eq!(f.app.look_refs.len(), 1);
+    let before = f.app.current.as_ref().unwrap().adjustments.clone();
+    f.app.match_look_selection();
+    f.pump("angeglichen", |app| app.look_progress.is_none());
+    let matched = f.app.current.as_ref().unwrap().adjustments.clone();
+    assert!(matched.exposure < before.exposure, "Belichtung {}", matched.exposure);
+    assert!(!matched.curves.luma.is_identity());
+    let mix = f.app.look_mix.as_ref().expect("Stärke");
+    assert_eq!(mix.strength, 100.0);
+    assert!(mix.summary.contains("Belichtung"), "{}", mix.summary);
+    // Strength 0: back to before; the slider leaves the rest alone.
+    let (opts, b, m) = (mix.opts, mix.before.clone(), mix.matched.clone());
+    let cur = f.app.current.as_ref().unwrap();
+    let zero = opts.blend(&cur.adjustments, &b, &m, 0.0, cur.as_shot_temp_tint);
+    assert_eq!(zero.exposure, before.exposure);
+    assert!(zero.curves.luma.is_identity());
+    // One undo step.
+    f.app.undo();
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.exposure, before.exposure);
 }
 
 #[test]
@@ -1661,6 +1840,54 @@ fn dng_from_jpeg(jpeg: &Path, out: &Path, mirror: bool) {
     sk_core::dng::write_linear_dng(out, &sk_core::dng::LinearDng { width: w, height: h, data: &data, xyz_to_cam, as_shot_wb: [1.0; 3], info: &info, baseline_exposure: 0.0, preview: Some(&img), lens_corrected: false }).unwrap();
 }
 
+/// One person recognized as two is merged by hand: one person with the images of both, the
+/// keyword of the name on all of them.
+#[test]
+fn persons_merged_by_hand() {
+    let Some(mut f) = Fixture::new("merge-persons") else { return };
+    f.pump("Indexiert", |a| a.lists.total == 2);
+    let (a, b) = (f.photo("_DSC0009.dng"), f.photo("_DSC0010.dng"));
+    let face = |k: usize| sk_core::catalog::FaceRecord { bbox: [0.4, 0.3, 0.2, 0.25], embedding: (0..8).map(|i| if i == k { 1.0 } else { 0.0 }).collect(), eyes_closed: 0.0 };
+    {
+        let c = f.app.catalog.as_ref().unwrap();
+        c.store_analysis(&a, 0.5, &[face(0)], 0.42).unwrap();
+        c.store_analysis(&b, 0.5, &[face(4)], 0.42).unwrap();
+    }
+    f.app.refresh_catalog_lists();
+    let ids = |app: &App| app.catalog.as_ref().unwrap().persons(1).unwrap().into_iter().map(|p| p.id).collect::<Vec<_>>();
+    let found = ids(&f.app);
+    assert_eq!(found.len(), 2);
+    let (anna, other) = (found[0], found[1]);
+    f.app.name_person(anna, "Anna");
+    f.app.open_scope(sk_core::catalog::Scope::Person(other));
+    f.app.merge_persons(anna, other);
+    assert_eq!(ids(&f.app), vec![anna]);
+    for p in [&a, &b] {
+        assert!(sidecar::load(p).keywords.contains(&"Anna".to_string()), "{}", p.display());
+    }
+    // The view of the person that is gone shows the merged one.
+    assert_eq!(f.app.scope, sk_core::catalog::Scope::Person(anna));
+    assert_eq!(f.app.entries.len(), 2);
+
+    // And back: the face in the second image is someone else, split off as a new person to name.
+    let faces = f.app.catalog.as_ref().unwrap().person_faces(anna).unwrap();
+    let in_b: Vec<i64> = faces.iter().filter(|x| x.path == b).map(|x| x.id).collect();
+    f.app.move_faces(anna, &in_b, None);
+    let ids_now = ids(&f.app);
+    assert_eq!(ids_now.len(), 2);
+    let ben = *ids_now.iter().find(|id| **id != anna).unwrap();
+    assert_eq!(f.app.library_ui.naming.as_ref().map(|(id, _)| *id), Some(ben), "gleich benennen");
+    assert!(f.app.lists.persons.iter().any(|p| p.id == ben), "mit einem Bild in der Liste");
+    assert!(sidecar::load(&a).keywords.contains(&"Anna".to_string()));
+    assert!(!sidecar::load(&b).keywords.contains(&"Anna".to_string()), "Bild ohne Anna verliert den Namen");
+    f.app.name_person(ben, "Ben");
+    assert!(sidecar::load(&b).keywords.contains(&"Ben".to_string()));
+    // Given back to Anna: Ben is gone, the image gets her name again.
+    f.app.move_faces(ben, &in_b, Some(anna));
+    assert_eq!(ids(&f.app), vec![anna]);
+    assert!(sidecar::load(&b).keywords.contains(&"Anna".to_string()));
+}
+
 #[test]
 fn faces_become_named_persons() {
     let Some(faces) = std::env::var_os("SILBERKORN_FACE_TEST").map(PathBuf::from) else { return };
@@ -1684,6 +1911,10 @@ fn faces_become_named_persons() {
     assert_eq!(f.app.lists.persons.len(), 1, "{:?}", f.app.lists.persons);
     let person = f.app.lists.persons[0].clone();
     assert_eq!(person.count, 2);
+    // The list shows the person's face, cut out square.
+    let (path, bbox) = person.sample.clone().expect("Beispielgesicht");
+    let face = crate::culling::face_thumbnail(&path, bbox).unwrap();
+    assert_eq!(face.size, [96, 96]);
     f.app.name_person(person.id, "Barack");
     for p in ["p1.dng", "p2.dng"] {
         assert!(sidecar::load(&f.photo(p)).keywords.contains(&"Barack".to_string()), "{p}");
@@ -2387,26 +2618,39 @@ fn clicked_slider_takes_the_arrow_keys() {
 }
 
 #[test]
-fn wheel_adjusts_a_slider_only_when_the_gesture_starts_on_it() {
+fn wheel_adjusts_a_slider_only_after_a_click_on_it() {
+    let handle = egui::pos2(SliderHarness::x(50.0), 10.0);
     let rail = egui::pos2(SliderHarness::x(50.0) + 30.0, 10.0);
     let mut h = SliderHarness::new(50.0);
+    // Merely hovering: the wheel scrolls the panel, the slider stays.
     h.frame(vec![egui::Event::PointerMoved(rail)]);
+    h.wheel(rail, 1.0);
+    assert_eq!(h.value, 50.0);
+    // A click on the handle (no jump) makes it take the wheel.
+    h.time += 1.0;
+    h.frame(vec![egui::Event::PointerMoved(handle)]);
+    h.button(handle, true);
+    h.button(handle, false);
+    assert_eq!(h.value, 50.0);
     h.wheel(rail, 1.0);
     assert!((h.value - 51.0).abs() < 0.005, "{}", h.value);
     h.wheel(rail, -3.0);
     assert!((h.value - 48.0).abs() < 0.005, "{}", h.value);
-    // A gesture that began elsewhere (scrolling the panel) passes over the slider unchanged.
-    let mut h = SliderHarness::new(50.0);
+    // A gesture that began elsewhere (scrolling the panel) passes over it unchanged.
     let elsewhere = egui::pos2(300.0, 200.0);
+    h.time += 1.0;
     h.frame(vec![egui::Event::PointerMoved(elsewhere)]);
     h.wheel(elsewhere, 1.0);
     h.wheel(rail, 1.0);
     h.wheel(rail, 1.0);
-    assert_eq!(h.value, 50.0);
-    // After a pause the next gesture over the rail adjusts again.
+    assert!((h.value - 48.0).abs() < 0.005, "{}", h.value);
+    // A click elsewhere ends it: the wheel over the rail scrolls again.
     h.time += 1.0;
+    h.frame(vec![egui::Event::PointerMoved(elsewhere)]);
+    h.button(elsewhere, true);
+    h.button(elsewhere, false);
     h.wheel(rail, 1.0);
-    assert!((h.value - 51.0).abs() < 0.005, "{}", h.value);
+    assert!((h.value - 48.0).abs() < 0.005, "{}", h.value);
 }
 
 #[test]
@@ -2546,4 +2790,236 @@ fn main_window_switches_to_the_image_with_the_viewer_window_open() {
     window_frame(&mut f, &mut frame, 10.1, vec![]);
     assert!(f.app.viewer_detached(), "Das Bildfenster bleibt offen");
     assert!(f.app.filmstrip_shown, "Im Einzelbild zeigt das Hauptfenster den Filmstreifen");
+}
+
+#[test]
+fn auto_adjust_current_image_and_selection() {
+    let Some(mut f) = Fixture::new("auto") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    f.pump("Indexiert", |a| a.entries.len() == 2);
+    let a = f.photo("_DSC0009.dng");
+    let b = f.photo("_DSC0010.dng");
+    f.app.edit(|adj| adj.saturation = 15.0);
+    f.app.commit_and_save();
+    let before = f.app.current.as_ref().unwrap().adjustments.clone();
+
+    // The open image: one undo step, other settings stay.
+    f.app.auto_adjust_selection();
+    assert!(f.app.auto_progress.is_some());
+    f.pump("angepasst", |app| app.auto_progress.is_none());
+    let adj = f.app.current.as_ref().unwrap().adjustments.clone();
+    assert_ne!(adj, before, "{}", f.app.status);
+    assert_eq!(adj.white_balance.mode, sk_core::params::WbMode::Custom);
+    assert_eq!(adj.saturation, 15.0);
+    // Half the strength: half way, as one more undo step; full strength again restores it.
+    let mix = f.app.auto_mix.as_ref().expect("Stärke");
+    let (opts, mix_before, mix_auto) = (mix.opts, mix.before.clone(), mix.auto.clone());
+    assert_eq!(mix_auto, adj);
+    let half = opts.blend(&adj, &mix_before, &mix_auto, 0.5, f.app.current.as_ref().unwrap().as_shot_temp_tint);
+    assert!((half.exposure - (before.exposure + adj.exposure) / 2.0).abs() < 0.011, "{} {}", half.exposure, adj.exposure);
+    assert_eq!(opts.blend(&adj, &mix_before, &mix_auto, 1.0, (0.0, 0.0)), adj);
+    assert_eq!(opts.blend(&adj, &mix_before, &mix_auto, 0.0, (0.0, 0.0)).exposure, before.exposure);
+    f.app.undo();
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments, before);
+
+    // Only the exposure, on both selected images: the other one is saved to its sidecar.
+    f.app.auto_options = sk_core::auto::AutoOptions { white_balance: false, exposure: true, tone: false, contrast: false, vibrance: false };
+    f.app.select_path(&b, egui::Modifiers::COMMAND);
+    assert_eq!(f.app.selected_paths().len(), 2);
+    f.app.auto_adjust_selection();
+    f.pump("beide angepasst", |app| app.auto_progress.is_none());
+    assert!(f.app.status.contains("2 Bilder"), "{}", f.app.status);
+    assert_eq!(f.app.current_path().as_ref(), Some(&a));
+    let other = sidecar::load(&b).adjustments;
+    assert_ne!(other.exposure, 0.0);
+    assert_eq!((other.white_balance.mode, other.contrast), (sk_core::params::WbMode::AsShot, 0.0));
+}
+
+/// Draws the tool panel (with AccessKit) and reports the labels of its widgets.
+fn tool_panel_frame(f: &mut Fixture, events: Vec<egui::Event>) -> Vec<(String, egui::Rect)> {
+    let input = egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1500.0, 2400.0))),
+        events,
+        // Frames a quarter second apart: pressing and releasing is a click, two clicks on the
+        // same slider are no double click (which resets).
+        time: Some(f.ctx.input(|i| i.time) + 0.25),
+        ..Default::default()
+    };
+    f.ctx.enable_accesskit();
+    let mut out = f.ctx.run_ui(input, |ui| {
+        egui::Panel::right("tools").exact_size(330.0).show(ui, |ui| f.app.tool_panel(ui));
+    });
+    out.textures_delta.clear();
+    let update = out.platform_output.accesskit_update.expect("AccessKit-Baum");
+    update
+        .nodes
+        .iter()
+        .filter_map(|(_, n)| {
+            let b = n.bounds()?;
+            Some((n.label()?.to_string(), egui::Rect::from_min_max(egui::pos2(b.x0 as f32, b.y0 as f32), egui::pos2(b.x1 as f32, b.y1 as f32))))
+        })
+        .collect()
+}
+
+/// The topmost slider with this label (AccessKit names sliders after their label).
+fn slider(nodes: &[(String, egui::Rect)], label: &str) -> egui::Rect {
+    nodes.iter().filter(|(l, _)| l == label).map(|(_, r)| *r).min_by(|a, b| a.top().total_cmp(&b.top())).unwrap_or_else(|| panic!("Regler {label} fehlt"))
+}
+
+/// Clicks at 80 % of a slider's rail.
+fn click_slider(f: &mut Fixture, rail: egui::Rect) {
+    click_at(f, egui::pos2(rail.left() + rail.width() * 0.8, rail.center().y));
+}
+
+fn click_at(f: &mut Fixture, pos: egui::Pos2) -> Vec<(String, egui::Rect)> {
+    let button = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    tool_panel_frame(f, vec![egui::Event::PointerMoved(pos)]);
+    tool_panel_frame(f, vec![button(true)]);
+    tool_panel_frame(f, vec![button(false)]);
+    tool_panel_frame(f, vec![])
+}
+
+/// With a layer chosen, the develop tabs change the layer and say so; tools without an effect on
+/// layers stay visible but do nothing.
+#[test]
+fn develop_tools_change_the_chosen_layer() {
+    let Some(mut f) = Fixture::new("layer-tools") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.edit(|a| a.layers = vec![sk_core::params::Layer { name: "Himmel".into(), ..Default::default() }]);
+    f.app.tab = crate::app::Tab::Exposure;
+    let adj = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.clone();
+
+    // On the background: the bar offers the layers, the sliders change the image.
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(widget(&nodes, "Hintergrund").is_some(), "Leiste zeigt den Hintergrund");
+    click_slider(&mut f, slider(&nodes, "Belichtung"));
+    assert!(adj(&f).exposure > 0.5, "Hintergrund: {}", adj(&f).exposure);
+    assert_eq!(adj(&f).layers[0].adjustments.exposure, 0.0);
+
+    // On the layer: the same slider changes the layer, the background stays.
+    f.app.edit(|a| a.exposure = 0.0);
+    f.app.select_layer(Some(0));
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(widget(&nodes, "Ebene „Himmel“").is_some(), "Leiste zeigt die Ebene");
+    click_slider(&mut f, slider(&nodes, "Belichtung"));
+    assert_eq!(adj(&f).exposure, 0.0);
+    assert!(adj(&f).layers[0].adjustments.exposure > 0.5, "Ebene: {}", adj(&f).layers[0].adjustments.exposure);
+
+    // Levels only change the whole image: disabled and closed, so their sliders are not there.
+    assert!(widget(&nodes, "Eingang Schwarz").is_none(), "Tonwerte sind zu");
+    f.app.select_layer(None);
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(widget(&nodes, "Eingang Schwarz").is_some(), "Tonwerte wieder offen");
+
+    // The layer below the lowest one is the background.
+    f.app.select_layer(Some(0));
+    f.app.step_layer(false);
+    assert_eq!(f.app.active_layer, None);
+}
+
+/// On a layer, the tabs that only change the whole image are disabled, so are their commands;
+/// going to such a tab does nothing.
+#[test]
+fn layer_mode_leaves_out_whole_image_tabs_and_commands() {
+    use crate::app::Tab;
+    let Some(mut f) = Fixture::new("layer-mode") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.edit(|a| a.layers = vec![sk_core::params::Layer { name: "Himmel".into(), ..Default::default() }]);
+    let image_tabs = [Tab::Lens, Tab::Effects, Tab::Retouch, Tab::Styles];
+    assert!(image_tabs.iter().all(|t| f.app.tab_available(*t)));
+    let enabled = |f: &Fixture, id: &str| (crate::commands::COMMANDS.iter().find(|c| c.id == id).unwrap().enabled)(&f.app);
+    assert!(enabled(&f, "crop") && enabled(&f, "tool-heal"));
+
+    f.app.tab = Tab::Lens;
+    f.app.step_layer(true);
+    assert_eq!(f.app.active_layer, Some(0));
+    for t in image_tabs {
+        assert!(!f.app.tab_available(t), "{t:?}");
+    }
+    for t in [Tab::Exposure, Tab::Color, Tab::Details, Tab::Layers, Tab::Library, Tab::History, Tab::Output] {
+        assert!(f.app.tab_available(t), "{t:?}");
+    }
+    for id in ["crop", "straighten", "rotate-left", "wb-picker", "tool-heal", "tool-clone", "tool-remove", "find-spots"] {
+        assert!(!enabled(&f, id), "{id}");
+    }
+    // The open tab was one of them: the next frame shows the layer tab instead.
+    let mut frame = eframe::Frame::_new_kittest();
+    let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1500.0, 950.0))), ..Default::default() };
+    let app = &mut f.app;
+    let mut out = f.ctx.run_ui(input, |ui| eframe::App::ui(app, ui, &mut frame));
+    out.textures_delta.clear();
+    assert_eq!(f.app.tab, Tab::Layers);
+    assert!(!f.app.open_tab(Tab::Effects));
+    assert_ne!(f.app.tab, Tab::Effects);
+    assert!(f.app.status.contains("ganze Bild"));
+    assert!(!f.app.section_available(Tab::Exposure, "Tonwerte"));
+    assert!(f.app.section_available(Tab::Exposure, "Belichtung"));
+}
+
+/// M shows the mask also after a click on a slider (which keeps the keyboard focus).
+#[test]
+fn mask_key_works_with_a_focused_slider() {
+    let Some(mut f) = Fixture::new("mask-key") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.edit(|a| a.layers = vec![sk_core::params::Layer { name: "Himmel".into(), ..Default::default() }]);
+    f.app.select_layer(Some(0));
+    f.app.tab = crate::app::Tab::Exposure;
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    click_slider(&mut f, slider(&nodes, "Belichtung"));
+    assert!(crate::widgets::slider_has_focus(&f.ctx), "Regler hat den Fokus");
+    let key = |pressed| egui::Event::Key { key: egui::Key::M, physical_key: None, pressed, repeat: false, modifiers: Default::default() };
+    let input = egui::RawInput { events: vec![key(true), key(false)], time: Some(f.ctx.input(|i| i.time) + 1.0), ..Default::default() };
+    let app = &mut f.app;
+    let mut out = f.ctx.run_ui(input, |ui| app.shortcuts(ui.ctx()));
+    out.textures_delta.clear();
+    assert!(f.app.show_mask);
+}
+
+#[test]
+fn every_tool_says_whether_it_works_on_layers() {
+    use sk_core::tools::{LayerSupport, Tool};
+    // The tools whose sliders the develop tabs send to a layer.
+    for t in Tool::ALL {
+        let on_layer = matches!(
+            t,
+            Tool::Exposure | Tool::HighlightsShadows | Tool::WhiteBalance | Tool::Color | Tool::ColorEditor | Tool::ColorBalance | Tool::Clarity | Tool::Dehaze
+        );
+        assert_eq!(t.layer_support() != LayerSupport::None, on_layer, "{t:?}");
+    }
+}
+
+/// "Neue Ebene" in the bar above the tools goes on to the mask: the new layer changes nothing
+/// before it has one.
+#[test]
+fn new_layer_from_the_bar_goes_to_the_mask() {
+    let Some(mut f) = Fixture::new("bar-new-layer") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.tab = crate::app::Tab::Exposure;
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let bar = widget(&nodes, "Hintergrund").expect("Leiste");
+    let nodes = click_at(&mut f, bar.center());
+    let add = widget(&nodes, "Neue Ebene").expect("Menüeintrag „Neue Ebene“");
+    click_at(&mut f, add.center());
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.layers.len(), 1);
+    assert_eq!(f.app.active_layer, Some(0));
+    assert_eq!(f.app.tab, crate::app::Tab::Layers);
+}
+
+/// A long lens profile name does not widen the tool panel; only dragging its edge does.
+#[test]
+fn long_lens_profile_keeps_the_tool_panel_width() {
+    let Some(mut f) = Fixture::new("lens_width") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    let mut frame = eframe::Frame::_new_kittest();
+    f.app.splash = None;
+    f.app.grid_view = false;
+    f.app.tab = crate::app::Tab::Lens;
+    let width = |f: &Fixture| egui::containers::panel::PanelState::load(&f.ctx, egui::Id::new("tools")).expect("Werkzeugpanel").size().x;
+    window_frame(&mut f, &mut frame, 10.0, vec![]);
+    let before = width(&f);
+    f.app.current.as_mut().unwrap().adjustments.lens.profile = Some("Sehr langer Objektivname ".repeat(8));
+    for i in 1..4 {
+        window_frame(&mut f, &mut frame, 10.0 + i as f64 * 0.1, vec![]);
+    }
+    assert_eq!(width(&f), before);
 }

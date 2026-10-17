@@ -23,7 +23,11 @@ impl App {
     }
 
     pub fn reset_adjustments(&mut self) {
-        self.edit(|a| *a = Adjustments::default());
+        // As a new image starts: with the camera's look, if new images get it.
+        let looked = self.current.as_ref().and_then(|c| {
+            sk_core::camera_look::apply_if_wanted(&c.meta, &c.preview, &Adjustments::default(), sk_core::camera_look::for_new())
+        });
+        self.edit(|a| *a = looked.clone().unwrap_or_default());
     }
 
     pub fn toggle_crop(&mut self) {
@@ -264,6 +268,7 @@ impl App {
         self.command_item(ui, "straighten");
         self.command_item(ui, "auto-upright");
         ui.separator();
+        self.command_item(ui, "auto-adjust");
         self.command_item_labeled(ui, "wb-picker", "Weißabgleich aufnehmen");
         self.command_item(ui, "denoise");
         ui.separator();
@@ -274,21 +279,9 @@ impl App {
         if self.compare_ref.is_some() && self.compare_ref != self.primary_path() && item(ui, icon::PUSH_PIN_SLASH, "Referenzbild entfernen", "", true) {
             self.compare_ref = None;
         }
-        let can_match = self.can_match();
-        ui.add_enabled_ui(can_match, |ui| {
-            ui.menu_button(format!("{}  An Referenz angleichen", icon::SCALES), |ui| {
-                use sk_core::auto::MatchWhat;
-                for (text, exposure, white_balance) in
-                    [("Belichtung und Weißabgleich", true, true), ("Nur Belichtung", true, false), ("Nur Weißabgleich", false, true)]
-                {
-                    if ui.button(text).clicked() {
-                        self.match_selection(MatchWhat { exposure, white_balance });
-                    }
-                }
-            })
-            .response
-            .on_disabled_hover_text("Ein Referenzbild festlegen und weitere Bilder auswählen");
-        });
+        self.command_item(ui, "match-look");
+        self.command_item(ui, "look-add-image");
+        self.command_item(ui, "look-add-file");
         ui.separator();
         let process = self.current.as_ref().map(|c| c.adjustments.process);
         let label = match process {
@@ -408,6 +401,10 @@ impl App {
     /// viewing aids, zoom and export on the right.
     pub fn toolbar(&mut self, ui: &mut Ui) {
         let has = self.current.is_some();
+        // What changes the whole image is unavailable while a layer is chosen.
+        let on_layer = self.on_layer();
+        let image = has && !on_layer;
+        let image_hover = |hover: &str| if on_layer { format!("{hover}\nWirkt nur aufs ganze Bild – erst den Hintergrund wählen") } else { hover.to_string() };
         let ctx = ui.ctx().clone();
         // Main image tools get a label when there is room for it.
         let wide = ui.available_width() > 1350.0;
@@ -436,19 +433,21 @@ impl App {
                 self.redo();
             }
             group_gap(ui);
-            if tool(ui, icon::ARROW_COUNTER_CLOCKWISE, &crate::commands::hint("Links drehen", "rotate-left"), false, has).clicked() {
+            if tool(ui, icon::ARROW_COUNTER_CLOCKWISE, &image_hover(&crate::commands::hint("Links drehen", "rotate-left")), false, image).clicked() {
                 self.rotate(3);
             }
-            if tool(ui, icon::ARROW_CLOCKWISE, &crate::commands::hint("Rechts drehen", "rotate-right"), false, has).clicked() {
+            if tool(ui, icon::ARROW_CLOCKWISE, &image_hover(&crate::commands::hint("Rechts drehen", "rotate-right")), false, image).clicked() {
                 self.rotate(1);
             }
-            if labeled_tool(ui, wide, icon::CROP, "Zuschneiden", &format!("{}, {}", crate::commands::hint("Zuschneiden", "crop"), crate::commands::hint("übernehmen", "finish-crop")), self.crop_tool.is_some(), has).clicked() {
+            let crop_hover = format!("{}, {}", crate::commands::hint("Zuschneiden", "crop"), crate::commands::hint("übernehmen", "finish-crop"));
+            if labeled_tool(ui, wide, icon::CROP, "Zuschneiden", &image_hover(&crop_hover), self.crop_tool.is_some(), image).clicked() {
                 self.toggle_crop();
             }
-            if labeled_tool(ui, wide, icon::RULER, "Geraderichten", "Geraderichten: eine Linie entlang des Horizonts ziehen", self.straighten_tool.is_some(), has).clicked() {
+            if labeled_tool(ui, wide, icon::RULER, "Geraderichten", &image_hover("Geraderichten: eine Linie entlang des Horizonts ziehen"), self.straighten_tool.is_some(), image).clicked() {
                 self.toggle_straighten();
             }
-            if labeled_tool(ui, wide, icon::EYEDROPPER, "Weißabgleich", &crate::commands::hint("Weißabgleich-Pipette: auf eine neutrale Stelle klicken", "wb-picker"), self.picking_wb, has).clicked() {
+            let wb_hover = crate::commands::hint("Weißabgleich-Pipette: auf eine neutrale Stelle klicken", "wb-picker");
+            if labeled_tool(ui, wide, icon::EYEDROPPER, "Weißabgleich", &image_hover(&wb_hover), self.picking_wb, image).clicked() {
                 self.toggle_wb_picker();
                 if self.picking_wb {
                     self.tab = Tab::Color;
@@ -462,7 +461,8 @@ impl App {
             if copy.secondary_clicked() {
                 self.open_copy_dialog();
             }
-            if tool(ui, icon::CLIPBOARD_TEXT, &crate::commands::hint("Anpassungen auf Auswahl anwenden", "paste-adjustments"), false, self.clipboard.is_some()).clicked() {
+            let paste_hover = image_hover(&crate::commands::hint("Anpassungen auf Auswahl anwenden", "paste-adjustments"));
+            if tool(ui, icon::CLIPBOARD_TEXT, &paste_hover, false, self.clipboard.is_some() && !on_layer).clicked() {
                 self.paste_adjustments();
             }
             if tool(ui, icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", false, has).clicked() {
@@ -546,7 +546,11 @@ impl App {
             ui.spacing_mut().item_spacing.y = 2.0;
             ui.add_space(6.0);
             let mut group = Tab::ALL[0].group();
+            let on_layer = self.on_layer();
             for tab in Tab::ALL {
+                // On a layer, the tabs that only change the whole image are disabled, those that
+                // work on it get a dot in the accent color.
+                let available = self.tab_available(tab);
                 if tab.group() != group {
                     group = tab.group();
                     ui.add_space(4.0);
@@ -555,27 +559,44 @@ impl App {
                     ui.add_space(4.0);
                 }
                 let selected = self.tab == tab;
-                let (rect, resp) = ui.allocate_exact_size(vec2(60.0, 46.0), Sense::click());
+                let (rect, resp) = ui.allocate_exact_size(vec2(60.0, 46.0), if available { Sense::click() } else { Sense::hover() });
                 let painter = ui.painter();
                 let t = ui.ctx().animate_bool_with_time(resp.id, selected, 0.12);
-                if resp.hovered() && !selected {
+                if resp.hovered() && !selected && available {
                     painter.rect_filled(rect, 7.0, Color32::from_rgb(38, 38, 42));
                 }
                 if t > 0.0 {
                     let bar = egui::Rect::from_center_size(pos2(rect.left() - 2.0, rect.center().y), vec2(3.0, 24.0 * t));
                     painter.rect_filled(bar, 1.5, theme::ACCENT);
                 }
-                let color = if selected { Color32::WHITE } else if resp.hovered() { theme::TEXT } else { theme::TEXT_DIM };
+                let color = if !available {
+                    theme::TEXT_FAINT.gamma_multiply(0.6)
+                } else if selected {
+                    Color32::WHITE
+                } else if resp.hovered() {
+                    theme::TEXT
+                } else {
+                    theme::TEXT_DIM
+                };
                 let symbol = painter.layout_no_wrap(tab.icon().to_string(), egui::FontId::proportional(19.0), color);
                 let pos = rect.center() - vec2(0.0, 7.0) - symbol.size() / 2.0;
                 if t > 0.0 {
                     // The selected tab's symbol glows in the accent color, like neon.
                     theme::paint_glow(painter, pos, &symbol, 6.0, t);
                 }
+                let symbol_rect = Rect::from_min_size(pos, symbol.size());
                 painter.galley(pos, symbol, color);
+                if on_layer && tab.on_layers() {
+                    painter.circle_filled(symbol_rect.right_top() + vec2(2.0, 1.0), 3.0, theme::ACCENT);
+                }
                 painter.text(rect.center_bottom() - vec2(0.0, 9.0), egui::Align2::CENTER_CENTER, tab.short_title(), egui::FontId::proportional(10.0), color);
                 let key = crate::palette::tab_shortcut(tab);
-                let hover = if key.is_empty() { tab.title().to_string() } else { format!("{}  ({key})", tab.title()) };
+                let mut hover = if key.is_empty() { tab.title().to_string() } else { format!("{}  ({key})", tab.title()) };
+                if !available {
+                    hover = format!("{hover}\n{}", crate::widgets::ONLY_IMAGE);
+                } else if on_layer && tab.on_layers() {
+                    hover = format!("{hover}\nWirkt auf die gewählte Ebene");
+                }
                 if resp.on_hover_text(hover).clicked() {
                     self.tab = tab;
                 }
@@ -598,6 +619,12 @@ impl App {
             });
         });
         ui.add_space(8.0);
+        // The tabs whose tools also work on layers (the layer tab has its list).
+        if matches!(self.tab, Tab::Exposure | Tab::Color | Tab::Details) {
+            self.edit_target_bar(ui);
+        } else {
+            self.peek_mask = false;
+        }
         self.tools_ui(ui);
     }
 
@@ -647,6 +674,7 @@ impl App {
                 let sel = if n > 1 { format!("  ·  {n} ausgewählt") } else { String::new() };
                 let count = image_count(self.visible.len());
                 ui.label(dim(format!("{}  ·  {count}{sel}", scope_label(&self.scope, &self.lists, self.session.as_ref()))));
+                self.update_status(ui);
                 if !self.activities().is_empty() {
                     ui.separator();
                     self.activity_status(ui);
@@ -663,6 +691,7 @@ impl App {
     pub fn dialogs(&mut self, ctx: &egui::Context) {
         self.rename_dialog(ctx);
         self.gpu_dialog(ctx);
+        self.update_dialog(ctx);
         self.copy_dialog(ctx);
         self.shortcut_editor(ctx);
     }

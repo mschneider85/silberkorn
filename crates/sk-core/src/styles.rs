@@ -92,7 +92,7 @@ pub fn apply_look(style: &Style, target: &Adjustments) -> Adjustments {
     out.levels = l.levels.clone();
     out.curves = l.curves.clone();
     out.color_editor = l.color_editor.clone();
-    out.color_balance = l.color_balance.clone();
+    out.color_balance = l.color_balance;
     out.black_white = l.black_white.clone();
     out.detail.grain_amount = l.detail.grain_amount;
     out.detail.grain_size = l.detail.grain_size;

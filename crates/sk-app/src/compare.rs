@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use egui::{Color32, Rect, Sense, Ui, Vec2, pos2, vec2};
-use sk_core::auto::MatchWhat;
 
 use crate::app::App;
 use crate::theme::{self, icon};
@@ -112,57 +111,6 @@ impl App {
         } else {
             self.status = format!("Referenzbild: {}", file_name(&path));
             self.compare_ref = Some(path);
-        }
-    }
-
-    /// The reference is set and other images are selected.
-    pub fn can_match(&self) -> bool {
-        self.match_progress.is_none()
-            && self.compare_ref.as_ref().is_some_and(|r| self.selected_paths().iter().any(|p| p != r))
-    }
-
-    /// Matches exposure and/or white balance of the selected images to the reference.
-    pub fn match_selection(&mut self, what: MatchWhat) {
-        let Some(reference) = self.compare_ref.clone() else {
-            self.status = crate::commands::hint("Zuerst ein Referenzbild festlegen", "reference");
-            return;
-        };
-        // The reference and the current image as they are now.
-        self.commit_and_save();
-        let targets: Vec<PathBuf> = self.selected_paths().into_iter().filter(|p| *p != reference).collect();
-        if targets.is_empty() {
-            self.status = "Zum Angleichen weitere Bilder auswählen".into();
-            return;
-        }
-        self.match_progress = Some((0, targets.len()));
-        self.status = format!("Gleiche {} an „{}“ an …", widgets::image_count(targets.len()), file_name(&reference));
-        self.workers.match_to_reference(crate::workers::MatchJob { reference, targets, what });
-    }
-
-    /// One image has been matched to the reference.
-    pub(crate) fn matched(&mut self, path: PathBuf, result: Result<(Option<f32>, Option<sk_core::params::WhiteBalance>), String>) {
-        match result {
-            Ok((exposure, wb)) => self.set_adjustments_on(&[path], |a| {
-                let mut n = a.clone();
-                if let Some(e) = exposure {
-                    n.exposure = e;
-                }
-                if let Some(w) = &wb {
-                    n.white_balance = w.clone();
-                }
-                n
-            }),
-            Err(e) => {
-                log::warn!("Angleichen: {e}");
-                self.status = format!("Angleichen fehlgeschlagen: {e}");
-            }
-        }
-        if let Some((done, total)) = self.match_progress {
-            let done = done + 1;
-            self.match_progress = (done < total).then_some((done, total));
-            if done == total && !self.status.starts_with("Angleichen fehlgeschlagen") {
-                self.status = format!("{} an die Referenz angeglichen", widgets::image_count(total));
-            }
         }
     }
 

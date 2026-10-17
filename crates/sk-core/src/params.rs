@@ -18,17 +18,70 @@ pub enum BaseCurve {
     FilmHigh,
     /// Pure linear scene response (gamma encoded only).
     Linear,
+    /// The tone of the camera's own JPEG, fitted per image (see [`CameraCurve`]); Film Standard
+    /// while there is none.
+    Camera,
 }
 
 impl BaseCurve {
-    pub const ALL: [BaseCurve; 3] = [BaseCurve::FilmStandard, BaseCurve::FilmHigh, BaseCurve::Linear];
+    pub const ALL: [BaseCurve; 4] = [BaseCurve::Camera, BaseCurve::FilmStandard, BaseCurve::FilmHigh, BaseCurve::Linear];
 
     pub fn label(self) -> &'static str {
         match self {
             BaseCurve::FilmStandard => "Film Standard",
             BaseCurve::FilmHigh => "Film hoher Kontrast",
             BaseCurve::Linear => "Linear",
+            BaseCurve::Camera => "Kamera",
         }
+    }
+
+    /// What the curve does, for the hover text.
+    pub fn hint(self) -> &'static str {
+        match self {
+            BaseCurve::Camera => "Tonkurve des Kamera-JPEGs, das in der RAW-Datei steckt, für jedes Bild angepasst: Helligkeit, Kontrast und Lichter wie in der Kamera. Standard für neue Bilder.",
+            BaseCurve::FilmStandard => "Filmähnliche Kurve mit weicher Schulter in den Lichtern",
+            BaseCurve::FilmHigh => "Wie Film Standard, mit mehr Kontrast",
+            BaseCurve::Linear => "Ohne Kurve, nur die Gammakodierung: Ausgangspunkt für eine eigene Gradation",
+        }
+    }
+}
+
+/// Tone curve of the camera's own JPEG (see `camera_look::fit`): display-linear luminance over
+/// scene brightness in EV relative to middle grey, at strictly increasing EV. Below the first
+/// point the curve runs towards black with the slope of its start, above the last it rolls off
+/// towards white.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+pub struct CameraCurve {
+    /// (EV, display-linear value 0..1)
+    pub points: Vec<[f32; 2]>,
+}
+
+impl CameraCurve {
+    /// Display-linear value for a scene-linear value `v` (middle grey 0.18).
+    pub fn eval(&self, v: f32) -> f32 {
+        let p = &self.points;
+        if p.len() < 2 || v <= 0.0 {
+            return 0.0;
+        }
+        let ev = (v / 0.18).log2();
+        let n = p.len();
+        if ev <= p[0][0] {
+            // Power law through the first point with the slope (in log-log) of the first segment.
+            let g = ((p[1][1] / p[0][1].max(1e-6)).log2() / (p[1][0] - p[0][0]).max(1e-3)).clamp(0.8, 3.0);
+            return p[0][1] * (ev - p[0][0]).exp2().powf(g);
+        }
+        if ev >= p[n - 1][0] {
+            // Exponential roll-off to 1 with the slope of the last segment (in linear terms).
+            let (v0, v1) = (0.18 * p[n - 2][0].exp2(), 0.18 * p[n - 1][0].exp2());
+            let y = p[n - 1][1];
+            let slope = ((y - p[n - 2][1]) / (v1 - v0).max(1e-6)).max(1e-4);
+            let k = slope / (1.0 - y).max(1e-4);
+            return (1.0 - (1.0 - y) * (-(v - v1) * k).exp()).min(1.0);
+        }
+        let i = p.partition_point(|q| q[0] <= ev).clamp(1, n - 1);
+        let (a, b) = (p[i - 1], p[i]);
+        let t = (ev - a[0]) / (b[0] - a[0]).max(1e-6);
+        a[1] + (b[1] - a[1]) * t
     }
 }
 
@@ -174,6 +227,9 @@ pub struct Adjustments {
     pub process: u32,
     pub white_balance: WhiteBalance,
     pub base_curve: BaseCurve,
+    /// The camera's tone for [`BaseCurve::Camera`], fitted to this image.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_curve: Option<CameraCurve>,
     /// Exposure in EV, -4..4
     pub exposure: f32,
     /// -100..100
@@ -213,6 +269,12 @@ pub struct Adjustments {
     /// Lens blur from the depth map.
     #[serde(skip_serializing_if = "LensBlur::is_default")]
     pub lens_blur: LensBlur,
+    /// Near and far parts lit separately, by the depth map.
+    #[serde(skip_serializing_if = "Relight::is_default")]
+    pub relight: Relight,
+    /// Haze growing with the distance, by the depth map.
+    #[serde(skip_serializing_if = "Atmosphere::is_default")]
+    pub atmosphere: Atmosphere,
 }
 
 /// Something removed from the image: the strokes that marked it and the generated content
@@ -249,9 +311,49 @@ pub struct LayerAdjustments {
     pub tint: f32,
     /// Haze removal, -100..100
     pub dehaze: f32,
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub whites: f32,
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub blacks: f32,
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub vibrance: f32,
+    /// Shifts per hue band, added to those of the color editor.
+    #[serde(skip_serializing_if = "bands_neutral")]
+    pub color_bands: [HslBand; 8],
+    /// Color wheels, added to those of the color balance (as offsets, see `ColorWheel::offset`).
+    #[serde(skip_serializing_if = "ColorBalance::is_neutral")]
+    pub color_balance: ColorBalance,
+}
+
+fn bands_neutral(b: &[HslBand; 8]) -> bool {
+    b.iter().all(|b| *b == HslBand::default())
 }
 
 impl LayerAdjustments {
+    /// No change (as `default()`, for constants).
+    pub const NEUTRAL: Self = {
+        let band = HslBand { hue: 0.0, saturation: 0.0, lightness: 0.0 };
+        let wheel = ColorWheel { hue: 0.0, amount: 0.0, lightness: 0.0 };
+        Self {
+            exposure: 0.0,
+            contrast: 0.0,
+            brightness: 0.0,
+            saturation: 0.0,
+            highlights: 0.0,
+            shadows: 0.0,
+            clarity: 0.0,
+            structure: 0.0,
+            temperature: 0.0,
+            tint: 0.0,
+            dehaze: 0.0,
+            whites: 0.0,
+            blacks: 0.0,
+            vibrance: 0.0,
+            color_bands: [band; 8],
+            color_balance: ColorBalance { master: wheel, shadows: wheel, midtones: wheel, highlights: wheel },
+        }
+    };
+
     pub fn is_neutral(&self) -> bool {
         *self == LayerAdjustments::default()
     }
@@ -412,6 +514,83 @@ impl LensBlur {
     /// Unchanged (not saved): switched off, the focus and range stay saved for later.
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+}
+
+/// Lights the near and the far part of the image separately, by the
+/// depth map: internally two layers with depth masks (see `pipeline`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Relight {
+    /// Exposure of the near part in EV, -2..2.
+    pub near: f32,
+    /// Warm (+) / cool (-) of the near part, -100..100.
+    pub near_warmth: f32,
+    pub far: f32,
+    pub far_warmth: f32,
+    /// Depth where near turns into far (0 far .. 1 near).
+    pub split: f32,
+    /// Width of the transition.
+    pub falloff: f32,
+}
+
+impl Default for Relight {
+    fn default() -> Self {
+        Self { near: 0.0, near_warmth: 0.0, far: 0.0, far_warmth: 0.0, split: 0.6, falloff: 0.3 }
+    }
+}
+
+impl Relight {
+    pub fn is_off(&self) -> bool {
+        self.near == 0.0 && self.near_warmth == 0.0 && self.far == 0.0 && self.far_warmth == 0.0
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The depth ranges of the near and the far part; their weights add up to one.
+    pub fn ranges(&self) -> (DepthRange, DepthRange) {
+        let f = self.falloff.max(0.02);
+        let near = DepthRange { near: 1.0, far: self.split + f / 2.0, falloff: f };
+        let far = DepthRange { near: self.split - f / 2.0, far: 0.0, falloff: f };
+        (near, far)
+    }
+}
+
+/// Haze that grows with the distance, by the depth map: internally a
+/// layer adding haze through a depth mask (see `pipeline`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Atmosphere {
+    /// 0..100; 0 is off.
+    pub amount: f32,
+    /// How far towards the front the haze reaches (0 only the farthest part .. 1 everything).
+    pub reach: f32,
+    /// Brightens the haze, -100..100.
+    pub brightness: f32,
+    /// Warm (+) / cool (-), -100..100.
+    pub warmth: f32,
+}
+
+impl Default for Atmosphere {
+    fn default() -> Self {
+        Self { amount: 0.0, reach: 0.5, brightness: 0.0, warmth: 0.0 }
+    }
+}
+
+impl Atmosphere {
+    pub fn is_off(&self) -> bool {
+        self.amount <= 0.0
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// The depth range of the haze: full at the farthest part, gone at `reach`.
+    pub fn range(&self) -> DepthRange {
+        DepthRange { near: 0.0, far: 0.0, falloff: self.reach.clamp(0.02, 1.0) }
     }
 }
 
@@ -654,6 +833,23 @@ pub struct Detail {
     pub dehaze: f32,
     /// AI denoising (see `ai_denoise`): how much of the cleaned raw data replaces the plain one, 0..100.
     pub ai_denoise: f32,
+    /// Glow (Orton effect): a blurred copy of the bright parts screened over the image, 0..100.
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub glow_amount: f32,
+    /// Size of the glow, 0..100.
+    #[serde(skip_serializing_if = "is_default_glow_size")]
+    pub glow_size: f32,
+}
+
+/// Default size of the glow.
+pub const GLOW_SIZE: f32 = 40.0;
+
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
+}
+
+fn is_default_glow_size(v: &f32) -> bool {
+    *v == GLOW_SIZE
 }
 
 impl Default for Detail {
@@ -671,6 +867,8 @@ impl Default for Detail {
             vignette_amount: 0.0,
             dehaze: 0.0,
             ai_denoise: 0.0,
+            glow_amount: 0.0,
+            glow_size: GLOW_SIZE,
         }
     }
 }
@@ -820,7 +1018,17 @@ pub struct ColorWheel {
     pub lightness: f32,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+impl ColorWheel {
+    /// The wheel as offsets that can be added up: a and b (amount 0..1 in the hue's
+    /// direction) and lightness (-1..1).
+    pub fn offset(&self) -> [f32; 3] {
+        let hr = self.hue.to_radians();
+        let amt = self.amount / 100.0;
+        [amt * hr.cos(), amt * hr.sin(), self.lightness / 100.0]
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ColorBalance {
     pub master: ColorWheel,
@@ -852,6 +1060,7 @@ impl Default for Adjustments {
             process: PROCESS_LATEST,
             white_balance: WhiteBalance::default(),
             base_curve: BaseCurve::default(),
+            camera_curve: None,
             exposure: 0.0,
             contrast: 0.0,
             brightness: 0.0,
@@ -875,11 +1084,19 @@ impl Default for Adjustments {
             retouch: Vec::new(),
             removals: Vec::new(),
             lens_blur: LensBlur::default(),
+            relight: Relight::default(),
+            atmosphere: Atmosphere::default(),
         }
     }
 }
 
 impl Adjustments {
+    /// Something uses the depth map (lens blur, relight, atmosphere); not counting depth masks
+    /// of layers, which keep their own bitmap.
+    pub fn needs_depth(&self) -> bool {
+        !self.lens_blur.is_off() || !self.relight.is_off() || !self.atmosphere.is_off()
+    }
+
     /// Copies only the framing (rotation, crop, straighten, ...), e.g. for the before view.
     pub fn keep_framing_from(&mut self, other: &Adjustments) {
         self.process = other.process;
@@ -951,12 +1168,30 @@ impl Adjustments {
         self.layers = other.layers.clone();
         self.retouch = other.retouch.clone();
         self.removals = other.removals.clone();
+        // The camera's curve was fitted to this image (another one gets its own when opened).
+        self.camera_curve = other.camera_curve.clone();
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn layer_adjustments_of_old_files_load_and_new_fields_stay_out_until_used() {
+        let old: LayerAdjustments = serde_json::from_str(r#"{"exposure":0.5,"dehaze":10.0}"#).unwrap();
+        assert_eq!(old, LayerAdjustments { exposure: 0.5, dehaze: 10.0, ..Default::default() });
+        let json = serde_json::to_string(&old).unwrap();
+        for key in ["whites", "blacks", "vibrance", "color_bands", "color_balance"] {
+            assert!(!json.contains(key), "{json}");
+        }
+        let mut used = old;
+        used.color_balance.shadows.amount = 20.0;
+        used.color_bands[2].hue = 5.0;
+        assert!(!used.is_neutral());
+        let back: LayerAdjustments = serde_json::from_str(&serde_json::to_string(&used).unwrap()).unwrap();
+        assert_eq!(back, used);
+    }
 
     #[test]
     fn damaged_ai_mask_is_dropped_on_load() {

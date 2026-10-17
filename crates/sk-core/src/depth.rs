@@ -76,6 +76,27 @@ impl DepthMap {
     }
 }
 
+/// Masks of depth ranges made recently (relight and atmosphere ask for the same ones with
+/// every rendering): by map and range, sharing the bitmap so the mask cache recognizes it.
+type RangeKey = (usize, [u32; 3]);
+static RANGE_MASKS: Mutex<Vec<(RangeKey, Arc<DepthMap>, crate::params::AiMask)>> = Mutex::new(Vec::new());
+
+/// [`DepthMap::range_mask`], reused while the map and the range stay the same.
+pub fn range_mask_cached(map: &Arc<DepthMap>, r: &crate::params::DepthRange) -> crate::params::AiMask {
+    let key = (Arc::as_ptr(map) as usize, [r.near, r.far, r.falloff].map(f32::to_bits));
+    let mut done = RANGE_MASKS.lock().unwrap();
+    // The map is held with its key, so the address can't be reused by another one.
+    if let Some(e) = done.iter().find(|(k, m, _)| *k == key && Arc::ptr_eq(m, map)) {
+        return e.2.clone();
+    }
+    let mask = map.range_mask(r);
+    done.push((key, map.clone(), mask.clone()));
+    if done.len() > 8 {
+        done.remove(0);
+    }
+    mask
+}
+
 /// Computes the depth map of an image file (with progress 0..1).
 pub type ComputeFn = dyn Fn(&Path, &dyn Fn(f32)) -> Result<DepthMap> + Send + Sync;
 

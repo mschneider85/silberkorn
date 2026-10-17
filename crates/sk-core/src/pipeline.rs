@@ -18,11 +18,11 @@ use std::sync::{Arc, Mutex};
 use rayon::prelude::*;
 
 use crate::color::{Mat3, Oklab, OutputSpace, luminance, mat_vec, srgb_decode, srgb_encode};
-use crate::detail::{Plane, fast_guided_filter, gaussian_blur, guided_filter, median_hv, value_noise};
+use crate::detail::{Plane, box_blur, fast_guided_filter, gaussian_blur, guided_filter, median_hv, value_noise};
 use crate::geometry::{GeoMap, Region};
 use crate::image::LinearImage;
 use crate::mask::{MaskBitmap, apply_retouch, cached_bitmap};
-use crate::params::{Adjustments, BaseCurve, HUE_BANDS, LayerAdjustments, Mask, WbMode};
+use crate::params::{Adjustments, BaseCurve, ColorBalance, HUE_BANDS, HslBand, LayerAdjustments, Mask, WbMode};
 use crate::raw::RawMeta;
 
 mod gpu;
@@ -126,16 +126,56 @@ struct LocalPlanes {
     /// Local contrast detail in EV (clarity + structure combined, unscaled per kind).
     clarity: Option<Plane>,
     structure: Option<Plane>,
-    dehaze: Option<DarkChannel>,
+    dehaze: Option<Arc<DarkChannel>>,
+    /// Where the planes' region starts in the region `dehaze` was made for (a part cut out of
+    /// the whole image's planes, see [`LocalPlanes::crop`]).
+    dark_origin: (usize, usize),
 }
 
-/// Low-resolution dark channel (haze density) and airlight for dehazing.
+impl LocalPlanes {
+    /// The part `ext` of the planes of the whole image (`full_w` wide).
+    fn crop(&self, full_w: usize, ext: Region) -> LocalPlanes {
+        let cut = |p: &Option<Plane>| p.as_ref().map(|p| crop_plane(&p.data, full_w, ext));
+        LocalPlanes {
+            hdr_base: cut(&self.hdr_base),
+            clarity: cut(&self.clarity),
+            structure: cut(&self.structure),
+            dehaze: self.dehaze.clone(),
+            dark_origin: (self.dark_origin.0 + ext.x, self.dark_origin.1 + ext.y),
+        }
+    }
+}
+
+/// The part `ext` of a `full_w` wide plane.
+fn crop_plane(data: &[f32], full_w: usize, ext: Region) -> Plane {
+    Plane::new(ext.w, ext.h, crop_rows(data, full_w, ext))
+}
+
+/// The part `ext` of a `full_w` wide raster, row after row.
+fn crop_rows<T: Copy>(data: &[T], full_w: usize, ext: Region) -> Vec<T> {
+    (ext.y..ext.y + ext.h).flat_map(|y| data[y * full_w + ext.x..y * full_w + ext.x + ext.w].iter().copied()).collect()
+}
+
+
+/// Low-resolution haze density and airlight for dehazing. The density follows the image's
+/// edges: on the block grid it is fitted as a linear function of the luminance (guided
+/// filter on the blocks' minima), evaluated per pixel with the pixel's own luminance, so
+/// that haze is not left in a halo around objects in front of a hazy background.
 struct DarkChannel {
-    plane: Plane,
+    /// Density at a pixel: `a * guide + b` (`guide`: luminance relative to the airlight's).
+    a: Plane,
+    b: Plane,
+    /// Largest guide the fit saw around each block: the pixel's guide is limited to it, a
+    /// bright pixel among darker ones (fitted on the blocks' darkest) would extrapolate.
+    top: Plane,
     /// Downsampling factor relative to the working region.
     step: usize,
-    airlight: f32,
+    /// The haze's color (see `airlight_of`).
+    airlight: [f32; 3],
 }
+
+/// Transmission below which dehazing eases off (at most about 4x the contrast).
+const HAZE_T_MIN: f32 = 0.25;
 
 /// Block size of the dark channel for an output of `full` pixels: the same for every part of
 /// the image, so that tiles match.
@@ -155,54 +195,83 @@ fn lcm(a: usize, b: usize) -> usize {
 
 impl DarkChannel {
     /// `airlight`: that of the whole image when `img` is only a part of it.
-    fn new(img: &LinearImage, step: usize, airlight: Option<f32>) -> Self {
+    fn new(img: &LinearImage, step: usize, airlight: Option<[f32; 3]>) -> Self {
         let (w, h) = (img.width, img.height);
-        let min_c: Vec<f32> = img.data.par_iter().map(|p| p[0].min(p[1]).min(p[2])).collect();
-        // Airlight: bright end of the minimum channel (sampled).
-        let samples: Vec<f32> = min_c.iter().step_by(7).copied().collect();
-        // Min-pool into blocks, then smooth.
+        // Airlight samples: every 7th pixel.
+        let samples: Vec<[f32; 3]> = img.data.iter().step_by(7).copied().collect();
+        // Per block: smallest value of each channel and of the luminance.
         let (lw, lh) = (w.div_ceil(step), h.div_ceil(step));
-        let pooled: Vec<f32> = (0..lw * lh)
+        let minima: Vec<[f32; 4]> = (0..lw * lh)
             .into_par_iter()
             .map(|i| {
                 let (bx, by) = (i % lw * step, i / lw * step);
-                let mut m = f32::MAX;
+                let mut m = [f32::MAX; 4];
                 for y in by..(by + step).min(h) {
-                    for x in bx..(bx + step).min(w) {
-                        m = m.min(min_c[y * w + x]);
+                    for p in &img.data[y * w + bx..y * w + (bx + step).min(w)] {
+                        for (c, v) in [p[0], p[1], p[2], dot(*p, LUMA)].into_iter().enumerate() {
+                            m[c] = m[c].min(v.max(0.0));
+                        }
                     }
                 }
                 m
             })
             .collect();
-        Self::from_parts(samples, pooled, lw, lh, step, airlight)
+        Self::from_parts(samples, minima, lw, lh, step, airlight)
     }
 
+    /// Haze density at pixel `(x, y)` of color `p`.
     #[inline]
-    fn at(&self, x: usize, y: usize) -> f32 {
-        let fx = ((x as f32 + 0.5) / self.step as f32 - 0.5).clamp(0.0, (self.plane.w - 1) as f32);
-        let fy = ((y as f32 + 0.5) / self.step as f32 - 0.5).clamp(0.0, (self.plane.h - 1) as f32);
+    fn at(&self, x: usize, y: usize, p: [f32; 3]) -> f32 {
+        let fx = ((x as f32 + 0.5) / self.step as f32 - 0.5).clamp(0.0, (self.a.w - 1) as f32);
+        let fy = ((y as f32 + 0.5) / self.step as f32 - 0.5).clamp(0.0, (self.a.h - 1) as f32);
         let (x0, y0) = (fx as usize, fy as usize);
-        let (x1, y1) = ((x0 + 1).min(self.plane.w - 1), (y0 + 1).min(self.plane.h - 1));
+        let (x1, y1) = ((x0 + 1).min(self.a.w - 1), (y0 + 1).min(self.a.h - 1));
         let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
-        let d = &self.plane.data;
-        let w = self.plane.w;
-        let top = d[y0 * w + x0] * (1.0 - tx) + d[y0 * w + x1] * tx;
-        let bot = d[y1 * w + x0] * (1.0 - tx) + d[y1 * w + x1] * tx;
-        top * (1.0 - ty) + bot * ty
+        let w = self.a.w;
+        let lerp = |d: &[f32]| {
+            let top = d[y0 * w + x0] * (1.0 - tx) + d[y0 * w + x1] * tx;
+            let bot = d[y1 * w + x0] * (1.0 - tx) + d[y1 * w + x1] * tx;
+            top * (1.0 - ty) + bot * ty
+        };
+        let guide = dot(p, LUMA).max(0.0) / dot(self.airlight, LUMA).max(1e-3);
+        (lerp(&self.a.data) * guide.min(lerp(&self.top.data)) + lerp(&self.b.data)).clamp(0.0, 1.0)
     }
 
     /// Removes (strength > 0) or adds (strength < 0) haze.
     #[inline]
     fn apply(&self, p: [f32; 3], dark: f32, strength: f32) -> [f32; 3] {
-        let a = self.airlight;
+        let al = self.airlight;
         if strength > 0.0 {
-            let t = (1.0 - 0.95 * strength * dark).max(0.12);
-            p.map(|v| ((v - a * (1.0 - t)) / t).max(0.0))
+            let t0 = 1.0 - 0.95 * strength * dark;
+            // Soft lower limit: no hard edge where the limit starts.
+            let t = (0.5 * (t0 + HAZE_T_MIN + ((t0 - HAZE_T_MIN).powi(2) + 0.004).sqrt())).min(1.0);
+            let j: [f32; 3] = std::array::from_fn(|c| (p[c] - al[c] * (1.0 - t)) / t);
+            // Removing the haze darkens: brighten the dark part of the result somewhat (the
+            // haze's own brightness stays, or the sky would burn out).
+            let ya = dot(al, LUMA).max(1e-3);
+            let lift = 1.0 + (t.powf(-0.3) - 1.0) * (1.0 - dot(j, LUMA) / ya).clamp(0.0, 1.0);
+            // Colors gain less than contrast (1/t^0.6 instead of 1/t), or they turn garish.
+            let y = dot(j, LUMA);
+            let chroma = t.powf(0.4);
+            // Values below black run out softly instead of clipping.
+            let toe = 0.05 * (1.0 - t) * ya;
+            j.map(|v| haze_toe((y + (v - y) * chroma) * lift, toe))
         } else {
             let s = -strength * 0.6 * (1.0 - dark * 0.5);
-            p.map(|v| v + (a - v) * s)
+            std::array::from_fn(|c| p[c] + (al[c] - p[c]) * s)
         }
+    }
+}
+
+/// `v` above `k`; below it runs smoothly towards 0 (same value and slope at `k`).
+#[inline]
+fn haze_toe(v: f32, k: f32) -> f32 {
+    if v >= k {
+        v
+    } else if k < 1e-6 {
+        v.max(0.0)
+    } else {
+        k * (v / k - 1.0).exp()
     }
 }
 
@@ -220,6 +289,25 @@ struct ToneParams {
     tint: f32,
     brightness: f32,
     dehaze: f32,
+    vibrance: f32,
+    /// Color editor: hue shift, saturation and lightness (both /100) per hue band.
+    bands: [[f32; 3]; 8],
+    /// Color balance offsets per wheel (master, shadows, midtones, highlights), see
+    /// `ColorWheel::offset`: being cartesian, the wheels of layers add up.
+    balance: [[f32; 3]; 4],
+}
+
+fn band_params(bands: &[HslBand; 8]) -> [[f32; 3]; 8] {
+    bands.map(|b| [b.hue, b.saturation / 100.0, b.lightness / 100.0])
+}
+
+fn balance_params(cb: &ColorBalance) -> [[f32; 3]; 4] {
+    [cb.master, cb.shadows, cb.midtones, cb.highlights].map(|w| w.offset())
+}
+
+/// Whether a layer changes anything of the color stage (bands, wheels, vibrance).
+fn layer_colors(l: &LayerAdjustments) -> bool {
+    l.vibrance != 0.0 || !l.color_balance.is_neutral() || l.color_bands.iter().any(|b| *b != HslBand::default())
 }
 
 impl ToneParams {
@@ -235,6 +323,17 @@ impl ToneParams {
         self.tint += l.tint * w;
         self.brightness += l.brightness * w;
         self.dehaze += l.dehaze * w;
+        self.hdr[2] += l.whites / 100.0 * w;
+        self.hdr[3] += l.blacks / 100.0 * w;
+        if layer_colors(l) {
+            self.vibrance += l.vibrance * w;
+            for (t, d) in self.bands.iter_mut().zip(band_params(&l.color_bands)) {
+                t.iter_mut().zip(d).for_each(|(t, d)| *t += d * w);
+            }
+            for (t, d) in self.balance.iter_mut().zip(balance_params(&l.color_balance)) {
+                t.iter_mut().zip(d).for_each(|(t, d)| *t += d * w);
+            }
+        }
     }
 }
 
@@ -245,6 +344,42 @@ struct PreparedLayer {
     mask: Mask,
     opacity: f32,
     adj: LayerAdjustments,
+}
+
+/// `PreparedLayer::index` of the layers made from tools (not in `Adjustments::layers`).
+const TOOL_LAYER: usize = usize::MAX;
+
+/// Relight and atmosphere as layers with masks from the depth map (none until the map exists).
+fn depth_layers(meta: &RawMeta, adj: &Adjustments) -> Vec<PreparedLayer> {
+    let (rl, at) = (&adj.relight, &adj.atmosphere);
+    if rl.is_off() && at.is_off() {
+        return Vec::new();
+    }
+    crate::depth::load(&meta.path).map_or_else(Vec::new, |map| depth_layers_with(&map, adj))
+}
+
+fn depth_layers_with(map: &Arc<crate::depth::DepthMap>, adj: &Adjustments) -> Vec<PreparedLayer> {
+    let (rl, at) = (&adj.relight, &adj.atmosphere);
+    let layer = |range: &crate::params::DepthRange, adj: LayerAdjustments| PreparedLayer {
+        index: TOOL_LAYER,
+        mask: Mask { ai: Some(crate::depth::range_mask_cached(map, range)), ..Default::default() },
+        opacity: 1.0,
+        adj,
+    };
+    let mut out = Vec::new();
+    if !rl.is_off() {
+        let (near, far) = rl.ranges();
+        for (range, ev, warmth) in [(near, rl.near, rl.near_warmth), (far, rl.far, rl.far_warmth)] {
+            if ev != 0.0 || warmth != 0.0 {
+                out.push(layer(&range, LayerAdjustments { exposure: ev, temperature: warmth, ..Default::default() }));
+            }
+        }
+    }
+    if !at.is_off() {
+        let a = LayerAdjustments { dehaze: -at.amount, brightness: at.brightness, temperature: at.warmth, ..Default::default() };
+        out.push(layer(&at.range(), a));
+    }
+    out
 }
 
 pub struct Processor {
@@ -291,20 +426,21 @@ impl Processor {
         // dcraw convention: the smallest multiplier is 1.
         let min_wb = wb.iter().cloned().fold(f32::MAX, f32::min).max(1e-6);
         let wb = wb.map(|v| v / min_wb);
-        let layers: Vec<PreparedLayer> = adj
-            .layers
-            .iter()
-            .enumerate()
-            .filter(|(i, l)| l.enabled && l.opacity > 0.0 && (!l.adjustments.is_neutral() || opts.mask_overlay == Some(*i)))
-            .map(|(index, l)| PreparedLayer { index, mask: l.mask.clone(), opacity: l.opacity / 100.0, adj: l.adjustments })
-            .collect();
+        let mut layers = depth_layers(meta, adj);
+        layers.extend(
+            adj.layers
+                .iter()
+                .enumerate()
+                .filter(|(i, l)| l.enabled && l.opacity > 0.0 && (!l.adjustments.is_neutral() || opts.mask_overlay == Some(*i)))
+                .map(|(index, l)| PreparedLayer { index, mask: l.mask.clone(), opacity: l.opacity / 100.0, adj: l.adjustments }),
+        );
         let color_active = adj.saturation != 0.0
             || adj.vibrance != 0.0
             || !adj.color_editor.is_neutral()
             || !adj.skin_tone.is_neutral()
             || !adj.color_balance.is_neutral()
             || adj.black_white.enabled
-            || layers.iter().any(|l| l.adj.saturation != 0.0);
+            || layers.iter().any(|l| l.adj.saturation != 0.0 || layer_colors(&l.adj));
         let base = ToneParams {
             exposure_ev: adj.exposure,
             contrast: adj.contrast,
@@ -316,7 +452,12 @@ impl Processor {
             tint: 0.0,
             brightness: 0.0,
             dehaze: adj.detail.dehaze,
+            vibrance: adj.vibrance,
+            bands: band_params(&adj.color_editor.bands),
+            balance: balance_params(&adj.color_balance),
         };
+        let layer_bands = layers.iter().any(|l| l.adj.color_bands.iter().any(|b| *b != HslBand::default()));
+        let layer_balance = layers.iter().any(|l| !l.adj.color_balance.is_neutral());
         Self {
             base,
             layers,
@@ -329,12 +470,12 @@ impl Processor {
             },
             oklab: Oklab::default(),
             color_active,
-            editor_active: !adj.color_editor.is_neutral(),
+            editor_active: !adj.color_editor.is_neutral() || layer_bands,
             skin_active: !adj.skin_tone.is_neutral(),
-            balance_active: !adj.color_balance.is_neutral(),
+            balance_active: !adj.color_balance.is_neutral() || layer_balance,
             lut: build_output_luts(adj),
             luma_lut: (!adj.curves.luma.is_identity()).then(|| adj.curves.luma.build_lut(LUT_SIZE)),
-            tone_luts: ToneLuts::new(&base, adj.base_curve),
+            tone_luts: ToneLuts::new(&base, adj.base_curve, adj.camera_curve.as_ref()),
             sensor_long_edge: meta.info.width.max(meta.info.height).max(1) as f32,
             hdr: meta.hdr,
             opts,
@@ -353,6 +494,23 @@ impl Processor {
     pub fn output_size(&self, src_w: usize, src_h: usize) -> (usize, usize) {
         let g = self.geomap(src_w, src_h);
         (g.out_w, g.out_h)
+    }
+
+    /// How far (output pixels of a rendering of `src`) a change of one pixel's development
+    /// spreads through the operations after it (sharpening, glow): a part rendered after a
+    /// change must reach that far beyond it.
+    pub fn output_spread(&self, src_w: usize, src_h: usize) -> usize {
+        let d = &self.adj.detail;
+        let (w, h) = self.output_size(src_w, src_h);
+        let scale = src_w.max(src_h) as f32 / self.sensor_long_edge;
+        let mut spread: f32 = 0.0;
+        if d.sharpen_amount > 0.0 {
+            spread = spread.max(d.sharpen_radius * scale * 4.0 + 2.0);
+        }
+        if d.glow_amount > 0.0 {
+            spread = spread.max(glow_sigma(d, w.max(h) as f32) * 3.0 + 2.0);
+        }
+        spread.ceil() as usize
     }
 
     // ------------------------------------------------------------ per-pixel stages
@@ -402,16 +560,19 @@ impl Processor {
             rgb.iter_mut().for_each(|v| *v *= g);
         }
         let lut = self.tone_luts.curve.as_ref().filter(|_| tp.contrast == self.base.contrast);
-        let curve = |v: f32| match lut {
-            Some(lut) => curve_lookup(lut, v),
-            None => contrast_and_base_curve(self.adj.base_curve, tp.contrast, v),
+        let curve = |v: f32| match (&self.tone_luts.camera, lut) {
+            (Some(cam), _) => curve_lookup(cam, contrast_warp(tp.contrast, v)),
+            (None, Some(lut)) => curve_lookup(lut, v),
+            (None, None) => contrast_and_base_curve(self.adj.base_curve, tp.contrast, v),
         };
-        if self.adj.process_3() { hue_preserving(rgb, curve) } else { rgb.map(curve) }
+        // The camera's curve per channel, as cameras apply it: highlights run into white and
+        // shadows get richer, like in its JPEG.
+        if self.adj.process_3() && self.tone_luts.camera.is_none() { hue_preserving(rgb, curve) } else { rgb.map(curve) }
     }
 
     /// Color adjustments in Oklab on display-linear working RGB.
     #[inline]
-    fn color(&self, rgb: [f32; 3], saturation: f32) -> [f32; 3] {
+    fn color(&self, rgb: [f32; 3], tp: &ToneParams) -> [f32; 3] {
         if !self.color_active {
             return rgb;
         }
@@ -430,10 +591,10 @@ impl Processor {
             let h_in = h;
             let w = band_weights(h);
             let (mut dh, mut ds, mut dl) = (0.0, 0.0, 0.0);
-            for (i, band) in ed.bands.iter().enumerate() {
-                dh += w[i] * band.hue;
-                ds += w[i] * band.saturation / 100.0;
-                dl += w[i] * band.lightness / 100.0;
+            for (w, band) in w.iter().zip(&tp.bands) {
+                dh += w * band[0];
+                ds += w * band[1];
+                dl += w * band[2];
             }
             h += dh * chroma_w;
             c *= (1.0 + ds * chroma_w).max(0.0);
@@ -463,8 +624,8 @@ impl Processor {
             }
         }
 
-        let s = 1.0 + saturation / 100.0;
-        let vib = self.adj.vibrance / 100.0;
+        let s = 1.0 + tp.saturation / 100.0;
+        let vib = tp.vibrance / 100.0;
         if s != 1.0 || vib != 0.0 {
             let low = (1.0 - c / 0.2).clamp(0.0, 1.0);
             c *= (s * (1.0 + vib * low * low)).max(0.0);
@@ -479,18 +640,15 @@ impl Processor {
             (a0, b0)
         };
 
-        let cb = &self.adj.color_balance;
         if self.balance_active {
             let lw = l.clamp(0.0, 1.0);
             let ws = (1.0 - lw) * (1.0 - lw);
             let wh = lw * lw;
             let wm = (1.0 - ws - wh).max(0.0);
-            for (wheel, weight) in [(cb.master, 1.0), (cb.shadows, ws), (cb.midtones, wm), (cb.highlights, wh)] {
-                let hr = wheel.hue.to_radians();
-                let amt = wheel.amount / 100.0 * 0.08 * weight;
-                a += amt * hr.cos();
-                b += amt * hr.sin();
-                l += wheel.lightness / 100.0 * 0.15 * weight;
+            for (wheel, weight) in tp.balance.iter().zip([1.0, ws, wm, wh]) {
+                a += wheel[0] * 0.08 * weight;
+                b += wheel[1] * 0.08 * weight;
+                l += wheel[2] * 0.15 * weight;
             }
         }
 
@@ -512,6 +670,11 @@ impl Processor {
         self.oklab.to_linear([l, a, b]).map(|v| v.clamp(0.0, 1.0))
     }
 
+    /// Scene-linear luminance (working space, before exposure) of a camera RGB value.
+    pub(crate) fn scene_luminance(&self, raw: [f32; 3]) -> f32 {
+        dot(self.to_working(raw), LUMA)
+    }
+
     /// Oklab (L, a, b) of a camera RGB value at the input of the color adjustments (without
     /// local operators), e.g. to pick the skin tone target.
     pub fn color_input(&self, raw: [f32; 3]) -> [f32; 3] {
@@ -531,8 +694,8 @@ impl Processor {
 
     /// Airlight (the haze's brightness) of the whole image, for renderings of a part of it:
     /// estimated from a small copy, cached per image and settings.
-    fn whole_airlight(&self, src: &LinearImage) -> f32 {
-        static CACHE: Mutex<Vec<(u64, f32)>> = Mutex::new(Vec::new());
+    fn whole_airlight(&self, src: &LinearImage) -> [f32; 3] {
+        static CACHE: Mutex<Vec<(u64, [f32; 3])>> = Mutex::new(Vec::new());
         let key = self.stage_key(src, Region { x: 0, y: 0, w: 0, h: 0 });
         if let Some((_, a)) = CACHE.lock().unwrap().iter().find(|(k, _)| *k == key) {
             return *a;
@@ -547,7 +710,7 @@ impl Processor {
         };
         let plan = self.plan(img, None, 1);
         let working = self.early_stages(img, &plan.geo, plan.ext, plan.scale);
-        let a = gpu::airlight_of(working.data.iter().step_by(7).map(|p| p[0].min(p[1]).min(p[2])).collect());
+        let a = gpu::airlight_of(working.data.iter().step_by(7).copied().collect());
         let mut cache = CACHE.lock().unwrap();
         cache.push((key, a));
         if cache.len() > 8 {
@@ -641,7 +804,7 @@ impl Processor {
 
         // Which local operators are needed (by the background or by any layer).
         let any_layer = |f: &dyn Fn(&LayerAdjustments) -> bool| self.layers.iter().any(|l| f(&l.adj));
-        let hdr_active = self.base.hdr.iter().any(|v| *v != 0.0) || any_layer(&|l| l.highlights != 0.0 || l.shadows != 0.0);
+        let hdr_active = self.base.hdr.iter().any(|v| *v != 0.0) || any_layer(&|l| l.highlights != 0.0 || l.shadows != 0.0 || l.whites != 0.0 || l.blacks != 0.0);
         let clarity_active = d.clarity != 0.0 || any_layer(&|l| l.clarity != 0.0);
         let structure_active = d.structure != 0.0 || any_layer(&|l| l.structure != 0.0);
         let dehaze_active = d.dehaze != 0.0 || any_layer(&|l| l.dehaze != 0.0);
@@ -669,6 +832,9 @@ impl Processor {
         if dehaze_active {
             margin = margin.max(long_edge / 64.0);
         }
+        if d.glow_amount > 0.0 {
+            margin = margin.max(glow_sigma(d, long_edge) * 3.0 + 2.0);
+        }
         let m = margin.ceil() as usize;
         // The dark channel's blocks are counted from the region's start: it starts on the
         // block grid of the whole image, so that its blocks are the same.
@@ -692,8 +858,13 @@ impl Processor {
         let d = &self.adj.detail;
 
         let mut timer = Timer::start();
-        let working = match cache {
-            Some(c) => {
+        // A part of the image whose whole is in the cache (painting renders only what the brush
+        // changed): cut out of it, which is much faster and gives exactly the whole rendering.
+        let whole_key = cache.filter(|_| partial).map(|_| self.stage_key(src, Region { x: 0, y: 0, w: full.0, h: full.1 }));
+        let whole = cache.zip(whole_key).and_then(|(c, key)| c.entry.lock().unwrap().as_ref().filter(|(k, _)| *k == key).map(|(_, img)| img.clone()));
+        let working = match (&whole, cache) {
+            (Some(img), _) => Arc::new(LinearImage::new(ext.w, ext.h, crop_rows(&img.data, full.0, ext))),
+            (None, Some(c)) => {
                 let key = self.stage_key(src, ext);
                 let mut entry = c.entry.lock().unwrap();
                 match &*entry {
@@ -705,7 +876,7 @@ impl Processor {
                     }
                 }
             }
-            None => Arc::new(self.early_stages(src, &geo, ext, scale)),
+            (None, None) => Arc::new(self.early_stages(src, &geo, ext, scale)),
         };
         let (w, h) = (ext.w, ext.h);
         timer.lap("early stages");
@@ -714,10 +885,16 @@ impl Processor {
         // are computed before exposure and cached independently of tone settings.
         let need_log = hdr_active || clarity_active || structure_active || dehaze_active;
         let local = if need_log {
-            let key = {
-                let k = format!("{}|{hdr_active}|{clarity_active}|{structure_active}|{dehaze_active}|{}", self.stage_key(src, ext), self.adj.process_3());
+            let local_key = |stage: u64| {
+                let k = format!("{stage}|{hdr_active}|{clarity_active}|{structure_active}|{dehaze_active}|{}", self.adj.process_3());
                 crate::cache::fnv1a(k.as_bytes())
             };
+            let key = local_key(self.stage_key(src, ext));
+            // Cut out of the whole image's planes as well (see `whole`).
+            let whole_planes = whole.as_ref().and(cache).zip(whole_key).and_then(|(c, wk)| {
+                let key = local_key(wk);
+                c.local.lock().unwrap().as_ref().filter(|(k, _)| *k == key).map(|(_, planes)| planes.clone())
+            });
             let compute = || {
                 let log_l = Plane::new(w, h, working.data.par_iter().map(|p| dot(*p, LUMA).max(1e-6).log2() - MID_GREY.log2()).collect());
                 let sub = ((r_hdr.min(r_clarity) / 8.0) as usize).clamp(1, 8);
@@ -736,11 +913,13 @@ impl Processor {
                     }),
                     // A part of the image: haze measured on the whole, or the tiles differ.
                     dehaze: dehaze_active
-                        .then(|| DarkChannel::new(&working, dark_step(full), partial.then(|| self.whole_airlight(src)))),
+                        .then(|| Arc::new(DarkChannel::new(&working, dark_step(full), partial.then(|| self.whole_airlight(src))))),
+                    dark_origin: (0, 0),
                 }
             };
-            Some(match cache {
-                Some(c) => {
+            Some(match (whole_planes, cache) {
+                (Some(planes), _) => Arc::new(planes.crop(full.0, ext)),
+                (None, Some(c)) => {
                     let mut entry = c.local.lock().unwrap();
                     match &*entry {
                         Some((k, planes)) if *k == key => planes.clone(),
@@ -751,7 +930,7 @@ impl Processor {
                         }
                     }
                 }
-                None => Arc::new(compute()),
+                (None, None) => Arc::new(compute()),
             })
         } else {
             None
@@ -764,6 +943,7 @@ impl Processor {
             self.layers.iter().map(|l| (!l.mask.is_empty()).then(|| cached_bitmap(&l.mask, aspect, Some(src)))).collect();
         let overlay_layer = self.opts.mask_overlay.and_then(|i| self.layers.iter().position(|l| l.index == i));
         let (sw, sh) = (src.width as f32, src.height as f32);
+        timer.lap("masks");
 
         // Per pixel: encoded result and mask overlay weight.
         let pixel = |i: usize, p: [f32; 3]| -> ([f32; 3], f32) {
@@ -772,12 +952,12 @@ impl Processor {
                 ev = lp.hdr_base.as_ref().map(|pl| pl.data[i]);
                 det = [lp.clarity.as_ref().map_or(0.0, |c| c.data[i]), lp.structure.as_ref().map_or(0.0, |c| c.data[i])];
             }
-            let dark = local.as_ref().and_then(|lp| lp.dehaze.as_ref()).map(|dc| (dc, dc.at(i % w, i / w)));
+            let dark = local.as_ref().and_then(|lp| lp.dehaze.as_ref().map(|dc| (dc, dc.at(i % w + lp.dark_origin.0, i / w + lp.dark_origin.1, p))));
             let haze = |p: [f32; 3], strength: f32| match dark {
                 Some((dc, dv)) if strength != 0.0 => dc.apply(p, dv, strength / 100.0),
                 _ => p,
             };
-            let base_disp = || self.color(self.tone(haze(p, self.base.dehaze), ev, det, &self.base), self.base.saturation);
+            let base_disp = || self.color(self.tone(haze(p, self.base.dehaze), ev, det, &self.base), &self.base);
             if self.layers.is_empty() {
                 return (self.encode(base_disp()), 0.0);
             }
@@ -810,7 +990,7 @@ impl Processor {
                 let bd = base_cache.unwrap_or_else(base_disp);
                 return (self.encode(bd), overlay);
             }
-            let mut e = self.encode(self.color(self.tone(haze(p, tp.dehaze), ev, det, &tp), tp.saturation));
+            let mut e = self.encode(self.color(self.tone(haze(p, tp.dehaze), ev, det, &tp), &tp));
             if tp.brightness != 0.0 {
                 let g = 2f32.powf(-tp.brightness / 100.0 * 0.6);
                 e = e.map(|v| v.max(0.0).powf(g));
@@ -851,6 +1031,13 @@ impl Processor {
             }
         }
 
+        if d.glow_amount > 0.0 {
+            let sigma = glow_sigma(d, full.0.max(full.1) as f32);
+            let blurred: Vec<Plane> = (0..3).into_par_iter().map(|c| gaussian_blur(&Plane::new(w, h, out.iter().map(|p| p[c]).collect()), sigma)).collect();
+            let k = d.glow_amount / 100.0;
+            out.par_iter_mut().enumerate().for_each(|(i, p)| *p = glow(*p, [blurred[0].data[i], blurred[1].data[i], blurred[2].data[i]], k));
+        }
+
         if d.vignette_amount != 0.0 || d.grain_amount > 0.0 {
             let (cx, cy) = (full.0 as f32 / 2.0, full.1 as f32 / 2.0);
             let half_diag = (cx * cx + cy * cy).sqrt();
@@ -877,7 +1064,7 @@ impl Processor {
             });
         }
 
-        timer.lap("sharpen / vignette / grain");
+        timer.lap("sharpen / glow / vignette / grain");
         // Crop the margin away.
         if ext == region {
             return (LinearImage::new(w, h, out), full, mask_plane);
@@ -988,6 +1175,12 @@ impl Processor {
         self.display(enc, full, mask)
     }
 
+    /// Encoded working RGB (sRGB transfer, 0..1) without the graphics card, the source as it is
+    /// (no AI denoising or lens blur): for measuring renderings (see `auto`).
+    pub(crate) fn encoded_cpu(&self, src: &LinearImage, cache: Option<&StageCache>) -> LinearImage {
+        self.process_encoded(src, None, cache).0
+    }
+
     /// Encoded working RGB -> display sRGB (or soft proof), clip warning, mask overlay, histogram.
     fn display(&self, enc: LinearImage, full: (usize, usize), mask: Option<Vec<f32>>) -> Rendered {
         let mut timer = Timer::start();
@@ -1062,6 +1255,20 @@ fn hue_preserving(rgb: [f32; 3], curve: impl Fn(f32) -> f32) -> [f32; 3] {
 
 /// Radius of the median under the highlights/shadows base (process 3): 0.15 % of the long
 /// edge, from the base's own radius (2 %); at most 24 pixels.
+/// Blur of the glow in pixels, for an output with this long edge.
+fn glow_sigma(d: &crate::params::Detail, long_edge: f32) -> f32 {
+    long_edge * (0.003 + d.glow_size.clamp(0.0, 100.0) / 100.0 * 0.03)
+}
+
+/// Glow (Orton effect): the blurred image `b`, mostly its brighter parts, screened over the
+/// encoded pixel `p` with strength `k` (0..1). Same as `glow.wgsl`.
+#[inline]
+fn glow(p: [f32; 3], b: [f32; 3], k: f32) -> [f32; 3] {
+    let l = dot(b, LUMA);
+    let g = k * 0.8 * smoothstep(0.05, 0.85, l);
+    std::array::from_fn(|c| 1.0 - (1.0 - p[c]) * (1.0 - g * b[c].clamp(0.0, 1.0)))
+}
+
 fn median_radius(r_hdr: f32) -> usize {
     ((r_hdr * 0.075).round() as usize).min(24)
 }
@@ -1170,12 +1377,18 @@ fn contrast_and_base_curve(kind: BaseCurve, contrast: f32, v: f32) -> f32 {
 /// Like [`contrast_and_base_curve`], but without clipping the linear curve at 1, so that a
 /// table of it can be interpolated without a kink.
 fn contrast_and_base_curve_unclipped(kind: BaseCurve, contrast: f32, v: f32) -> f32 {
-    let e = 1.0 + contrast / 100.0 * 0.5;
-    let v = if e != 1.0 { MID_GREY * (v / MID_GREY).powf(e) } else { v };
+    let v = contrast_warp(contrast, v);
     match kind {
         BaseCurve::Linear => v.max(0.0),
         _ => base_curve(kind, v),
     }
+}
+
+/// Contrast around mid grey (before the base curve).
+#[inline]
+fn contrast_warp(contrast: f32, v: f32) -> f32 {
+    let e = 1.0 + contrast / 100.0 * 0.5;
+    if e != 1.0 { MID_GREY * (v.max(0.0) / MID_GREY).powf(e) } else { v }
 }
 
 /// EV range and resolution of the HDR tables (the weights are saturated beyond it).
@@ -1193,10 +1406,12 @@ struct ToneLuts {
     hdr: Option<[Vec<f32>; 2]>,
     /// Contrast and base curve over sqrt(scene value), see [`curve_lookup`].
     curve: Option<Vec<f32>>,
+    /// The camera's tone curve (without contrast, which warps its input), same layout.
+    camera: Option<Vec<f32>>,
 }
 
 impl ToneLuts {
-    fn new(base: &ToneParams, kind: BaseCurve) -> Self {
+    fn new(base: &ToneParams, kind: BaseCurve, camera: Option<&crate::params::CameraCurve>) -> Self {
         let n = ((EV_MAX - EV_MIN) * EV_STEPS) as usize + 1;
         let ev_at = |i: usize| EV_MIN + i as f32 / EV_STEPS;
         let [hi, sh, wh, bl] = base.hdr;
@@ -1214,7 +1429,15 @@ impl ToneLuts {
                 })
                 .collect()
         });
-        Self { hdr, curve }
+        let camera = camera.filter(|_| kind == BaseCurve::Camera).map(|c| {
+            (0..CURVE_SIZE)
+                .map(|i| {
+                    let s = i as f32 / (CURVE_SIZE - 1) as f32 * CURVE_MAX.sqrt();
+                    c.eval(s * s)
+                })
+                .collect()
+        });
+        Self { hdr, curve, camera }
     }
 }
 
@@ -1240,7 +1463,8 @@ fn curve_lookup(lut: &[f32], v: f32) -> f32 {
 pub fn base_curve(kind: BaseCurve, x: f32) -> f32 {
     match kind {
         BaseCurve::Linear => x.clamp(0.0, 1.0),
-        BaseCurve::FilmStandard => aces_fit(x * 0.8),
+        // The camera's curve is a table (see `ToneLuts`); without one, Film Standard.
+        BaseCurve::FilmStandard | BaseCurve::Camera => aces_fit(x * 0.8),
         BaseCurve::FilmHigh => {
             let y = aces_fit(x * 0.8);
             // extra S-shape in display space
@@ -1338,8 +1562,11 @@ mod tests {
                     tint: 0.0,
                     brightness: 0.0,
                     dehaze: 0.0,
+                    vibrance: 0.0,
+                    bands: [[0.0; 3]; 8],
+                    balance: [[0.0; 3]; 4],
                 };
-                let luts = ToneLuts::new(&base, kind);
+                let luts = ToneLuts::new(&base, kind, None);
                 let curve = luts.curve.as_ref().unwrap();
                 for i in 0..4000 {
                     let v = (i as f32 / 4000.0 * 20.0 - 14.0).exp2();
@@ -1385,7 +1612,7 @@ mod tests {
     }
 
     fn px(p: &Processor, v: [f32; 3]) -> [f32; 3] {
-        p.encode(p.color(p.tone(p.to_working(v), None, [0.0; 2], &p.base), p.base.saturation))
+        p.encode(p.color(p.tone(p.to_working(v), None, [0.0; 2], &p.base), &p.base))
     }
 
     #[test]
@@ -1444,6 +1671,71 @@ mod tests {
         assert_eq!(r.histogram.luma.iter().sum::<u32>(), 24 * 32);
     }
 
+    /// Source and adjustments with every neighborhood operation and a painted layer.
+    fn neighborhood_scene() -> (LinearImage, Adjustments) {
+        let (w, h) = (200, 150);
+        let src = LinearImage::new(
+            w,
+            h,
+            (0..w * h).map(|i| {
+                let v = 0.05 + 0.3 * (((i % w) / 9 + (i / w) / 7) % 2) as f32 + 0.002 * (i % w) as f32;
+                [v, v * 0.9, v * 0.7]
+            }).collect(),
+        );
+        let mut adj = Adjustments {
+            shadows: 40.0,
+            detail: Detail {
+                clarity: 50.0,
+                structure: 30.0,
+                dehaze: 40.0,
+                sharpen_amount: 150.0,
+                sharpen_radius: 1.0,
+                nr_luma: 30.0,
+                nr_color: 30.0,
+                glow_amount: 60.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let stroke = crate::params::BrushStroke { points: vec![[0.3, 0.4], [0.6, 0.5]], radius: 0.08, hardness: 0.3, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true };
+        let mut layer = crate::params::Layer { adjustments: LayerAdjustments { exposure: 1.0, clarity: 30.0, ..Default::default() }, ..Default::default() };
+        layer.mask.strokes.push(stroke);
+        adj.layers.push(layer);
+        adj.assign_layer_ids();
+        (src, adj)
+    }
+
+    fn max_region_diff(part: &Rendered, full: &Rendered, region: Region) -> i32 {
+        let mut max_diff = 0i32;
+        for y in 0..region.h {
+            for x in 0..region.w {
+                for c in 0..3 {
+                    let a = part.rgba[(y * region.w + x) * 4 + c] as i32;
+                    let b = full.rgba[((y + region.y) * full.width + x + region.x) * 4 + c] as i32;
+                    max_diff = max_diff.max((a - b).abs());
+                }
+            }
+        }
+        max_diff
+    }
+
+    /// With the whole image in the cache, a part of it (what the brush changed) is cut out of
+    /// the cached stages: exactly the whole rendering there, and the cache keeps the whole.
+    #[test]
+    fn part_with_cached_whole_matches_the_whole_rendering() {
+        let (src, adj) = neighborhood_scene();
+        let p = Processor::new(&meta(), &adj);
+        let cache = StageCache::default();
+        let full = p.render_cpu(&src, None, Some(&cache));
+        let whole_key = cache.entry.lock().unwrap().as_ref().unwrap().0;
+        for region in [Region { x: 50, y: 40, w: 40, h: 30 }, Region { x: 0, y: 0, w: 25, h: 20 }, Region { x: 170, y: 120, w: 30, h: 30 }] {
+            let part = p.render_cpu(&src, Some(region), Some(&cache));
+            assert_eq!((part.width, part.height), (region.w, region.h));
+            assert!(max_region_diff(&part, &full, region) <= 1, "{region:?}: {}", max_region_diff(&part, &full, region));
+        }
+        assert_eq!(cache.entry.lock().unwrap().as_ref().unwrap().0, whole_key, "the whole stays cached");
+    }
+
     #[test]
     fn tiles_match_full_render_with_neighborhood_ops() {
         let src = LinearImage::new(
@@ -1456,7 +1748,7 @@ mod tests {
         );
         let adj = Adjustments {
             shadows: 40.0,
-            detail: Detail { clarity: 50.0, structure: 30.0, sharpen_amount: 150.0, sharpen_radius: 1.0, nr_luma: 30.0, nr_color: 30.0, ..Default::default() },
+            detail: Detail { clarity: 50.0, structure: 30.0, sharpen_amount: 150.0, sharpen_radius: 1.0, nr_luma: 30.0, nr_color: 30.0, glow_amount: 60.0, ..Default::default() },
             ..Default::default()
         };
         let p = Processor::new(&meta(), &adj);
@@ -1474,6 +1766,75 @@ mod tests {
             }
         }
         assert!(max_diff <= 2, "tile differs from full render by {max_diff}");
+    }
+
+    /// A grey image whose left half is near and right half far (by its depth map).
+    fn near_and_far() -> (LinearImage, Arc<crate::depth::DepthMap>) {
+        let src = LinearImage::new(64, 32, vec![[0.15, 0.15, 0.15]; 64 * 32]);
+        let map = crate::depth::DepthMap { width: 64, height: 32, data: (0..64 * 32).map(|i| if i % 64 < 32 { 1.0 } else { 0.0 }).collect() };
+        (src, Arc::new(map))
+    }
+
+    fn with_depth_layers(adj: &Adjustments, map: &Arc<crate::depth::DepthMap>) -> Processor {
+        let mut p = Processor::new(&meta(), adj);
+        p.layers.splice(0..0, depth_layers_with(map, adj));
+        p
+    }
+
+    /// Mean of a row's left and right ends (near and far part).
+    fn ends(r: &Rendered) -> ([f32; 3], [f32; 3]) {
+        let at = |x: usize| -> [f32; 3] { std::array::from_fn(|c| r.rgba[(r.height / 2 * r.width + x) * 4 + c] as f32) };
+        (at(4), at(r.width - 5))
+    }
+
+    #[test]
+    fn relight_lights_near_and_far_separately() {
+        let (src, map) = near_and_far();
+        let plain = ends(&Processor::new(&meta(), &Adjustments::default()).render_cpu(&src, None, None));
+        let adj = Adjustments { relight: crate::params::Relight { near: 1.0, far_warmth: 60.0, ..Default::default() }, ..Default::default() };
+        let (near, far) = ends(&with_depth_layers(&adj, &map).render_cpu(&src, None, None));
+        assert!(near[1] > plain.0[1] + 20.0, "Vordergrund {near:?} statt {:?}", plain.0);
+        assert!((near[0] - near[2]).abs() < 2.0, "Vordergrund bleibt neutral: {near:?}");
+        assert!((far[1] - plain.1[1]).abs() < 4.0, "Hintergrund {far:?} statt {:?}", plain.1);
+        assert!(far[0] > far[2] + 5.0, "Hintergrund wärmer: {far:?}");
+        // Off: no layers, even with a map.
+        assert!(depth_layers_with(&map, &Adjustments::default()).is_empty());
+    }
+
+    #[test]
+    fn atmosphere_hazes_only_the_far_part() {
+        let (mut src, map) = near_and_far();
+        // Texture, so that the haze shows as lower contrast.
+        for (i, p) in src.data.iter_mut().enumerate() {
+            if (i % 64 / 2 + i / 64 / 2) % 2 == 0 {
+                *p = [0.02, 0.02, 0.02];
+            }
+        }
+        let contrast = |r: &Rendered, x0: usize| {
+            let row = r.height / 2;
+            let v: Vec<f32> = (x0..x0 + 8).map(|x| r.rgba[(row * r.width + x) * 4 + 1] as f32).collect();
+            v.iter().cloned().fold(0.0, f32::max) - v.iter().cloned().fold(255.0, f32::min)
+        };
+        let plain = Processor::new(&meta(), &Adjustments::default()).render_cpu(&src, None, None);
+        let adj = Adjustments { atmosphere: crate::params::Atmosphere { amount: 80.0, reach: 0.3, ..Default::default() }, ..Default::default() };
+        let hazy = with_depth_layers(&adj, &map).render_cpu(&src, None, None);
+        assert!(contrast(&hazy, 48) < contrast(&plain, 48) * 0.8, "fern: {} statt {}", contrast(&hazy, 48), contrast(&plain, 48));
+        assert!((contrast(&hazy, 4) - contrast(&plain, 4)).abs() < 3.0, "nah: {} statt {}", contrast(&hazy, 4), contrast(&plain, 4));
+    }
+
+    #[test]
+    fn glow_brightens_around_highlights() {
+        // A bright square on a dark ground: the glow spreads light beyond its edge.
+        let src = LinearImage::new(96, 64, (0..96 * 64).map(|i| if (40..56).contains(&(i % 96)) && (24..40).contains(&(i / 96)) { [0.9; 3] } else { [0.01; 3] }).collect());
+        let at = |r: &Rendered, x: usize| r.rgba[(32 * r.width + x) * 4 + 1];
+        let unsharp = Adjustments { detail: Detail { sharpen_amount: 0.0, ..Default::default() }, ..Default::default() };
+        let plain = Processor::new(&meta(), &unsharp).render_cpu(&src, None, None);
+        let mut adj = unsharp.clone();
+        (adj.detail.glow_amount, adj.detail.glow_size) = (80.0, 100.0);
+        let glow = Processor::new(&meta(), &adj).render_cpu(&src, None, None);
+        assert!(at(&glow, 58) > at(&plain, 58) + 3, "neben dem Quadrat {} statt {}", at(&glow, 58), at(&plain, 58));
+        assert!(at(&glow, 48) > at(&plain, 48), "im Quadrat {} statt {}", at(&glow, 48), at(&plain, 48));
+        assert!(at(&glow, 2) <= at(&plain, 2) + 1, "weit weg {} statt {}", at(&glow, 2), at(&plain, 2));
     }
 
     #[test]
@@ -1683,6 +2044,81 @@ mod tests {
         assert!(max_diff <= 1, "{max_diff}");
     }
 
+    /// A colorful test image: hues around the circle, from dark to bright.
+    fn colorful() -> LinearImage {
+        let data = (0..24 * 16)
+            .map(|i| {
+                let (x, y) = ((i % 24) as f32, (i / 24) as f32);
+                let h = x / 24.0 * std::f32::consts::TAU;
+                let v = 0.02 + y / 16.0 * 0.6;
+                [v * (1.0 + 0.8 * h.cos()), v * (1.0 + 0.8 * (h - 2.1).cos()), v * (1.0 + 0.8 * (h + 2.1).cos())]
+            })
+            .collect();
+        LinearImage::new(24, 16, data)
+    }
+
+    fn max_diff(a: &Rendered, b: &Rendered) -> i32 {
+        a.rgba.iter().zip(&b.rgba).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap()
+    }
+
+    #[test]
+    fn filled_layer_equals_global_tone_and_color() {
+        use crate::params::ColorWheel;
+        let src = colorful();
+        let filled = Mask { fill: true, ..Default::default() };
+        let wheel = ColorWheel { hue: 210.0, amount: 40.0, lightness: 10.0 };
+        let band = HslBand { hue: 10.0, saturation: -40.0, lightness: 20.0 };
+        let cases: Vec<(Adjustments, LayerAdjustments)> = vec![
+            (Adjustments { whites: 40.0, ..plain() }, LayerAdjustments { whites: 40.0, ..Default::default() }),
+            (Adjustments { blacks: 40.0, ..plain() }, LayerAdjustments { blacks: 40.0, ..Default::default() }),
+            (Adjustments { vibrance: 50.0, ..plain() }, LayerAdjustments { vibrance: 50.0, ..Default::default() }),
+            {
+                let mut g = plain();
+                g.color_editor.bands[3] = band;
+                let mut l = LayerAdjustments::default();
+                l.color_bands[3] = band;
+                (g, l)
+            },
+            {
+                let mut g = plain();
+                g.color_balance.shadows = wheel;
+                let mut l = LayerAdjustments::default();
+                l.color_balance.shadows = wheel;
+                (g, l)
+            },
+        ];
+        for (global, local) in cases {
+            let want = Processor::new(&meta(), &global).render(&src, None, None);
+            let mut adj = plain();
+            adj.layers.push(layer(filled.clone(), local));
+            let got = Processor::new(&meta(), &adj).render(&src, None, None);
+            assert!(max_diff(&want, &got) <= 1, "{local:?}: {}", max_diff(&want, &got));
+            assert!(max_diff(&want, &Processor::new(&meta(), &plain()).render(&src, None, None)) > 3, "{local:?} has no effect");
+        }
+    }
+
+    #[test]
+    fn color_wheels_of_layers_add_up() {
+        use crate::params::ColorWheel;
+        let src = colorful();
+        let filled = Mask { fill: true, ..Default::default() };
+        let (a, b) = (ColorWheel { hue: 30.0, amount: 30.0, lightness: 5.0 }, ColorWheel { hue: 120.0, amount: 30.0, lightness: 5.0 });
+        let mut two = plain();
+        for w in [a, b] {
+            let mut l = LayerAdjustments::default();
+            l.color_balance.master = w;
+            two.layers.push(layer(filled.clone(), l));
+        }
+        // The cartesian sum of both wheels.
+        let [oa, ob] = [a.offset(), b.offset()];
+        let (x, y) = (oa[0] + ob[0], oa[1] + ob[1]);
+        let sum = ColorWheel { hue: y.atan2(x).to_degrees(), amount: (x * x + y * y).sqrt() * 100.0, lightness: 10.0 };
+        let mut one = plain();
+        one.color_balance.master = sum;
+        let d = max_diff(&Processor::new(&meta(), &one).render(&src, None, None), &Processor::new(&meta(), &two).render(&src, None, None));
+        assert!(d <= 1, "{d}");
+    }
+
     #[test]
     fn radial_layer_affects_only_inside_and_opacity_scales() {
         let src = LinearImage::new(40, 40, vec![[0.1; 3]; 1600]);
@@ -1769,6 +2205,35 @@ mod tests {
         adj.detail.dehaze = -80.0;
         let f = Processor::new(&meta(), &adj).render(&src, None, None);
         assert!(spread(&f) < spread(&base));
+    }
+
+    #[test]
+    fn dehaze_has_no_halo_around_dark_objects() {
+        // Hazy background with a dark object in it: the background right next to the object
+        // must be dehazed like the rest of it (no bright seam along the edge).
+        let (w, h) = (2048, 64);
+        let src = LinearImage::new(
+            w,
+            h,
+            (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    // Sky (the haze's color) on the left, hazy land with the object right of it.
+                    let v = match x {
+                        0..300 => 0.8,
+                        900..1100 => 0.04,
+                        _ => 0.35 + 0.03 * (((x / 3 + y / 3) % 2) as f32),
+                    };
+                    [v * 0.9, v * 0.95, v]
+                })
+                .collect(),
+        );
+        let mut adj = plain();
+        adj.detail.dehaze = 80.0;
+        let r = Processor::new(&meta(), &adj).render_cpu(&src, None, None);
+        let at = |x: usize| -> f32 { (0..h).map(|y| r.rgba[(y * w + x) * 4 + 1] as f32).sum::<f32>() / h as f32 };
+        let (near, far) = (at(1103), at(1600));
+        assert!((near - far).abs() < 5.0, "neben dem Objekt {near}, weiter weg {far}");
     }
 
     #[test]

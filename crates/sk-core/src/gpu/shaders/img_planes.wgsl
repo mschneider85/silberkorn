@@ -28,8 +28,10 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         // log2 luminance relative to mid grey (local operators).
         case 2u: { o0[i] = log2(max(l, 1e-6)) - log2(MID_GREY); }
-        // Smallest channel (dark channel).
-        case 3u: { o0[i] = min(p.x, min(p.y, p.z)); }
+        // One channel (glow).
+        case 5u: { o0[i] = p.x; }
+        case 6u: { o0[i] = p.y; }
+        case 7u: { o0[i] = p.z; }
         // Luminance (sharpening).
         default: { o0[i] = l; }
     }

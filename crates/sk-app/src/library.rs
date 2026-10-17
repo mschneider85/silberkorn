@@ -37,6 +37,12 @@ pub struct LibraryUi {
     pub new_style_tools: Option<std::collections::BTreeSet<sk_core::tools::Tool>>,
     /// Person being named, with the text typed so far.
     pub naming: Option<(i64, String)>,
+    /// The faces shown for the persons.
+    pub faces: crate::culling::FaceThumbs,
+    /// Two persons to be merged once confirmed: (into, from).
+    pub merging: Option<(i64, i64)>,
+    /// The faces of the chosen person and those chosen among them.
+    pub person_faces: crate::culling::PersonFaces,
 }
 
 fn record_from_sidecar(path: PathBuf, sc: Sidecar) -> ImageRecord {
@@ -407,6 +413,49 @@ impl App {
             let folder = self.folder.clone();
             self.import_folder(&folder);
         }
+        // Filtering is used most, so it comes right after the catalog.
+        let mut refilter = false;
+        let mut resort = false;
+        section(ui, "Filter & Suche", None, |ui| {
+            refilter |= ui
+                .add(egui::TextEdit::singleline(&mut self.filter.text).hint_text("\u{E30C}  Name, Kamera, Objektiv, Keyword"))
+                .changed();
+            widgets::field(ui, "Mindestens", |ui| refilter |= widgets::stars(ui, &mut self.filter.min_rating, 16.0));
+            widgets::combo_field(ui, "Farb-Label", self.filter.color_label.map_or("Alle", |l| l.label()), |ui| {
+                    refilter |= ui.selectable_value(&mut self.filter.color_label, None, "Alle").changed();
+                    for l in ColorLabel::ALL {
+                        refilter |= ui.selectable_value(&mut self.filter.color_label, Some(l), l.label()).changed();
+                    }
+                });
+            widgets::combo_field(ui, "Keyword", self.filter.keyword.clone().unwrap_or_else(|| "Alle".into()), |ui| {
+                    refilter |= ui.selectable_value(&mut self.filter.keyword, None, "Alle").changed();
+                    for (k, n) in &self.lists.keywords {
+                        refilter |= ui.selectable_value(&mut self.filter.keyword, Some(k.clone()), format!("{k} ({n})")).changed();
+                    }
+                });
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt("sort").selected_text(self.sort.label()).show_ui(ui, |ui| {
+                    for s in SortKey::ALL {
+                        resort |= ui.selectable_value(&mut self.sort, s, s.label()).changed();
+                    }
+                });
+                if ui.button(if self.sort_desc { "\u{E446}" } else { "\u{E444}" }).on_hover_text("Sortierrichtung").clicked() {
+                    self.sort_desc = !self.sort_desc;
+                    resort = true;
+                }
+                if !self.filter.is_empty() && ui.button("\u{E4F6}  Filter").clicked() {
+                    self.filter = Filter::default();
+                    refilter = true;
+                }
+            });
+            ui.label(RichText::new(format!("{} von {} Bildern", self.visible.len(), self.entries.len())).color(Color32::from_gray(150)));
+        });
+        if resort {
+            self.resort();
+        } else if refilter {
+            self.refilter();
+        }
+
         self.culling_section(ui);
         if do_cleanup && let Some(c) = &self.catalog {
             let n = c.remove_missing().unwrap_or(0);
@@ -565,48 +614,6 @@ impl App {
             }
         });
 
-        let mut refilter = false;
-        let mut resort = false;
-        section(ui, "Filter & Suche", None, |ui| {
-            refilter |= ui
-                .add(egui::TextEdit::singleline(&mut self.filter.text).hint_text("\u{E30C}  Name, Kamera, Objektiv, Keyword"))
-                .changed();
-            widgets::field(ui, "Mindestens", |ui| refilter |= widgets::stars(ui, &mut self.filter.min_rating, 16.0));
-            widgets::combo_field(ui, "Farb-Label", self.filter.color_label.map_or("Alle", |l| l.label()), |ui| {
-                    refilter |= ui.selectable_value(&mut self.filter.color_label, None, "Alle").changed();
-                    for l in ColorLabel::ALL {
-                        refilter |= ui.selectable_value(&mut self.filter.color_label, Some(l), l.label()).changed();
-                    }
-                });
-            widgets::combo_field(ui, "Keyword", self.filter.keyword.clone().unwrap_or_else(|| "Alle".into()), |ui| {
-                    refilter |= ui.selectable_value(&mut self.filter.keyword, None, "Alle").changed();
-                    for (k, n) in &self.lists.keywords {
-                        refilter |= ui.selectable_value(&mut self.filter.keyword, Some(k.clone()), format!("{k} ({n})")).changed();
-                    }
-                });
-            ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("sort").selected_text(self.sort.label()).show_ui(ui, |ui| {
-                    for s in SortKey::ALL {
-                        resort |= ui.selectable_value(&mut self.sort, s, s.label()).changed();
-                    }
-                });
-                if ui.button(if self.sort_desc { "\u{E446}" } else { "\u{E444}" }).on_hover_text("Sortierrichtung").clicked() {
-                    self.sort_desc = !self.sort_desc;
-                    resort = true;
-                }
-                if !self.filter.is_empty() && ui.button("\u{E4F6}  Filter").clicked() {
-                    self.filter = Filter::default();
-                    refilter = true;
-                }
-            });
-            ui.label(RichText::new(format!("{} von {} Bildern", self.visible.len(), self.entries.len())).color(Color32::from_gray(150)));
-        });
-        if resort {
-            self.resort();
-        } else if refilter {
-            self.refilter();
-        }
-
         if browse {
             self.open_folder_dialog();
         } else if let Some(f) = open_folder {
@@ -622,49 +629,67 @@ impl App {
         let mut delete: Option<String> = None;
         let mut hovered: Option<(Style, bool)> = None;
         let current = self.current.as_ref().map(|c| c.adjustments.clone());
-        let help = "Zeiger auf einen Stil: Vorschau im Bild. „Anwenden“ übernimmt ihn für die Auswahl.";
+        ui.horizontal(|ui| {
+            ui.label("Ansicht");
+            let mut list = self.style_list;
+            ui.selectable_value(&mut list, false, "Vorschauen").on_hover_text("Jeder Stil als kleines Bild des aktuellen Fotos");
+            ui.selectable_value(&mut list, true, "Liste");
+            if list != self.style_list {
+                self.style_list = list;
+                self.save_settings();
+            }
+        });
+        let looks: Vec<(Style, bool, String)> = self
+            .film_looks
+            .iter()
+            .map(|(s, d)| (s.clone(), true, format!("{d}\n\nNachempfunden, keine offizielle Simulation. Belichtung, Weißabgleich und Korrekturen des Bildes bleiben erhalten.")))
+            .collect();
+        let own: Vec<(Style, bool, String)> = self
+            .styles
+            .iter()
+            .map(|s| {
+                let sets = match &s.tools {
+                    Some(t) => format!("Setzt: {}", t.iter().map(|t| t.label()).collect::<Vec<_>>().join(", ")),
+                    None => "Setzt alle Werkzeuge außer Zuschnitt, Drehen, Perspektive, Ebenen und Retusche".into(),
+                };
+                (s.clone(), false, sets)
+            })
+            .collect();
+        let grid = !self.style_list && self.current.is_some();
+        if grid {
+            self.pump_style_thumbs();
+        }
+        let mut take = |(c, h, d): crate::style_grid::Picks| {
+            apply = apply.take().or(c);
+            hovered = hovered.take().or(h);
+            delete = delete.take().or(d);
+        };
+        let help = if grid {
+            "Zeiger auf einen Stil: Vorschau im Bild. Ein Klick übernimmt ihn für die Auswahl."
+        } else {
+            "Zeiger auf einen Stil: Vorschau im Bild. „Anwenden“ übernimmt ihn für die Auswahl."
+        };
         crate::widgets::section_help(ui, "Filmsimulationen", help, None, |ui| {
-            for (style, description) in &self.film_looks {
-                let row = ui.horizontal(|ui| {
-                    if ui.button("Anwenden").on_hover_text("Auf Auswahl anwenden").clicked() {
-                        apply = Some((style.clone(), true));
-                    }
-                    ui.label(&style.name).on_hover_text(format!("{description}\n\nNachempfunden, keine offizielle Simulation. Belichtung, Weißabgleich und Korrekturen des Bildes bleiben erhalten."));
-                });
-                if ui.rect_contains_pointer(row.response.rect) {
-                    hovered = Some((style.clone(), true));
-                }
+            if grid {
+                take(self.style_tiles(ui, &looks));
+            } else {
+                take(style_rows(ui, &looks));
             }
         });
         section(ui, "Eigene Stile", None, |ui| {
-            if self.styles.is_empty() {
+            if own.is_empty() {
                 ui.label(RichText::new("Noch keine Stile gespeichert.").color(Color32::from_gray(150)));
-            }
-            for style in &self.styles {
-                let row = ui.horizontal(|ui| {
-                    if ui.button("Anwenden").on_hover_text("Auf Auswahl anwenden").clicked() {
-                        apply = Some((style.clone(), false));
-                    }
-                    let sets = match &style.tools {
-                        Some(t) => format!("Setzt: {}", t.iter().map(|t| t.label()).collect::<Vec<_>>().join(", ")),
-                        None => "Setzt alle Werkzeuge außer Zuschnitt, Drehen, Perspektive, Ebenen und Retusche".into(),
-                    };
-                    ui.label(&style.name).on_hover_text(sets);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if widgets::small_button(ui, "\u{E4A6}", "Stil löschen").clicked() {
-                            delete = Some(style.name.clone());
-                        }
-                    });
-                });
-                if ui.rect_contains_pointer(row.response.rect) {
-                    hovered = Some((style.clone(), false));
-                }
+            } else if grid {
+                take(self.style_tiles(ui, &own));
+                ui.label(RichText::new("Rechtsklick auf einen Stil: löschen").small().color(crate::theme::TEXT_FAINT));
+            } else {
+                take(style_rows(ui, &own));
             }
         });
         if let (Some((style, look)), Some(current)) = (hovered, current)
             && apply.is_none()
         {
-            self.preview_style(if look { styles::apply_look(&style, &current) } else { styles::apply(&style, &current) });
+            self.preview_style(crate::style_grid::applied(&style, look, &current));
         }
         let mut save = None;
         section(ui, "Neuer Stil", None, |ui| {
@@ -712,6 +737,31 @@ impl App {
             self.reload_styles();
         }
     }
+}
+
+/// Styles as rows with an "Anwenden" button; returns the clicked one, the hovered one and one to
+/// delete, like `App::style_tiles`.
+fn style_rows(ui: &mut Ui, list: &[(Style, bool, String)]) -> crate::style_grid::Picks {
+    let (mut clicked, mut hovered, mut delete) = (None, None, None);
+    for (style, look, help) in list {
+        let row = ui.horizontal(|ui| {
+            if ui.button("Anwenden").on_hover_text("Auf Auswahl anwenden").clicked() {
+                clicked = Some((style.clone(), *look));
+            }
+            ui.label(&style.name).on_hover_text(help.as_str());
+            if !look {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if widgets::small_button(ui, "\u{E4A6}", "Stil löschen").clicked() {
+                        delete = Some(style.name.clone());
+                    }
+                });
+            }
+        });
+        if ui.rect_contains_pointer(row.response.rect) {
+            hovered = Some((style.clone(), *look));
+        }
+    }
+    (clicked, hovered, delete)
 }
 
 pub fn sort_records(records: &mut [ImageRecord], key: SortKey, desc: bool) {

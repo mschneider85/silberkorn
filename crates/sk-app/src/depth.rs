@@ -1,12 +1,12 @@
 //! Depth maps (see `sk_core::depth` and `sk_ai::depth`): computed in the background for the image
-//! in the viewer when its lens blur or a depth mask needs one, and kept in a cache. Here also the
-//! "Objektivunschärfe" section, its focus pipette, and the depth mask of a layer.
+//! in the viewer when its lens blur, relight, atmosphere or a depth mask needs one, and kept in a
+//! cache. Here also the sections of those tools, the focus pipette, and the depth mask of a layer.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use egui::{RichText, Ui, Vec2};
-use sk_core::params::{DepthRange, LensBlur};
+use sk_core::params::{Atmosphere, DepthRange, LensBlur, Relight};
 use sk_core::pipeline::{Processor, RenderOptions};
 
 use crate::ai_models::{self, AiFeature};
@@ -77,7 +77,7 @@ impl App {
         }
         let Some(cur) = &self.current else { return };
         let path = cur.meta.path.clone();
-        let wanted = !cur.adjustments.lens_blur.is_off() || self.depth.mask_for.as_ref().is_some_and(|(p, _)| *p == path);
+        let wanted = cur.adjustments.needs_depth() || self.depth.mask_for.as_ref().is_some_and(|(p, _)| *p == path);
         if !wanted || self.depth.failed.contains_key(&path) || self.depth.cancelled.contains(&path) || sk_core::depth::is_ready(&path) || !self.ensure_ai(AiFeature::Depth) {
             return;
         }
@@ -199,37 +199,18 @@ impl App {
         crate::widgets::tool_section_help(ui, sk_core::tools::Tool::LensBlur, help, Some(&mut || reset = true), |ui| {
             let d = LensBlur::default();
             slider_row(ui, "Stärke", &mut lb.amount, 0.0..=100.0, 0.0, 0);
-            ui.horizontal(|ui| {
-                let pipette = format!("{}  Fokus setzen", crate::theme::icon::EYEDROPPER);
-                if ui.selectable_label(picking, pipette).on_hover_text("Auf die Stelle klicken, die scharf bleiben soll").clicked() {
-                    toggle_pick = true;
-                }
+            ui.add_enabled_ui(!lb.is_off(), |ui| {
+                ui.horizontal(|ui| {
+                    let pipette = format!("{}  Fokus setzen", crate::theme::icon::EYEDROPPER);
+                    if ui.selectable_label(picking, pipette).on_hover_text("Auf die Stelle klicken, die scharf bleiben soll").clicked() {
+                        toggle_pick = true;
+                    }
+                });
+                slider_row(ui, "Fokus", &mut lb.focus, 0.0..=1.0, d.focus, 2);
+                slider_row(ui, "Schärfebereich", &mut lb.range, 0.0..=1.0, d.range, 2);
+                slider_row(ui, "Lichter", &mut lb.bokeh, 0.0..=100.0, 0.0, 0);
             });
-            slider_row(ui, "Fokus", &mut lb.focus, 0.0..=1.0, d.focus, 2);
-            slider_row(ui, "Schärfebereich", &mut lb.range, 0.0..=1.0, d.range, 2);
-            slider_row(ui, "Lichter", &mut lb.bokeh, 0.0..=100.0, 0.0, 0);
-            let faint = |t: &str| RichText::new(t).small().color(crate::theme::TEXT_FAINT);
-            match &state {
-                DepthState::NoModel => {
-                    ui.label(faint(&format!("Lädt beim ersten Einschalten ein KI-Modell ({} MB)", AiFeature::Depth.download_mb())));
-                }
-                DepthState::Downloading(p) => ai_models::download_progress(ui, AiFeature::Depth, *p),
-                _ if lb.is_off() => {}
-                DepthState::Running(p) => {
-                    ui.add(egui::ProgressBar::new(*p).desired_height(6.0));
-                    ui.label(faint("Tiefenkarte wird berechnet …"));
-                }
-                DepthState::Waiting => {
-                    ui.label(faint("Tiefenkarte wird gleich berechnet …"));
-                }
-                DepthState::Ready => {}
-                DepthState::Cancelled => {
-                    ui.label(faint("Abgebrochen – zum Berechnen einen Regler ändern"));
-                }
-                DepthState::Failed(e) => {
-                    ui.label(RichText::new(format!("Fehlgeschlagen: {e}")).small().color(crate::theme::DANGER));
-                }
-            }
+            depth_status(ui, &state, !lb.is_off());
         });
         if reset {
             lb = LensBlur::default();
@@ -251,6 +232,67 @@ impl App {
                 }
             }
             self.edit(|a| a.lens_blur = lb);
+        }
+    }
+
+    /// The "Neu ausleuchten" section of the exposure panel.
+    pub(crate) fn relight_section(&mut self, ui: &mut Ui) {
+        let Some(cur) = &self.current else { return };
+        let path = cur.meta.path.clone();
+        let mut rl = cur.adjustments.relight;
+        let before = rl;
+        let mut reset = false;
+        let state = self.depth_state(&path);
+        let help = "Hellt den Vordergrund und den Hintergrund getrennt auf oder ab und macht sie wärmer oder kühler, etwa bei einem Porträt im Gegenlicht. Wie nah jede Stelle ist, schätzt ein neuronales Netz einmal je Bild (dieselbe Tiefenkarte wie bei der Objektivunschärfe).\n\nGrenze: wo der Vordergrund aufhört (0 ist der fernste, 1 der nächste Teil des Bildes). Übergang: wie weich er in den Hintergrund übergeht.";
+        crate::widgets::tool_section_help(ui, sk_core::tools::Tool::Relight, help, Some(&mut || reset = true), |ui| {
+            let d = Relight::default();
+            crate::widgets::subheading(ui, "Vordergrund");
+            slider_row(ui, "Belichtung", &mut rl.near, -2.0..=2.0, 0.0, 2);
+            slider_row(ui, "Wärme", &mut rl.near_warmth, -100.0..=100.0, 0.0, 0);
+            crate::widgets::subheading(ui, "Hintergrund");
+            slider_row(ui, "Belichtung", &mut rl.far, -2.0..=2.0, 0.0, 2);
+            slider_row(ui, "Wärme", &mut rl.far_warmth, -100.0..=100.0, 0.0, 0);
+            ui.add_space(4.0);
+            ui.add_enabled_ui(!rl.is_off(), |ui| {
+                slider_row(ui, "Grenze", &mut rl.split, 0.0..=1.0, d.split, 2);
+                slider_row(ui, "Übergang", &mut rl.falloff, 0.02..=1.0, d.falloff, 2);
+            });
+            depth_status(ui, &state, !rl.is_off());
+        });
+        if reset {
+            rl = Relight::default();
+        }
+        if rl != before {
+            self.depth.cancelled.remove(&path);
+            self.edit(|a| a.relight = rl);
+        }
+    }
+
+    /// The "Atmosphäre" section of the details panel.
+    pub(crate) fn atmosphere_section(&mut self, ui: &mut Ui) {
+        let Some(cur) = &self.current else { return };
+        let path = cur.meta.path.clone();
+        let mut at = cur.adjustments.atmosphere;
+        let before = at;
+        let mut reset = false;
+        let state = self.depth_state(&path);
+        let help = "Legt Dunst über das Bild, der mit der Entfernung dichter wird, wie Nebel über einer Landschaft. Wie nah jede Stelle ist, schätzt ein neuronales Netz einmal je Bild (dieselbe Tiefenkarte wie bei der Objektivunschärfe).\n\nReichweite: wie weit nach vorn der Dunst reicht. Helligkeit und Wärme färben ihn.";
+        crate::widgets::tool_section_help(ui, sk_core::tools::Tool::Atmosphere, help, Some(&mut || reset = true), |ui| {
+            let d = Atmosphere::default();
+            slider_row(ui, "Stärke", &mut at.amount, 0.0..=100.0, 0.0, 0);
+            ui.add_enabled_ui(!at.is_off(), |ui| {
+                slider_row(ui, "Reichweite", &mut at.reach, 0.02..=1.0, d.reach, 2);
+                slider_row(ui, "Helligkeit", &mut at.brightness, -100.0..=100.0, 0.0, 0);
+                slider_row(ui, "Wärme", &mut at.warmth, -100.0..=100.0, 0.0, 0);
+            });
+            depth_status(ui, &state, !at.is_off());
+        });
+        if reset {
+            at = Atmosphere::default();
+        }
+        if at != before {
+            self.depth.cancelled.remove(&path);
+            self.edit(|a| a.atmosphere = at);
         }
     }
 
@@ -289,5 +331,31 @@ impl App {
         changed |= slider_row(ui, "Fern", &mut r.far, 0.0..=1.0, d.far, 2);
         changed |= slider_row(ui, "Weichheit", &mut r.falloff, 0.0..=0.5, d.falloff, 2);
         changed.then_some(r)
+    }
+}
+
+/// Progress of the depth map below a tool that uses it (`active`: the tool is switched on).
+fn depth_status(ui: &mut Ui, state: &DepthState, active: bool) {
+    let faint = |t: &str| RichText::new(t).small().color(crate::theme::TEXT_FAINT);
+    match state {
+        DepthState::NoModel => {
+            ui.label(faint(&format!("Lädt beim ersten Einschalten ein KI-Modell ({} MB)", AiFeature::Depth.download_mb())));
+        }
+        DepthState::Downloading(p) => ai_models::download_progress(ui, AiFeature::Depth, *p),
+        _ if !active => {}
+        DepthState::Running(p) => {
+            ui.add(egui::ProgressBar::new(*p).desired_height(6.0));
+            ui.label(faint("Tiefenkarte wird berechnet …"));
+        }
+        DepthState::Waiting => {
+            ui.label(faint("Tiefenkarte wird gleich berechnet …"));
+        }
+        DepthState::Ready => {}
+        DepthState::Cancelled => {
+            ui.label(faint("Abgebrochen – zum Berechnen einen Regler ändern"));
+        }
+        DepthState::Failed(e) => {
+            ui.label(RichText::new(format!("Fehlgeschlagen: {e}")).small().color(crate::theme::DANGER));
+        }
     }
 }

@@ -194,11 +194,12 @@ impl App {
                 }
             }
         });
-        if let Some((tab, title)) = open.and_then(tool_of) {
-            self.tab = tab;
-            if let Some(title) = title {
-                widgets::reveal_section(ui.ctx(), title);
-            }
+        if let Some((tab, title)) = open.and_then(tool_of)
+            && self.section_available(tab, title.unwrap_or_default())
+            && self.open_tab(tab)
+            && let Some(title) = title
+        {
+            widgets::reveal_section(ui.ctx(), title);
         }
     }
 
@@ -307,27 +308,29 @@ impl App {
 /// Tab and section of a tool named by [`changes`].
 fn tool_of(name: &'static str) -> Option<(Tab, Option<&'static str>)> {
     let t = match name {
-        "Belichtung" | "Kontrast" | "Helligkeit" | "Sättigung" => (Tab::Exposure, Some("Belichtung")),
+        "Belichtung" | "Kontrast" | "Helligkeit" => (Tab::Exposure, Some("Belichtung")),
         "Lichter" | "Tiefen" | "Weiß" | "Schwarz" => (Tab::Exposure, Some("Lichter und Tiefen")),
         "Tonwerte" => (Tab::Exposure, Some("Tonwerte")),
         "Gradationskurve" => (Tab::Exposure, Some("Gradationskurve")),
         "Weißabgleich" => (Tab::Color, Some("Weißabgleich")),
         "Basiskurve" => (Tab::Color, Some("Basismerkmale")),
-        "Dynamik" => (Tab::Color, Some("Farbe")),
+        "Sättigung" | "Dynamik" => (Tab::Color, Some("Farbe")),
         // These sections are named like the tool.
         "Farbeditor" | "Hauttöne" | "Farbbalance" | "Schwarzweiß" => (Tab::Color, Some(name)),
         "Zuschnitt" => (Tab::Lens, Some("Zuschnitt")),
         "Drehen" | "Geraderichten" | "Spiegeln" => (Tab::Lens, Some("Drehen & Spiegeln")),
         "Perspektive" => (Tab::Lens, Some("Perspektive")),
         "Objektivkorrektur" => (Tab::Lens, Some("Objektivkorrektur")),
-        "Schärfen" | "Körnung" | "Dunst entfernen" => (Tab::Details, Some(name)),
+        "Neu ausleuchten" => (Tab::Exposure, Some("Neu ausleuchten")),
+        "Schärfen" | "Dunst entfernen" => (Tab::Details, Some(name)),
+        "Körnung" | "Leuchten" | "Atmosphäre" => (Tab::Effects, Some(name)),
         "Rauschreduzierung" | "KI-Entrauschen" => (Tab::Details, Some(crate::denoise::NOISE_SECTION)),
         "Klarheit" | "Struktur" => (Tab::Details, Some("Klarheit")),
-        "Vignette" => (Tab::Details, Some("Vignettierung")),
-        "Objektivunschärfe" => (Tab::Details, Some("Objektivunschärfe")),
+        "Vignette" => (Tab::Effects, Some("Vignette")),
+        "Objektivunschärfe" => (Tab::Effects, Some("Objektivunschärfe")),
         "Ebenen" => (Tab::Layers, None),
         "Retusche" => (Tab::Retouch, Some("Reparieren & Klonen")),
-        "Entfernen" => (Tab::Retouch, Some("Entfernen (KI)")),
+        "Entfernen" => (Tab::Retouch, Some("Entfernen")),
         _ => return None,
     };
     Some(t)

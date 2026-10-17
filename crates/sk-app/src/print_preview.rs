@@ -186,7 +186,8 @@ impl App {
                 ui.selectable_value(&mut s.fit, Fit::Contain, Fit::Contain.label()).on_hover_text("Ganzes Bild, Rand wo die Seitenverhältnisse abweichen");
                 ui.selectable_value(&mut s.fit, Fit::Fill, Fit::Fill.label()).on_hover_text("Randlos wie im Fotolabor, das Bild wird beschnitten");
             });
-            ui.horizontal(|ui| {
+            // Wraps instead of widening the panel (the label carries the shortcut).
+            ui.horizontal_wrapped(|ui| {
                 if ui.selectable_label(self.print.zoom, crate::commands::hint("Druckgröße", "print-zoom")).clicked() {
                     zoom = true;
                 }

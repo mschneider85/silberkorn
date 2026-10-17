@@ -34,12 +34,13 @@ const DARK_POOL: Kernel = kernel!("dark_pool");
 const DEVELOP: Kernel = kernel!("develop");
 const SHARPEN: Kernel = kernel!("sharpen");
 const FINISH: Kernel = kernel!("finish");
+const GLOW: Kernel = kernel!("glow");
 const DISPLAY: Kernel = kernel!("display");
 const OUTPUT: Kernel = kernel!("output");
 const MEDIAN: Kernel = kernel!("median");
 
-const ALL: [Kernel; 15] =
-    [RESAMPLE, BOX_H, BOX_V, PLANE_OP, IMG_PLANES, DOWNSAMPLE, UPSAMPLE_APPLY, NR_COMBINE, DARK_POOL, DEVELOP, SHARPEN, FINISH, DISPLAY, OUTPUT, MEDIAN];
+const ALL: [Kernel; 16] =
+    [RESAMPLE, BOX_H, BOX_V, PLANE_OP, IMG_PLANES, DOWNSAMPLE, UPSAMPLE_APPLY, NR_COMBINE, DARK_POOL, DEVELOP, SHARPEN, GLOW, FINISH, DISPLAY, OUTPUT, MEDIAN];
 
 /// Sets up the graphics card and compiles all kernels (takes a moment; call it early in
 /// the background so that the first rendering does not wait for it).
@@ -63,8 +64,9 @@ const OP_KEEP: u32 = 5;
 const IMG_SQRT_LUMA: u32 = 0;
 const IMG_CHROMA: u32 = 1;
 const IMG_LOG_LUMA: u32 = 2;
-const IMG_MIN: u32 = 3;
 const IMG_LUMA: u32 = 4;
+/// Red; green and blue follow.
+const IMG_RED: u32 = 5;
 
 /// Region size above which exports are processed in tiles (output pixels per side).
 const TILE: usize = 2048;
@@ -88,12 +90,38 @@ struct Local {
     dark: Option<DarkInfo>,
 }
 
+impl Local {
+    /// The part `ext` of the planes of the whole image (`full_w` wide).
+    fn crop(&self, ops: &mut Ops, full_w: usize, ext: Region) -> Local {
+        let n = ext.w * ext.h;
+        let planes = self.has[..3].iter().filter(|h| **h).count();
+        let dark_len = self.dark.map_or(0, |d| (d.w * d.h * 3) as usize);
+        let buf = ops.plane(planes * n + dark_len);
+        let mut off = [0u32; 4];
+        let mut at = 0usize;
+        for ((has, from), to) in self.has.iter().zip(self.off).zip(off.iter_mut()).take(3) {
+            if *has {
+                *to = at as u32;
+                ops.crop_into((&self.buf, from as usize), full_w, ext, 4, (&buf, at));
+                at += n;
+            }
+        }
+        // The dark channel is that of the whole image; only where the part starts in it changes.
+        let dark = self.dark.map(|d| {
+            off[3] = at as u32;
+            ops.enc.copy_at(&self.buf, self.off[3] as u64 * 4, &buf, at as u64 * 4, dark_len as u64 * 4);
+            DarkInfo { origin: (d.origin.0 + ext.x as u32, d.origin.1 + ext.y as u32), ..d }
+        });
+        Local { buf, off, has: self.has, dark }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct DarkInfo {
     w: u32,
     h: u32,
     step: u32,
-    airlight: f32,
+    airlight: [f32; 3],
     /// Offset of the processed region in the dark channel's domain.
     origin: (u32, u32),
 }
@@ -127,6 +155,15 @@ impl<'a> Ops<'a> {
         }
         self.temps.push(b.clone());
         b
+    }
+
+    /// The part `ext` of a raster `full_w` wide (elements of `size` bytes, starting at element
+    /// `src.1` of `src.0`), written row after row from element `dst.1` of `dst.0`.
+    fn crop_into(&mut self, (src, from): (&Buffer, usize), full_w: usize, ext: Region, size: usize, (dst, to): (&Buffer, usize)) {
+        for y in 0..ext.h {
+            let at = (from + (ext.y + y) * full_w + ext.x) * size;
+            self.enc.copy_at(src, at as u64, dst, ((to + y * ext.w) * size) as u64, (ext.w * size) as u64);
+        }
     }
 
     /// `b` outlives this rendering (kept in a cache): it must not go back to the pool.
@@ -307,7 +344,7 @@ struct DevelopParams {
     dark_step: u32,
     dark_ox: u32,
     dark_oy: u32,
-    airlight: f32,
+    airlight: [f32; 3],
     lut_hdr_ev: u32,
     lut_hdr_px: u32,
     lut_hdr_len: u32,
@@ -362,8 +399,12 @@ struct LayerGpu {
     /// hue, width, falloff, minimum chroma
     color: [f32; 4],
     /// exposure, contrast, brightness, saturation, highlights, shadows, clarity, structure,
-    /// temperature, tint, dehaze
-    adj: [f32; 11],
+    /// temperature, tint, dehaze, whites, blacks, vibrance
+    adj: [f32; 14],
+    /// Color editor per band: hue shift, saturation and lightness (both /100).
+    bands: [f32; 24],
+    /// Color balance offsets per wheel (`ColorWheel::offset`).
+    balance: [f32; 12],
 }
 
 const NO_LUT: u32 = u32::MAX;
@@ -389,18 +430,36 @@ fn upload_window(g: &Gpu, img: &LinearImage, (x0, y0, w, h): (usize, usize, usiz
 }
 
 /// Rasterized masks on the graphics card (uploaded again only when the mask changes), per
-/// device (identified by its address).
-static MASKS: LazyLock<Mutex<Vec<(usize, Weak<MaskBitmap>, Arc<Buffer>)>>> = LazyLock::new(Default::default);
+/// device (identified by its address), with the version they hold.
+type MaskBuffers = Mutex<Vec<(usize, u64, Weak<MaskBitmap>, Arc<Buffer>)>>;
+
+static MASKS: LazyLock<MaskBuffers> = LazyLock::new(Default::default);
 
 fn mask_buffer(g: &Gpu, bm: &Arc<MaskBitmap>) -> Arc<Buffer> {
     let device = g as *const Gpu as usize;
     let mut masks = MASKS.lock().unwrap();
-    masks.retain(|(_, w, _)| w.strong_count() > 0);
-    if let Some((_, _, b)) = masks.iter().find(|(d, w, _)| *d == device && std::ptr::eq(w.as_ptr(), Arc::as_ptr(bm))) {
+    if let Some((_, _, _, b)) = masks.iter().find(|(d, v, ..)| *d == device && *v == bm.version) {
         return b.clone();
     }
+    // While a stroke is painted only a few rows change: those are written into the buffer of
+    // the version before, which no rendering asks for any more (and whose bitmap is usually
+    // gone already: it became this one).
+    let patched = bm.changed.as_ref().and_then(|(from, rows)| {
+        let entry = masks.iter_mut().find(|(d, v, ..)| *d == device && v == from)?;
+        if !rows.is_empty() {
+            let part = &bm.data[rows.start * bm.w..rows.end * bm.w];
+            g.queue.write_buffer(&entry.3, (rows.start * bm.w * 4) as u64, bytemuck::cast_slice(part));
+        }
+        entry.1 = bm.version;
+        entry.2 = Arc::downgrade(bm);
+        Some(entry.3.clone())
+    });
+    masks.retain(|(_, _, w, _)| w.strong_count() > 0);
+    if let Some(b) = patched {
+        return b;
+    }
     let b = Arc::new(g.upload(&bm.data));
-    masks.push((device, Arc::downgrade(bm), b.clone()));
+    masks.push((device, bm.version, Arc::downgrade(bm), b.clone()));
     if masks.len() > 16 {
         masks.remove(0);
     }
@@ -416,18 +475,53 @@ fn display_tables(g: &Gpu) -> &(Buffer, Buffer) {
 }
 
 impl DarkChannel {
-    /// From block minima (before dividing by the airlight) and airlight samples; `airlight`
-    /// given (that of the whole image, for a part of it) the samples are not used.
-    pub(super) fn from_parts(samples: Vec<f32>, pooled: Vec<f32>, lw: usize, lh: usize, step: usize, airlight: Option<f32>) -> Self {
+    /// From per block minima (r, g, b, luminance) on a `lw` x `lh` grid and airlight
+    /// samples; `airlight` given (that of the whole image, for a part of it) the samples are
+    /// not used.
+    pub(super) fn from_parts(samples: Vec<[f32; 3]>, minima: Vec<[f32; 4]>, lw: usize, lh: usize, step: usize, airlight: Option<[f32; 3]>) -> Self {
         let airlight = airlight.unwrap_or_else(|| airlight_of(samples));
-        let plane = gaussian_blur(&Plane::new(lw, lh, pooled.into_iter().map(|m| (m / airlight).clamp(0.0, 1.0)).collect()), 1.5);
-        Self { plane, step, airlight }
+        let ya = dot(airlight, LUMA).max(1e-3);
+        // Raw density: the smallest channel relative to the haze's color.
+        let dark = Plane::new(lw, lh, minima.iter().map(|m| (0..3).map(|c| m[c] / airlight[c]).fold(f32::MAX, f32::min).clamp(0.0, 1.0)).collect());
+        // Guide: the darkest luminance, so that a block on an edge pairs with the density of
+        // its dark side (the mean would make it an outlier that leaves a seam).
+        let guide = Plane::new(lw, lh, minima.iter().map(|m| m[3] / ya).collect());
+        // Guided filter on the block grid: density as a linear function of the guide.
+        const R: usize = 2;
+        const EPS: f32 = 2e-3;
+        let (mi, md) = (box_blur(&guide, R), box_blur(&dark, R));
+        let mii = box_blur(&guide.map(|v| v * v), R);
+        let mid = box_blur(&guide.zip(&dark, |g, d| g * d), R);
+        let a: Vec<f32> = (0..lw * lh)
+            .map(|i| {
+                let var = (mii.data[i] - mi.data[i] * mi.data[i]).max(0.0);
+                (mid.data[i] - mi.data[i] * md.data[i]) / (var + EPS)
+            })
+            .collect();
+        let b: Vec<f32> = (0..lw * lh).map(|i| md.data[i] - a[i] * mi.data[i]).collect();
+        // Not smoothed a second time: that would mix in the coefficients of windows on the dark
+        // side alone (no slope), which leave a seam on the bright side of an edge.
+        let top = (0..lw * lh)
+            .map(|i| {
+                let (x, y) = ((i % lw) as isize, (i / lw) as isize);
+                let mut m = 0.0f32;
+                for yy in (y - R as isize).max(0)..=(y + R as isize).min(lh as isize - 1) {
+                    for xx in (x - R as isize).max(0)..=(x + R as isize).min(lw as isize - 1) {
+                        m = m.max(guide.data[yy as usize * lw + xx as usize]);
+                    }
+                }
+                m
+            })
+            .collect();
+        Self { a: Plane::new(lw, lh, a), b: Plane::new(lw, lh, b), top: Plane::new(lw, lh, top), step, airlight }
     }
 }
 
-/// Block minima and airlight samples of a working region on the graphics card.
+/// Per block minima and airlight samples of a working region on the graphics card.
 struct DarkPool {
-    pooled: Buffer,
+    /// Per block: minima of r, g, b and luminance (as float bits).
+    blocks: Buffer,
+    /// Color of every 7th pixel.
     samples: Buffer,
     count: Buffer,
     lw: usize,
@@ -437,10 +531,13 @@ struct DarkPool {
     dom: (usize, usize),
 }
 
-/// Airlight: the bright end of the minimum channel.
-pub(super) fn airlight_of(mut samples: Vec<f32>) -> f32 {
-    let idx = ((samples.len() as f32 * 0.997) as usize).min(samples.len().saturating_sub(1));
-    if samples.is_empty() { 1.0 } else { *samples.select_nth_unstable_by(idx, |a, b| a.total_cmp(b)).1 }.max(0.05)
+/// Airlight: the bright end of the smallest channel, neutral (a colored airlight shifts every
+/// hue of the dehazed image: a slightly blue sky turns the rest magenta).
+pub(super) fn airlight_of(samples: Vec<[f32; 3]>) -> [f32; 3] {
+    let mut min_c: Vec<f32> = samples.iter().map(|p| p[0].min(p[1]).min(p[2])).collect();
+    let idx = ((min_c.len() as f32 * 0.997) as usize).min(min_c.len().saturating_sub(1));
+    let a = if min_c.is_empty() { 1.0 } else { *min_c.select_nth_unstable_by(idx, |a, b| a.total_cmp(b)).1 };
+    [a.max(0.05); 3]
 }
 
 impl DarkPool {
@@ -448,8 +545,8 @@ impl DarkPool {
     fn new(g: &Gpu, dom: (usize, usize), step: usize) -> Self {
         let (lw, lh) = (dom.0.div_ceil(step), dom.1.div_ceil(step));
         Self {
-            pooled: g.upload(&vec![f32::MAX.to_bits(); lw * lh]),
-            samples: g.buffer((dom.0 * dom.1).div_ceil(7) as u64 * 4),
+            blocks: g.upload(&vec![f32::MAX.to_bits(); lw * lh * 4]),
+            samples: g.buffer((dom.0 * dom.1).div_ceil(7) as u64 * 12),
             count: g.upload(&[0u32; 4]),
             lw,
             lh,
@@ -460,7 +557,6 @@ impl DarkPool {
 
     /// Adds the pixels `own` (in working region coordinates) of a working region at `origin`.
     fn add(&self, ops: &mut Ops, working: &Buffer, ext: Region, own: Region, origin: (usize, usize)) {
-        let min_c = ops.img_planes(IMG_MIN, working, ext.w * ext.h).0;
         let a = ops.args(&[
             own.x as u32,
             own.y as u32,
@@ -473,14 +569,15 @@ impl DarkPool {
             self.step as u32,
             self.lw as u32,
         ]);
-        ops.enc.run_2d(DARK_POOL, &[&a, &min_c, &self.pooled, &self.samples, &self.count], own.w, own.h);
+        ops.enc.run_2d(DARK_POOL, &[&a, working, &self.blocks, &self.samples, &self.count], own.w, own.h);
     }
 
-    fn finish(self, g: &Gpu, airlight: Option<f32>) -> Result<DarkChannel> {
+    fn finish(self, g: &Gpu, airlight: Option<[f32; 3]>) -> Result<DarkChannel> {
         let count = g.read::<u32>(&self.count, 1)?[0] as usize;
-        let samples = g.read::<f32>(&self.samples, count)?;
-        let pooled = g.read::<f32>(&self.pooled, self.lw * self.lh)?;
-        Ok(DarkChannel::from_parts(samples, pooled, self.lw, self.lh, self.step, airlight))
+        let samples = g.read::<f32>(&self.samples, count * 3)?.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let blocks = g.read::<f32>(&self.blocks, self.lw * self.lh * 4)?;
+        let minima = blocks.chunks_exact(4).map(|b| [b[0], b[1], b[2], b[3]]).collect();
+        Ok(DarkChannel::from_parts(samples, minima, self.lw, self.lh, self.step, airlight))
     }
 }
 
@@ -559,7 +656,7 @@ impl Processor {
     }
 
     /// Local operator planes (smoothed log luminance, clarity, structure, dark channel).
-    fn local_gpu(&self, ops: &mut Ops, working: &Buffer, plan: &Plan, global_dark: Option<&DarkChannel>, airlight: Option<f32>) -> Result<Local> {
+    fn local_gpu(&self, ops: &mut Ops, working: &Buffer, plan: &Plan, global_dark: Option<&DarkChannel>, airlight: Option<[f32; 3]>) -> Result<Local> {
         let (w, h) = (plan.ext.w, plan.ext.h);
         let n = w * h;
         let log_l = ops.img_planes(IMG_LOG_LUMA, working, n).0;
@@ -582,16 +679,16 @@ impl Processor {
         let dark = if !plan.dehaze_active {
             None
         } else if let Some(dc) = global_dark {
-            Some((dc.plane.clone(), dc.step, dc.airlight, (plan.ext.x as u32, plan.ext.y as u32)))
+            Some(([dc.a.clone(), dc.b.clone(), dc.top.clone()], dc.step, dc.airlight, (plan.ext.x as u32, plan.ext.y as u32)))
         } else {
             let pool = DarkPool::new(ops.g, (w, h), super::dark_step(plan.full));
             pool.add(ops, working, plan.ext, Region { x: 0, y: 0, w, h }, (0, 0));
             ops.flush();
             let dc = pool.finish(ops.g, airlight)?;
-            Some((dc.plane, dc.step, dc.airlight, (0, 0)))
+            Some(([dc.a, dc.b, dc.top], dc.step, dc.airlight, (0, 0)))
         };
         let planes = [ev.as_ref(), clarity.as_ref(), structure.as_ref()];
-        let dark_len = dark.as_ref().map_or(0, |d| d.0.data.len());
+        let dark_len = dark.as_ref().map_or(0, |d| d.0[0].data.len() * 3);
         let total = planes.iter().flatten().count() * n + dark_len;
         let buf = ops.plane(total);
         let mut off = [0u32; 4];
@@ -603,11 +700,13 @@ impl Processor {
                 at += n;
             }
         }
-        let dark = dark.map(|(plane, step, airlight, origin)| {
+        // The guided filter's coefficients a and b, then the guide's limit.
+        let dark = dark.map(|(planes, step, airlight, origin)| {
             off[3] = at as u32;
-            let d = ops.g.upload(&plane.data);
-            ops.enc.copy(&d, &buf, at as u64 * 4, plane.data.len() as u64 * 4);
-            DarkInfo { w: plane.w as u32, h: plane.h as u32, step: step as u32, airlight, origin }
+            let d = ops.g.upload(&planes.iter().flat_map(|p| p.data.iter().copied()).collect::<Vec<f32>>());
+            ops.enc.copy(&d, &buf, at as u64 * 4, planes[0].data.len() as u64 * 12);
+            let (w, h) = (planes[0].w as u32, planes[0].h as u32);
+            DarkInfo { w, h, step: step as u32, airlight, origin }
         });
         Ok(Local { buf, off, has: [ev.is_some(), clarity.is_some(), structure.is_some(), dark.is_some()], dark })
     }
@@ -622,10 +721,20 @@ impl Processor {
         }
         let mut timer = Timer::start();
         let stage_key = self.stage_key(src, ext);
+        // A part of the image whose whole is in the cache (painting renders only what the brush
+        // changed): cut out of it, which is much faster and gives exactly the whole rendering.
+        let full_w = plan.full.0;
+        let whole_key = cache.filter(|_| plan.partial() && global_dark.is_none()).map(|_| self.stage_key(src, Region { x: 0, y: 0, w: full_w, h: plan.full.1 }));
+        let whole = cache.zip(whole_key).and_then(|(c, k)| c.gpu.lock().unwrap().early.as_ref().filter(|(ck, _)| *ck == k).map(|(_, b)| b.clone()));
         let cached = cache.and_then(|c| c.gpu.lock().unwrap().early.as_ref().filter(|(k, _)| *k == stage_key).map(|(_, b)| b.clone()));
-        let working = match cached {
-            Some(b) => b,
-            None => {
+        let working = match (&whole, cached) {
+            (Some(full), _) => {
+                let b = ops.image(n);
+                ops.crop_into((full, 0), full_w, ext, 16, (&b, 0));
+                Arc::new(b)
+            }
+            (None, Some(b)) => b,
+            (None, None) => {
                 let b = Arc::new(self.early_gpu(ops, src, plan, cache));
                 if let Some(c) = cache {
                     ops.keep(&b);
@@ -635,12 +744,21 @@ impl Processor {
             }
         };
 
+        timer.lap("gpu: early stages");
+
         let need_log = plan.hdr_active || plan.clarity_active || plan.structure_active || plan.dehaze_active;
         let local = if need_log {
-            let k = key(&format!("{stage_key}|{}|{}|{}|{}|{}", plan.hdr_active, plan.clarity_active, plan.structure_active, plan.dehaze_active, self.adj.process_3()));
+            let local_key = |stage: u64| key(&format!("{stage}|{}|{}|{}|{}|{}", plan.hdr_active, plan.clarity_active, plan.structure_active, plan.dehaze_active, self.adj.process_3()));
+            let k = local_key(stage_key);
+            // Cut out of the whole image's planes as well (see `whole`).
+            let whole_local = whole.as_ref().and(cache).zip(whole_key).and_then(|(c, wk)| {
+                let k = local_key(wk);
+                c.gpu.lock().unwrap().local.as_ref().filter(|(ck, _)| *ck == k).map(|(_, l)| l.clone())
+            });
             let cached = cache.and_then(|c| c.gpu.lock().unwrap().local.as_ref().filter(|(ck, _)| *ck == k).map(|(_, l)| l.clone()));
-            match cached {
-                Some(l) if global_dark.is_none() => Some(l),
+            match (whole_local, cached) {
+                (Some(full), _) => Some(Arc::new(full.crop(ops, full_w, ext))),
+                (None, Some(l)) if global_dark.is_none() => Some(l),
                 _ => {
                     // A part of the image: haze measured on the whole, or the tiles differ.
                     let airlight = (plan.dehaze_active && plan.partial()).then(|| self.whole_airlight(src));
@@ -656,6 +774,8 @@ impl Processor {
             None
         };
 
+        timer.lap("gpu: local operators");
+
         // Tables: HDR gain, contrast/base curve, output curves.
         let mut luts: Vec<f32> = Vec::new();
         let mut push = |t: &[f32]| {
@@ -667,7 +787,8 @@ impl Processor {
             Some([a, b]) => (push(a), push(b), a.len() as u32),
             None => (NO_LUT, NO_LUT, 2),
         };
-        let lut_curve = self.tone_luts.curve.as_ref().map_or(NO_LUT, |c| push(c));
+        // The camera's curve takes the place of the contrast/base curve (base_curve 3).
+        let lut_curve = self.tone_luts.camera.as_ref().or(self.tone_luts.curve.as_ref()).map_or(NO_LUT, |c| push(c));
         let lut_out = [push(&self.lut[0]), push(&self.lut[1]), push(&self.lut[2])];
         let lut_luma = self.luma_lut.as_ref().map_or(NO_LUT, |l| push(l));
         let luts = g.upload(&luts);
@@ -701,7 +822,17 @@ impl Processor {
             lg.neutral = l.adj.is_neutral() as u32;
             lg.opacity = l.opacity;
             let a = &l.adj;
-            lg.adj = [a.exposure, a.contrast, a.brightness, a.saturation, a.highlights, a.shadows, a.clarity, a.structure, a.temperature, a.tint, a.dehaze];
+            lg.adj = [
+                a.exposure, a.contrast, a.brightness, a.saturation, a.highlights, a.shadows, a.clarity, a.structure, a.temperature, a.tint, a.dehaze,
+                a.whites, a.blacks, a.vibrance,
+            ];
+            for (i, b) in a.color_bands.iter().enumerate() {
+                lg.bands[i * 3..i * 3 + 3].copy_from_slice(&[b.hue, b.saturation / 100.0, b.lightness / 100.0]);
+            }
+            let cb = &a.color_balance;
+            for (i, w) in [cb.master, cb.shadows, cb.midtones, cb.highlights].iter().enumerate() {
+                lg.balance[i * 3..i * 3 + 3].copy_from_slice(&w.offset());
+            }
             layers.push(lg);
         }
         let layer_buf = if layers.is_empty() { g.upload(&[LayerGpu::zeroed()]) } else { g.upload(&layers) };
@@ -718,6 +849,8 @@ impl Processor {
                 Arc::new(all)
             }
         };
+
+        timer.lap("gpu: masks");
 
         let adj = &self.adj;
         let oklab_to = crate::color::working_to_lms();
@@ -744,8 +877,12 @@ impl Processor {
             skin_active: self.skin_active as u32,
             balance_active: self.balance_active as u32,
             bw_enabled: bw.enabled as u32,
-            base_curve: adj.base_curve as u32,
-            hue_preserve: adj.process_3() as u32,
+            base_curve: match adj.base_curve {
+                BaseCurve::Camera if self.tone_luts.camera.is_some() => 3,
+                BaseCurve::Camera => BaseCurve::FilmStandard as u32,
+                b => b as u32,
+            },
+            hue_preserve: (adj.process_3() && self.tone_luts.camera.is_none()) as u32,
             off_ev: off(0),
             off_clarity: off(1),
             off_structure: off(2),
@@ -755,7 +892,7 @@ impl Processor {
             dark_step: dark.map_or(1, |d| d.step),
             dark_ox: dark.map_or(0, |d| d.origin.0),
             dark_oy: dark.map_or(0, |d| d.origin.1),
-            airlight: dark.map_or(1.0, |d| d.airlight),
+            airlight: dark.map_or([1.0; 3], |d| d.airlight),
             lut_hdr_ev,
             lut_hdr_px,
             lut_hdr_len,
@@ -789,7 +926,7 @@ impl Processor {
             ],
             balance: [cb.master, cb.shadows, cb.midtones, cb.highlights]
                 .iter()
-                .flat_map(|w| [w.hue, w.amount, w.lightness])
+                .flat_map(|w| w.offset())
                 .collect::<Vec<_>>()
                 .try_into()
                 .expect("4 wheels"),
@@ -831,6 +968,21 @@ impl Processor {
                 let a = ops.args(&Args { n: n as u32, amount: d.sharpen_amount / 100.0, thr: d.sharpen_threshold / 255.0 });
                 ops.enc.run_1d(SHARPEN, &[&a, &out, &y, &blur], n);
             }
+        }
+        if d.glow_amount > 0.0 {
+            let sigma = super::glow_sigma(d, plan.full.0.max(plan.full.1) as f32);
+            let blurred: Vec<Buffer> = (0..3).map(|c| {
+                let ch = ops.img_planes(IMG_RED + c, &out, n).0;
+                ops.gaussian(&ch, ext.w, ext.h, sigma)
+            }).collect();
+            #[repr(C)]
+            #[derive(Clone, Copy, Pod, Zeroable)]
+            struct Args {
+                n: u32,
+                k: f32,
+            }
+            let a = ops.args(&Args { n: n as u32, k: d.glow_amount / 100.0 });
+            ops.enc.run_1d(GLOW, &[&a, &out, &blurred[0], &blurred[1], &blurred[2]], n);
         }
         if d.vignette_amount != 0.0 || d.grain_amount > 0.0 {
             #[repr(C)]
@@ -1151,6 +1303,70 @@ mod tests {
         assert!(c.source.is_none() && c.early.is_none() && c.local.is_none());
     }
 
+    fn painted_scene() -> Adjustments {
+        let mut adj = Adjustments {
+            shadows: 40.0,
+            detail: Detail { clarity: 40.0, structure: 30.0, dehaze: 30.0, sharpen_amount: 120.0, sharpen_radius: 1.0, nr_luma: 20.0, ..Default::default() },
+            ..Default::default()
+        };
+        let stroke = BrushStroke { points: vec![[0.3, 0.4], [0.6, 0.5]], radius: 0.08, hardness: 0.3, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true };
+        let mut layer = Layer { adjustments: LayerAdjustments { exposure: 1.0, ..Default::default() }, ..Default::default() };
+        layer.mask.strokes.push(stroke);
+        adj.layers.push(layer);
+        adj.assign_layer_ids();
+        adj
+    }
+
+    /// With the whole image in the cache, a part of it is cut out of the cached buffers on
+    /// the card as well: exactly the whole rendering there.
+    #[test]
+    fn part_with_cached_whole_matches_the_whole_rendering_on_the_card() {
+        let Some(g) = gpu() else { return };
+        let (w, h) = (200, 150);
+        let src = image(w, h);
+        let p = Processor::new(&meta(w, h), &painted_scene());
+        let cache = StageCache::default();
+        let full = p.render_gpu(g, &src, None, Some(&cache)).unwrap();
+        let whole_key = cache.gpu.lock().unwrap().early.as_ref().unwrap().0;
+        for region in [Region { x: 50, y: 40, w: 40, h: 30 }, Region { x: 0, y: 0, w: 25, h: 20 }, Region { x: 170, y: 120, w: 30, h: 30 }] {
+            let part = p.render_gpu(g, &src, Some(region), Some(&cache)).unwrap();
+            let mut max = 0;
+            for y in 0..region.h {
+                for x in 0..region.w {
+                    for c in 0..3 {
+                        let a = part.rgba[(y * region.w + x) * 4 + c] as i32;
+                        let b = full.rgba[((y + region.y) * w + x + region.x) * 4 + c] as i32;
+                        max = max.max((a - b).abs());
+                    }
+                }
+            }
+            assert!(max <= 1, "{region:?}: {max}");
+        }
+        assert_eq!(cache.gpu.lock().unwrap().early.as_ref().unwrap().0, whole_key, "the whole stays cached");
+    }
+
+    /// While a stroke is painted only its changed rows go to the card: the result is that of
+    /// the whole mask.
+    #[test]
+    fn growing_stroke_updates_the_mask_on_the_card() {
+        let Some(g) = gpu() else { return };
+        let (w, h) = (200, 150);
+        let src = image(w, h);
+        let mut adj = painted_scene();
+        adj.detail = Detail::default();
+        let cache = StageCache::default();
+        for i in 0..8 {
+            adj.layers[0].mask.strokes[0].points.push([0.6 - i as f32 * 0.04, 0.5 + i as f32 * 0.03]);
+            let bm = crate::mask::cached_bitmap(&adj.layers[0].mask, w as f32 / h as f32, Some(&src));
+            assert!(i == 0 || bm.changed.is_some(), "Punkt {i}: nur die geänderten Zeilen");
+            let p = Processor::new(&meta(w, h), &adj);
+            let on_card = p.render_gpu(g, &src, None, Some(&cache)).unwrap();
+            let cpu = p.render_cpu(&src, None, None);
+            let max = on_card.rgba.iter().zip(&cpu.rgba).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap_or(0);
+            assert!(max <= 4, "Punkt {i}: {max}");
+        }
+    }
+
     #[test]
     fn median_matches_cpu() {
         let Some(g) = gpu() else { return };
@@ -1275,6 +1491,31 @@ mod tests {
                 None,
             ),
             (
+                // The camera's curve, also where a layer changes the contrast (no table there).
+                "Kamera-Kurve",
+                Adjustments {
+                    base_curve: BaseCurve::Camera,
+                    camera_curve: Some(crate::params::CameraCurve { points: (0..14).map(|i| [-5.0 + i as f32 * 0.5, 0.01 * 1.42f32.powi(i)]).collect() }),
+                    contrast: 20.0,
+                    layers: vec![layer(LayerAdjustments { contrast: -40.0, exposure: 0.5, ..Default::default() }, radial.clone())],
+                    ..plain.clone()
+                },
+                Default::default(),
+                None,
+            ),
+            (
+                "Leuchten",
+                Adjustments { detail: Detail { glow_amount: 70.0, glow_size: 60.0, ..Default::default() }, ..plain.clone() },
+                Default::default(),
+                None,
+            ),
+            (
+                "Leuchten, Ausschnitt",
+                Adjustments { detail: Detail { glow_amount: 70.0, ..Default::default() }, ..plain.clone() },
+                Default::default(),
+                Some(Region { x: 40, y: 30, w: 200, h: 120 }),
+            ),
+            (
                 "Details",
                 Adjustments {
                     detail: Detail { clarity: 45.0, structure: 30.0, dehaze: 40.0, nr_luma: 40.0, nr_color: 50.0, sharpen_amount: 120.0, sharpen_threshold: 2.0, ..Default::default() },
@@ -1372,6 +1613,37 @@ mod tests {
                 None,
             ),
             (
+                "Ebenen mit Weiß, Schwarz und Farbe",
+                Adjustments {
+                    vibrance: 10.0,
+                    color_balance: ColorBalance { midtones: ColorWheel { hue: 40.0, amount: 20.0, lightness: 0.0 }, ..Default::default() },
+                    layers: vec![
+                        layer(
+                            LayerAdjustments {
+                                whites: 30.0,
+                                blacks: -20.0,
+                                vibrance: 40.0,
+                                color_bands: std::array::from_fn(|i| HslBand { hue: i as f32 * 2.0, saturation: -20.0, lightness: 10.0 }),
+                                color_balance: ColorBalance {
+                                    master: ColorWheel { hue: 220.0, amount: 25.0, lightness: 5.0 },
+                                    highlights: ColorWheel { hue: 60.0, amount: 30.0, lightness: -10.0 },
+                                    ..Default::default()
+                                },
+                                ..Default::default()
+                            },
+                            radial.clone(),
+                        ),
+                        layer(
+                            LayerAdjustments { color_balance: ColorBalance { shadows: ColorWheel { hue: 300.0, amount: 40.0, lightness: 0.0 }, ..Default::default() }, ..Default::default() },
+                            Mask { fill: true, ..Default::default() },
+                        ),
+                    ],
+                    ..plain.clone()
+                },
+                Default::default(),
+                None,
+            ),
+            (
                 "Maskenanzeige, Clipping",
                 Adjustments { exposure: 1.0, layers: vec![layer(LayerAdjustments::default(), radial.clone())], ..plain.clone() },
                 RenderOptions { clip_warning: true, mask_overlay: Some(0), ..Default::default() },
@@ -1406,7 +1678,7 @@ mod tests {
         let src = image(w, h);
         let adj = Adjustments {
             shadows: 40.0,
-            detail: Detail { clarity: 40.0, dehaze: 30.0, grain_amount: 20.0, vignette_amount: -30.0, ..Default::default() },
+            detail: Detail { clarity: 40.0, dehaze: 30.0, grain_amount: 20.0, vignette_amount: -30.0, glow_amount: 50.0, ..Default::default() },
             ..Default::default()
         };
         let p = Processor::new(&meta(w, h), &adj);

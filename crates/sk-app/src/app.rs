@@ -28,6 +28,7 @@ pub enum Tab {
     Exposure,
     Color,
     Details,
+    Effects,
     Layers,
     Retouch,
     Metadata,
@@ -38,13 +39,14 @@ pub enum Tab {
 
 impl Tab {
     /// In rail order: organizing, developing, presets and history, output.
-    pub const ALL: [Tab; 11] = [
+    pub const ALL: [Tab; 12] = [
         Tab::Library,
         Tab::Metadata,
         Tab::Lens,
         Tab::Exposure,
         Tab::Color,
         Tab::Details,
+        Tab::Effects,
         Tab::Layers,
         Tab::Retouch,
         Tab::Styles,
@@ -52,11 +54,21 @@ impl Tab {
         Tab::Output,
     ];
 
+    /// Tabs whose tools only change the whole image: disabled while a layer is chosen.
+    pub fn edits_image(self) -> bool {
+        matches!(self, Tab::Lens | Tab::Effects | Tab::Retouch | Tab::Styles)
+    }
+
+    /// Tabs whose tools work on the chosen layer (marked in the rail while one is).
+    pub fn on_layers(self) -> bool {
+        matches!(self, Tab::Exposure | Tab::Color | Tab::Details | Tab::Layers)
+    }
+
     /// Group of the tab in the rail; groups are set apart by a gap.
     pub fn group(self) -> u8 {
         match self {
             Tab::Library | Tab::Metadata => 0,
-            Tab::Lens | Tab::Exposure | Tab::Color | Tab::Details | Tab::Layers | Tab::Retouch => 1,
+            Tab::Lens | Tab::Exposure | Tab::Color | Tab::Details | Tab::Effects | Tab::Layers | Tab::Retouch => 1,
             Tab::Styles | Tab::History => 2,
             Tab::Output => 3,
         }
@@ -69,6 +81,7 @@ impl Tab {
             Tab::Exposure => "Belichtung",
             Tab::Color => "Farbe",
             Tab::Details => "Details",
+            Tab::Effects => "Effekte",
             Tab::Layers => "Ebenen",
             Tab::Retouch => "Retusche",
             Tab::Metadata => "Metadaten",
@@ -86,6 +99,7 @@ impl Tab {
             Tab::Exposure => "Belichtung",
             Tab::Color => "Farbe",
             Tab::Details => "Details",
+            Tab::Effects => "Effekte",
             Tab::Layers => "Ebenen",
             Tab::Retouch => "Retusche",
             Tab::Metadata => "Info",
@@ -95,7 +109,8 @@ impl Tab {
         }
     }
 
-    /// Ctrl+1 … Ctrl+0 in rail order; the history has none (it is also in the side column).
+    /// Ctrl+1 … Ctrl+0 for the first ten tabs in rail order; the history is skipped (it is also in
+    /// the side column), the output has none left (export has its own shortcut).
     pub fn key(self) -> Option<Key> {
         const KEYS: [Key; 10] = [Key::Num1, Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9, Key::Num0];
         let i = Tab::ALL.into_iter().filter(|t| *t != Tab::History).position(|t| t == self)?;
@@ -110,6 +125,7 @@ impl Tab {
             Tab::Exposure => icon::SUN,
             Tab::Color => icon::PALETTE,
             Tab::Details => icon::MAGNIFYING_GLASS_PLUS,
+            Tab::Effects => icon::SHOOTING_STAR,
             Tab::Layers => icon::STACK,
             Tab::Retouch => icon::BANDAIDS,
             Tab::Metadata => icon::INFO,
@@ -279,6 +295,10 @@ struct Settings {
     print: sk_core::print::PrintSettings,
     hdr_options: sk_core::hdr::HdrOptions,
     pano_options: sk_core::panorama::PanoramaOptions,
+    auto_options: sk_core::auto::AutoOptions,
+    look_options: sk_core::look_match::LookOptions,
+    /// The references of "Look angleichen".
+    look_refs: Vec<crate::look::LookRef>,
     /// AI on the graphics card (if available).
     ai_gpu: Option<bool>,
     /// Development pipeline on the graphics card (if available).
@@ -290,6 +310,14 @@ struct Settings {
     /// Shortcuts changed by the user, by command id (see `commands::saved_bindings`).
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     shortcuts: std::collections::BTreeMap<String, Vec<String>>,
+    /// Styles as a list instead of the grid of previews.
+    style_list: bool,
+    /// No check for a new version at startup.
+    update_check_off: bool,
+    /// Last automatic update check, in seconds since 1970.
+    update_last_check: Option<u64>,
+    /// Version the user skipped.
+    update_skipped: Option<String>,
 }
 
 /// Thumbnail textures kept at most (see `App::trim_thumbs`).
@@ -317,6 +345,15 @@ fn load_settings(path: &Path) -> (Settings, Option<String>) {
     }
 }
 
+/// Area the brush changed, from edit version `base` (exclusive) to `version`: 0..1 of the
+/// shown image.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Painted {
+    pub base: u64,
+    pub version: u64,
+    pub rect: egui::Rect,
+}
+
 pub struct App {
     pub(crate) workers: Workers,
     persist_settings: bool,
@@ -338,6 +375,9 @@ pub struct App {
     pub(crate) style_preview: Option<Adjustments>,
     /// A style row is hovered this frame (otherwise the preview ends).
     pub(crate) style_hovered: bool,
+    pub(crate) style_grid: crate::style_grid::StyleGrid,
+    /// Styles as a list instead of the grid of previews.
+    pub(crate) style_list: bool,
     /// Lensfun profiles, read in the background at startup.
     pub lens_db: Option<Arc<Vec<sk_core::lensfun::LensProfile>>>,
     pub lens_db_downloading: bool,
@@ -439,6 +479,8 @@ pub struct App {
     pub(crate) auto_guide: Option<(u64, Arc<sk_core::brush::AutoGuide>)>,
     pub selected_spot: Option<usize>,
     pub show_mask: bool,
+    /// The mask is shown while the pointer is over the layer bar above the tools.
+    pub peek_mask: bool,
     /// Mask overlay of the latest render request (see `send_render`).
     rendered_mask_overlay: Option<usize>,
     pub split_view: bool,
@@ -507,8 +549,24 @@ pub struct App {
     pub compare_zoom: f32,
     /// ... and the image point (0..1) at the center of the cells.
     pub compare_center: Vec2,
-    /// Images still being matched to the reference: (done, total).
-    pub match_progress: Option<(usize, usize)>,
+    /// What "Look angleichen" sets, and where the look comes from (see `look`).
+    pub look_options: sk_core::look_match::LookOptions,
+    pub look_refs: Vec<crate::look::LookRef>,
+    /// Thumbnails of the references, or why one can't be used.
+    pub look_ref_state: HashMap<crate::look::LookRef, crate::look::LookRefState>,
+    /// How similar the open image is to the references, and what was last asked for.
+    pub look_similarity: Option<crate::look::LookSimilarity>,
+    pub look_similarity_asked: Option<(PathBuf, Vec<crate::look::LookRef>)>,
+    /// Images still being matched to the look: (done, total).
+    pub look_progress: Option<(usize, usize)>,
+    /// The last look match of the open image, for its strength slider.
+    pub look_mix: Option<crate::look::LookMix>,
+    /// What the one-click auto adjustment sets.
+    pub auto_options: sk_core::auto::AutoOptions,
+    /// Images still being adjusted automatically: (done, total).
+    pub auto_progress: Option<(usize, usize)>,
+    /// The last auto adjustment of the open image, for its strength slider.
+    pub auto_mix: Option<crate::develop_tools::AutoMix>,
     /// Sharp areas are marked in green (focus mask).
     pub focus_mask: bool,
     /// 0..100: higher marks more.
@@ -545,6 +603,7 @@ pub struct App {
     pub export_log: Vec<String>,
 
     pub status: String,
+    pub updates: crate::update::Updates,
     pub show_filmstrip: bool,
     /// Thumbnail size (long edge) in the grid.
     pub grid_thumb: f32,
@@ -566,6 +625,14 @@ pub struct App {
     pub(crate) drag_view_level: Option<usize>,
     /// Rendered while the mouse was down (perhaps without reduction): render once more after release.
     pub(crate) drag_rendered: bool,
+    /// What the brush painted since the last rendering was requested (see [`App::note_painted`]).
+    pub(crate) painted: Option<Painted>,
+    /// The stroke point before the last one (screen), for [`App::note_painted`].
+    pub(crate) paint_prev: Option<egui::Pos2>,
+    /// Edit version of the last rendering requested that leaves the whole image at full
+    /// preview resolution in `texture` (a whole rendering, or a part on top of one): parts
+    /// painted after it can be rendered alone.
+    whole_sent: Option<u64>,
     pub guides: crate::guides::Guides,
     pub overlay: crate::guides::Overlay,
     /// Distraction-free full screen: only the image.
@@ -656,6 +723,9 @@ impl App {
         let (settings, settings_error) = settings_path().filter(|_| opts.persist_settings).map_or((Settings::default(), None), |p| load_settings(&p));
         // Without an explicit folder, reopen the session that was open last time.
         sk_core::xmp::set_write_enabled(settings.write_xmp && opts.persist_settings);
+        // Not in tests (one process, many apps): they set the look explicitly.
+        // Never edited images start with the camera's look (not in tests, which compare renderings).
+        sk_core::camera_look::set_for_new(opts.persist_settings);
         if opts.persist_settings {
             crate::commands::load_bindings(&settings.shortcuts);
         }
@@ -701,6 +771,8 @@ impl App {
             film_looks: sk_core::styles::film_simulations(),
             style_preview: None,
             style_hovered: false,
+            style_grid: Default::default(),
+            style_list: settings.style_list,
             lens_db: None,
             lens_db_downloading: false,
             lens_match: None,
@@ -716,6 +788,9 @@ impl App {
             drag_draft_level: None,
             drag_view_level: None,
             drag_rendered: false,
+            painted: None,
+            paint_prev: None,
+            whole_sent: None,
             guides: settings.guides,
             overlay: crate::guides::Overlay::new(settings.overlay_file.clone(), settings.overlay_opacity),
             folder: PathBuf::new(),
@@ -773,6 +848,7 @@ impl App {
             auto_guide: None,
             selected_spot: None,
             show_mask: false,
+            peek_mask: false,
             rendered_mask_overlay: None,
             split_view: false,
             split_side: false,
@@ -842,7 +918,16 @@ impl App {
             details_requested: Vec::new(),
             compare_zoom: 1.0,
             compare_center: Vec2::splat(0.5),
-            match_progress: None,
+            look_options: settings.look_options,
+            look_refs: settings.look_refs.clone(),
+            look_ref_state: HashMap::new(),
+            look_similarity: None,
+            look_similarity_asked: None,
+            look_progress: None,
+            look_mix: None,
+            auto_options: settings.auto_options,
+            auto_progress: None,
+            auto_mix: None,
             confirm_delete_variant: None,
             rename: None,
             restore_image: settings.last_image.clone(),
@@ -870,6 +955,7 @@ impl App {
             quit_asked: false,
             quit_confirmed: false,
             export_log: Vec::new(),
+            updates: crate::update::Updates::new(settings.update_check_off, settings.update_last_check, settings.update_skipped.clone()),
             status,
             screenshot: std::env::var_os("SILBERKORN_SCREENSHOT").map(|p| (PathBuf::from(p), None)),
             viewer_window: crate::viewer_window::ViewerWindow {
@@ -895,6 +981,7 @@ impl App {
         if opts.persist_settings {
             app.workers.load_lens_db();
             app.preload_small_ai();
+            app.start_update_check();
         }
         match session {
             Some(s) => {
@@ -914,6 +1001,7 @@ impl App {
             Ok("shortcuts") => app.show_shortcuts = true,
             Ok("about") => app.splash = Some(crate::splash::Splash::about()),
             Ok("gpu") => app.show_gpu_dialog = true,
+            Ok("update") => app.update_dialog_open(),
             // `calibrate` or `calibrate:<dpi>`.
             Ok(d) if d.starts_with("calibrate") => {
                 app.print.calibrating = Some(d.trim_start_matches("calibrate").trim_start_matches(':').parse().unwrap_or(96.0) / 25.4);
@@ -953,11 +1041,18 @@ impl App {
             print: self.print.settings.clone(),
             hdr_options: self.hdr_options,
             pano_options: self.pano_options,
+            auto_options: self.auto_options,
+            look_options: self.look_options,
+            look_refs: self.look_refs.clone(),
             ai_gpu: Some(sk_ai::runtime::gpu_enabled()),
             develop_gpu: Some(sk_core::gpu::enabled()),
             brushes: self.brushes.clone(),
             grid_thumb: Some(self.grid_thumb),
             shortcuts: crate::commands::saved_bindings(),
+            style_list: self.style_list,
+            update_check_off: self.updates.auto_off,
+            update_last_check: self.updates.last_check,
+            update_skipped: self.updates.skipped.clone(),
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -996,7 +1091,7 @@ impl App {
 
     /// Layer whose mask is shown as overlay: only while "Maske anzeigen" (M) is on.
     pub fn mask_overlay(&self) -> Option<usize> {
-        if self.show_mask { self.active_layer } else { None }
+        if self.show_mask || self.peek_mask { self.active_layer } else { None }
     }
 
     /// Size of the shown image in the viewer's coordinates (preview pixels).
@@ -1117,6 +1212,15 @@ impl App {
             self.sidecar_dirty = true;
         }
         let mut sc = self.with_unsaved(&meta.path, sc);
+        // The camera's look for a new image (usually fitted ahead while prefetching).
+        let looked = unreadable.is_none()
+            && match sk_core::camera_look::apply_if_wanted(&meta, &preview, &sc.adjustments, sk_core::camera_look::for_new()) {
+                Some(adj) => {
+                    sc.adjustments = adj;
+                    true
+                }
+                None => false,
+            };
         // Rounded to slider precision so that displaying it never counts as an edit.
         let (k, t) = meta.color.temp_tint_for_wb(meta.as_shot_wb);
         let as_shot_temp_tint = (k.round(), (t * 10.0).round() / 10.0);
@@ -1157,6 +1261,11 @@ impl App {
             as_shot_temp_tint,
             unreadable,
         });
+        if looked {
+            // Saved right away, so that export and thumbnails see it too.
+            self.sidecar_dirty = true;
+            self.commit_and_save();
+        }
         // The prefetched rendering lacks the profile.
         let rendered = rendered.filter(|_| !self.auto_lens_profile());
         self.undo.clear();
@@ -1887,6 +1996,23 @@ impl App {
                         self.set_thumb(ctx, path, thumb);
                     }
                 }
+                Event::RenderedPart { generation, version, x, y, image } => {
+                    if generation != self.generation {
+                        continue;
+                    }
+                    let fits = |t: &TextureHandle| x + image.size[0] <= t.size()[0] && y + image.size[1] <= t.size()[1];
+                    match &mut self.texture {
+                        Some(t) if !self.texture_draft && fits(t) => {
+                            t.set_partial([x, y], image, TextureOptions::LINEAR);
+                            self.texture_version = version;
+                        }
+                        // The shown image changed in the meantime: render it whole.
+                        _ => {
+                            self.whole_sent = None;
+                            self.request_render();
+                        }
+                    }
+                }
                 Event::Thumbnail { path, image } => self.set_thumb(ctx, path, image),
                 Event::ProxyProgress(p) => self.proxy_progress = p,
                 Event::Proof { generation, version, key, result } => {
@@ -2010,6 +2136,7 @@ impl App {
                     }
                 }
                 Event::LensDbDownloading(on) => self.lens_db_downloading = on,
+                Event::StyleThumb { key, id, image } => self.style_thumb_arrived(ctx, key, id, image),
                 Event::CompareImage { path, image } => {
                     // The current image is shown from its live rendering.
                     if self.compare_requested.remove(&path) && self.current_path().as_ref() != Some(&path) {
@@ -2026,7 +2153,10 @@ impl App {
                 Event::CompareDetail { path, version, uv, width, full_res, image, focus } => {
                     self.detail_received(ctx, path, version, uv, width, full_res, image, focus);
                 }
-                Event::Matched { path, result } => self.matched(path, result),
+                Event::LookMatched { path, opts, result } => self.look_matched(path, opts, result),
+                Event::LookRef { r, result } => self.look_ref_arrived(ctx, r, result),
+                Event::LookSimilarity { path, refs, values } => self.look_similarity = Some(crate::look::LookSimilarity { path, refs, values }),
+                Event::AutoAdjusted { path, opts, result } => self.auto_adjusted(path, opts, result),
                 Event::Focus { path, version, size, sharpness } => self.focus_received(path, version, size, sharpness),
                 Event::IndexProgress { done, total } => {
                     self.index_progress = (done < total).then_some((done, total));
@@ -2133,17 +2263,23 @@ impl App {
                     cache_as: None,
                     draft: 1,
                     softproof: None,
+                    part: None,
                 });
             }
         }
         let softproof = self.active_softproof();
+        // Painting: only what the brush changed, at full resolution, on top of the shown image
+        // (the whole image once if it is not complete, so that the next parts can follow).
+        let (painting, part) = self.painted_part(softproof.is_some());
         let draft = match (self.pointer_down, self.view_magnified) {
+            _ if painting => 1,
             (false, _) => 1,
             (true, false) => self.drag_draft_level(),
             // Zoomed in, the view draft covers the screen; this only feeds the histogram.
             (true, true) => 4,
         };
         self.drag_rendered |= self.pointer_down && self.current.is_some();
+        self.whole_sent = (draft == 1 && !self.show_before && self.style_preview.is_none() && self.current.is_some()).then_some(self.edit_version);
         if let Some(cur) = &self.current {
             self.workers.render(RenderJob {
                 generation: self.generation,
@@ -2159,8 +2295,51 @@ impl App {
                 ignore_crop: self.crop_tool.is_some(),
                 mask_overlay: self.mask_overlay(),
                 softproof,
+                part,
             });
         }
+    }
+
+    /// Notes that the brush painted along `trail` (screen positions: the point before the last
+    /// one, the last one and the new ones) with radius `r` on the image shown in `img_rect`, in
+    /// the last edit.
+    pub(crate) fn note_painted(&mut self, img_rect: egui::Rect, trail: &[egui::Pos2], r: f32) {
+        // The smoothed path between the last points still changes with the next one; a little
+        // more for its bends and the edge pixels.
+        let rect = trail.iter().fold(egui::Rect::NOTHING, |a, p| a.union(egui::Rect::from_two_pos(*p, *p)));
+        let rect = rect.expand(r * 1.25 + 2.0);
+        let size = img_rect.size().max(egui::vec2(1.0, 1.0));
+        let rect = egui::Rect::from_min_max(((rect.min - img_rect.min) / size).to_pos2(), ((rect.max - img_rect.min) / size).to_pos2());
+        let version = self.edit_version;
+        self.painted = match self.painted {
+            // The edit before was painting as well: one area.
+            Some(p) if p.version + 1 == version => Some(Painted { version, rect: p.rect.union(rect), ..p }),
+            _ => Some(Painted { base: version.saturating_sub(1), version, rect }),
+        };
+    }
+
+    /// Whether the brush painted in a view shown by parts, and the part to render for it
+    /// (output pixels of the preview's rendering) if nothing else changed since the shown
+    /// image was complete.
+    fn painted_part(&mut self, softproof: bool) -> (bool, Option<sk_core::geometry::Region>) {
+        let Some(p) = self.painted.take() else { return (false, None) };
+        let plain_view = self.pointer_down
+            && !self.view_magnified
+            && !self.show_before
+            && !self.split_view
+            && !softproof
+            && self.style_preview.is_none()
+            && self.crop_tool.is_none()
+            && self.straighten_tool.is_none();
+        if !plain_view {
+            return (false, None);
+        }
+        let Some(size) = self.view_size.filter(|_| p.version == self.edit_version && self.whole_sent == Some(p.base)) else { return (true, None) };
+        let x0 = (p.rect.min.x * size.x).floor().clamp(0.0, size.x) as usize;
+        let y0 = (p.rect.min.y * size.y).floor().clamp(0.0, size.y) as usize;
+        let x1 = (p.rect.max.x * size.x).ceil().clamp(0.0, size.x) as usize;
+        let y1 = (p.rect.max.y * size.y).ceil().clamp(0.0, size.y) as usize;
+        (true, (x1 > x0 && y1 > y0).then(|| sk_core::geometry::Region { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }))
     }
 
     pub(crate) fn shortcuts(&mut self, ctx: &egui::Context) {
@@ -2173,7 +2352,9 @@ impl App {
         }
         // While a menu, a dialog or the palette is open the keyboard belongs to it, as in native
         // applications (Ctrl+Entf must not trash the selection behind the rename dialog).
-        if self.palette.open || ctx.egui_wants_keyboard_input() || egui::Popup::is_any_open(ctx) || ctx.memory(|m| m.top_modal_layer()).is_some() {
+        // A focused slider or button keeps only the keys it uses itself (arrows, space); only a
+        // text field takes them all.
+        if self.palette.open || ctx.text_edit_focused() || egui::Popup::is_any_open(ctx) || ctx.memory(|m| m.top_modal_layer()).is_some() {
             return;
         }
         // Ctrl+1 … Ctrl+0: the tool tabs in rail order.
@@ -2181,7 +2362,7 @@ impl App {
             if let Some(key) = tab.key()
                 && ctx.input_mut(|inp| inp.consume_key(Modifiers::COMMAND, key))
             {
-                self.tab = tab;
+                self.open_tab(tab);
             }
         }
         // Everything else comes from the command list (see `commands`).
@@ -2482,6 +2663,10 @@ impl eframe::App for App {
             self.speed_message = None;
         }
         self.handle_events(&ctx);
+        // While a layer is chosen, tabs that only change the whole image can't be open.
+        if !self.tab_available(self.tab) {
+            self.tab = Tab::Layers;
+        }
         // Another tab: a layer or retouch tool of the old one ends (its panel is gone).
         if self.tab != self.tab_shown {
             self.tab_shown = self.tab;
@@ -2513,6 +2698,7 @@ impl eframe::App for App {
             self.dialogs(&ctx);
             self.session_dialogs(&ctx);
             self.variant_dialogs(&ctx);
+            self.person_dialogs(&ctx);
             self.stack_dialogs(&ctx);
             self.merge_dialogs(&ctx);
             self.print_dialogs(&ctx);
@@ -2533,7 +2719,15 @@ impl eframe::App for App {
             .resizable(true)
             .default_size(340.0)
             .size_range(280.0..=560.0)
-            .show(ui, |ui| self.tool_panel(ui));
+            .show(ui, |ui| {
+                // Too wide content (a long lens name) must not widen the panel; only dragging
+                // its edge does. The child is not counted in the panel's size, its rect is.
+                let rect = ui.available_rect_before_wrap();
+                let mut content = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(*ui.layout()));
+                content.set_clip_rect(rect.intersect(ui.clip_rect()));
+                self.tool_panel(&mut content);
+                ui.advance_cursor_after_rect(rect);
+            });
         let grid = self.grid_view;
         self.side_column_shown = self.side_column_wanted(grid);
         if self.side_column_shown {
@@ -2572,6 +2766,7 @@ impl eframe::App for App {
         self.palette_ui(&ctx);
         self.session_dialogs(&ctx);
         self.variant_dialogs(&ctx);
+        self.person_dialogs(&ctx);
         self.stack_dialogs(&ctx);
         self.merge_dialogs(&ctx);
         self.print_dialogs(&ctx);
@@ -2581,6 +2776,7 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.commit_and_save();
         self.save_settings();
+        self.install_update_on_exit();
     }
 }
 

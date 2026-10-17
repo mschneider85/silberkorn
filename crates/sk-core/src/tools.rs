@@ -16,7 +16,7 @@ pub enum Tool {
     SkinTone,
     ColorBalance,
     BlackWhite,
-    /// Exposure, contrast, brightness and saturation (the "Belichtung" section).
+    /// Exposure, contrast and brightness (the "Belichtung" section).
     Exposure,
     HighlightsShadows,
     Levels,
@@ -28,6 +28,9 @@ pub enum Tool {
     Vignette,
     Grain,
     LensBlur,
+    Glow,
+    Relight,
+    Atmosphere,
     LensCorrection,
     Crop,
     Rotation,
@@ -39,14 +42,26 @@ pub enum Tool {
 /// The tools in groups as in the tool tabs.
 pub const GROUPS: &[(&str, &[Tool])] = &[
     ("Farbe", &[Tool::BaseCurve, Tool::WhiteBalance, Tool::Color, Tool::ColorEditor, Tool::SkinTone, Tool::ColorBalance, Tool::BlackWhite]),
-    ("Belichtung", &[Tool::Exposure, Tool::HighlightsShadows, Tool::Levels, Tool::Curves]),
-    ("Details", &[Tool::NoiseReduction, Tool::Sharpening, Tool::Clarity, Tool::Dehaze, Tool::Vignette, Tool::Grain, Tool::LensBlur]),
+    ("Belichtung", &[Tool::Exposure, Tool::HighlightsShadows, Tool::Levels, Tool::Curves, Tool::Relight]),
+    ("Details", &[Tool::NoiseReduction, Tool::Sharpening, Tool::Clarity, Tool::Dehaze]),
+    ("Effekte", &[Tool::LensBlur, Tool::Atmosphere, Tool::Glow, Tool::Vignette, Tool::Grain]),
     ("Objektiv", &[Tool::LensCorrection, Tool::Crop, Tool::Rotation, Tool::Perspective]),
     ("Ebenen und Retusche", &[Tool::Layers, Tool::Retouch]),
 ];
 
+/// Whether a tool's settings can also be made on a local layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerSupport {
+    /// Every setting of the tool.
+    Full,
+    /// Some settings; the others only on the background.
+    Partial,
+    /// Only on the background.
+    None,
+}
+
 impl Tool {
-    pub const ALL: [Tool; 24] = [
+    pub const ALL: [Tool; 27] = [
         Tool::WhiteBalance,
         Tool::BaseCurve,
         Tool::Color,
@@ -65,6 +80,9 @@ impl Tool {
         Tool::Vignette,
         Tool::Grain,
         Tool::LensBlur,
+        Tool::Glow,
+        Tool::Relight,
+        Tool::Atmosphere,
         Tool::LensCorrection,
         Tool::Crop,
         Tool::Rotation,
@@ -72,6 +90,11 @@ impl Tool {
         Tool::Layers,
         Tool::Retouch,
     ];
+
+    /// Works with an AI model (the depth map): marked as such in the tool tabs.
+    pub fn is_ai(self) -> bool {
+        matches!(self, Tool::LensBlur | Tool::Relight | Tool::Atmosphere)
+    }
 
     /// The title of the tool's section.
     pub fn label(self) -> &'static str {
@@ -91,15 +114,29 @@ impl Tool {
             Tool::NoiseReduction => "Rauschen",
             Tool::Clarity => "Klarheit",
             Tool::Dehaze => "Dunst entfernen",
-            Tool::Vignette => "Vignettierung",
+            Tool::Vignette => "Vignette",
             Tool::Grain => "Körnung",
             Tool::LensBlur => "Objektivunschärfe",
+            Tool::Glow => "Leuchten",
+            Tool::Relight => "Neu ausleuchten",
+            Tool::Atmosphere => "Atmosphäre",
             Tool::LensCorrection => "Objektivkorrektur",
             Tool::Crop => "Zuschnitt",
             Tool::Rotation => "Drehen & Spiegeln",
             Tool::Perspective => "Perspektive",
             Tool::Layers => "Ebenen",
             Tool::Retouch => "Retusche",
+        }
+    }
+
+    /// How far the tool also works on a local layer (`LayerAdjustments`).
+    pub fn layer_support(self) -> LayerSupport {
+        match self {
+            Tool::Color | Tool::ColorBalance | Tool::Exposure | Tool::HighlightsShadows | Tool::Clarity | Tool::Dehaze => LayerSupport::Full,
+            // Temperature and tint relative to the background; the color editor's bands, not its
+            // ranges of one's own.
+            Tool::WhiteBalance | Tool::ColorEditor => LayerSupport::Partial,
+            _ => LayerSupport::None,
         }
     }
 
@@ -117,10 +154,10 @@ impl Tool {
             Tool::Color => (to.saturation, to.vibrance) = (from.saturation, from.vibrance),
             Tool::ColorEditor => to.color_editor = from.color_editor.clone(),
             Tool::SkinTone => to.skin_tone = from.skin_tone,
-            Tool::ColorBalance => to.color_balance = from.color_balance.clone(),
+            Tool::ColorBalance => to.color_balance = from.color_balance,
             Tool::BlackWhite => to.black_white = from.black_white.clone(),
             Tool::Exposure => {
-                (to.exposure, to.contrast, to.brightness, to.saturation) = (from.exposure, from.contrast, from.brightness, from.saturation);
+                (to.exposure, to.contrast, to.brightness) = (from.exposure, from.contrast, from.brightness);
             }
             Tool::HighlightsShadows => {
                 (to.highlights, to.shadows, to.whites, to.blacks) = (from.highlights, from.shadows, from.whites, from.blacks);
@@ -140,6 +177,9 @@ impl Tool {
             Tool::Vignette => to.detail.vignette_amount = from.detail.vignette_amount,
             Tool::Grain => (to.detail.grain_amount, to.detail.grain_size) = (from.detail.grain_amount, from.detail.grain_size),
             Tool::LensBlur => to.lens_blur = from.lens_blur,
+            Tool::Glow => (to.detail.glow_amount, to.detail.glow_size) = (from.detail.glow_amount, from.detail.glow_size),
+            Tool::Relight => to.relight = from.relight,
+            Tool::Atmosphere => to.atmosphere = from.atmosphere,
             Tool::LensCorrection => to.lens = from.lens.clone(),
             Tool::Crop => {
                 let (f, t) = (&from.geometry, &mut to.geometry);

@@ -1,5 +1,6 @@
-//! "Merge" dialogs: HDR from an exposure bracket and panoramas (see `sk_core::hdr` and
-//! `sk_core::panorama`). Both run as background jobs and create a linear DNG.
+//! "Merge" dialogs: HDR from an exposure bracket, panoramas and focus stacks (see
+//! `sk_core::hdr`, `sk_core::panorama` and `sk_core::focus_stack`). All run as background jobs
+//! and create a linear DNG.
 
 use std::path::PathBuf;
 
@@ -14,6 +15,7 @@ use crate::theme::icon;
 pub enum MergeKind {
     Hdr,
     Panorama,
+    FocusStack,
 }
 
 pub struct MergeDialog {
@@ -43,6 +45,9 @@ impl App {
                 if ui.button(format!("{}  Panorama …", icon::PANORAMA)).clicked() {
                     self.open_merge(MergeKind::Panorama);
                 }
+                if ui.button(format!("{}  Focus Stacking …", icon::APERTURE)).clicked() {
+                    self.open_merge(MergeKind::FocusStack);
+                }
             })
             .response
             .on_disabled_hover_text("Mindestens zwei Bilder auswählen");
@@ -61,6 +66,9 @@ impl App {
                 let opts = self.pano_options;
                 self.start_job("Panorama zusammenfügen", Box::new(move |p| Ok(vec![sk_core::panorama::stitch_files(&files, &opts, p)?])));
             }
+            MergeKind::FocusStack => {
+                self.start_job("Focus Stacking", Box::new(move |p| Ok(vec![sk_core::focus_stack::stack_files(&files, p)?])));
+            }
         }
     }
 
@@ -73,6 +81,7 @@ impl App {
             let (ic, title) = match kind {
                 MergeKind::Hdr => (icon::SUN_HORIZON, "HDR zusammenfügen"),
                 MergeKind::Panorama => (icon::PANORAMA, "Panorama zusammenfügen"),
+                MergeKind::FocusStack => (icon::APERTURE, "Focus Stacking"),
             };
             ui.label(RichText::new(format!("{ic}  {title}")).size(17.0).strong().color(Color32::WHITE));
             ui.add_space(6.0);
@@ -105,6 +114,18 @@ impl App {
                     ui.label(RichText::new("Sphärisch für weite und mehrreihige Panoramen, zylindrisch für eine Reihe, perspektivisch für Architektur (gerade Linien, bis etwa 120°).").small().color(Color32::from_gray(150)));
                     ui.checkbox(&mut self.pano_options.auto_crop, "Rand automatisch beschneiden");
                     ui.checkbox(&mut self.pano_options.lens_correction, "Objektivkorrektur der Einzelbilder anwenden");
+                }
+                MergeKind::FocusStack => {
+                    ui.label(format!(
+                        "{n} Aufnahmen mit unterschiedlicher Schärfeebene werden zu einem DNG zusammengefügt, das überall scharf ist. \
+                         Jede Stelle wird aus den Bildern genommen, die dort am schärfsten sind."
+                    ));
+                    ui.add_space(8.0);
+                    ui.label(
+                        RichText::new("Die Bilder werden am mittleren ausgerichtet: kleine Verschiebungen aus der Hand und die Größenänderung beim Fokussieren werden ausgeglichen.")
+                            .small()
+                            .color(Color32::from_gray(150)),
+                    );
                 }
             }
             ui.add_space(12.0);

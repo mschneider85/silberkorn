@@ -27,6 +27,8 @@ pub const TEXT_DIM: Color32 = Color32::from_rgb(150, 150, 158);
 pub const TEXT_FAINT: Color32 = Color32::from_rgb(108, 108, 116);
 pub const DANGER: Color32 = Color32::from_rgb(230, 110, 100);
 pub const STAR: Color32 = Color32::from_rgb(240, 196, 70);
+/// Mark of the AI functions (a sparkle after their name, see `widgets::ai_text`).
+pub const AI: Color32 = Color32::from_rgb(246, 200, 50);
 /// Glow around highlighted symbols and the wordmark: the accent, a little brighter.
 pub const GLOW: Color32 = Color32::from_rgb(110, 178, 255);
 

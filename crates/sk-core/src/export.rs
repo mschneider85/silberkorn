@@ -176,9 +176,9 @@ pub fn export_many_with(
         if adj.detail.ai_denoise > 0.0 && !meta.hdr {
             crate::ai_denoise::ensure(image, &|_| {}).context("KI-Entrauschen")?;
         }
-        // Nor without the lens blur.
-        if !adj.lens_blur.is_off() {
-            crate::depth::ensure(image, &|_| {}).context("Tiefenkarte für die Objektivunschärfe")?;
+        // Nor without the lens blur, relight or atmosphere.
+        if adj.needs_depth() {
+            crate::depth::ensure(image, &|_| {}).context("Tiefenkarte")?;
         }
         Ok((meta, linear))
     });

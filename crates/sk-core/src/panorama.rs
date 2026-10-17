@@ -57,7 +57,7 @@ impl Default for PanoramaOptions {
 
 // ------------------------------------------------------------------ small linear algebra
 
-type M3 = [[f64; 3]; 3];
+pub(crate) type M3 = [[f64; 3]; 3];
 
 fn mul(a: &M3, b: &M3) -> M3 {
     let mut r = [[0.0; 3]; 3];
@@ -209,13 +209,13 @@ fn smallest_eigenvector(m: &M3) -> [f64; 3] {
 // ------------------------------------------------------------------ features
 
 /// Long edge of the images features are found in.
-const FEATURE_EDGE: usize = 1600;
+pub(crate) const FEATURE_EDGE: usize = 1600;
 const DESC: usize = 8;
 const DESC_STEP: f32 = 4.0;
 
-struct Features {
+pub(crate) struct Features {
     /// Positions relative to the image center (feature image pixels).
-    pts: Vec<[f32; 2]>,
+    pub(crate) pts: Vec<[f32; 2]>,
     desc: Vec<[f32; DESC * DESC]>,
 }
 
@@ -232,13 +232,13 @@ fn bilinear(p: &Plane, x: f32, y: f32) -> f32 {
 }
 
 /// Gamma-encoded luminance of camera RGB (a robust guide; the exact color doesn't matter).
-fn guide(img: &LinearImage) -> Plane {
+pub(crate) fn guide(img: &LinearImage) -> Plane {
     let mean = img.data.iter().step_by(17).map(|p| p[1]).sum::<f32>() / (img.data.len() / 17).max(1) as f32;
     let scale = 0.18 / mean.max(1e-6);
     Plane::new(img.width, img.height, img.data.par_iter().map(|p| ((p[0] + 2.0 * p[1] + p[2]) * 0.25 * scale).clamp(0.0, 1.0).powf(1.0 / 2.2)).collect())
 }
 
-fn detect(gray: &Plane) -> Features {
+pub(crate) fn detect(gray: &Plane) -> Features {
     let (w, h) = (gray.w, gray.h);
     let g = gaussian_blur(gray, 1.0);
     let mut ixx = vec![0.0f32; w * h];
@@ -311,7 +311,7 @@ fn dist2(a: &[f32; DESC * DESC], b: &[f32; DESC * DESC]) -> f32 {
 }
 
 /// Mutual best matches passing the ratio test: (index in a, index in b).
-fn match_features(a: &Features, b: &Features) -> Vec<(usize, usize)> {
+pub(crate) fn match_features(a: &Features, b: &Features) -> Vec<(usize, usize)> {
     let best = |from: &Features, to: &Features| -> Vec<Option<usize>> {
         from.desc
             .par_iter()
@@ -370,7 +370,7 @@ fn fit_homography(src: &[[f64; 2]], dst: &[[f64; 2]]) -> Option<M3> {
     (s.abs() > 1e-12).then(|| hm.map(|r| r.map(|v| v / s)))
 }
 
-fn project_h(h: &M3, p: [f64; 2]) -> Option<[f64; 2]> {
+pub(crate) fn project_h(h: &M3, p: [f64; 2]) -> Option<[f64; 2]> {
     let q = mulv(h, [p[0], p[1], 1.0]);
     (q[2].abs() > 1e-12).then(|| [q[0] / q[2], q[1] / q[2]])
 }
@@ -386,7 +386,7 @@ impl Lcg {
 }
 
 /// RANSAC: homography and inlier matches.
-fn ransac(src: &[[f64; 2]], dst: &[[f64; 2]], threshold: f64) -> Option<(M3, Vec<usize>)> {
+pub(crate) fn ransac(src: &[[f64; 2]], dst: &[[f64; 2]], threshold: f64) -> Option<(M3, Vec<usize>)> {
     let n = src.len();
     if n < 8 {
         return None;

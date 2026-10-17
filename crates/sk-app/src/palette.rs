@@ -5,7 +5,6 @@
 use egui::{Align2, Color32, Id, Key, Modifiers, Order, Rect, RichText, Sense, Ui, vec2};
 
 use crate::app::{App, Tab};
-use crate::develop_tools::Auto;
 use crate::guides::Guides;
 use crate::theme::{self, icon};
 
@@ -53,7 +52,6 @@ enum Action {
     Section(Tab, &'static str),
     Run(fn(&mut App, &egui::Context)),
     Guides(Guides),
-    Auto(Auto),
 }
 
 struct Command {
@@ -65,6 +63,8 @@ struct Command {
     /// Further search terms (synonyms, English names).
     keywords: &'static str,
     action: Action,
+    /// An AI function: marked with the yellow sparkle.
+    ai: bool,
 }
 
 /// Tool sections per tab with search terms; titles as passed to `widgets::section`.
@@ -76,11 +76,12 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Lens, "Zuschnitt", "crop beschneiden seitenverhältnis format"),
     (Tab::Lens, "Drehen & Spiegeln", "rotate flip geraderichten horizont straighten"),
     (Tab::Lens, "Perspektive", "perspektive stürzende linien upright keystone"),
-    (Tab::Lens, "Objektivkorrektur", "lens verzeichnung chromatische aberration ca vignette lensfun profil fisheye fischauge entzerren defish"),
+    (Tab::Lens, "Objektivkorrektur", "lens verzeichnung chromatische aberration ca vignette vignettierung randabschattung lensfun profil fisheye fischauge entzerren defish"),
     (Tab::Exposure, "Belichtung", "exposure kontrast helligkeit sättigung"),
     (Tab::Exposure, "Lichter und Tiefen", "hdr lichter tiefen weiß schwarz highlights shadows"),
     (Tab::Exposure, "Tonwerte", "levels schwarzpunkt weißpunkt"),
     (Tab::Exposure, "Gradationskurve", "curve kurve tonkurve luma helligkeitskurve"),
+    (Tab::Exposure, "Neu ausleuchten", "relight licht vordergrund hintergrund gegenlicht aufhellen tiefe ki"),
     (Tab::Color, "Basismerkmale", "basiskurve kameraprofil"),
     (Tab::Color, "Weißabgleich", "white balance wb kelvin temperatur tint"),
     (Tab::Color, "Farbe", "sättigung dynamik vibrance saturation"),
@@ -92,17 +93,19 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Details, "Rauschen", "noise denoise ki ai entrauschen rauschreduzierung luminanz farbrauschen"),
     (Tab::Details, "Klarheit", "clarity struktur"),
     (Tab::Details, "Dunst entfernen", "dehaze dunst nebel"),
-    (Tab::Details, "Vignettierung", "vignette"),
-    (Tab::Details, "Körnung", "grain film korn"),
-    (Tab::Details, "Objektivunschärfe", "lens blur bokeh tiefe tiefenschärfe hintergrund unschärfe ki"),
+    (Tab::Effects, "Leuchten", "glow orton weich strahlen lichter"),
+    (Tab::Effects, "Vignette", "vignette vignettierung"),
+    (Tab::Effects, "Körnung", "grain film korn"),
+    (Tab::Effects, "Objektivunschärfe", "lens blur bokeh tiefe tiefenschärfe hintergrund unschärfe ki"),
+    (Tab::Effects, "Atmosphäre", "atmosphere nebel dunst fog haze tiefe ki"),
     (Tab::Layers, "Maske", "pinsel radierer verlauf zauberpinsel motiv himmel tiefe helligkeitsbereich farbbereich eingrenzen brush luma range"),
     (Tab::Layers, "Anpassungen", "ebenen-anpassungen lokal belichtung"),
-    (Tab::Retouch, "Entfernen (KI)", "remove objekt retusche ki"),
+    (Tab::Retouch, "Entfernen", "remove objekt retusche ki"),
     (Tab::Layers, "Ebenen", "layer maske lokal"),
     (Tab::Retouch, "Reparieren & Klonen", "heal clone stempel flecken staub"),
     (Tab::Metadata, "Keywords", "schlagworte stichworte tags"),
     (Tab::Metadata, "Aufnahme", "exif kamera objektiv iso"),
-    (Tab::Styles, "Filmsimulationen", "film look preset"),
+    (Tab::Styles, "Filmsimulationen", "film look preset vorschau raster"),
     (Tab::Styles, "Eigene Stile", "preset stil"),
     (Tab::Styles, "Neuer Stil", "preset speichern"),
     (Tab::History, "Schnappschüsse", "snapshot stand sichern"),
@@ -114,19 +117,24 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
 
 impl App {
     fn commands(&self) -> Vec<Command> {
-        let has = self.current.is_some();
         let mut v = Vec::new();
         let mut add = |icon, label: &str, group, shortcut: &str, enabled, keywords, action| {
-            v.push(Command { icon, label: label.to_string(), group, shortcut: shortcut.to_string(), enabled, keywords, action });
+            let ai = match &action {
+                Action::Command(id) => crate::commands::is_ai(id),
+                Action::Section(_, title) => is_ai_section(title),
+                _ => false,
+            };
+            v.push(Command { icon, label: label.to_string(), group, shortcut: shortcut.to_string(), enabled, keywords, action, ai });
         };
         use Action::Run;
 
         // Tools and their sections first: they are what one looks for most often.
+        // On a layer, what only changes the whole image is disabled.
         for tab in Tab::ALL {
-            add(tab.icon(), tab.title(), "Werkzeug", &tab_shortcut(tab), true, "tab", Action::Tab(tab));
+            add(tab.icon(), tab.title(), "Werkzeug", &tab_shortcut(tab), self.tab_available(tab), "tab", Action::Tab(tab));
         }
         for &(tab, title, keywords) in SECTIONS {
-            add(tab.icon(), title, tab.title(), "", true, keywords, Action::Section(tab, title));
+            add(tab.icon(), title, tab.title(), "", self.section_available(tab, title), keywords, Action::Section(tab, title));
         }
 
         // Everything in the command list (see `commands`), with the same shortcuts as the keyboard.
@@ -137,10 +145,6 @@ impl App {
         // Entries that only the palette offers.
         let import = if self.session.is_some() { "In Session importieren …" } else { "Ordner in Katalog importieren …" };
         add(icon::FOLDER_PLUS, import, "Datei", "", true, "import", Run(|a, _| a.import_folder_dialog()));
-        let g = "Bild";
-        add(icon::MAGIC_WAND, "Auto-Belichtung", g, "", has, "automatisch exposure", Action::Auto(Auto::Exposure));
-        add(icon::MAGIC_WAND, "Auto-Tonwerte", g, "", has, "automatisch tonwerte", Action::Auto(Auto::Levels));
-        add(icon::MAGIC_WAND, "Auto-Weißabgleich", g, "", has, "automatisch wb white balance", Action::Auto(Auto::WhiteBalance));
         for gd in Guides::ALL {
             let label = if gd == Guides::Off { "Hilfslinien aus".to_string() } else { format!("Hilfslinien: {}", gd.label()) };
             add(icon::GRID_NINE, &label, "Ansicht", "", true, "guides raster drittel", Action::Guides(gd));
@@ -151,17 +155,19 @@ impl App {
     fn run_command(&mut self, ctx: &egui::Context, action: Action) {
         match action {
             Action::Command(id) => self.run_command_id(ctx, id),
-            Action::Tab(tab) => self.tab = tab,
+            Action::Tab(tab) => {
+                self.open_tab(tab);
+            }
             Action::Section(tab, title) => {
-                self.tab = tab;
-                crate::widgets::reveal_section(ctx, title);
+                if self.open_tab(tab) {
+                    crate::widgets::reveal_section(ctx, title);
+                }
             }
             Action::Run(f) => f(self, ctx),
             Action::Guides(g) => {
                 self.guides = g;
                 self.save_settings();
             }
-            Action::Auto(kind) => self.run_auto(kind),
         }
     }
 
@@ -212,7 +218,7 @@ impl App {
 
         let width = 600.0f32.min(screen.width() - 40.0);
         let mut run: Option<usize> = enter.then(|| hits.get(self.palette.selected).copied()).flatten();
-        egui::Area::new(Id::new("palette")).order(Order::Foreground).anchor(Align2::CENTER_TOP, vec2(0.0, 64.0)).show(ctx, |ui| {
+        let area = egui::Area::new(Id::new("palette")).order(Order::Foreground).anchor(Align2::CENTER_TOP, vec2(0.0, 64.0)).show(ctx, |ui| {
             egui::Frame::popup(ui.style()).corner_radius(12).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
                 ui.set_width(width);
                 ui.horizontal(|ui| {
@@ -272,6 +278,8 @@ impl App {
                 });
             });
         });
+        // Both areas share the Foreground order; keep the palette above its own backdrop.
+        ctx.move_to_top(area.response.layer_id);
 
         if let Some(ci) = run
             && let Some(c) = commands.get(ci)
@@ -307,7 +315,11 @@ fn command_row(ui: &Ui, rect: Rect, c: &Command, selected: bool) {
         theme::TEXT_DIM
     };
     p.text(rect.left_center() + vec2(14.0, 0.0), Align2::CENTER_CENTER, c.icon, egui::FontId::proportional(16.0), icon_color);
-    let label = p.text(rect.left_center() + vec2(32.0, 0.0), Align2::LEFT_CENTER, &c.label, egui::FontId::proportional(13.5), fg);
+    let mut label = p.text(rect.left_center() + vec2(32.0, 0.0), Align2::LEFT_CENTER, &c.label, egui::FontId::proportional(13.5), fg);
+    if c.ai {
+        let mark = p.text(label.right_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, icon::SPARKLE, egui::FontId::proportional(12.0), theme::AI);
+        label = label.union(mark);
+    }
     let mut right = rect.right() - 10.0;
     if !c.shortcut.is_empty() {
         let galley = p.layout_no_wrap(c.shortcut.clone(), egui::FontId::proportional(11.0), theme::TEXT_DIM);
@@ -319,6 +331,11 @@ fn command_row(ui: &Ui, rect: Rect, c: &Command, selected: bool) {
     if right - label.right() > 60.0 {
         p.text(egui::pos2(right, rect.center().y), Align2::RIGHT_CENTER, c.group, egui::FontId::proportional(11.5), theme::TEXT_FAINT);
     }
+}
+
+/// Sections of AI functions (marked in the palette as in the tool tabs).
+fn is_ai_section(title: &str) -> bool {
+    matches!(title, "Entfernen" | "Gesichter & Sichtung") || sk_core::tools::Tool::ALL.iter().any(|t| t.is_ai() && t.label() == title)
 }
 
 /// "Strg+1" … "Strg+0" for the tool tabs in rail order.
@@ -392,7 +409,7 @@ mod tests {
     use super::*;
 
     fn cmd(label: &str, keywords: &'static str) -> Command {
-        Command { icon: "", label: label.into(), group: "Test", shortcut: String::new(), enabled: true, keywords, action: Action::Command("reset") }
+        Command { icon: "", label: label.into(), group: "Test", shortcut: String::new(), enabled: true, keywords, ai: false, action: Action::Command("reset") }
     }
 
     #[test]

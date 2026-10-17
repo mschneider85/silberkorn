@@ -1,0 +1,55 @@
+# Builds the Windows program and its installer for a version tag (e.g. v0.2.0) and publishes both
+# as a GitHub release.
+# The app's update check reads these releases and runs the installer (see crates/sk-core/src/update.rs).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag und Version im Cargo.toml müssen übereinstimmen
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME passt nicht zur Version $version in Cargo.toml"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Bauen
+        run: cargo build --locked --profile dist -p sk-app
+
+      - name: Installer bauen
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          New-Item -ItemType Directory out | Out-Null
+          & $iscc "/DVersion=$($env:GITHUB_REF_NAME.TrimStart('v'))" "/DExe=$env:GITHUB_WORKSPACE\target\dist\silberkorn.exe" "/O$env:GITHUB_WORKSPACE\out" installer\silberkorn.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Programmdatei und Prüfsummen
+        shell: bash
+        run: |
+          cp target/dist/silberkorn.exe out/silberkorn-windows-x64.exe
+          cd out
+          for f in *.exe; do sha256sum "$f" > "$f.sha256"; done
+
+      - name: Release veröffentlichen
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" out/* --title "Silberkorn ${GITHUB_REF_NAME#v}" --generate-notes --verify-tag

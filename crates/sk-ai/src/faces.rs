@@ -133,6 +133,82 @@ pub fn sharpness(img: &Image, rect: [f32; 4], n: usize) -> f32 {
     (fine / coarse.max(1e-9)).sqrt()
 }
 
+/// Faces with their landmarks (pixel coordinates of `img`), before embedding.
+fn detect(det: &Net, img: &Image) -> Result<Vec<Detection>> {
+    let k = DET as f32 / img.width.max(img.height) as f32;
+    let k = k.min(4.0);
+    // BGR 0..255, image in the top left, the rest black.
+    let n = DET * DET;
+    let mut input = vec![0.0f32; 3 * n];
+    let (dw, dh) = ((img.width as f32 * k).round() as usize, (img.height as f32 * k).round() as usize);
+    for y in 0..dh.min(DET) {
+        for x in 0..dw.min(DET) {
+            let p = img.at((x as f32 + 0.5) / k, (y as f32 + 0.5) / k);
+            for c in 0..3 {
+                input[c * n + y * DET + x] = p[2 - c] * 255.0;
+            }
+        }
+    }
+    let out = det.run(&[Data::F32(&input)])?;
+    anyhow::ensure!(out.len() >= 12, "Unerwartete Modellausgabe");
+    let view = |i: usize| -> Result<&[f32]> { Ok(&out[i].data) };
+    let mut faces = Vec::new();
+    for (si, stride) in [8usize, 16, 32].into_iter().enumerate() {
+        let (cls, obj, bbox, kps) = (view(si)?, view(3 + si)?, view(6 + si)?, view(9 + si)?);
+        let cols = DET / stride;
+        for i in 0..cls.len() {
+            let score = (sigmoid_free(cls[i]) * sigmoid_free(obj[i])).sqrt();
+            if score < 0.6 {
+                continue;
+            }
+            let (col, row) = ((i % cols) as f32, (i / cols) as f32);
+            let s = stride as f32;
+            let (cx, cy) = ((col + bbox[i * 4]) * s, (row + bbox[i * 4 + 1]) * s);
+            let (w, h) = (bbox[i * 4 + 2].exp() * s, bbox[i * 4 + 3].exp() * s);
+            let mut lm = [[0.0f32; 2]; 5];
+            for (j, l) in lm.iter_mut().enumerate() {
+                *l = [(col + kps[i * 10 + 2 * j]) * s / k, (row + kps[i * 10 + 2 * j + 1]) * s / k];
+            }
+            faces.push(([(cx - w / 2.0) / k, (cy - h / 2.0) / k, w / k, h / k], lm, score));
+        }
+    }
+    // Non-maximum suppression.
+    faces.sort_by(|a, b| b.2.total_cmp(&a.2));
+    let mut kept: Vec<Detection> = Vec::new();
+    for f in faces {
+        if kept.iter().all(|k| iou(k.0, f.0) < 0.3) {
+            kept.push(f);
+        }
+    }
+    Ok(kept)
+}
+
+/// Only finding faces (for the auto adjustment), without recognizing persons.
+pub struct FaceDetector {
+    det: Net,
+}
+
+impl FaceDetector {
+    pub fn available() -> bool {
+        models::available(&models::FACE_DETECT)
+    }
+
+    pub fn load() -> Result<Self> {
+        Ok(Self { det: Net::load(&models::path(&models::FACE_DETECT), &[Input::F32([1, 3, DET, DET])])? })
+    }
+
+    /// Boxes (x, y, width, height normalized to the image) of the faces at least `min_px`
+    /// pixels of `img` wide.
+    pub fn faces(&self, img: &Image, min_px: f32) -> Result<Vec<[f32; 4]>> {
+        let (w, h) = (img.width as f32, img.height as f32);
+        Ok(detect(&self.det, img)?
+            .into_iter()
+            .filter(|d| d.0[2].min(d.0[3]) >= min_px)
+            .map(|(b, _, _)| [b[0] / w, b[1] / h, b[2] / w, b[3] / h])
+            .collect())
+    }
+}
+
 impl FaceModels {
     pub fn load() -> Result<Self> {
         Ok(Self {
@@ -142,54 +218,8 @@ impl FaceModels {
         })
     }
 
-    /// Faces with their landmarks (pixel coordinates of `img`), before embedding.
     fn detect(&self, img: &Image) -> Result<Vec<Detection>> {
-        let k = DET as f32 / img.width.max(img.height) as f32;
-        let k = k.min(4.0);
-        // BGR 0..255, image in the top left, the rest black.
-        let n = DET * DET;
-        let mut input = vec![0.0f32; 3 * n];
-        let (dw, dh) = ((img.width as f32 * k).round() as usize, (img.height as f32 * k).round() as usize);
-        for y in 0..dh.min(DET) {
-            for x in 0..dw.min(DET) {
-                let p = img.at((x as f32 + 0.5) / k, (y as f32 + 0.5) / k);
-                for c in 0..3 {
-                    input[c * n + y * DET + x] = p[2 - c] * 255.0;
-                }
-            }
-        }
-        let out = self.det.run(&[Data::F32(&input)])?;
-        anyhow::ensure!(out.len() >= 12, "Unerwartete Modellausgabe");
-        let view = |i: usize| -> Result<&[f32]> { Ok(&out[i].data) };
-        let mut faces = Vec::new();
-        for (si, stride) in [8usize, 16, 32].into_iter().enumerate() {
-            let (cls, obj, bbox, kps) = (view(si)?, view(3 + si)?, view(6 + si)?, view(9 + si)?);
-            let cols = DET / stride;
-            for i in 0..cls.len() {
-                let score = (sigmoid_free(cls[i]) * sigmoid_free(obj[i])).sqrt();
-                if score < 0.6 {
-                    continue;
-                }
-                let (col, row) = ((i % cols) as f32, (i / cols) as f32);
-                let s = stride as f32;
-                let (cx, cy) = ((col + bbox[i * 4]) * s, (row + bbox[i * 4 + 1]) * s);
-                let (w, h) = (bbox[i * 4 + 2].exp() * s, bbox[i * 4 + 3].exp() * s);
-                let mut lm = [[0.0f32; 2]; 5];
-                for (j, l) in lm.iter_mut().enumerate() {
-                    *l = [(col + kps[i * 10 + 2 * j]) * s / k, (row + kps[i * 10 + 2 * j + 1]) * s / k];
-                }
-                faces.push(([(cx - w / 2.0) / k, (cy - h / 2.0) / k, w / k, h / k], lm, score));
-            }
-        }
-        // Non-maximum suppression.
-        faces.sort_by(|a, b| b.2.total_cmp(&a.2));
-        let mut kept: Vec<Detection> = Vec::new();
-        for f in faces {
-            if kept.iter().all(|k| iou(k.0, f.0) < 0.3) {
-                kept.push(f);
-            }
-        }
-        Ok(kept)
+        detect(&self.det, img)
     }
 
     fn embed(&self, img: &Image, lm: &[[f32; 2]; 5]) -> Result<Vec<f32>> {

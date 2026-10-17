@@ -86,7 +86,15 @@ impl App {
             } else if self.loading.is_some() {
                 "Lade…".into()
             } else if self.entries.is_empty() {
-                self.welcome(ui, rect);
+                // An empty folder of the session is not the start: say what is (not) in it.
+                match self.empty_session_folder() {
+                    Some((ic, title, hint)) => {
+                        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Center)));
+                        child.add_space((rect.height() / 2.0 - 90.0).max(0.0));
+                        widgets::empty_state(&mut child, ic, &title, hint);
+                    }
+                    None => self.welcome(ui, rect),
+                }
                 return;
             } else {
                 String::new()
@@ -278,11 +286,14 @@ impl App {
                 painter.rect_filled(r.expand(4.0), 3.0, Color32::from_black_alpha(160));
                 painter.galley(r.min, galley, Color32::WHITE);
             }
-            let near = response.hover_pos().is_some_and(|p| (p.x - x).abs() < 10.0);
-            if near || self.split_dragging {
+            let near = |p: Pos2| (p.x - x).abs() < 12.0 && img_rect.y_range().contains(p.y);
+            if response.hover_pos().is_some_and(near) || self.split_dragging {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }
-            if response.drag_started() && near {
+            // Taken when the button goes down next to it (where it was pressed, not where the
+            // pointer is by the time a drag is recognized), so that the loupe does not take
+            // the press first.
+            if !self.split_dragging && response.is_pointer_button_down_on() && ui.input(|i| i.pointer.press_origin()).is_some_and(near) {
                 self.split_dragging = true;
             }
             if self.split_dragging {
@@ -290,7 +301,7 @@ impl App {
                 if let Some(p) = response.interact_pointer_pos() {
                     self.split_pos = ((p.x - img_rect.left()) / img_rect.width()).clamp(0.0, 1.0);
                 }
-                if response.drag_stopped() {
+                if !ui.input(|i| i.pointer.primary_down()) {
                     self.split_dragging = false;
                 }
             }
@@ -417,10 +428,17 @@ impl App {
         } else {
             None
         };
-        if let Some(text) = mode {
+        // Otherwise, while the develop tools change a layer, its name (in the accent color).
+        let layer = if mode.is_none() { self.edit_layer_name() } else { None };
+        let on_layer = layer.is_some();
+        if let Some(text) = mode.or(layer.map(|n| format!("{}  Ebene „{n}“", crate::theme::icon::STACK))) {
             let galley = painter.layout_no_wrap(text, egui::FontId::proportional(13.0), Color32::WHITE);
             let pos = pos2(rect.center().x - galley.size().x / 2.0, rect.top() + 12.0);
-            painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand2(vec2(10.0, 5.0)), 12.0, Color32::from_black_alpha(170));
+            let pill = Rect::from_min_size(pos, galley.size()).expand2(vec2(10.0, 5.0));
+            painter.rect_filled(pill, 12.0, Color32::from_black_alpha(170));
+            if on_layer {
+                painter.rect_stroke(pill, 12.0, egui::Stroke::new(1.5, crate::theme::ACCENT), egui::StrokeKind::Inside);
+            }
             painter.galley(pos, galley, Color32::WHITE);
         }
         if self.loading.is_some() {
@@ -913,6 +931,20 @@ impl App {
         ui.painter().galley(rect.min + vec2(4.0, 2.0), galley, Color32::WHITE);
         let hover = crate::commands::hint(if expanded { "Stapel zuklappen" } else { "Stapel aufklappen" }, "stack-toggle");
         resp.on_hover_text(hover).clicked().then(|| s.id.clone())
+    }
+
+    /// Icon, title and hint for an empty folder of the open session (`None` outside a session).
+    pub(crate) fn empty_session_folder(&self) -> Option<(&'static str, String, &'static str)> {
+        use sk_core::session::SessionFolder;
+        let s = self.session.as_ref()?;
+        let folder = SessionFolder::ALL.into_iter().find(|f| matches!(&self.scope, sk_core::catalog::Scope::Folder { path, .. } if *path == s.folder(*f)));
+        Some(match folder {
+            Some(SessionFolder::Trash) => (theme::icon::TRASH, "Der Papierkorb ist leer".into(), "Mit Strg+Entf verschobene Bilder liegen hier, bis er geleert wird"),
+            Some(SessionFolder::Capture) => (crate::session::folder_icon(SessionFolder::Capture), "Noch keine Aufnahmen".into(), "Bilder importieren oder den Aufnahmeordner der Kamera hierher legen"),
+            Some(SessionFolder::Selects) => (crate::session::folder_icon(SessionFolder::Selects), "Noch keine Auswahl".into(), "Gute Bilder mit Strg+J hierher verschieben"),
+            Some(f) => (crate::session::folder_icon(f), format!("„{}“ ist leer", f.label()), "Exportierte Bilder landen hier"),
+            None => (theme::icon::IMAGES, "Keine Bilder in dieser Ansicht".into(), "Einen anderen Ordner der Session wählen"),
+        })
     }
 
     /// Start screen when no folder with images is open.

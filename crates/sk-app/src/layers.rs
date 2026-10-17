@@ -4,11 +4,14 @@
 use sk_core::mask;
 use sk_core::params::{BrushStroke, Layer, LayerAdjustments, Mask, Spot, SpotMode};
 use sk_core::pipeline::{Processor, RenderOptions};
-use egui::{Color32, Pos2, Rect, Response, Stroke, Ui, Vec2, pos2, vec2};
+use sk_core::tools::Tool;
+use egui::{Color32, Pos2, Rect, Response, RichText, Stroke, Ui, Vec2, pos2, vec2};
+
+use crate::theme::{self, icon};
 
 use crate::ai_models::AiFeature;
 use crate::app::{App, Tab};
-use crate::widgets::{section, slider_row};
+use crate::widgets::{slider_row, subheading};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalTool {
@@ -44,19 +47,7 @@ pub const STYLE_BRUSHES: &[(&str, LayerAdjustments)] = &[
     ("Augen aufhellen", LayerAdjustments { exposure: 0.4, clarity: 20.0, saturation: 10.0, ..ZERO }),
 ];
 
-const ZERO: LayerAdjustments = LayerAdjustments {
-    exposure: 0.0,
-    contrast: 0.0,
-    brightness: 0.0,
-    saturation: 0.0,
-    highlights: 0.0,
-    shadows: 0.0,
-    clarity: 0.0,
-    structure: 0.0,
-    temperature: 0.0,
-    tint: 0.0,
-    dehaze: 0.0,
-};
+const ZERO: LayerAdjustments = LayerAdjustments::NEUTRAL;
 
 impl LocalTool {
     pub fn label(self) -> &'static str {
@@ -89,6 +80,11 @@ impl LocalTool {
             LocalTool::ColorPick => (icon::EYEDROPPER, "Farbe", ""),
             LocalTool::Remove => (icon::SPARKLE, "Entfernen", "tool-remove"),
         }
+    }
+
+    /// Tools painted with a round brush (size, mostly hardness).
+    pub fn is_brush(self) -> bool {
+        matches!(self, LocalTool::Brush | LocalTool::Eraser | LocalTool::Heal | LocalTool::Clone | LocalTool::Magic | LocalTool::Remove)
     }
 
     /// The tab with the tool's settings.
@@ -231,6 +227,9 @@ pub enum LocalDrag {
     /// Painting a retouch area or a Magic Brush stroke: its points so far (normalized) and the
     /// last pointer position.
     Paint(Vec<[f32; 2]>, Pos2),
+    /// Changing the brush with the right mouse button: where the drag started (the outline
+    /// stays there) and the last pointer position.
+    BrushAdjust { anchor: Pos2, last: Pos2 },
 }
 
 impl App {
@@ -294,6 +293,60 @@ impl App {
         let cur = self.current.as_mut()?;
         cur.adjustments.assign_layer_ids();
         cur.adjustments.layers.get(i).map(|l| l.id)
+    }
+
+    /// Name of the layer the develop tools change (`None`: the background).
+    pub(crate) fn edit_layer_name(&self) -> Option<String> {
+        let cur = self.current.as_ref()?;
+        cur.adjustments.layers.get(self.active_layer?).map(|l| l.name.clone())
+    }
+
+    /// Whether a layer is chosen: the develop tools change it, what only changes the whole image
+    /// is disabled.
+    pub(crate) fn on_layer(&self) -> bool {
+        self.current.as_ref().zip(self.active_layer).is_some_and(|(c, i)| i < c.adjustments.layers.len())
+    }
+
+    /// Whether the tab can be opened: not those that only change the whole image while a layer
+    /// is chosen.
+    pub(crate) fn tab_available(&self, tab: Tab) -> bool {
+        !(tab.edits_image() && self.on_layer())
+    }
+
+    /// Goes to a tab if it is there, else says why not.
+    pub(crate) fn open_tab(&mut self, tab: Tab) -> bool {
+        if self.tab_available(tab) {
+            self.tab = tab;
+            true
+        } else {
+            self.status = format!("„{}“ wirkt nur aufs ganze Bild – erst den Hintergrund wählen", tab.title());
+            false
+        }
+    }
+
+    /// Whether a tool section can be reached (palette, side column): its tab is there and, on a
+    /// layer, the tool works on it.
+    pub(crate) fn section_available(&self, tab: Tab, title: &str) -> bool {
+        let background_only = || Tool::ALL.iter().any(|t| t.label() == title && t.layer_support() == sk_core::tools::LayerSupport::None);
+        self.tab_available(tab) && !(self.on_layer() && tab != Tab::Layers && background_only())
+    }
+
+    /// Chooses what the develop tools change: a layer or (`None`) the background.
+    pub(crate) fn select_layer(&mut self, layer: Option<usize>) {
+        self.apply_layer_action(Some(LayerAction::Select(layer)));
+    }
+
+    /// The next layer above (`up`) or below the active one, the background below the lowest.
+    pub(crate) fn step_layer(&mut self, up: bool) {
+        let Some(cur) = self.current.as_ref() else { return };
+        let n = cur.adjustments.layers.len();
+        if n == 0 {
+            return;
+        }
+        // Positions as in the list: the background at 0, layer i at i + 1.
+        let pos = self.active_layer.map_or(0, |i| i + 1);
+        let pos = if up { (pos + 1).min(n) } else { pos.saturating_sub(1) };
+        self.select_layer(pos.checked_sub(1));
     }
 
     /// Index of the layer with id `id`, if it still exists.
@@ -399,11 +452,12 @@ impl App {
         let Some(tool) = self.local_tool else { return };
         let hover = response.hover_pos();
         let painter = ui.painter_at(response.rect);
+        self.brush_adjust_gesture(ui, response, &painter, tool);
 
         match tool {
             LocalTool::Brush | LocalTool::Eraser => {
                 let b = self.brushes.of(Some(tool)).clone();
-                if let Some(p) = hover {
+                if let Some(p) = hover.filter(|_| !self.adjusting_brush()) {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::None);
                     brush_cursor(&painter, p, &b);
                     if tool == LocalTool::Eraser {
@@ -426,20 +480,38 @@ impl App {
                         build_up: true,
                     };
                     self.edit(|a| a.layers[li].mask.strokes.push(stroke));
+                    self.note_painted(img_rect, &[p], b.size);
+                    self.paint_prev = None;
                     self.local_drag = LocalDrag::Stroke(p);
                 }
                 if response.dragged()
-                    && let (Some(p), LocalDrag::Stroke(last)) = (response.interact_pointer_pos(), self.local_drag.clone())
-                    && (p - last).length() > point_spacing(b.size)
-                    && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
+                    && let LocalDrag::Stroke(mut last) = self.local_drag
                     && let Some(li) = self.active_layer
                 {
-                    self.edit(|a| {
-                        if let Some(s) = a.layers.get_mut(li).and_then(|l| l.mask.strokes.last_mut()) {
-                            s.points.push(uv);
+                    // Every movement of the frame, so that fast strokes stay round.
+                    let mut screen = Vec::new();
+                    let mut uvs = Vec::new();
+                    for p in drag_trail(ui, response) {
+                        if (p - last).length() > point_spacing(b.size)
+                            && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
+                        {
+                            screen.push(p);
+                            uvs.push(uv);
+                            last = p;
                         }
-                    });
-                    self.local_drag = LocalDrag::Stroke(p);
+                    }
+                    if !uvs.is_empty() {
+                        self.edit(|a| {
+                            if let Some(s) = a.layers.get_mut(li).and_then(|l| l.mask.strokes.last_mut()) {
+                                s.points.extend(uvs);
+                            }
+                        });
+                        let LocalDrag::Stroke(from) = self.local_drag else { unreachable!() };
+                        let trail: Vec<Pos2> = self.paint_prev.into_iter().chain([from]).chain(screen.iter().copied()).collect();
+                        self.note_painted(img_rect, &trail, b.size);
+                        self.paint_prev = Some(if screen.len() >= 2 { screen[screen.len() - 2] } else { from });
+                        self.local_drag = LocalDrag::Stroke(last);
+                    }
                 }
             }
             LocalTool::Linear | LocalTool::Radial => self.gradient_interaction(ui, response, img_rect, scale, tool),
@@ -463,17 +535,70 @@ impl App {
         }
     }
 
+    /// Whether the brush is being changed with the right mouse button (see
+    /// [`Self::brush_adjust_gesture`]); the tools then leave the outline to it.
+    pub(crate) fn adjusting_brush(&self) -> bool {
+        matches!(self.local_drag, LocalDrag::BrushAdjust { .. })
+    }
+
+    /// Dragging with the right mouse button (also with Alt) changes the
+    /// brush: left/right its size, up/down its hardness (up is harder). Each movement changes
+    /// only what its main direction says: a hand moving up and down drifts a little sideways
+    /// as well, which must not change the size. The outline stays where the drag started.
+    fn brush_adjust_gesture(&mut self, ui: &Ui, response: &Response, painter: &egui::Painter, tool: LocalTool) {
+        if !tool.is_brush() {
+            return;
+        }
+        if response.drag_started_by(egui::PointerButton::Secondary)
+            && let Some(anchor) = ui.input(|i| i.pointer.press_origin())
+        {
+            self.local_drag = LocalDrag::BrushAdjust { anchor, last: anchor };
+        }
+        let LocalDrag::BrushAdjust { anchor, mut last } = self.local_drag else { return };
+        // The Magic Brush has no hardness.
+        let with_hardness = tool != LocalTool::Magic;
+        let b = self.brushes.of(Some(tool));
+        let before = last;
+        for p in drag_trail(ui, response) {
+            let d = p - last;
+            if d.x.abs() > d.y.abs() || !with_hardness {
+                b.size = (b.size + d.x).clamp(2.0, 400.0);
+            } else {
+                b.hardness = (b.hardness - d.y / BRUSH_ADJUST_HARDNESS_SPAN).clamp(0.0, 1.0);
+            }
+            last = p;
+        }
+        if last != before {
+            self.brushes_changed_at = Some(std::time::Instant::now());
+        }
+        self.local_drag = LocalDrag::BrushAdjust { anchor, last };
+        ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+        let b = self.brushes.of(Some(tool)).clone();
+        brush_cursor(painter, anchor, &b);
+        let text = if with_hardness {
+            format!("Größe {:.0} · Härte {:.0} %", b.size, b.hardness * 100.0)
+        } else {
+            format!("Größe {:.0}", b.size)
+        };
+        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), Color32::WHITE);
+        let pos = anchor + vec2(-galley.size().x / 2.0, b.size + 8.0);
+        painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand(4.0), 4.0, Color32::from_black_alpha(170));
+        painter.galley(pos, galley, Color32::WHITE);
+    }
+
     /// Extends the stroke being painted (`LocalDrag::Paint`) and returns its points in
     /// screen coordinates for the preview.
-    fn extend_paint(&mut self, response: &Response, img_rect: Rect, scale: f32, spacing: f32) -> Vec<Pos2> {
-        let LocalDrag::Paint(mut pts, last) = self.local_drag.clone() else { return Vec::new() };
-        if let Some(p) = response.interact_pointer_pos()
-            && (p - last).length() > spacing
-            && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
-        {
-            pts.push(uv);
-            self.local_drag = LocalDrag::Paint(pts.clone(), p);
+    fn extend_paint(&mut self, ui: &Ui, response: &Response, img_rect: Rect, scale: f32, spacing: f32) -> Vec<Pos2> {
+        let LocalDrag::Paint(mut pts, mut last) = self.local_drag.clone() else { return Vec::new() };
+        for p in drag_trail(ui, response) {
+            if (p - last).length() > spacing
+                && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
+            {
+                pts.push(uv);
+                last = p;
+            }
         }
+        self.local_drag = LocalDrag::Paint(pts.clone(), last);
         let Some(map) = self.uv_mapper(img_rect, scale) else { return Vec::new() };
         pts.iter().map(|uv| map.map(*uv)).collect()
     }
@@ -541,7 +666,7 @@ impl App {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         } else if hovered_pin.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-        } else if let Some(p) = response.hover_pos() {
+        } else if let Some(p) = response.hover_pos().filter(|_| !self.adjusting_brush()) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
             brush_cursor(&painter, p, &b);
         }
@@ -572,7 +697,7 @@ impl App {
                 }
             });
         }
-        let preview = self.extend_paint(response, img_rect, scale, (b.size * 0.3).max(3.0));
+        let preview = self.extend_paint(ui, response, img_rect, scale, (b.size * 0.3).max(3.0));
         if !preview.is_empty() {
             paint_area(&painter, &preview, b.size, Color32::WHITE);
         }
@@ -592,7 +717,7 @@ impl App {
     fn magic_interaction(&mut self, ui: &mut Ui, response: &Response, img_rect: Rect, scale: f32) {
         let painter = ui.painter_at(response.rect);
         let b = self.brushes.magic.clone();
-        if let Some(p) = response.hover_pos() {
+        if let Some(p) = response.hover_pos().filter(|_| !self.adjusting_brush()) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
             brush_cursor(&painter, p, &b);
         }
@@ -601,7 +726,7 @@ impl App {
         {
             self.local_drag = LocalDrag::Paint(vec![uv], p);
         }
-        let preview = self.extend_paint(response, img_rect, scale, (b.size * 0.3).max(3.0));
+        let preview = self.extend_paint(ui, response, img_rect, scale, (b.size * 0.3).max(3.0));
         if !preview.is_empty() {
             paint_area(&painter, &preview, b.size, Color32::from_rgb(255, 150, 60));
         }
@@ -746,15 +871,16 @@ impl App {
 
         subheading(ui, "Automatisch auswählen");
         ui.horizontal_wrapped(|ui| {
-            if ui.add_enabled(!busy, egui::Button::new("\u{E4C2}  Motiv")).on_hover_text("Motiv auswählen").clicked() {
+            let ai = |ui: &Ui, text: &str| crate::widgets::ai_text(ui, text);
+            if ui.add_enabled(!busy, egui::Button::new(ai(ui, "\u{E4C2}  Motiv"))).on_hover_text(format!("Motiv auswählen\n\n{}", crate::widgets::AI_HINT)).clicked() {
                 ai_action = Some(1);
             }
-            if ui.add_enabled(!busy, egui::Button::new("\u{E1AA}  Himmel")).on_hover_text("Himmel auswählen").clicked() {
+            if ui.add_enabled(!busy, egui::Button::new(ai(ui, "\u{E1AA}  Himmel"))).on_hover_text(format!("Himmel auswählen\n\n{}", crate::widgets::AI_HINT)).clicked() {
                 ai_action = Some(2);
             }
             if ui
-                .add_enabled(!busy, egui::Button::new("\u{E7AE}  Tiefe"))
-                .on_hover_text("Wählt nach Entfernung aus (anfangs den nahen Teil des Bildes); der Bereich lässt sich danach einstellen")
+                .add_enabled(!busy, egui::Button::new(ai(ui, "\u{E7AE}  Tiefe")))
+                .on_hover_text(format!("Wählt nach Entfernung aus (anfangs den nahen Teil des Bildes); der Bereich lässt sich danach einstellen\n\n{}", crate::widgets::AI_HINT))
                 .clicked()
             {
                 ai_action = Some(6);
@@ -788,18 +914,24 @@ impl App {
                 m.luma_range = luma_on.then(Default::default);
                 *changed = true;
             }
-            if let Some(r) = &mut m.luma_range {
+            // Switched off: the range is shown, but disabled.
+            let mut r = m.luma_range.unwrap_or_default();
+            ui.add_enabled_ui(luma_on, |ui| {
                 *changed |= slider_row(ui, "Von", &mut r.low, 0.0..=1.0, 0.0, 2);
                 *changed |= slider_row(ui, "Bis", &mut r.high, 0.0..=1.0, 1.0, 2);
                 *changed |= slider_row(ui, "Weichheit", &mut r.falloff, 0.0..=0.5, 0.1, 2);
                 *changed |= ui.checkbox(&mut r.invert, "Bereich umkehren").changed();
+            });
+            if luma_on {
+                m.luma_range = Some(r);
             }
             let mut color_on = m.color_range.is_some();
             if ui.checkbox(&mut color_on, "Farbbereich").changed() {
                 m.color_range = color_on.then(Default::default);
                 *changed = true;
             }
-            if let Some(c) = &mut m.color_range {
+            let mut c = m.color_range.unwrap_or_default();
+            ui.add_enabled_ui(color_on, |ui| {
                 if ui.selectable_label(tool == Some(LocalTool::ColorPick), LocalTool::ColorPick.label()).clicked() {
                     pick = true;
                 }
@@ -807,6 +939,9 @@ impl App {
                 *changed |= slider_row(ui, "Breite", &mut c.width, 2.0..=90.0, 25.0, 0);
                 *changed |= slider_row(ui, "Weichheit", &mut c.falloff, 0.0..=60.0, 15.0, 0);
                 *changed |= slider_row(ui, "Min. Chroma", &mut c.min_chroma, 0.0..=0.2, 0.03, 3);
+            });
+            if color_on {
+                m.color_range = Some(c);
             }
         }
         match ai_action {
@@ -1109,7 +1244,7 @@ impl App {
                 }
             }
             if rows == 0 {
-                crate::widgets::hint(ui, "Noch keine Ebenen.");
+                crate::widgets::hint(ui, "Nur der Hintergrund: + oder ein Maskenwerkzeug legt eine Ebene an.");
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -1143,6 +1278,103 @@ impl App {
         action
     }
 
+    /// Bar at the top of the develop tabs: what the tools change, the background or a layer
+    /// (with the accent color), with a menu to choose and an X back to the background. Hovering
+    /// it shows the layer's mask.
+    pub fn edit_target_bar(&mut self, ui: &mut Ui) {
+        let Some(cur) = self.current.as_ref() else { return };
+        let names: Vec<String> = cur.adjustments.layers.iter().map(|l| l.name.clone()).collect();
+        let active = self.active_layer.filter(|i| *i < names.len());
+        let mut pick: Option<Option<usize>> = None;
+        let mut add = false;
+        let mut toggle_mask = false;
+        let (fill, text) = if active.is_some() { (theme::ACCENT_SOFT, Color32::WHITE) } else { (theme::CONTROL, theme::TEXT_DIM) };
+        let frame = egui::Frame::new().fill(fill).corner_radius(5).inner_margin(egui::Margin { left: 10, right: 4, top: 2, bottom: 2 });
+        let r = frame.show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.label(RichText::new(icon::STACK).size(14.0).color(if active.is_some() { theme::ACCENT } else { text }));
+                let title = match active {
+                    Some(i) => format!("Ebene „{}“", names[i]),
+                    None => "Hintergrund".to_string(),
+                };
+                let button = egui::Button::new(RichText::new(format!("{title}  {}", icon::CARET_DOWN)).color(text)).frame_when_inactive(false);
+                let hover = if active.is_some() {
+                    "Die Werkzeuge ändern diese Ebene. Hier eine andere Ebene oder den Hintergrund wählen."
+                } else {
+                    "Die Werkzeuge ändern das ganze Bild. Hier eine Ebene wählen, um nur ihren Bereich zu ändern."
+                };
+                egui::containers::menu::MenuButton::from_button(button)
+                    .ui(ui, |ui| {
+                        for (i, name) in names.iter().enumerate().rev() {
+                            if ui.selectable_label(active == Some(i), format!("{}  {name}", icon::STACK)).clicked() {
+                                pick = Some(Some(i));
+                                ui.close();
+                            }
+                        }
+                        if !names.is_empty() {
+                            ui.separator();
+                        }
+                        if ui.selectable_label(active.is_none(), "Hintergrund").clicked() {
+                            pick = Some(None);
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button(format!("{}  Neue Ebene", icon::PLUS)).clicked() {
+                            add = true;
+                            ui.close();
+                        }
+                    })
+                    .0
+                    .on_hover_text(hover);
+                if active.is_some() {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let close = egui::Button::new(RichText::new(icon::X).size(13.0).color(text)).frame_when_inactive(false);
+                        if ui.add(close).on_hover_text(crate::commands::hint("Hintergrund bearbeiten", "edit-background")).clicked() {
+                            pick = Some(None);
+                        }
+                        let ic = if self.show_mask { icon::EYE } else { icon::EYE_SLASH };
+                        let eye = egui::Button::new(RichText::new(ic).size(13.0).color(text)).frame_when_inactive(false).selected(self.show_mask);
+                        if ui.add(eye).on_hover_text(crate::commands::hint("Maske anzeigen", "show-mask")).clicked() {
+                            toggle_mask = true;
+                        }
+                    });
+                }
+            });
+        });
+        if active.is_some() {
+            let rect = r.response.rect;
+            ui.painter().rect_filled(Rect::from_min_size(rect.left_top(), vec2(3.0, rect.height())), egui::CornerRadius { nw: 5, sw: 5, ne: 0, se: 0 }, theme::ACCENT);
+        }
+        ui.add_space(6.0);
+        let peek = active.is_some() && ui.rect_contains_pointer(r.response.rect);
+        self.set_peek_mask(peek);
+        if toggle_mask {
+            self.show_mask = !self.show_mask;
+            self.request_render();
+        }
+        if let Some(layer) = pick {
+            self.select_layer(layer);
+        }
+        if add {
+            // A new layer has no mask yet and changes nothing: on to the mask.
+            self.apply_layer_action(Some(LayerAction::Add));
+            self.tab = Tab::Layers;
+            crate::widgets::reveal_section(ui.ctx(), "Maske");
+        }
+    }
+
+    /// Shows the active layer's mask while the pointer is over the bar above the tools.
+    fn set_peek_mask(&mut self, on: bool) {
+        if self.peek_mask != on {
+            self.peek_mask = on;
+            if !self.show_mask {
+                self.request_render();
+            }
+        }
+    }
+
     // ---------------------------------------------------------------- tab
 
     /// Three groups, top to bottom: which layer, where it acts (mask), what it does (adjustments).
@@ -1153,31 +1385,49 @@ impl App {
         }
         let action = self.layer_list(ui);
         let mut changed = false;
-        let help = "Wo die gewählte Ebene wirkt.\n\nPinsel, Radierer, Verläufe, Zauberpinsel und Objekt malen bzw. wählen die Maske; ist keine Ebene gewählt, wird eine angelegt. [ und ] ändern die Pinselgröße.\n\nZauberpinsel: ähnliche, zusammenhängende Farben werden ausgewählt; weitere Striche erweitern die Auswahl.\n\nObjekt: auf ein Objekt klicken, es wird ausgewählt; weitere Klicks verfeinern, Alt+Klick nimmt Teile aus.\n\nEingrenzen: beschränkt die Maske zusätzlich auf einen Helligkeits- oder Farbbereich – mit „Füllen“ ohne Malen aufs ganze Bild.";
+        let help = "Wo die gewählte Ebene wirkt.\n\nPinsel, Radierer, Verläufe, Zauberpinsel und Objekt malen bzw. wählen die Maske; ist keine Ebene gewählt, wird eine angelegt. [ und ] ändern die Pinselgröße; mit der rechten Maustaste ziehen: links/rechts Größe, hoch/runter Härte.\n\nZauberpinsel: ähnliche, zusammenhängende Farben werden ausgewählt; weitere Striche erweitern die Auswahl.\n\nObjekt: auf ein Objekt klicken, es wird ausgewählt; weitere Klicks verfeinern, Alt+Klick nimmt Teile aus.\n\nEingrenzen: beschränkt die Maske zusätzlich auf einen Helligkeits- oder Farbbereich – mit „Füllen“ ohne Malen aufs ganze Bild.";
         crate::widgets::section_help(ui, "Maske", help, None, |ui| self.mask_body(ui, &mut changed));
 
+        let mut jump = None;
         let Some(cur) = self.current.as_mut() else { return };
         let mut layer = self.active_layer.and_then(|li| cur.adjustments.layers.get_mut(li));
         let mut reset = false;
         let mut on_reset = || reset = true;
         let on_reset: Option<&mut dyn FnMut()> = if layer.is_some() { Some(&mut on_reset) } else { None };
-        section(ui, "Anpassungen", on_reset, |ui| {
+        let help = "Was die gewählte Ebene ändert. Die Regler dafür stehen in den Werkzeugen Belichtung, Farbe und Details: \
+                    solange eine Ebene gewählt ist, wirken sie auf diese Ebene. Ein Klick auf einen Eintrag springt zum Werkzeug.";
+        crate::widgets::section_full(ui, "Anpassungen", true, Some(help), on_reset, |ui| {
             let Some(layer) = layer.as_deref_mut() else {
                 crate::widgets::hint(ui, "Eine Ebene wählen oder anlegen.");
                 return;
             };
             let a = &mut layer.adjustments;
-            changed |= slider_row(ui, "Belichtung", &mut a.exposure, -4.0..=4.0, 0.0, 2);
-            changed |= slider_row(ui, "Kontrast", &mut a.contrast, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Helligkeit", &mut a.brightness, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Sättigung", &mut a.saturation, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Lichter", &mut a.highlights, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Tiefen", &mut a.shadows, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Klarheit", &mut a.clarity, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Struktur", &mut a.structure, -100.0..=100.0, 0.0, 0);
-            changed |= crate::widgets::slider_row_with(ui, "Temperatur", &mut a.temperature, -100.0..=100.0, 0.0, 0, crate::widgets::SliderOpts { rail: Some(crate::widgets::RAIL_KELVIN), ..Default::default() });
-            changed |= crate::widgets::slider_row_with(ui, "Tönung", &mut a.tint, -100.0..=100.0, 0.0, 0, crate::widgets::SliderOpts { rail: Some(crate::widgets::RAIL_TINT), ..Default::default() });
-            changed |= slider_row(ui, "Dunst", &mut a.dehaze, -100.0..=100.0, 0.0, 0);
+            let changes = layer_changes(a);
+            if changes.is_empty() {
+                crate::widgets::hint(ui, "Noch keine Änderungen. Die Regler in Belichtung, Farbe und Details wirken jetzt auf diese Ebene.");
+            }
+            for c in changes {
+                ui.horizontal(|ui| {
+                    let text = format!("{}  {}", c.label, c.value);
+                    if ui.add(egui::Button::new(text).frame(false)).on_hover_text(format!("Zu „{}“", c.tool.label())).clicked() {
+                        jump = Some(c.tool);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if crate::widgets::small_button(ui, crate::theme::icon::ARROW_COUNTER_CLOCKWISE, "Zurücksetzen").clicked() {
+                            c.key.reset(a);
+                            changed = true;
+                        }
+                    });
+                });
+            }
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                for (tab, tool) in [(Tab::Exposure, Tool::Exposure), (Tab::Color, Tool::ColorBalance), (Tab::Details, Tool::Clarity)] {
+                    if ui.small_button(format!("{}  {}", tab.icon(), tab.title())).on_hover_text("Werkzeuge für diese Ebene").clicked() {
+                        jump = Some(tool);
+                    }
+                }
+            });
         });
         if reset && let Some(layer) = layer {
             layer.adjustments = LayerAdjustments::default();
@@ -1185,6 +1435,10 @@ impl App {
         }
         if changed {
             self.request_render();
+        }
+        if let Some(tool) = jump {
+            self.tab = tab_of(tool);
+            crate::widgets::reveal_section(ui.ctx(), tool.label());
         }
         self.apply_layer_action(action);
     }
@@ -1195,7 +1449,7 @@ impl App {
             crate::widgets::no_image(ui);
             return;
         }
-        let help = "Reparieren (H) und Klonen (S): über eine Stelle malen, die Quelle wird automatisch gewählt.\n\nEntfernen (X): über das Störende malen; die KI füllt die Stelle passend zur Umgebung.\n\n[ und ] ändern die Pinselgröße.";
+        let help = "Reparieren (H) und Klonen (S): über eine Stelle malen, die Quelle wird automatisch gewählt.\n\nEntfernen (X): über das Störende malen; die KI füllt die Stelle passend zur Umgebung.\n\n[ und ] ändern die Pinselgröße; mit der rechten Maustaste ziehen: links/rechts Größe, hoch/runter Härte.";
         self.tools_section(ui, help, &[LocalTool::Heal, LocalTool::Clone, LocalTool::Remove]);
         self.remove_section(ui);
         self.retouch_section(ui);
@@ -1218,7 +1472,9 @@ impl App {
                     let (ic, name, id) = t.tile();
                     let key = crate::commands::get(id).map(|c| c.shortcut()).unwrap_or_default();
                     let hover = crate::commands::hint(name, id);
-                    if crate::widgets::tool_tile(ui, ic, name, &key, self.local_tool == Some(t), w).on_hover_text(hover).clicked() {
+                    let ai = matches!(t, LocalTool::Object | LocalTool::Remove);
+                    let hover = if ai { format!("{hover}\n\n{}", crate::widgets::AI_HINT) } else { hover };
+                    if crate::widgets::tool_tile(ui, ic, name, &key, self.local_tool == Some(t), ai, w).on_hover_text(hover).clicked() {
                         tool_click = Some(t);
                     }
                 }
@@ -1310,10 +1566,90 @@ pub(crate) enum LayerAction {
     Delete(usize),
 }
 
-/// Small heading inside a section, e.g. "Eingrenzen" within "Maske".
-fn subheading(ui: &mut Ui, text: &str) {
-    ui.add_space(8.0);
-    ui.label(egui::RichText::new(text).size(11.5).strong().color(crate::theme::TEXT_DIM));
+/// The tab with a tool that works on layers.
+fn tab_of(tool: Tool) -> Tab {
+    match tool {
+        Tool::Exposure | Tool::HighlightsShadows => Tab::Exposure,
+        Tool::Clarity | Tool::Dehaze => Tab::Details,
+        _ => Tab::Color,
+    }
+}
+
+/// One value of a layer's adjustments (see [`layer_changes`]).
+#[derive(Clone, Copy)]
+enum ChangeKey {
+    Field(usize),
+    Band(usize),
+    Wheel(usize),
+}
+
+impl ChangeKey {
+    fn reset(self, a: &mut LayerAdjustments) {
+        match self {
+            ChangeKey::Field(i) => *(LAYER_FIELDS[i].2)(a) = 0.0,
+            ChangeKey::Band(i) => a.color_bands[i] = Default::default(),
+            ChangeKey::Wheel(i) => *wheels(a)[i].1 = Default::default(),
+        }
+    }
+}
+
+struct Change {
+    label: String,
+    value: String,
+    tool: Tool,
+    key: ChangeKey,
+}
+
+type Field = fn(&mut LayerAdjustments) -> &mut f32;
+
+/// The single values of a layer's adjustments: label, tool, field and decimals.
+const LAYER_FIELDS: &[(&str, Tool, Field, usize)] = &[
+    ("Belichtung", Tool::Exposure, |a| &mut a.exposure, 2),
+    ("Kontrast", Tool::Exposure, |a| &mut a.contrast, 0),
+    ("Helligkeit", Tool::Exposure, |a| &mut a.brightness, 0),
+    ("Lichter", Tool::HighlightsShadows, |a| &mut a.highlights, 0),
+    ("Tiefen", Tool::HighlightsShadows, |a| &mut a.shadows, 0),
+    ("Weiß", Tool::HighlightsShadows, |a| &mut a.whites, 0),
+    ("Schwarz", Tool::HighlightsShadows, |a| &mut a.blacks, 0),
+    ("Temperatur", Tool::WhiteBalance, |a| &mut a.temperature, 0),
+    ("Tönung", Tool::WhiteBalance, |a| &mut a.tint, 0),
+    ("Sättigung", Tool::Color, |a| &mut a.saturation, 0),
+    ("Dynamik", Tool::Color, |a| &mut a.vibrance, 0),
+    ("Klarheit", Tool::Clarity, |a| &mut a.clarity, 0),
+    ("Struktur", Tool::Clarity, |a| &mut a.structure, 0),
+    ("Dunst entfernen", Tool::Dehaze, |a| &mut a.dehaze, 0),
+];
+
+fn wheels(a: &mut LayerAdjustments) -> [(&'static str, &mut sk_core::params::ColorWheel); 4] {
+    let cb = &mut a.color_balance;
+    [("Master", &mut cb.master), ("Schatten", &mut cb.shadows), ("Mitteltöne", &mut cb.midtones), ("Lichter", &mut cb.highlights)]
+}
+
+/// What a layer changes, in the order of the tools.
+fn layer_changes(a: &LayerAdjustments) -> Vec<Change> {
+    let mut a = *a;
+    let mut out = Vec::new();
+    for (i, (label, tool, field, decimals)) in LAYER_FIELDS.iter().enumerate() {
+        let v = *field(&mut a);
+        if v != 0.0 {
+            let value = format!("{v:+.decimals$}").replace('.', ",");
+            out.push(Change { label: label.to_string(), value, tool: *tool, key: ChangeKey::Field(i) });
+        }
+    }
+    for (i, b) in a.color_bands.iter().enumerate() {
+        if *b != Default::default() {
+            let label = format!("Farbeditor · {}", sk_core::params::HUE_BANDS[i].0);
+            let value = format!("{:+.0}° {:+.0} {:+.0}", b.hue, b.saturation, b.lightness);
+            out.push(Change { label, value, tool: Tool::ColorEditor, key: ChangeKey::Band(i) });
+        }
+    }
+    for (i, (name, w)) in wheels(&mut a).into_iter().enumerate() {
+        if *w != Default::default() {
+            let value = format!("{:.0} %", w.amount);
+            out.push(Change { label: format!("Farbbalance · {name}"), value, tool: Tool::ColorBalance, key: ChangeKey::Wheel(i) });
+        }
+    }
+    out
 }
 
 /// Short description of what a layer's mask consists of, e.g. "Pinsel · Verlauf".
@@ -1356,8 +1692,24 @@ pub fn brush_cursor(painter: &egui::Painter, p: Pos2, b: &BrushSettings) {
     }
 }
 
+/// Vertical drag (screen points) that takes the hardness over its whole range.
+const BRUSH_ADJUST_HARDNESS_SPAN: f32 = 200.0;
+
 /// Pointer distance (screen points) within which a pin of a retouch area is grabbed.
 const PIN_HIT: f32 = 9.0;
+
+/// Pointer positions of this frame while dragging, in order: every movement the system
+/// reported, not only where the pointer ended up (at one point per frame a fast circle comes
+/// out as a polygon).
+pub(crate) fn drag_trail(ui: &Ui, response: &Response) -> Vec<Pos2> {
+    let mut pts: Vec<Pos2> = ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
+    if let Some(p) = response.interact_pointer_pos()
+        && pts.last() != Some(&p)
+    {
+        pts.push(p);
+    }
+    pts
+}
 
 /// Where the primary button went down on the viewer this frame. Tools act from the press on
 /// instead of on `clicked()`, which egui drops when the mouse moves a little or the button is
@@ -1493,6 +1845,23 @@ fn pin(painter: &egui::Painter, p: Pos2, color: Color32, hovered: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The summary in the layer tab lists what a layer changes and resets each value alone.
+    #[test]
+    fn layer_summary_lists_and_resets_changes() {
+        let mut a = LayerAdjustments { exposure: 0.4, whites: -12.0, ..Default::default() };
+        a.color_bands[5].saturation = 30.0;
+        a.color_balance.shadows.amount = 25.0;
+        let changes = layer_changes(&a);
+        let labels: Vec<String> = changes.iter().map(|c| format!("{} {}", c.label, c.value)).collect();
+        assert_eq!(labels, ["Belichtung +0,40", "Weiß -12", "Farbeditor · Blau +0° +30 +0", "Farbbalance · Schatten 25 %"]);
+        assert_eq!(tab_of(changes[2].tool), Tab::Color);
+        changes[0].key.reset(&mut a);
+        changes[3].key.reset(&mut a);
+        assert_eq!(a.exposure, 0.0);
+        assert!(a.color_balance.is_neutral());
+        assert_eq!(layer_changes(&a).len(), 2);
+    }
 
     /// The outline of a stroke that goes back and forth is only its outer edge: no piece of it
     /// lies inside the area (the old filled band drew spikes and overlaps there).

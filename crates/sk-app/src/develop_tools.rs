@@ -5,6 +5,7 @@ use sk_core::params::{AspectRatio, ColorWheel, ColorZone, CropRect, Detail, HUE_
 use egui::{Color32, RichText, Ui};
 
 use crate::app::App;
+use crate::layer_target::Target;
 use crate::theme::icon;
 use crate::widgets::{self, slider_row};
 
@@ -16,6 +17,17 @@ fn band_color(hue: f32) -> Color32 {
 /// A band hue (Oklab degrees) at the given HSV saturation and value.
 fn band_hsv(hue: f32, s: f32, v: f32) -> Color32 {
     egui::ecolor::Hsva::new(((hue - 25.0 + 720.0) % 360.0 + 5.0) / 360.0, s, v, 1.0).into()
+}
+
+/// The last auto adjustment of an image: its strength can still be changed,
+/// between the settings before and the full auto result.
+pub struct AutoMix {
+    pub path: std::path::PathBuf,
+    pub before: sk_core::params::Adjustments,
+    pub auto: sk_core::params::Adjustments,
+    pub opts: auto::AutoOptions,
+    /// 0..100 %
+    pub strength: f32,
 }
 
 /// What the color editor shows: one property for all colors (hue, saturation or
@@ -125,14 +137,6 @@ fn skin_color(st: &SkinTone) -> Color32 {
     Color32::from_rgb(r, g, b)
 }
 
-/// The automatic adjustments of the exposure tab.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Auto {
-    Exposure,
-    Levels,
-    WhiteBalance,
-}
-
 /// Hue slider with a colored swatch; returns true when changed.
 fn wheel_ui(ui: &mut Ui, label: &str, wheel: &mut ColorWheel, with_lightness: bool) -> bool {
     let mut changed = false;
@@ -142,7 +146,7 @@ fn wheel_ui(ui: &mut Ui, label: &str, wheel: &mut ColorWheel, with_lightness: bo
         ui.painter().circle_filled(rect.center(), 6.0, Color32::from(c));
         ui.label(RichText::new(label).strong());
     });
-    changed |= crate::widgets::slider_row_with(ui, "Farbton", &mut wheel.hue, 0.0..=360.0, 0.0, 0, crate::widgets::SliderOpts { suffix: "°", rail: Some(crate::widgets::RAIL_HUE) });
+    changed |= crate::widgets::slider_row_with(ui, "Farbton", &mut wheel.hue, 0.0..=360.0, 0.0, 0, crate::widgets::SliderOpts { suffix: "°", rail: Some(crate::widgets::RAIL_HUE), ..Default::default() });
     changed |= slider_row(ui, "Stärke", &mut wheel.amount, 0.0..=100.0, 0.0, 0);
     if with_lightness {
         changed |= slider_row(ui, "Helligkeit", &mut wheel.lightness, -100.0..=100.0, 0.0, 0);
@@ -169,6 +173,75 @@ impl App {
         let Some(cur) = self.current.as_mut() else { return };
         let adj = &mut cur.adjustments;
         let mut changed = false;
+
+        let mut reset_lens = false;
+        let lens_name = cur.meta.info.lens.clone();
+        let focal = cur.meta.info.focal_length.clone();
+        let camera_source = cur.meta.lens.as_ref().map(|l| l.source);
+        let mut profile_action: Option<bool> = None;
+        widgets::tool_section(ui, sk_core::tools::Tool::LensCorrection, Some(&mut || reset_lens = true), |ui| {
+            ui.label(RichText::new(lens_name.clone().unwrap_or_else(|| "Objektiv unbekannt".into())).color(Color32::from_gray(170)));
+            let l = &mut adj.lens;
+            if let Some(source) = camera_source {
+                let r = ui
+                    .checkbox(&mut l.camera, format!("Korrektur aus den Kameradaten ({source})"))
+                    .on_hover_text("Verzeichnung, Farbsäume und Randabschattung, wie die Kamera sie für dieses Objektiv gespeichert hat");
+                if r.changed() {
+                    changed = true;
+                    // Never both: the profile would correct the same lens a second time.
+                    if l.camera {
+                        l.profile = None;
+                        l.profile_coeffs = None;
+                    }
+                }
+            }
+            ui.horizontal(|ui| {
+                match (&l.profile, &match_name) {
+                    (Some(p), _) => {
+                        // Right to left, so the button keeps its place and a long name is cut.
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Entfernen").clicked() {
+                                profile_action = Some(false);
+                            }
+                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                ui.add(egui::Label::new(format!("Profil: {p}")).truncate()).on_hover_text(p.as_str());
+                            });
+                        });
+                    }
+                    (None, Some(p)) => {
+                        ui.label("Kein Profil");
+                        if ui.button("Anwenden").on_hover_text(format!("Profil „{p}“")).clicked() {
+                            profile_action = Some(true);
+                        }
+                    }
+                    (None, None) if downloading || (!db_loaded && lens_name.is_some()) => {
+                        ui.spinner();
+                        ui.label("Objektivprofile werden geladen…");
+                    }
+                    (None, None) if lens_name.is_some() => {
+                        ui.label(RichText::new("Kein Profil für dieses Objektiv").color(crate::theme::TEXT_FAINT));
+                    }
+                    (None, None) => {}
+                }
+            });
+            if let Some(f) = &focal {
+                ui.label(RichText::new(format!("Brennweite {f}")).small().color(crate::theme::TEXT_FAINT));
+            }
+            changed |= slider_row(ui, "Verzeichnung", &mut l.distortion, -100.0..=100.0, 0.0, 0);
+            changed |= crate::widgets::slider_row_with(ui, "Fisheye", &mut l.fisheye, 0.0..=220.0, 0.0, 0, crate::widgets::SliderOpts { suffix: "°", ..Default::default() });
+            ui.label(RichText::new("Fisheye: Bildwinkel über die Diagonale (meist 180°), rechnet in ein normales Weitwinkelbild um").small().color(crate::theme::TEXT_FAINT));
+            changed |= slider_row(ui, "CA Rot/Cyan", &mut l.ca_red, -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "CA Blau/Gelb", &mut l.ca_blue, -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Randabschattung", &mut l.vignetting, -100.0..=100.0, 0.0, 0);
+        });
+        if reset_lens {
+            adj.lens = LensCorrection::default();
+            changed = true;
+            // Back to what a new image gets.
+            if camera_source.is_none() && match_name.is_some() {
+                profile_action = Some(true);
+            }
+        }
 
         let mut reset_crop = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Crop, Some(&mut || reset_crop = true), |ui| {
@@ -257,70 +330,6 @@ impl App {
             changed = true;
         }
 
-        let mut reset_lens = false;
-        let lens_name = cur.meta.info.lens.clone();
-        let focal = cur.meta.info.focal_length.clone();
-        let camera_source = cur.meta.lens.as_ref().map(|l| l.source);
-        let mut profile_action: Option<bool> = None;
-        widgets::tool_section(ui, sk_core::tools::Tool::LensCorrection, Some(&mut || reset_lens = true), |ui| {
-            ui.label(RichText::new(lens_name.clone().unwrap_or_else(|| "Objektiv unbekannt".into())).color(Color32::from_gray(170)));
-            let l = &mut adj.lens;
-            if let Some(source) = camera_source {
-                let r = ui
-                    .checkbox(&mut l.camera, format!("Korrektur aus den Kameradaten ({source})"))
-                    .on_hover_text("Verzeichnung, Farbsäume und Vignettierung, wie die Kamera sie für dieses Objektiv gespeichert hat");
-                if r.changed() {
-                    changed = true;
-                    // Never both: the profile would correct the same lens a second time.
-                    if l.camera {
-                        l.profile = None;
-                        l.profile_coeffs = None;
-                    }
-                }
-            }
-            ui.horizontal(|ui| {
-                match (&l.profile, &match_name) {
-                    (Some(p), _) => {
-                        ui.label(format!("Profil: {p}"));
-                        if ui.button("Entfernen").clicked() {
-                            profile_action = Some(false);
-                        }
-                    }
-                    (None, Some(p)) => {
-                        ui.label("Kein Profil");
-                        if ui.button("Anwenden").on_hover_text(format!("Profil „{p}“")).clicked() {
-                            profile_action = Some(true);
-                        }
-                    }
-                    (None, None) if downloading || (!db_loaded && lens_name.is_some()) => {
-                        ui.spinner();
-                        ui.label("Objektivprofile werden geladen…");
-                    }
-                    (None, None) if lens_name.is_some() => {
-                        ui.label(RichText::new("Kein Profil für dieses Objektiv").color(crate::theme::TEXT_FAINT));
-                    }
-                    (None, None) => {}
-                }
-            });
-            if let Some(f) = &focal {
-                ui.label(RichText::new(format!("Brennweite {f}")).small().color(crate::theme::TEXT_FAINT));
-            }
-            changed |= slider_row(ui, "Verzeichnung", &mut l.distortion, -100.0..=100.0, 0.0, 0);
-            changed |= crate::widgets::slider_row_with(ui, "Fisheye", &mut l.fisheye, 0.0..=220.0, 0.0, 0, crate::widgets::SliderOpts { suffix: "°", ..Default::default() });
-            ui.label(RichText::new("Fisheye: Bildwinkel über die Diagonale (meist 180°), rechnet in ein normales Weitwinkelbild um").small().color(crate::theme::TEXT_FAINT));
-            changed |= slider_row(ui, "CA Rot/Cyan", &mut l.ca_red, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "CA Blau/Gelb", &mut l.ca_blue, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Vignettierung", &mut l.vignetting, -100.0..=100.0, 0.0, 0);
-        });
-        if reset_lens {
-            adj.lens = LensCorrection::default();
-            changed = true;
-            // Back to what a new image gets.
-            if camera_source.is_none() && match_name.is_some() {
-                profile_action = Some(true);
-            }
-        }
-
         if changed {
             self.request_render();
         }
@@ -359,40 +368,80 @@ impl App {
         }
         let mut changed = self.noise_section(ui);
         let Some(cur) = self.current.as_mut() else { return };
+        let mut t = Target::new(&cur.adjustments, self.active_layer);
         let d = &mut cur.adjustments.detail;
         let defaults = Detail::default();
 
-        let (mut r_sharp, mut r_clarity, mut r_vig, mut r_grain) = (false, false, false, false);
+        let (mut r_sharp, mut r_clarity, mut r_haze) = (false, false, false);
         widgets::tool_section(ui, sk_core::tools::Tool::Sharpening, Some(&mut || r_sharp = true), |ui| {
             changed |= slider_row(ui, "Stärke", &mut d.sharpen_amount, 0.0..=500.0, defaults.sharpen_amount, 0);
-            changed |= slider_row(ui, "Radius", &mut d.sharpen_radius, 0.2..=3.0, defaults.sharpen_radius, 1);
-            changed |= slider_row(ui, "Schwelle", &mut d.sharpen_threshold, 0.0..=20.0, defaults.sharpen_threshold, 1);
+            // Without an effect, what shapes it is shown but disabled (here and below).
+            ui.add_enabled_ui(d.sharpen_amount > 0.0, |ui| {
+                changed |= slider_row(ui, "Radius", &mut d.sharpen_radius, 0.2..=3.0, defaults.sharpen_radius, 1);
+                changed |= slider_row(ui, "Schwelle", &mut d.sharpen_threshold, 0.0..=20.0, defaults.sharpen_threshold, 1);
+            });
             ui.label(RichText::new(crate::commands::hint("Wirkung bei 100 % prüfen", "zoom-100")).small().color(crate::theme::TEXT_FAINT));
         });
         widgets::tool_section(ui, sk_core::tools::Tool::Clarity, Some(&mut || r_clarity = true), |ui| {
-            changed |= slider_row(ui, "Klarheit", &mut d.clarity, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Struktur", &mut d.structure, -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Klarheit", t.pick(&mut d.clarity, |l| &mut l.clarity), -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Struktur", t.pick(&mut d.structure, |l| &mut l.structure), -100.0..=100.0, 0.0, 0);
         });
-        let mut r_haze = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Dehaze, Some(&mut || r_haze = true), |ui| {
-            changed |= slider_row(ui, "Stärke", &mut d.dehaze, -100.0..=100.0, 0.0, 0);
-        });
-        if r_haze {
-            d.dehaze = 0.0;
-            changed = true;
-        }
-        widgets::tool_section(ui, sk_core::tools::Tool::Vignette, Some(&mut || r_vig = true), |ui| {
-            changed |= slider_row(ui, "Stärke", &mut d.vignette_amount, -100.0..=100.0, 0.0, 0);
-        });
-        widgets::tool_section(ui, sk_core::tools::Tool::Grain, Some(&mut || r_grain = true), |ui| {
-            changed |= slider_row(ui, "Stärke", &mut d.grain_amount, 0.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Größe", &mut d.grain_size, 0.0..=100.0, defaults.grain_size, 0);
+            changed |= slider_row(ui, "Stärke", t.pick(&mut d.dehaze, |l| &mut l.dehaze), -100.0..=100.0, 0.0, 0);
         });
         if r_sharp {
             (d.sharpen_amount, d.sharpen_radius, d.sharpen_threshold) = (defaults.sharpen_amount, defaults.sharpen_radius, defaults.sharpen_threshold);
         }
         if r_clarity {
-            (d.clarity, d.structure) = (0.0, 0.0);
+            match t.layer_mut() {
+                Some(l) => (l.clarity, l.structure) = (0.0, 0.0),
+                None => (d.clarity, d.structure) = (0.0, 0.0),
+            }
+        }
+        if r_haze {
+            match t.layer_mut() {
+                Some(l) => l.dehaze = 0.0,
+                None => d.dehaze = 0.0,
+            }
+        }
+        t.store(&mut cur.adjustments);
+        if changed || r_sharp || r_clarity || r_haze {
+            self.request_render();
+        }
+    }
+
+    /// Creative looks: depth effects first, the finishing touches (vignette, grain) last.
+    pub fn effects_tab(&mut self, ui: &mut Ui) {
+        if self.current.is_none() {
+            crate::widgets::no_image(ui);
+            return;
+        }
+        self.lens_blur_section(ui);
+        self.atmosphere_section(ui);
+        let Some(cur) = self.current.as_mut() else { return };
+        let d = &mut cur.adjustments.detail;
+        let defaults = Detail::default();
+        let mut changed = false;
+
+        let (mut r_glow, mut r_vig, mut r_grain) = (false, false, false);
+        let glow_help = "Ein weichgezeichnetes Abbild der hellen Bildteile wird über das Bild gelegt: Lichter leuchten und strahlen in ihre Umgebung, wie beim Orton-Effekt in der Landschaftsfotografie.\n\nGröße: wie weit das Leuchten reicht.";
+        widgets::tool_section_help(ui, sk_core::tools::Tool::Glow, glow_help, Some(&mut || r_glow = true), |ui| {
+            changed |= slider_row(ui, "Stärke", &mut d.glow_amount, 0.0..=100.0, 0.0, 0);
+            ui.add_enabled_ui(d.glow_amount > 0.0, |ui| {
+                changed |= slider_row(ui, "Größe", &mut d.glow_size, 0.0..=100.0, sk_core::params::GLOW_SIZE, 0);
+            });
+        });
+        widgets::tool_section(ui, sk_core::tools::Tool::Vignette, Some(&mut || r_vig = true), |ui| {
+            changed |= slider_row(ui, "Stärke", &mut d.vignette_amount, -100.0..=100.0, 0.0, 0);
+        });
+        widgets::tool_section(ui, sk_core::tools::Tool::Grain, Some(&mut || r_grain = true), |ui| {
+            changed |= slider_row(ui, "Stärke", &mut d.grain_amount, 0.0..=100.0, 0.0, 0);
+            ui.add_enabled_ui(d.grain_amount > 0.0, |ui| {
+                changed |= slider_row(ui, "Größe", &mut d.grain_size, 0.0..=100.0, defaults.grain_size, 0);
+            });
+        });
+        if r_glow {
+            (d.glow_amount, d.glow_size) = (0.0, sk_core::params::GLOW_SIZE);
         }
         if r_vig {
             d.vignette_amount = 0.0;
@@ -400,10 +449,9 @@ impl App {
         if r_grain {
             (d.grain_amount, d.grain_size) = (0.0, defaults.grain_size);
         }
-        if changed || r_sharp || r_clarity || r_vig || r_grain {
+        if changed || r_glow || r_vig || r_grain {
             self.request_render();
         }
-        self.lens_blur_section(ui);
     }
 
     /// Color editor, color balance and black & white (appended to the color tab).
@@ -420,20 +468,36 @@ impl App {
         let mut toggle_pick: Option<ColorPick> = None;
         let Some(cur) = self.current.as_mut() else { return };
         let adj = &mut cur.adjustments;
+        let mut t = Target::new(adj, self.active_layer);
+        let on_layer = t.is_layer();
         let mut changed = false;
 
         let mut reset_ed = false;
         widgets::tool_section(ui, sk_core::tools::Tool::ColorEditor, Some(&mut || reset_ed = true), |ui| {
+            // Layers shift the bands; ranges of one's own belong to the whole image.
+            if on_layer && *view == ColorView::Zones {
+                *view = ColorView::Single;
+            }
             ui.horizontal_wrapped(|ui| {
+                // Ranges of one's own only for the whole image.
                 for v in ColorView::ALL {
-                    let r = ui.selectable_label(*view == v, v.label());
-                    let r = if v == ColorView::Zones { r.on_hover_text("Eigene Farbbereiche: eine Farbe im Bild aufnehmen und nur sie ändern") } else { r };
+                    let zones = v == ColorView::Zones;
+                    let r = ui.add_enabled(!(zones && on_layer), egui::Button::selectable(*view == v, v.label()));
+                    let r = if zones {
+                        r.on_hover_text("Eigene Farbbereiche: eine Farbe im Bild aufnehmen und nur sie ändern").on_disabled_hover_text(crate::widgets::ONLY_IMAGE)
+                    } else {
+                        r
+                    };
                     if r.clicked() {
                         *view = v;
                     }
                 }
             });
             ui.add_space(4.0);
+            let bands = match t.layer_mut() {
+                Some(l) => &mut l.color_bands,
+                None => &mut adj.color_editor.bands,
+            };
             if *view == ColorView::Zones {
                 let zones = &mut adj.color_editor.zones;
                 ui.horizontal_wrapped(|ui| {
@@ -479,7 +543,7 @@ impl App {
                     let rail = hue_rail();
                     let deg = widgets::SliderOpts { suffix: "°", ..Default::default() };
                     let picked = z.hue;
-                    changed |= widgets::slider_row_with(ui, "Farbe", &mut z.hue, 0.0..=360.0, picked, 0, widgets::SliderOpts { suffix: "°", rail: Some(&rail) });
+                    changed |= widgets::slider_row_with(ui, "Farbe", &mut z.hue, 0.0..=360.0, picked, 0, widgets::SliderOpts { suffix: "°", rail: Some(&rail), ..Default::default() });
                     changed |= widgets::slider_row_with(ui, "Breite", &mut z.width, 3.0..=90.0, d.width, 0, deg);
                     changed |= widgets::slider_row_with(ui, "Weichheit", &mut z.softness, 0.0..=100.0, d.softness, 0, widgets::SliderOpts { suffix: " %", ..Default::default() });
                     ui.label(RichText::new("Ändern").strong());
@@ -494,7 +558,6 @@ impl App {
                     }
                 }
             } else if *view == ColorView::Single {
-                let bands = &mut adj.color_editor.bands;
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = ((ui.available_width() - 8.0 * 28.0) / 7.0).max(0.0);
                     for (i, (name, hue)) in HUE_BANDS.iter().enumerate() {
@@ -511,14 +574,16 @@ impl App {
                 changed |= band_slider(ui, "Sättigung", b, ColorView::Saturation, hue);
                 changed |= band_slider(ui, "Helligkeit", b, ColorView::Lightness, hue);
             } else {
-                let bands = &mut adj.color_editor.bands;
                 for (i, (name, hue)) in HUE_BANDS.iter().enumerate() {
                     changed |= band_slider(ui, name, &mut bands[i], *view, *hue);
                 }
             }
         });
         if reset_ed {
-            adj.color_editor = Default::default();
+            match t.layer_mut() {
+                Some(l) => l.color_bands = Default::default(),
+                None => adj.color_editor = Default::default(),
+            }
             changed = true;
         }
 
@@ -553,22 +618,29 @@ impl App {
 
         let mut reset_cb = false;
         widgets::tool_section(ui, sk_core::tools::Tool::ColorBalance, Some(&mut || reset_cb = true), |ui| {
-            let cb = &mut adj.color_balance;
+            let cb = match t.layer_mut() {
+                Some(l) => &mut l.color_balance,
+                None => &mut adj.color_balance,
+            };
             changed |= wheel_ui(ui, "Master", &mut cb.master, false);
             changed |= wheel_ui(ui, "Schatten", &mut cb.shadows, true);
             changed |= wheel_ui(ui, "Mitteltöne", &mut cb.midtones, true);
             changed |= wheel_ui(ui, "Lichter", &mut cb.highlights, true);
         });
         if reset_cb {
-            adj.color_balance = Default::default();
+            match t.layer_mut() {
+                Some(l) => l.color_balance = Default::default(),
+                None => adj.color_balance = Default::default(),
+            }
             changed = true;
         }
+        t.store(adj);
 
         let mut reset_bw = false;
         widgets::tool_section(ui, sk_core::tools::Tool::BlackWhite, Some(&mut || reset_bw = true), |ui| {
             let bw = &mut adj.black_white;
             changed |= ui.checkbox(&mut bw.enabled, "Schwarzweiß aktivieren").changed();
-            if bw.enabled {
+            ui.add_enabled_ui(bw.enabled, |ui| {
                 ui.label(RichText::new("Farbempfindlichkeit").strong());
                 for (i, (name, _)) in HUE_BANDS.iter().enumerate() {
                     changed |= slider_row(ui, name, &mut bw.mix[i], -100.0..=100.0, 0.0, 0);
@@ -576,7 +648,7 @@ impl App {
                 ui.label(RichText::new("Tonung").strong());
                 changed |= wheel_ui(ui, "Schatten", &mut bw.shadow_tint, false);
                 changed |= wheel_ui(ui, "Lichter", &mut bw.highlight_tint, false);
-            }
+            });
         });
         if reset_bw {
             adj.black_white = Default::default();
@@ -590,40 +662,124 @@ impl App {
         }
     }
 
-    /// "Auto" buttons for the exposure tab.
+    /// "Automatisch anpassen" with its options and strength, for the exposure tab.
     pub fn auto_section(&mut self, ui: &mut Ui) {
-        let mut action = None;
         ui.horizontal(|ui| {
-            for (kind, text, hover) in [
-                (Auto::Exposure, "Auto-Belichtung", "Belichtung so setzen, dass die Mitteltöne stimmen"),
-                (Auto::Levels, "Auto-Tonwerte", "Schwarz- und Weißpunkt aus dem Histogramm"),
-                (Auto::WhiteBalance, "Auto-Weißabgleich", "Weißabgleich aus dem Bildinhalt schätzen"),
-            ] {
-                if ui.add_enabled(self.current.is_some(), egui::Button::new(format!("{}  {text}", icon::MAGIC_WAND))).on_hover_text(hover).clicked() {
-                    action = Some(kind);
-                }
+            let busy = self.auto_progress.is_some();
+            let text = if busy { "Passe an …" } else { "Automatisch anpassen" };
+            let hover = "Weißabgleich, Belichtung, Lichter und Schatten, Kontrast und Dynamik zusammen einstellen (Strg+L). \
+                         Gesichter und das Hauptmotiv zählen mehr, wenn die KI-Modelle geladen sind. \
+                         Sind mehrere Bilder ausgewählt, werden alle angepasst.";
+            if ui.add_enabled(!busy, egui::Button::new(format!("{}  {text}", icon::MAGIC_WAND))).on_hover_text(hover).clicked() {
+                self.auto_adjust_selection();
+            }
+            let mut opts = self.auto_options;
+            ui.menu_button(icon::CARET_DOWN, |ui| {
+                ui.label(RichText::new("Automatisch anpassen setzt:").weak());
+                ui.checkbox(&mut opts.white_balance, "Weißabgleich");
+                ui.checkbox(&mut opts.exposure, "Belichtung");
+                ui.checkbox(&mut opts.tone, "Lichter, Schatten, Weiß und Schwarz");
+                ui.checkbox(&mut opts.contrast, "Kontrast");
+                ui.checkbox(&mut opts.vibrance, "Dynamik");
+            })
+            .response
+            .on_hover_text("Was automatisch angepasst wird");
+            if opts != self.auto_options {
+                self.auto_options = opts;
+                self.save_settings();
             }
         });
-        if let Some(kind) = action {
-            self.run_auto(kind);
+        self.auto_strength(ui);
+    }
+
+    /// Strength of the last auto adjustment of the open image; disabled until there is one.
+    fn auto_strength(&mut self, ui: &mut Ui) {
+        let current = self.current_path();
+        let mix = self.auto_mix.as_mut().filter(|m| Some(&m.path) == current.as_ref());
+        let enabled = mix.is_some();
+        let mut idle = 100.0;
+        let mut changed = false;
+        let strength = match mix {
+            Some(m) => &mut m.strength,
+            None => &mut idle,
+        };
+        ui.add_enabled_ui(enabled, |ui| {
+            changed = widgets::slider_row_with(ui, "Stärke", strength, 0.0..=100.0, 100.0, 0, widgets::SliderOpts { suffix: " %", ..Default::default() });
+        })
+        .response
+        .on_disabled_hover_text("Wie stark die letzte automatische Anpassung wirkt: erst nach „Automatisch anpassen“");
+        let Some(mix) = self.auto_mix.as_ref().filter(|_| enabled) else { return };
+        let Some(cur) = self.current.as_mut() else { return };
+        if changed {
+            cur.adjustments = mix.opts.blend(&cur.adjustments, &mix.before, &mix.auto, mix.strength / 100.0, cur.as_shot_temp_tint);
+            self.request_render();
         }
     }
 
-    pub fn run_auto(&mut self, kind: Auto) {
-        let Some(cur) = self.current.as_mut() else { return };
-        match kind {
-            Auto::Exposure => {
-                cur.adjustments.exposure = auto::auto_exposure(&cur.meta, &cur.adjustments, &cur.preview);
+    /// Adjusts the selected images automatically (see `sk_core::auto::auto_adjust`), in the
+    /// background; the results arrive as [`Self::auto_adjusted`].
+    pub fn auto_adjust_selection(&mut self) {
+        if self.auto_progress.is_some() {
+            return;
+        }
+        if !self.auto_options.any() {
+            self.status = "Automatisch anpassen: nichts ausgewählt, was angepasst werden soll".into();
+            return;
+        }
+        let current = self.current_path();
+        let items: Vec<crate::workers::AutoItem> = self
+            .selected_paths()
+            .into_iter()
+            .map(|path| {
+                let open = (Some(&path) == current.as_ref())
+                    .then(|| self.current.as_ref().map(|c| (c.meta.clone(), c.preview.clone(), c.adjustments.clone())))
+                    .flatten();
+                crate::workers::AutoItem { path, open }
+            })
+            .collect();
+        if items.is_empty() {
+            return;
+        }
+        self.auto_progress = Some((0, items.len()));
+        self.status = if items.len() == 1 { "Passe automatisch an …".into() } else { format!("Passe {} automatisch an …", widgets::image_count(items.len())) };
+        self.workers.auto_adjust(crate::workers::AutoJob { items, opts: self.auto_options });
+    }
+
+    /// The auto adjustment of one image is done: its settings change (the open image's as one
+    /// undo step). Only what the options cover changes, so edits made meanwhile stay.
+    pub(crate) fn auto_adjusted(&mut self, path: std::path::PathBuf, opts: auto::AutoOptions, result: Result<Box<sk_core::params::Adjustments>, String>) {
+        let failed = match result {
+            Ok(adj) => {
+                let before = self.current.as_ref().filter(|_| self.current_path().as_ref() == Some(&path)).map(|c| c.adjustments.clone());
+                self.set_adjustments_on(std::slice::from_ref(&path), |a| opts.take(&adj, a));
+                // The open image: its strength can still be changed.
+                if let Some(before) = before
+                    && let Some(cur) = &self.current
+                {
+                    self.auto_mix = Some(AutoMix { path, before, auto: cur.adjustments.clone(), opts, strength: 100.0 });
+                }
+                false
             }
-            Auto::Levels => {
-                let Some(h) = &self.histogram else { return };
-                cur.adjustments.levels = auto::auto_levels(h);
+            Err(e) => {
+                log::warn!("Automatisch anpassen: {e}");
+                self.status = format!("Automatisch anpassen fehlgeschlagen: {e}");
+                true
             }
-            Auto::WhiteBalance => {
-                cur.adjustments.white_balance = auto::auto_white_balance(&cur.meta, &cur.preview);
+        };
+        if let Some((done, total)) = self.auto_progress {
+            let done = done + 1;
+            self.auto_progress = (done < total).then_some((done, total));
+            if done == total && !failed && !self.status.starts_with("Automatisch anpassen fehlgeschlagen") {
+                self.status = if total == 1 { "Automatisch angepasst".into() } else { format!("{} automatisch angepasst", widgets::image_count(total)) };
             }
         }
-        self.request_render();
+    }
+
+    /// White balance from the nearly neutral parts of the image (see `auto::auto_white_balance`).
+    pub fn auto_white_balance(&mut self) {
+        let Some(cur) = &self.current else { return };
+        let wb = auto::auto_white_balance(&cur.meta, &cur.adjustments, &cur.preview);
+        self.edit(|a| a.white_balance = wb.clone());
     }
 
     /// The lensfun profile for the current image's lens: name and coefficients at its focal length.
@@ -665,7 +821,9 @@ impl App {
     /// away, so that export and thumbnails see it too. Returns whether it applied one.
     pub fn auto_lens_profile(&mut self) -> bool {
         let Some(cur) = &self.current else { return false };
-        if cur.meta.lens.is_some() || cur.adjustments != cur.committed || cur.committed.clone().normalized() != sk_core::params::Adjustments::default() {
+        // The camera's look (see `camera_look`) doesn't count as an edit.
+        let plain = sk_core::params::Adjustments { base_curve: Default::default(), camera_curve: None, ..cur.committed.clone() };
+        if cur.meta.lens.is_some() || cur.adjustments != cur.committed || plain.normalized() != sk_core::params::Adjustments::default() {
             return false;
         }
         let Some((name, coeffs)) = self.lens_profile() else { return false };

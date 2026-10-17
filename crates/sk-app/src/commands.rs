@@ -30,6 +30,7 @@ const NONE: Modifiers = Modifiers::NONE;
 const CTRL: Modifiers = Modifiers::COMMAND;
 const SHIFT: Modifiers = Modifiers::SHIFT;
 const CTRL_SHIFT: Modifiers = Modifiers::COMMAND.plus(Modifiers::SHIFT);
+const ALT: Modifiers = Modifiers::ALT;
 
 fn always(_: &App) -> bool {
     true
@@ -51,6 +52,17 @@ fn several_files(a: &App) -> bool {
 }
 fn in_session(a: &App) -> bool {
     a.session.is_some() && has_selection(a)
+}
+
+/// Changes the whole image: not while a layer is chosen (only what works on it is there).
+fn image_tool(a: &App) -> bool {
+    has_image(a) && !a.on_layer()
+}
+fn has_layers(a: &App) -> bool {
+    a.current.as_ref().is_some_and(|c| !c.adjustments.layers.is_empty())
+}
+fn on_layer(a: &App) -> bool {
+    a.on_layer()
 }
 
 fn tool(a: &mut App, t: LocalTool) {
@@ -86,21 +98,26 @@ pub const COMMANDS: &[Command] = &[
     cmd!("redo", icon::ARROW_U_UP_RIGHT, "Wiederholen", "Bearbeiten", [CTRL => Key::Y, CTRL_SHIFT => Key::Z], "redo", |a| !a.redo.is_empty(), |a, _| a.redo()),
     cmd!("copy-adjustments", icon::COPY, "Anpassungen kopieren", "Bearbeiten", [CTRL_SHIFT => Key::C], "copy", has_image, |a, _| a.copy_adjustments()),
     cmd!("copy-adjustments-choose", icon::LIST_CHECKS, "Anpassungen auswählen und kopieren …", "Bearbeiten", [], "copy clipboard zwischenablage werkzeuge auswählen", has_image, |a, _| a.open_copy_dialog()),
-    cmd!("paste-adjustments", icon::CLIPBOARD_TEXT, "Anpassungen auf Auswahl anwenden", "Bearbeiten", [CTRL_SHIFT => Key::V], "paste einfügen", |a| a.clipboard.is_some(), |a, _| a.paste_adjustments()),
+    cmd!("paste-adjustments", icon::CLIPBOARD_TEXT, "Anpassungen auf Auswahl anwenden", "Bearbeiten", [CTRL_SHIFT => Key::V], "paste einfügen", |a| a.clipboard.is_some() && !a.on_layer(), |a, _| a.paste_adjustments()),
     cmd!("reset", icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", "Bearbeiten", [], "reset", has_image, |a, _| a.reset_adjustments()),
     cmd!("select-all", icon::CHECK_SQUARE, "Alle auswählen", "Bearbeiten", [CTRL => Key::A], "select all", has_images, |a, _| a.select_all()),
     cmd!("gpu", icon::LIGHTNING, "Grafikkarte und KI-Modelle …", "Bearbeiten", [], "gpu grafikkarte ki modelle download laden zwischenspeicher", always, |a, _| a.show_gpu_dialog = true),
     // Foto und Entwickeln
-    cmd!("rotate-left", icon::ARROW_COUNTER_CLOCKWISE, "Links drehen", "Entwickeln", [CTRL => Key::OpenBracket], "rotate", has_image, |a, _| a.rotate(3)),
-    cmd!("rotate-right", icon::ARROW_CLOCKWISE, "Rechts drehen", "Entwickeln", [CTRL => Key::CloseBracket], "rotate", has_image, |a, _| a.rotate(1)),
-    cmd!("crop", icon::CROP, "Zuschneiden", "Entwickeln", [NONE => Key::C], "crop", has_image, |a, _| a.toggle_crop()),
+    cmd!("rotate-left", icon::ARROW_COUNTER_CLOCKWISE, "Links drehen", "Entwickeln", [CTRL => Key::OpenBracket], "rotate", image_tool, |a, _| a.rotate(3)),
+    cmd!("rotate-right", icon::ARROW_CLOCKWISE, "Rechts drehen", "Entwickeln", [CTRL => Key::CloseBracket], "rotate", image_tool, |a, _| a.rotate(1)),
+    cmd!("crop", icon::CROP, "Zuschneiden", "Entwickeln", [NONE => Key::C], "crop", image_tool, |a, _| a.toggle_crop()),
     cmd!("finish-crop", icon::CHECK, "Zuschnitt übernehmen", "Entwickeln", [NONE => Key::Enter], "crop fertig", |a| a.crop_tool.is_some(), |a, _| a.finish_crop_tool()),
-    cmd!("straighten", icon::RULER, "Geraderichten (Linie ziehen)", "Entwickeln", [], "straighten horizont", has_image, |a, _| {
+    cmd!("straighten", icon::RULER, "Geraderichten (Linie ziehen)", "Entwickeln", [], "straighten horizont", image_tool, |a, _| {
         a.tab = Tab::Lens;
         a.toggle_straighten();
     }),
-    cmd!("auto-upright", icon::PERSPECTIVE, "Automatisch geraderichten", "Entwickeln", [SHIFT => Key::A], "upright", has_image, |a, _| a.auto_upright(sk_core::upright::UprightMode::Vertical)),
-    cmd!("wb-picker", icon::EYEDROPPER, "Weißabgleich-Pipette", "Entwickeln", [NONE => Key::W], "white balance wb aufnehmen", has_image, |a, _| {
+    cmd!("auto-adjust", icon::MAGIC_WAND, "Automatisch anpassen", "Entwickeln", [CTRL => Key::L], "auto adjust automatisch belichtung weißabgleich tonwerte", |a| has_selection(a) && a.auto_progress.is_none() && !a.on_layer(), |a, _| a.auto_adjust_selection()),
+    cmd!("auto-upright", icon::PERSPECTIVE, "Automatisch geraderichten", "Entwickeln", [SHIFT => Key::A], "upright", image_tool, |a, _| a.auto_upright(sk_core::upright::UprightMode::Vertical)),
+    cmd!("auto-wb", icon::MAGIC_WAND, "Weißabgleich automatisch", "Entwickeln", [], "auto wb white balance weißabgleich automatisch", image_tool, |a, _| {
+        a.tab = Tab::Color;
+        a.auto_white_balance();
+    }),
+    cmd!("wb-picker", icon::EYEDROPPER, "Weißabgleich-Pipette", "Entwickeln", [NONE => Key::W], "white balance wb aufnehmen", image_tool, |a, _| {
         if !a.picking_wb {
             a.tab = Tab::Color;
         }
@@ -126,8 +143,22 @@ pub const COMMANDS: &[Command] = &[
     cmd!("stack-toggle", icon::STACK, "Stapel auf-/zuklappen", "Foto", [SHIFT => Key::G], "stack", has_selection, |a, _| a.run_stack_action(crate::stacks::StackAction::Toggle)),
     cmd!("merge-hdr", icon::SUN_HORIZON, "HDR zusammenfügen …", "Entwickeln", [], "merge belichtungsreihe", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Hdr)),
     cmd!("merge-pano", icon::PANORAMA, "Panorama zusammenfügen …", "Entwickeln", [], "merge stitch", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Panorama)),
-    cmd!("denoise", icon::SPARKLE, "KI-Entrauschen", "Entwickeln", [], "denoise rauschen ki entrauschen rauschreduzierung", has_image, |a, ctx| a.open_denoise(ctx)),
+    cmd!("merge-focus", icon::APERTURE, "Focus Stacking …", "Entwickeln", [], "merge fokus schärfentiefe stack makro focus stacking", several_files, |a, _| a.open_merge(crate::merge::MergeKind::FocusStack)),
+    cmd!("denoise", icon::SPARKLE, "KI-Entrauschen", "Entwickeln", [], "denoise rauschen ki entrauschen rauschreduzierung", image_tool, |a, ctx| a.open_denoise(ctx)),
     cmd!("reference", icon::PUSH_PIN, "Referenzbild festlegen / entfernen", "Entwickeln", [SHIFT => Key::Enter], "vergleich compare", has_image, |a, _| a.toggle_reference()),
+    cmd!("match-look", icon::SWATCHES, "Look angleichen", "Entwickeln", [], "match look referenz angleichen stil übertragen belichtung weißabgleich", |a| a.can_match_look() && !a.on_layer(), |a, _| {
+        a.tab = Tab::Color;
+        a.match_look_selection();
+    }),
+    cmd!("look-add-file", icon::IMAGE, "Look-Referenz aus Bilddatei …", "Entwickeln", [], "match look datei jpeg film still referenz hinzufügen", always, |a, _| {
+        if a.pick_look_files() {
+            a.tab = Tab::Color;
+        }
+    }),
+    cmd!("look-add-image", icon::PLUS, "Dieses Bild als Look-Referenz", "Entwickeln", [], "match look referenz hinzufügen bibliothek", has_image, |a, _| {
+        a.add_current_as_look_ref();
+        a.tab = Tab::Color;
+    }),
     cmd!("previous", icon::CARET_LEFT, "Vorheriges Bild", "Foto", [NONE => Key::ArrowLeft], "zurück previous", has_images, |a, _| a.step(-1)),
     cmd!("next", icon::CARET_RIGHT, "Nächstes Bild", "Foto", [NONE => Key::ArrowRight], "weiter next", has_images, |a, _| a.step(1)),
     cmd!("row-up", icon::CARET_UP, "Bild darüber", "Foto", [NONE => Key::ArrowUp], "raster zeile hoch up", in_grid, |a, _| a.step_row(-1)),
@@ -141,16 +172,22 @@ pub const COMMANDS: &[Command] = &[
     cmd!("tool-radial", icon::CIRCLE_DASHED, "Radialer Verlauf", "Ebenen", [NONE => Key::R], "radial", has_image, |a, _| tool(a, LocalTool::Radial)),
     cmd!("tool-magic", icon::MAGIC_WAND, "Zauberpinsel", "Ebenen", [NONE => Key::J], "zauberstab magic brush auswahl", has_image, |a, _| tool(a, LocalTool::Magic)),
     cmd!("tool-object", icon::CURSOR_CLICK, "Objekt auswählen", "Ebenen", [SHIFT => Key::J], "objekt auswahl klick sam maske", has_image, |a, _| tool(a, LocalTool::Object)),
-    cmd!("find-spots", icon::BROOM, "Staub und Flecken finden", "Retusche", [], "sensorstaub flecken unreinheiten pickel retusche reparieren", has_image, |a, _| a.find_spots()),
-    cmd!("tool-heal", icon::BANDAIDS, "Reparieren", "Retusche", [NONE => Key::H], "heal flecken", has_image, |a, _| tool(a, LocalTool::Heal)),
-    cmd!("tool-clone", icon::STAMP, "Klonen", "Retusche", [NONE => Key::S], "clone stempel", has_image, |a, _| tool(a, LocalTool::Clone)),
-    cmd!("tool-remove", icon::SPARKLE, "Entfernen (KI)", "Retusche", [NONE => Key::X], "remove objekt", has_image, |a, _| tool(a, LocalTool::Remove)),
+    cmd!("find-spots", icon::BROOM, "Staub und Flecken finden", "Retusche", [], "sensorstaub flecken unreinheiten pickel retusche reparieren", image_tool, |a, _| a.find_spots()),
+    cmd!("tool-heal", icon::BANDAIDS, "Reparieren", "Retusche", [NONE => Key::H], "heal flecken", image_tool, |a, _| tool(a, LocalTool::Heal)),
+    cmd!("tool-clone", icon::STAMP, "Klonen", "Retusche", [NONE => Key::S], "clone stempel", image_tool, |a, _| tool(a, LocalTool::Clone)),
+    cmd!("tool-remove", icon::SPARKLE, "Entfernen", "Retusche", [NONE => Key::X], "remove objekt", image_tool, |a, _| tool(a, LocalTool::Remove)),
     cmd!("brush-smaller", icon::MINUS, "Pinsel kleiner", "Ebenen", [NONE => Key::OpenBracket], "größe", always, |a, _| brush_size(a, 1.0 / 1.2)),
     cmd!("brush-larger", icon::PLUS, "Pinsel größer", "Ebenen", [NONE => Key::CloseBracket], "größe", always, |a, _| brush_size(a, 1.2)),
     cmd!("show-mask", icon::EYE, "Maske anzeigen", "Ebenen", [NONE => Key::M], "mask", always, |a, _| {
         a.show_mask = !a.show_mask;
+        if a.show_mask && !a.on_layer() {
+            a.status = "Maske anzeigen: keine Ebene gewählt".into();
+        }
         a.request_render();
     }),
+    cmd!("edit-background", icon::X, "Hintergrund bearbeiten", "Ebenen", [], "ebene abwählen global ganzes bild background", on_layer, |a, _| a.select_layer(None)),
+    cmd!("layer-up", icon::ARROW_UP, "Ebene darüber bearbeiten", "Ebenen", [ALT => Key::ArrowUp], "nächste ebene wählen layer", has_layers, |a, _| a.step_layer(true)),
+    cmd!("layer-down", icon::ARROW_DOWN, "Ebene darunter bearbeiten", "Ebenen", [ALT => Key::ArrowDown], "vorherige ebene wählen layer hintergrund", has_layers, |a, _| a.step_layer(false)),
     cmd!("delete-spot", icon::TRASH, "Retuschepunkt oder Verlauf löschen", "Retusche", [NONE => Key::Delete, NONE => Key::Backspace], "spot verlauf gradient", always, |a, _| a.delete_selected_spot()),
     // Ansicht
     cmd!("grid", icon::SQUARES_FOUR, "Raster / Einzelbild umschalten", "Ansicht", [NONE => Key::G], "grid browser übersicht viewer", always, |a, _| a.grid_view = !a.grid_view),
@@ -192,6 +229,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("find", icon::MAGNIFYING_GLASS, "Suchen (Bibliothek)", "Ansicht", [CTRL => Key::F], "filter suche", always, |a, _| a.tab = Tab::Library),
     // Hilfe
     cmd!("shortcuts", icon::KEYBOARD, "Tastenkürzel", "Hilfe", [NONE => Key::F1], "shortcuts hilfe", always, |a, _| a.show_shortcuts = !a.show_shortcuts),
+    cmd!("update", icon::ARROW_CIRCLE_UP, "Nach Updates suchen …", "Hilfe", [], "update aktualisieren version release neu", always, |a, _| a.update_dialog_open()),
     cmd!("about", icon::INFO, "Über Silberkorn", "Hilfe", [], "about version", always, |a, _| a.splash = Some(crate::splash::Splash::about())),
 ];
 
@@ -338,6 +376,11 @@ fn parse_bindings(saved: &BTreeMap<String, Vec<String>>) -> Bindings {
 }
 
 /// `text` with the shortcut of command `id` in brackets, e.g. "Rückgängig (Strg+Z)".
+/// Commands of AI functions (marked with the yellow sparkle in menus and the palette).
+pub fn is_ai(id: &str) -> bool {
+    matches!(id, "denoise" | "tool-object" | "tool-remove")
+}
+
 pub fn hint(text: &str, id: &str) -> String {
     match get(id).map(|c| c.shortcut()).unwrap_or_default() {
         k if k.is_empty() => text.to_string(),
@@ -426,8 +469,13 @@ impl App {
         // A slider that was just clicked keeps the arrow keys; a click elsewhere
         // or Esc gives them back to "previous/next image".
         let slider = crate::widgets::slider_has_focus(ctx);
+        // A focused control presses itself with Enter.
+        let focused = ctx.memory(|m| m.focused()).is_some();
         for (c, (m, k)) in keys {
             if slider && matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown) {
+                continue;
+            }
+            if focused && k == Key::Enter {
                 continue;
             }
             // A key of an unavailable command stays for others (Enter of "finish crop" must still
@@ -449,7 +497,9 @@ impl App {
     /// Like [`Self::command_item`] with a label of its own (e.g. with a count).
     pub(crate) fn command_item_labeled(&mut self, ui: &mut egui::Ui, id: &str, label: &str) {
         let Some(c) = get(id) else { return };
-        let button = egui::Button::new(format!("{}  {label}", c.icon)).shortcut_text(c.shortcut());
+        let text = format!("{}  {label}", c.icon);
+        let text = if is_ai(id) { crate::widgets::ai_text(ui, &text) } else { text.into() };
+        let button = egui::Button::new(text).shortcut_text(c.shortcut());
         if ui.add_enabled((c.enabled)(self), button).clicked() {
             (c.run)(self, ui.ctx());
         }

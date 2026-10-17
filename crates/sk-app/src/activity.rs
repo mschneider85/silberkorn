@@ -29,8 +29,11 @@ impl App {
         if self.ai_busy {
             v.push(Activity { label: "Maske wird berechnet".into(), progress: None, in_viewer: true, cancel: None });
         }
-        if let Some((done, total)) = self.match_progress {
-            v.push(Activity { label: "An Referenz angleichen".into(), progress: Some(done as f32 / total.max(1) as f32), in_viewer: true, cancel: None });
+        if let Some((done, total)) = self.look_progress {
+            v.push(Activity { label: "Look angleichen".into(), progress: Some(done as f32 / total.max(1) as f32), in_viewer: true, cancel: None });
+        }
+        if let Some((done, total)) = self.auto_progress {
+            v.push(Activity { label: "Automatisch anpassen".into(), progress: Some(done as f32 / total.max(1) as f32), in_viewer: true, cancel: None });
         }
         for j in &self.jobs {
             v.push(Activity { label: j.label.clone(), progress: Some(j.progress), in_viewer: false, cancel: Some(j.cancel.clone()) });

@@ -11,7 +11,7 @@ use sk_core::params::{BrushStroke, WbMode};
 use crate::ai_models::AiFeature;
 use crate::app::App;
 use crate::layers::{LocalDrag, LocalTool};
-use crate::widgets::section_help;
+use crate::widgets::section_help_ai;
 use crate::workers::InpaintJob;
 
 impl App {
@@ -25,11 +25,12 @@ impl App {
             return;
         }
         let b = self.brushes.remove.clone();
-        if let Some(p) = response.hover_pos() {
+        if let Some(p) = response.hover_pos().filter(|_| !self.adjusting_brush()) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
             crate::layers::brush_cursor(&painter, p, &b);
         }
-        if response.drag_started()
+        // Only the left button paints; the right one changes the brush.
+        if response.drag_started_by(egui::PointerButton::Primary)
             && let Some(p) = response.interact_pointer_pos()
             && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
         {
@@ -46,16 +47,21 @@ impl App {
             self.local_drag = LocalDrag::Stroke(p);
         }
         if response.dragged()
-            && let (Some(p), LocalDrag::Stroke(last)) = (response.interact_pointer_pos(), self.local_drag.clone())
-            && (p - last).length() > crate::layers::point_spacing(b.size)
-            && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
+            && let LocalDrag::Stroke(mut last) = self.local_drag
         {
-            if let Some(s) = self.remove_strokes.last_mut() {
-                s.points.push(uv);
+            // Every movement of the frame, so that fast strokes stay round.
+            for p in crate::layers::drag_trail(ui, response) {
+                if (p - last).length() > crate::layers::point_spacing(b.size)
+                    && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
+                    && let Some(s) = self.remove_strokes.last_mut()
+                {
+                    s.points.push(uv);
+                    last = p;
+                }
             }
-            self.local_drag = LocalDrag::Stroke(p);
+            self.local_drag = LocalDrag::Stroke(last);
         }
-        if response.drag_stopped() && !self.remove_strokes.is_empty() {
+        if response.drag_stopped_by(egui::PointerButton::Primary) && !self.remove_strokes.is_empty() {
             self.request_removal();
         }
     }
@@ -185,7 +191,7 @@ impl App {
             return;
         }
         let help = "Über das Störende malen; beim Loslassen füllt die KI die Stelle passend zur Umgebung.";
-        section_help(ui, "Entfernen (KI)", help, None, |ui| {
+        section_help_ai(ui, "Entfernen", help, None, |ui| {
             if active && crate::layers::brush_controls(ui, &mut self.brushes.remove, Some(LocalTool::Remove), true) {
                 self.brushes_changed_at = Some(std::time::Instant::now());
             }

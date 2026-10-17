@@ -26,6 +26,23 @@ pub fn section_help(ui: &mut Ui, title: &str, help: &str, reset: Option<&mut dyn
     section_full(ui, title, true, Some(help), reset, body);
 }
 
+/// [`section_help`] of an AI function: marked with the yellow sparkle after the title.
+pub fn section_help_ai(ui: &mut Ui, title: &str, help: &str, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
+    section_inner(ui, title, true, Some(help), None, true, reset, body);
+}
+
+/// Hover text of the AI mark.
+pub const AI_HINT: &str = "KI-Funktion: rechnet mit einem neuronalen Netz, das beim ersten Gebrauch einmalig geladen wird";
+
+/// `text` followed by the yellow AI mark, for buttons, checkboxes and menu items.
+pub fn ai_text(ui: &Ui, text: &str) -> egui::WidgetText {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let mut job = egui::text::LayoutJob::default();
+    job.append(text, 0.0, egui::TextFormat { font_id: font_id.clone(), color: Color32::PLACEHOLDER, ..Default::default() });
+    job.append(theme::icon::SPARKLE, 5.0, egui::TextFormat { font_id, color: theme::AI, ..Default::default() });
+    job.into()
+}
+
 /// Section that starts closed unless `default_open`, with an optional help icon.
 /// Flat header: a fine line above, the title on the left, help, reset and caret on the right.
 pub fn section_full(
@@ -36,7 +53,7 @@ pub fn section_full(
     reset: Option<&mut dyn FnMut()>,
     body: impl FnOnce(&mut Ui),
 ) {
-    section_inner(ui, title, default_open, help, None, reset, body);
+    section_inner(ui, title, default_open, help, None, false, reset, body);
 }
 
 fn copy_targets_id() -> egui::Id {
@@ -53,6 +70,29 @@ pub fn set_copy_targets(ctx: &egui::Context, n: usize) {
     ctx.data_mut(|d| d.insert_temp(copy_targets_id(), n));
 }
 
+fn edit_layer_id() -> egui::Id {
+    egui::Id::new("tool_edit_layer")
+}
+
+/// Whether the develop tools change a layer; set before the tool tabs are drawn. Tool sections
+/// then show whether they work on it; those that don't are shown disabled and closed.
+pub fn set_edit_layer(ctx: &egui::Context, on_layer: bool) {
+    ctx.data_mut(|d| d.insert_temp(edit_layer_id(), on_layer));
+}
+
+fn on_layer(ui: &Ui) -> bool {
+    ui.data(|d| d.get_temp::<bool>(edit_layer_id())).unwrap_or(false)
+}
+
+/// Explanation on what only works on the whole image while a layer is chosen.
+pub const ONLY_IMAGE: &str = "Wirkt nur aufs ganze Bild. Zum Ändern oben in der Leiste den Hintergrund wählen.";
+
+/// Shows what only works on the whole image disabled while a layer is chosen.
+pub fn background_only(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
+    let layer = on_layer(ui);
+    ui.add_enabled_ui(!layer, body).response.on_disabled_hover_text(ONLY_IMAGE);
+}
+
 /// The tool whose copy button was clicked since the last call.
 pub fn take_copy_clicked(ctx: &egui::Context) -> Option<sk_core::tools::Tool> {
     ctx.data_mut(|d| {
@@ -65,25 +105,58 @@ pub fn take_copy_clicked(ctx: &egui::Context) -> Option<sk_core::tools::Tool> {
 /// [`section`] of a develop tool: titled after it, with a button in the header that carries
 /// its settings over to the other selected images.
 pub fn tool_section(ui: &mut Ui, tool: sk_core::tools::Tool, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
-    section_inner(ui, tool.label(), true, None, Some(tool), reset, body);
+    section_inner(ui, tool.label(), true, None, Some(tool), tool.is_ai(), reset, body);
 }
 
 /// [`tool_section`] with an explanation behind an info icon in the header.
 pub fn tool_section_help(ui: &mut Ui, tool: sk_core::tools::Tool, help: &str, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
-    section_inner(ui, tool.label(), true, Some(help), Some(tool), reset, body);
+    section_inner(ui, tool.label(), true, Some(help), Some(tool), tool.is_ai(), reset, body);
 }
 
+/// Sections of functions that not everyone uses: closed until opened (then they stay open).
+const SPECIALIZED: &[&str] = &[
+    "Gesichter & Sichtung",
+    "Hauttöne",
+    "Schwarzweiß",
+    "Neu ausleuchten",
+    "Objektivunschärfe",
+    "Atmosphäre",
+    "Leuchten",
+    "Softproof",
+    "Wasserzeichen",
+    "Druckvorschau",
+];
+
+#[allow(clippy::too_many_arguments)]
 fn section_inner(
     ui: &mut Ui,
     title: &str,
     default_open: bool,
     help: Option<&str>,
     copy: Option<sk_core::tools::Tool>,
+    ai: bool,
     reset: Option<&mut dyn FnMut()>,
     body: impl FnOnce(&mut Ui),
 ) {
-    let id = ui.make_persistent_id(title);
-    let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(id, default_open));
+    // While a layer is chosen, the tools that don't work on it are there, but disabled and closed.
+    let on_layer = on_layer(ui);
+    let layer_support = copy.filter(|_| on_layer).map(|t| t.layer_support());
+    if layer_support == Some(sk_core::tools::LayerSupport::None) {
+        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+        let painter = ui.painter();
+        painter.hline(rect.x_range(), rect.top(), Stroke::new(1.0, theme::BORDER));
+        let inner = rect.shrink2(vec2(0.0, 2.0)).translate(vec2(0.0, 1.0));
+        painter.text(pos2(inner.left() + 6.0, inner.center().y), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(13.5), theme::TEXT_FAINT);
+        painter.text(inner.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, "nur ganzes Bild", egui::FontId::proportional(11.5), theme::TEXT_FAINT);
+        resp.on_hover_text(ONLY_IMAGE);
+        ui.add_space(2.0);
+        return;
+    }
+    // Specialized sections start closed; their state is kept under a key of its own, so that
+    // they also close once where they had been open before (every section used to start open).
+    let special = SPECIALIZED.contains(&title);
+    let id = if special { ui.make_persistent_id((title, "eingeklappt")) } else { ui.make_persistent_id(title) };
+    let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(id, default_open && !special));
     let reveal = ui.data(|d| d.get_temp::<String>(reveal_id())).is_some_and(|t| t == title);
     let flash_id = id.with("flash");
     let now = ui.input(|i| i.time);
@@ -108,8 +181,18 @@ fn section_inner(
     }
     let title_color = if open || hovered { Color32::WHITE } else { theme::TEXT };
     let galley = painter.layout_no_wrap(title.to_string(), egui::FontId::proportional(13.5), title_color);
-    let title_w = galley.size().x;
+    let mut title_w = galley.size().x;
     painter.galley(pos2(inner.left() + 6.0, inner.center().y - galley.size().y / 2.0), galley, title_color);
+    if ai {
+        let r = Rect::from_center_size(pos2(inner.left() + 6.0 + title_w + 12.0, inner.center().y), vec2(16.0, 20.0));
+        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, theme::icon::SPARKLE, egui::FontId::proportional(13.0), theme::AI);
+        ui.interact(r, id.with("ai"), Sense::hover()).on_hover_text(AI_HINT);
+        title_w += 18.0;
+    }
+    let marked = layer_support.is_some();
+    if marked {
+        painter.rect_filled(Rect::from_min_size(pos2(rect.left(), inner.top() + 3.0), vec2(2.0, inner.height() - 6.0)), 1.0, theme::ACCENT);
+    }
     let caret = if open { theme::icon::CARET_DOWN } else { theme::icon::CARET_RIGHT };
     let dim = if hovered { theme::TEXT } else { theme::TEXT_FAINT };
     painter.text(inner.right_center() - vec2(10.0, 0.0), egui::Align2::CENTER_CENTER, caret, egui::FontId::proportional(11.0), dim);
@@ -145,7 +228,8 @@ fn section_inner(
         }
     }
     let targets = ui.data(|d| d.get_temp::<usize>(copy_targets_id())).unwrap_or(0);
-    if let Some(tool) = copy.filter(|_| targets > 0) {
+    // Layers belong to one image: nothing to carry over while one is chosen.
+    if let Some(tool) = copy.filter(|_| targets > 0 && !on_layer) {
         let x = if has_reset { 60.0 } else { 34.0 };
         let r = Rect::from_center_size(inner.right_center() - vec2(x, 0.0), vec2(24.0, 22.0));
         let color = if hovered || ui.rect_contains_pointer(r) { theme::TEXT } else { theme::TEXT_FAINT };
@@ -162,7 +246,11 @@ fn section_inner(
     }
     if open {
         ui.add_space(2.0);
-        egui::Frame::new().inner_margin(egui::Margin { left: 6, right: 4, top: 0, bottom: 0 }).show(ui, body);
+        let frame = egui::Frame::new().inner_margin(egui::Margin { left: 6, right: 4, top: 0, bottom: 0 });
+        let r = frame.show(ui, body).response;
+        if marked {
+            ui.painter().rect_filled(Rect::from_min_size(r.rect.left_top(), vec2(2.0, r.rect.height())), 1.0, theme::ACCENT.gamma_multiply(0.45));
+        }
         ui.add_space(8.0);
     }
     ui.add_space(2.0);
@@ -182,7 +270,8 @@ pub fn field<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
             ui.set_min_width(w);
             ui.add(egui::Label::new(RichText::new(label).color(theme::TEXT_DIM)).truncate());
         });
-        ui.spacing_mut().text_edit_width = ui.available_width();
+        // Like the combo boxes: the field's frame must not reach past the panel edge.
+        ui.spacing_mut().text_edit_width = ui.available_width() - 8.0;
         add(ui)
     })
     .inner
@@ -203,6 +292,8 @@ pub struct SliderOpts<'a> {
     /// Colors painted along the rail (left to right) instead of the accent fill, e.g. blue to
     /// yellow for a color temperature.
     pub rail: Option<&'a [Color32]>,
+    /// An AI function: the label gets the yellow mark.
+    pub ai: bool,
 }
 
 /// Rail colors for color temperature (cool to warm).
@@ -254,7 +345,16 @@ pub fn slider_row_with(
         let lbl = ui
             .allocate_ui_with_layout(vec2(label_w, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 ui.set_min_width(label_w);
-                ui.add(egui::Label::new(RichText::new(label).color(color)).sense(Sense::click()).truncate())
+                let text: egui::WidgetText = if opts.ai {
+                    let font_id = egui::TextStyle::Body.resolve(ui.style());
+                    let mut job = egui::text::LayoutJob::default();
+                    job.append(label, 0.0, egui::TextFormat { font_id: font_id.clone(), color, ..Default::default() });
+                    job.append(theme::icon::SPARKLE, 5.0, egui::TextFormat { font_id, color: theme::AI, ..Default::default() });
+                    job.into()
+                } else {
+                    RichText::new(label).color(color).into()
+                };
+                ui.add(egui::Label::new(text).sense(Sense::click()).truncate())
             })
             .inner;
         if lbl.on_hover_text("Doppelklick: zurücksetzen").double_clicked() && modified {
@@ -291,7 +391,8 @@ pub fn slider_row_with(
 /// Slim slider: a thin rail filled from the default to the value, a small round handle.
 /// Grabbing the handle moves it from where it is; a click elsewhere on the rail jumps there.
 /// Shift while dragging for fine steps; double-click resets. After a click the arrow keys and,
-/// over the rail, the mouse wheel change the value (Shift: coarse, Alt: fine).
+/// over the rail, the mouse wheel change the value (Shift: coarse, Alt: fine). Without that
+/// click the wheel scrolls the panel, so scrolling past a slider never changes it.
 #[allow(clippy::too_many_arguments)]
 fn rail_slider(
     ui: &mut Ui,
@@ -384,7 +485,7 @@ fn rail_slider(
         ui.data_mut(|d| d.insert_temp(hovered_rail_id(), HoveredRail(resp.id, pass)));
     }
     let owns_wheel = ui.data(|d| d.get_temp::<WheelGesture>(wheel_gesture_id())).is_some_and(|g| g.owner == Some(resp.id));
-    if ui.is_enabled() && resp.hovered() && owns_wheel {
+    if ui.is_enabled() && resp.hovered() && resp.has_focus() && owns_wheel {
         let (notches, mods) = ui.input(|i| {
             let n: f32 = i
                 .events
@@ -541,7 +642,7 @@ pub fn compact_slider(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops:
 }
 
 /// Tool tile: icon above the name, the key in the corner; `selected` highlights it.
-pub fn tool_tile(ui: &mut Ui, ic: &str, label: &str, key: &str, selected: bool, width: f32) -> Response {
+pub fn tool_tile(ui: &mut Ui, ic: &str, label: &str, key: &str, selected: bool, ai: bool, width: f32) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 50.0), Sense::click());
     let p = ui.painter();
     let hovered = resp.hovered();
@@ -562,8 +663,13 @@ pub fn tool_tile(ui: &mut Ui, ic: &str, label: &str, key: &str, selected: bool, 
     job.wrap = egui::text::TextWrapping::truncate_at_width(width - 8.0);
     let galley = p.layout_job(job);
     p.galley(pos2(rect.center().x - galley.size().x / 2.0, rect.bottom() - 18.0), galley, color);
-    if !key.is_empty() {
-        p.text(rect.right_top() + vec2(-6.0, 5.0), egui::Align2::RIGHT_TOP, key, egui::FontId::proportional(10.0), theme::TEXT_FAINT);
+    // Only short keys fit in the corner; longer ones (with modifiers) are in the tooltip.
+    let key = p.layout_no_wrap(key.to_string(), egui::FontId::proportional(10.0), theme::TEXT_FAINT);
+    if key.size().x > 0.0 && key.size().x <= width * 0.2 {
+        p.galley(rect.right_top() + vec2(-6.0 - key.size().x, 5.0), key, theme::TEXT_FAINT);
+    }
+    if ai {
+        p.text(rect.left_top() + vec2(8.0, 9.0), egui::Align2::CENTER_CENTER, theme::icon::SPARKLE, egui::FontId::proportional(11.0), theme::AI);
     }
     resp
 }
@@ -903,4 +1009,10 @@ pub fn clip_triangles(ui: &mut Ui, rect: Rect, hist: Option<&Histogram>, warning
         }
     }
     clicked
+}
+
+/// Small heading inside a section, e.g. "Eingrenzen" within "Maske".
+pub(crate) fn subheading(ui: &mut Ui, text: &str) {
+    ui.add_space(8.0);
+    ui.label(egui::RichText::new(text).size(11.5).strong().color(crate::theme::TEXT_DIM));
 }

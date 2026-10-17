@@ -204,7 +204,7 @@ impl App {
     /// The KI-Entrauschen amount and the state of its computation; returns whether it changed.
     fn denoise_controls(&mut self, ui: &mut egui::Ui, amount: &mut f32, path: &Path, hdr: bool) -> bool {
         let before = *amount;
-        let changed = slider_row(ui, "KI-Entrauschen", amount, 0.0..=100.0, 0.0, 0);
+        let changed = crate::widgets::slider_row_with(ui, "KI-Entrauschen", amount, 0.0..=100.0, 0.0, 0, crate::widgets::SliderOpts { ai: true, ..Default::default() });
         if changed && self.denoise.cancelled.remove(path) {
             // Queued again by `pump_denoise`.
             self.denoise.checked = None;

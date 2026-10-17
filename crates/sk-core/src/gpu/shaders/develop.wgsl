@@ -12,6 +12,11 @@ struct Tone {
     tint: f32,
     brightness: f32,
     dehaze: f32,
+    vibrance: f32,
+    // Color editor per band: hue shift, saturation and lightness (both /100).
+    bands: array<f32, 24>,
+    // Color balance offsets per wheel: a, b, lightness.
+    balance: array<f32, 12>,
 }
 
 // Layout as written by the CPU: only 4-byte members, no padding.
@@ -45,7 +50,7 @@ struct Params {
     // Offset of the working region in the dark channel's domain.
     dark_ox: u32,
     dark_oy: u32,
-    airlight: f32,
+    airlight: array<f32, 3>,
     // Offsets into the table buffer (u32::MAX: no table).
     lut_hdr_ev: u32,
     lut_hdr_px: u32,
@@ -78,7 +83,7 @@ struct Params {
     skin_hue_shift: f32,
     skin_saturation: f32,
     skin_lightness_shift: f32,
-    // master, shadows, midtones, highlights: hue, amount, lightness
+    // master, shadows, midtones, highlights: a, b and lightness offsets
     balance: array<f32, 12>,
     bw_mix: array<f32, 8>,
     // shadow tint hue, amount, highlight tint hue, amount
@@ -122,6 +127,11 @@ struct Layer {
     temperature: f32,
     tint: f32,
     dehaze: f32,
+    whites: f32,
+    blacks: f32,
+    vibrance: f32,
+    bands: array<f32, 24>,
+    balance: array<f32, 12>,
 }
 
 @group(0) @binding(0) var<storage, read> P: Params;
@@ -141,7 +151,14 @@ const RAD: f32 = 0.017453292519943295;
 const DEG: f32 = 57.29577951308232;
 
 fn base_tone() -> Tone {
-    return Tone(P.exposure_ev, P.contrast, vec4<f32>(P.hdr[0], P.hdr[1], P.hdr[2], P.hdr[3]), P.clarity, P.structure, P.saturation, 0.0, 0.0, 0.0, P.dehaze);
+    var bands: array<f32, 24>;
+    for (var i = 0u; i < 8u; i++) {
+        bands[i * 3u] = P.band_hue[i];
+        bands[i * 3u + 1u] = P.band_sat[i] / 100.0;
+        bands[i * 3u + 2u] = P.band_light[i] / 100.0;
+    }
+    return Tone(P.exposure_ev, P.contrast, vec4<f32>(P.hdr[0], P.hdr[1], P.hdr[2], P.hdr[3]), P.clarity, P.structure, P.saturation, 0.0, 0.0, 0.0, P.dehaze,
+        P.vibrance, bands, P.balance);
 }
 
 // ------------------------------------------------------------------ tables
@@ -268,6 +285,15 @@ fn tone(rgb0: vec3<f32>, has_ev: bool, local_ev: f32, detail: vec2<f32>, tp: Ton
 }
 
 fn tone_curve(tp: Tone, v: f32) -> f32 {
+    // The camera's curve: a table without contrast, which warps its input instead.
+    if P.base_curve == 3u {
+        let e = 1.0 + tp.contrast / 100.0 * 0.5;
+        var w = v;
+        if e != 1.0 {
+            w = MID_GREY * pow(max(v / MID_GREY, 0.0), e);
+        }
+        return curve_lookup(w);
+    }
     if P.lut_curve != NO_LUT && tp.contrast == P.contrast {
         return curve_lookup(v);
     }
@@ -357,7 +383,7 @@ fn skin_weight(h: f32, c: f32) -> f32 {
     return by_hue * by_chroma;
 }
 
-fn color(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
+fn color(rgb: vec3<f32>, tp: Tone) -> vec3<f32> {
     if P.color_active == 0u {
         return rgb;
     }
@@ -381,9 +407,9 @@ fn color(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
         var ds = 0.0;
         var dl = 0.0;
         for (var i = 0u; i < 8u; i++) {
-            dh += w[i] * P.band_hue[i];
-            ds += w[i] * P.band_sat[i] / 100.0;
-            dl += w[i] * P.band_light[i] / 100.0;
+            dh += w[i] * tp.bands[i * 3u];
+            ds += w[i] * tp.bands[i * 3u + 1u];
+            dl += w[i] * tp.bands[i * 3u + 2u];
         }
         h += dh * chroma_w;
         c *= max(1.0 + ds * chroma_w, 0.0);
@@ -414,8 +440,8 @@ fn color(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
         }
     }
 
-    let s = 1.0 + saturation / 100.0;
-    let vib = P.vibrance / 100.0;
+    let s = 1.0 + tp.saturation / 100.0;
+    let vib = tp.vibrance / 100.0;
     if s != 1.0 || vib != 0.0 {
         let low = clamp(1.0 - c / 0.2, 0.0, 1.0);
         c *= max(s * (1.0 + vib * low * low), 0.0);
@@ -442,11 +468,9 @@ fn color(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
         let wm = max(1.0 - ws - wh, 0.0);
         let weights = array<f32, 4>(1.0, ws, wm, wh);
         for (var k = 0u; k < 4u; k++) {
-            let hr = P.balance[k * 3u] * RAD;
-            let amt = P.balance[k * 3u + 1u] / 100.0 * 0.08 * weights[k];
-            a += amt * cos(hr);
-            b += amt * sin(hr);
-            l += P.balance[k * 3u + 2u] / 100.0 * 0.15 * weights[k];
+            a += tp.balance[k * 3u] * 0.08 * weights[k];
+            b += tp.balance[k * 3u + 1u] * 0.08 * weights[k];
+            l += tp.balance[k * 3u + 2u] * 0.15 * weights[k];
         }
     }
 
@@ -473,7 +497,9 @@ fn color(rgb: vec3<f32>, saturation: f32) -> vec3<f32> {
 
 // ------------------------------------------------------------------ local planes
 
-fn dark_at(x: u32, y: u32) -> f32 {
+// Haze density at (x, y) of the dark channel's domain for a pixel of color p: the guided
+// filter's coefficients a and b applied to the pixel's guide, limited to the third plane.
+fn dark_at(x: u32, y: u32, p: vec3<f32>) -> f32 {
     let step = f32(P.dark_step);
     let fx = clamp((f32(x) + 0.5) / step - 0.5, 0.0, f32(P.dark_w - 1u));
     let fy = clamp((f32(y) + 0.5) / step - 0.5, 0.0, f32(P.dark_h - 1u));
@@ -483,21 +509,49 @@ fn dark_at(x: u32, y: u32) -> f32 {
     let y1 = min(y0 + 1u, P.dark_h - 1u);
     let tx = fx - f32(x0);
     let ty = fy - f32(y0);
-    let o = P.off_dark;
-    let top = local[o + y0 * P.dark_w + x0] * (1.0 - tx) + local[o + y0 * P.dark_w + x1] * tx;
-    let bot = local[o + y1 * P.dark_w + x0] * (1.0 - tx) + local[o + y1 * P.dark_w + x1] * tx;
-    return top * (1.0 - ty) + bot * ty;
+    let n = P.dark_w * P.dark_h;
+    var ab = vec3<f32>(0.0);
+    for (var k = 0u; k < 3u; k++) {
+        let o = P.off_dark + k * n;
+        let top = local[o + y0 * P.dark_w + x0] * (1.0 - tx) + local[o + y0 * P.dark_w + x1] * tx;
+        let bot = local[o + y1 * P.dark_w + x0] * (1.0 - tx) + local[o + y1 * P.dark_w + x1] * tx;
+        ab[k] = top * (1.0 - ty) + bot * ty;
+    }
+    let al = vec3<f32>(P.airlight[0], P.airlight[1], P.airlight[2]);
+    let guide = max(dot(p, LUMA), 0.0) / max(dot(al, LUMA), 1e-3);
+    return clamp(ab.x * min(guide, ab.z) + ab.y, 0.0, 1.0);
 }
 
+// pipeline.rs haze_toe
+fn haze_toe(v: f32, k: f32) -> f32 {
+    if v >= k {
+        return v;
+    }
+    if k < 1e-6 {
+        return max(v, 0.0);
+    }
+    return k * exp(v / k - 1.0);
+}
+
+const HAZE_T_MIN: f32 = 0.25;
+
+// DarkChannel::apply
 fn haze(p: vec3<f32>, dark: f32, strength0: f32) -> vec3<f32> {
     if P.has_dark == 0u || strength0 == 0.0 {
         return p;
     }
     let strength = strength0 / 100.0;
-    let al = P.airlight;
+    let al = vec3<f32>(P.airlight[0], P.airlight[1], P.airlight[2]);
     if strength > 0.0 {
-        let t = max(1.0 - 0.95 * strength * dark, 0.12);
-        return max((p - al * (1.0 - t)) / t, vec3<f32>(0.0));
+        let t0 = 1.0 - 0.95 * strength * dark;
+        let t = min(0.5 * (t0 + HAZE_T_MIN + sqrt((t0 - HAZE_T_MIN) * (t0 - HAZE_T_MIN) + 0.004)), 1.0);
+        let j = (p - al * (1.0 - t)) / t;
+        let ya = max(dot(al, LUMA), 1e-3);
+        let lift = 1.0 + (pow(t, -0.3) - 1.0) * clamp(1.0 - dot(j, LUMA) / ya, 0.0, 1.0);
+        let y = dot(j, LUMA);
+        let toe = 0.05 * (1.0 - t) * ya;
+        let v = (y + (j - y) * pow(t, 0.4)) * lift;
+        return vec3<f32>(haze_toe(v.x, toe), haze_toe(v.y, toe), haze_toe(v.z, toe));
     }
     let s = -strength * 0.6 * (1.0 - dark * 0.5);
     return p + (al - p) * s;
@@ -557,6 +611,15 @@ fn add_layer(tp: ptr<function, Tone>, l: Layer, w: f32) {
     (*tp).tint += l.tint * w;
     (*tp).brightness += l.brightness * w;
     (*tp).dehaze += l.dehaze * w;
+    (*tp).hdr.z += l.whites / 100.0 * w;
+    (*tp).hdr.w += l.blacks / 100.0 * w;
+    (*tp).vibrance += l.vibrance * w;
+    for (var i = 0u; i < 24u; i++) {
+        (*tp).bands[i] += l.bands[i] * w;
+    }
+    for (var i = 0u; i < 12u; i++) {
+        (*tp).balance[i] += l.balance[i] * w;
+    }
 }
 
 @compute @workgroup_size(16, 16)
@@ -579,12 +642,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     var dark = 0.0;
     if P.has_dark != 0u {
-        dark = dark_at(P.dark_ox + gid.x, P.dark_oy + gid.y);
+        dark = dark_at(P.dark_ox + gid.x, P.dark_oy + gid.y, p);
     }
     let base = base_tone();
     let has_ev = P.has_ev != 0u;
     if P.n_layers == 0u {
-        out[i] = vec4<f32>(encode(color(tone(haze(p, dark, base.dehaze), has_ev, ev, det, base), base.saturation)), 0.0);
+        out[i] = vec4<f32>(encode(color(tone(haze(p, dark, base.dehaze), has_ev, ev, det, base), base)), 0.0);
         return;
     }
     let ox = f32(P.ext_x + gid.x) + 0.5;
@@ -608,7 +671,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         }
         if wgt > 0.0 && (l.has_luma != 0u || l.has_color != 0u) {
             if !have_base {
-                base_disp = color(tone(haze(p, dark, base.dehaze), has_ev, ev, det, base), base.saturation);
+                base_disp = color(tone(haze(p, dark, base.dehaze), has_ev, ev, det, base), base);
                 have_base = true;
             }
             wgt *= range_weight(l, base_disp);
@@ -624,12 +687,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     if !any_layer {
         if !have_base {
-            base_disp = color(tone(haze(p, dark, base.dehaze), has_ev, ev, det, base), base.saturation);
+            base_disp = color(tone(haze(p, dark, base.dehaze), has_ev, ev, det, base), base);
         }
         out[i] = vec4<f32>(encode(base_disp), overlay);
         return;
     }
-    var e = encode(color(tone(haze(p, dark, tp.dehaze), has_ev, ev, det, tp), tp.saturation));
+    var e = encode(color(tone(haze(p, dark, tp.dehaze), has_ev, ev, det, tp), tp));
     if tp.brightness != 0.0 {
         let g = exp2(-tp.brightness / 100.0 * 0.6);
         e = pow(max(e, vec3<f32>(0.0)), vec3<f32>(g));

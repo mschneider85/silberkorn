@@ -31,6 +31,8 @@ pub enum Event {
     /// `version` is the edit version the rendering was made for; `draft` marks a
     /// half-resolution rendering made while a control is being dragged.
     Rendered { generation: u64, version: u64, draft: bool, image: ColorImage, thumb: Option<ColorImage>, histogram: Histogram, before: bool },
+    /// The part `x`, `y` of the preview rendering of `version` (see [`RenderJob::part`]).
+    RenderedPart { generation: u64, version: u64, x: usize, y: usize, image: ColorImage },
     /// Stand-in shown immediately while the raw file loads: the cached preview, or the camera JPEG.
     Quick { generation: u64, image: ColorImage },
     /// A neighbouring image, loaded and rendered ahead of time.
@@ -66,12 +68,19 @@ pub enum Event {
     AiMask { generation: u64, layer: u32, result: Result<sk_ai::MaskImage, String> },
     /// An image of the compare view, rendered with its saved adjustments.
     CompareImage { path: PathBuf, image: ColorImage },
-    /// Exposure and/or white balance of an image matched to the reference (see [`MatchJob`]);
-    /// `None` when that part was not matched.
-    Matched { path: PathBuf, result: Result<(Option<f32>, Option<sk_core::params::WhiteBalance>), String> },
+    /// A reference for "Look angleichen" is measured: its thumbnail, or why it can't be used.
+    LookRef { r: crate::look::LookRef, result: Result<ColorImage, String> },
+    /// How similar the open image is to each reference (`None`: not measured).
+    LookSimilarity { path: PathBuf, refs: Vec<crate::look::LookRef>, values: Vec<Option<f32>> },
+    /// The settings that give an image the look of the references.
+    LookMatched { path: PathBuf, opts: sk_core::look_match::LookOptions, result: Result<crate::look_worker::LookResult, String> },
+    /// The settings the auto adjustment chose for an image (see [`AutoJob`]).
+    AutoAdjusted { path: PathBuf, opts: sk_core::auto::AutoOptions, result: Result<Box<Adjustments>, String> },
     /// Part of an image of the compare view at a higher resolution than its preview. `uv` is the
     /// part (0..1 of the output), `width` the whole output's width at this resolution.
     CompareDetail { path: PathBuf, version: Option<u64>, uv: [f32; 4], width: f32, full_res: bool, image: ColorImage, focus: Option<Arc<Vec<u8>>> },
+    /// A style applied to the current image, for the style grid (see `style_grid`).
+    StyleThumb { key: u64, id: String, image: ColorImage },
     /// Sharpness map of a displayed image for the focus mask.
     /// `version`: edit version of the rendering of the image being edited (`None` for others).
     Focus { path: PathBuf, version: Option<u64>, size: [usize; 2], sharpness: Arc<Vec<u8>> },
@@ -125,6 +134,15 @@ pub struct RenderJob {
     /// zoomed in, where the view draft covers the screen and this only feeds the histogram).
     pub draft: usize,
     pub softproof: Option<Arc<sk_core::softproof::SoftProof>>,
+    /// Only this part (output pixels of the preview's rendering) changed since the last job:
+    /// rendered alone and sent as [`Event::RenderedPart`] (while a brush paints).
+    pub part: Option<Region>,
+}
+
+/// The smallest region containing `a` and `b`.
+fn union(a: Region, b: Region) -> Region {
+    let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+    Region { x, y, w: (a.x + a.w).max(b.x + b.w) - x, h: (a.y + a.h).max(b.y + b.h) - y }
 }
 
 /// Full-resolution rendering for zoomed-in viewing: first the exact visible region (fastest
@@ -189,15 +207,20 @@ pub struct ProofImage {
     pub file_size: usize,
 }
 
-/// Matches exposure and/or white balance of `targets` to the reference image (as saved).
-pub struct MatchJob {
-    pub reference: PathBuf,
-    pub targets: Vec<PathBuf>,
-    pub what: sk_core::auto::MatchWhat,
+/// One-click auto adjustment of images (see `sk_core::auto::auto_adjust`).
+pub struct AutoJob {
+    pub items: Vec<AutoItem>,
+    pub opts: sk_core::auto::AutoOptions,
 }
 
-/// Long edge of the images used for matching (statistics need few pixels).
-const MATCH_EDGE: usize = 512;
+pub struct AutoItem {
+    pub path: PathBuf,
+    /// The open image as it is now (with unsaved changes); other images are loaded.
+    pub open: Option<(Arc<sk_core::raw::RawMeta>, Arc<LinearImage>, Adjustments)>,
+}
+
+/// Long edge of the images loaded for the auto adjustment (the face detector takes 640).
+const AUTO_EDGE: usize = 1024;
 
 pub struct ExportJob {
     pub items: Vec<(PathBuf, Adjustments)>,
@@ -242,6 +265,18 @@ pub struct InpaintJob {
     pub strokes: Vec<sk_core::params::BrushStroke>,
 }
 
+/// The current image with each style applied, small (see `style_grid`); replaces earlier jobs.
+pub struct StyleThumbJob {
+    pub key: u64,
+    pub meta: Arc<RawMeta>,
+    pub source: Arc<LinearImage>,
+    /// Style id and the adjustments it gives the image.
+    pub variants: Vec<(String, Adjustments)>,
+}
+
+/// Long edge of the source the style previews are rendered from.
+const STYLE_THUMB_SOURCE: usize = 360;
+
 pub struct Workers {
     pub events: Receiver<Event>,
     ev_tx: Sender<Event>,
@@ -264,8 +299,10 @@ pub struct Workers {
     compare_tx: Sender<(Vec<PathBuf>, Option<PathBuf>)>,
     detail_tx: Sender<Vec<DetailJob>>,
     focus_tx: Sender<(PathBuf, Arc<ColorImage>, Option<u64>)>,
-    match_tx: Sender<MatchJob>,
+    look_tx: Sender<crate::look_worker::LookRequest>,
+    auto_tx: Sender<AutoJob>,
     inpaint_tx: Sender<InpaintJob>,
+    style_tx: Sender<StyleThumbJob>,
     activity: Activity,
     pub draft_speed: DraftSpeed,
 }
@@ -405,7 +442,12 @@ impl Workers {
                     activity.touch();
                     // A panic (broken file) must still answer, or the viewer waits for ever.
                     let result = crate::guard::catch(|| {
-                        raw::load_preview(&path, PREVIEW_EDGE).map(|(m, p)| (Arc::new(m), Arc::new(p))).map_err(|e| format!("{e:#}"))
+                        let (meta, preview) = raw::load_preview(&path, PREVIEW_EDGE).map_err(|e| format!("{e:#}"))?;
+                        // Fitted here rather than when the image is shown (see `App::install`).
+                        if sk_core::camera_look::wanted(&sidecar::load(&path).adjustments, sk_core::camera_look::for_new()) {
+                            sk_core::camera_look::fit_cached(&meta, &preview);
+                        }
+                        Ok((Arc::new(meta), Arc::new(preview)))
                     })
                     .and_then(|r| r);
                     let _ = ev_tx.send(Event::Loaded { generation, result });
@@ -613,6 +655,9 @@ impl Workers {
                 // Last plain rendering, written to the preview cache once no new job arrives for a while
                 // (not on every slider step).
                 let mut pending: Option<(PathBuf, Option<PathBuf>, Adjustments, ::image::DynamicImage)> = None;
+                // Image of the last whole rendering at full preview resolution: its stages are in
+                // `cache`, which makes rendering parts fast (and exactly like the whole).
+                let mut whole: Option<(u64, *const LinearImage)> = None;
                 loop {
                     let job = if pending.is_some() {
                         match render_rx.recv_timeout(Duration::from_millis(800)) {
@@ -631,7 +676,18 @@ impl Workers {
                             Err(_) => break,
                         }
                     };
-                    let job = render_rx.try_iter().last().unwrap_or(job);
+                    // The newest job; the parts of those skipped are rendered with it.
+                    let mut job = job;
+                    for next in render_rx.try_iter() {
+                        let part = match (job.part, next.part) {
+                            (Some(a), Some(b)) if job.generation == next.generation => Some(union(a, b)),
+                            _ => None,
+                        };
+                        job = RenderJob { part, ..next };
+                    }
+                    if job.part.is_some() && whole != Some((job.generation, Arc::as_ptr(&job.preview))) {
+                        job.part = None;
+                    }
                     activity.touch();
                     let adj = if job.before {
                         let mut a = Adjustments::default();
@@ -642,6 +698,21 @@ impl Workers {
                     };
                     let opts = RenderOptions { clip_warning: job.clip_warning, ignore_crop: job.ignore_crop, mask_overlay: job.mask_overlay, softproof: job.softproof.clone() };
                     let processor = Processor::with_options(&job.meta, &adj, opts);
+                    if let Some(part) = job.part {
+                        // Sharpening and glow carry the change a little beyond what was painted.
+                        let (w, h) = processor.output_size(job.preview.width, job.preview.height);
+                        let m = processor.output_spread(job.preview.width, job.preview.height);
+                        let (x, y) = (part.x.saturating_sub(m), part.y.saturating_sub(m));
+                        let part = Region { x, y, w: (part.x + part.w + m).min(w).saturating_sub(x), h: (part.y + part.h + m).min(h).saturating_sub(y) };
+                        if part.w == 0 || part.h == 0 {
+                            continue;
+                        }
+                        let r = processor.render(&job.preview, Some(part), Some(&cache));
+                        let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
+                        let _ = ev_tx.send(Event::RenderedPart { generation: job.generation, version: job.version, x: part.x, y: part.y, image });
+                        ctx.request_repaint();
+                        continue;
+                    }
                     let draft = job.draft > 1;
                     let r = if draft {
                         let small = match &draft_src {
@@ -661,6 +732,8 @@ impl Workers {
                         let t0 = Instant::now();
                         let r = processor.render(&job.preview, None, Some(&cache));
                         speed.record(r.width * r.height, t0.elapsed());
+                        // (The "before" view has other early stages.)
+                        whole = (!job.before).then_some((job.generation, Arc::as_ptr(&job.preview)));
                         r
                     };
                     let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
@@ -847,6 +920,38 @@ impl Workers {
             });
         }
 
+        let (style_tx, style_rx) = channel::<StyleThumbJob>();
+        {
+            let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
+            crate::guard::spawn("Stilvorschau", move || {
+                let mut next = recv_latest(&style_rx);
+                while let Some(job) = next.take() {
+                    let src = &job.source;
+                    let k = STYLE_THUMB_SOURCE as f32 / src.width.max(src.height).max(1) as f32;
+                    let small = if k < 1.0 {
+                        src.resize_area(((src.width as f32 * k).round() as usize).max(1), ((src.height as f32 * k).round() as usize).max(1))
+                    } else {
+                        (**src).clone()
+                    };
+                    for (id, adj) in job.variants {
+                        // A newer image or edit: these previews are no longer wanted.
+                        if let Some(newer) = style_rx.try_iter().last() {
+                            next = Some(newer);
+                            break;
+                        }
+                        activity.touch();
+                        let r = Processor::new(&job.meta, &adj).render(&small, None, None);
+                        let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
+                        let _ = ev_tx.send(Event::StyleThumb { key: job.key, id, image });
+                        ctx.request_repaint();
+                    }
+                    if next.is_none() {
+                        next = recv_latest(&style_rx);
+                    }
+                }
+            });
+        }
+
         let (detail_tx, detail_rx) = channel::<Vec<DetailJob>>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
@@ -892,27 +997,35 @@ impl Workers {
             });
         }
 
-        let (match_tx, match_rx) = channel::<MatchJob>();
+        let look_tx = crate::look_worker::spawn(ev_tx.clone(), ctx.clone(), activity.clone());
+
+        let (auto_tx, auto_rx) = channel::<AutoJob>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
-            crate::guard::spawn("Angleichen", move || {
-                while let Ok(job) = match_rx.recv() {
-                    activity.touch();
-                    let load = |path: &std::path::Path| {
-                        raw::load_preview(path, MATCH_EDGE).map_err(|e| format!("{}: {e:#}", path.display()))
-                    };
-                    let reference = load(&job.reference).map(|(meta, preview)| {
-                        sk_core::auto::scene_stats(&meta, &sidecar::load(&job.reference).adjustments, &preview)
-                    });
-                    for path in job.targets {
+            crate::guard::spawn("Automatisch", move || {
+                // Loaded on first use, kept for further images.
+                let mut models = sk_ai::auto::AutoModels::default();
+                while let Ok(job) = auto_rx.recv() {
+                    for item in job.items {
                         activity.touch();
-                        let result = reference.clone().and_then(|reference| {
-                            let (meta, preview) = load(&path)?;
-                            let adj = sidecar::load(&path).adjustments;
-                            let out = sk_core::auto::match_to(&reference, &meta, &adj, &preview, job.what);
-                            Ok((job.what.exposure.then_some(out.exposure), job.what.white_balance.then_some(out.white_balance)))
-                        });
-                        let _ = ev_tx.send(Event::Matched { path, result });
+                        let path = item.path;
+                        let result = crate::guard::catch(|| {
+                            let (meta, preview, adj) = match item.open {
+                                Some(open) => open,
+                                None => {
+                                    let (meta, preview) = raw::load_preview(&path, AUTO_EDGE).map_err(|e| format!("{}: {e:#}", path.display()))?;
+                                    (Arc::new(meta), Arc::new(preview), sidecar::load(&path).adjustments)
+                                }
+                            };
+                            // On the camera's look, if the image is to get it (see `camera_look`).
+                            let adj = sk_core::camera_look::apply_if_wanted(&meta, &preview, &adj, sk_core::camera_look::for_new()).unwrap_or(adj);
+                            let guide = sk_core::auto::guide_image(&meta, &adj, &preview, &job.opts);
+                            let focus = models.focus(&guide);
+                            let camera = sk_core::auto::camera_brightness(&meta);
+                            Ok(Box::new(sk_core::auto::auto_adjust(&meta, &adj, &preview, &job.opts, &focus, camera)))
+                        })
+                        .and_then(|r| r);
+                        let _ = ev_tx.send(Event::AutoAdjusted { path, opts: job.opts, result });
                         ctx.request_repaint();
                     }
                 }
@@ -960,6 +1073,15 @@ impl Workers {
                             let _ = ev_tx.send(Event::ExportStep(p));
                             ctx.request_repaint();
                         };
+                        // An image never opened gets the camera's look it would show (see `camera_look`).
+                        let for_new = sk_core::camera_look::for_new();
+                        let adj = match sk_core::camera_look::wanted(&adj, for_new) {
+                            true => raw::load_preview(&path, 1024)
+                                .ok()
+                                .and_then(|(meta, preview)| sk_core::camera_look::apply_if_wanted(&meta, &preview, &adj, for_new))
+                                .unwrap_or(adj),
+                            false => adj,
+                        };
                         // A bug on one image fails its outputs, not the whole export.
                         let results =
                             crate::guard::catch(|| export::export_many_with(&path, &adj, &job.recipes, i as u32 + 1, &job.session, &mut written, &progress));
@@ -998,9 +1120,11 @@ impl Workers {
             proxy_tx,
             proof_tx,
             compare_tx,
+            style_tx,
             detail_tx,
             focus_tx,
-            match_tx,
+            look_tx,
+            auto_tx,
             inpaint_tx,
             activity,
             draft_speed,
@@ -1059,8 +1183,16 @@ impl Workers {
         let _ = self.inpaint_tx.send(job);
     }
 
-    pub fn match_to_reference(&self, job: MatchJob) {
-        let _ = self.match_tx.send(job);
+    pub fn style_thumbs(&self, job: StyleThumbJob) {
+        let _ = self.style_tx.send(job);
+    }
+
+    pub fn look(&self, request: crate::look_worker::LookRequest) {
+        let _ = self.look_tx.send(request);
+    }
+
+    pub fn auto_adjust(&self, job: AutoJob) {
+        let _ = self.auto_tx.send(job);
     }
 
     pub fn load(&self, generation: u64, path: PathBuf) {
@@ -1143,6 +1275,8 @@ fn quick_preview(path: &std::path::Path, session: Option<&std::path::Path>) -> O
 fn prepare(path: &std::path::Path, session: Option<&std::path::Path>) -> Option<Prepared> {
     let adjustments = sidecar::load(path).adjustments;
     let (meta, preview) = raw::load_preview(path, PREVIEW_EDGE).map_err(|e| log::warn!("{}: {e:#}", path.display())).ok()?;
+    // As it will look when opened (see `App::install`).
+    let adjustments = sk_core::camera_look::apply_if_wanted(&meta, &preview, &adjustments, sk_core::camera_look::for_new()).unwrap_or(adjustments);
     let r = Processor::new(&meta, &adjustments).render(&preview, None, None);
     let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
     if !cache::has_preview(path, &adjustments, session)

@@ -95,6 +95,17 @@ pub struct Person {
     pub count: usize,
     /// A face of the person: image and box (normalized x, y, w, h).
     pub sample: Option<(PathBuf, [f32; 4])>,
+    /// Split off by hand (shown even with a single image).
+    pub manual: bool,
+}
+
+/// One face of a person, in an image.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PersonFace {
+    pub id: i64,
+    pub path: PathBuf,
+    /// Normalized x, y, w, h.
+    pub bbox: [f32; 4],
 }
 
 /// A face found by the analysis.
@@ -381,6 +392,12 @@ impl Catalog {
                 conn.execute_batch(&format!("ALTER TABLE images ADD COLUMN {name} {def}"))?;
             }
         }
+        // Persons split off by hand stay in the list with a single image.
+        let person_columns: Vec<String> =
+            conn.prepare("SELECT name FROM pragma_table_info('persons')")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        if !person_columns.iter().any(|c| c == "manual") {
+            conn.execute_batch("ALTER TABLE persons ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")?;
+        }
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
         let catalog = Self { conn, path, base };
         if catalog.base.is_some() {
@@ -653,15 +670,15 @@ impl Catalog {
     /// Recognized people: named ones and those seen in at least `min_count` images.
     pub fn persons(&self, min_count: usize) -> Result<Vec<Person>> {
         let mut stmt = self.conn.prepare(
-            "SELECT p.id, p.name, count(DISTINCT f.image_id),
+            "SELECT p.id, p.name, count(DISTINCT f.image_id), p.manual,
                     (SELECT i.path FROM faces g JOIN images i ON i.id = g.image_id WHERE g.person_id = p.id ORDER BY g.w * g.h DESC LIMIT 1),
                     (SELECT g.x || ',' || g.y || ',' || g.w || ',' || g.h FROM faces g WHERE g.person_id = p.id ORDER BY g.w * g.h DESC LIMIT 1)
              FROM persons p JOIN faces f ON f.person_id = p.id GROUP BY p.id",
         )?;
         let mut out: Vec<Person> = stmt
             .query_map([], |r| {
-                let path: Option<String> = r.get(3)?;
-                let bbox: Option<String> = r.get(4)?;
+                let path: Option<String> = r.get(4)?;
+                let bbox: Option<String> = r.get(5)?;
                 let bbox = bbox.and_then(|b| {
                     let v: Vec<f32> = b.split(',').filter_map(|x| x.parse().ok()).collect();
                     <[f32; 4]>::try_from(v).ok()
@@ -671,10 +688,11 @@ impl Catalog {
                     name: r.get::<_, Option<String>>(1)?.filter(|n| !n.trim().is_empty()),
                     count: r.get::<_, i64>(2)? as usize,
                     sample: path.map(|p| self.resolve(&p)).zip(bbox),
+                    manual: r.get::<_, i64>(3)? != 0,
                 })
             })?
             .collect::<rusqlite::Result<_>>()?;
-        out.retain(|p| p.name.is_some() || p.count >= min_count);
+        out.retain(|p| p.name.is_some() || p.manual || p.count >= min_count);
         out.sort_by(|a, b| b.name.is_some().cmp(&a.name.is_some()).then(b.count.cmp(&a.count)).then(a.id.cmp(&b.id)));
         Ok(out)
     }
@@ -693,6 +711,60 @@ impl Catalog {
         }
         self.conn.execute("UPDATE persons SET name = ?2 WHERE id = ?1", params![id, (!name.is_empty()).then_some(name)])?;
         self.person_images(id)
+    }
+
+    /// Merges the person `from` into `into` (one person recognized as two): all faces go to
+    /// `into`, which keeps its name or, without one, takes that of `from`. Returns the images of
+    /// the merged person.
+    pub fn merge_persons(&self, into: i64, from: i64) -> Result<Vec<PathBuf>> {
+        if into != from {
+            let tx = self.conn.unchecked_transaction()?;
+            if self.person_name(into).is_none()
+                && let Some(name) = self.person_name(from)
+            {
+                self.conn.execute("UPDATE persons SET name = ?2 WHERE id = ?1", params![into, name])?;
+            }
+            self.conn.execute("UPDATE faces SET person_id = ?1 WHERE person_id = ?2", params![into, from])?;
+            self.conn.execute("DELETE FROM persons WHERE id = ?1", [from])?;
+            tx.commit()?;
+        }
+        self.person_images(into)
+    }
+
+    /// All faces of a person, by image.
+    pub fn person_faces(&self, person: i64) -> Result<Vec<PersonFace>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT f.id, i.path, f.x, f.y, f.w, f.h FROM faces f JOIN images i ON i.id = f.image_id WHERE f.person_id = ?1 ORDER BY i.path, f.x",
+        )?;
+        let rows = stmt.query_map([person], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, [r.get::<_, f64>(2)?, r.get::<_, f64>(3)?, r.get::<_, f64>(4)?, r.get::<_, f64>(5)?]))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, path, b) = row?;
+            out.push(PersonFace { id, path: self.resolve(&path), bbox: b.map(|v| v as f32) });
+        }
+        Ok(out)
+    }
+
+    /// Gives faces to another person, or (`to` = `None`) to a new one: when one person turned
+    /// out to be two, or a face was taken for the wrong person. Persons left without faces are
+    /// gone. Returns the person the faces now belong to.
+    pub fn move_faces(&self, faces: &[i64], to: Option<i64>) -> Result<i64> {
+        let tx = self.conn.unchecked_transaction()?;
+        let to = match to {
+            Some(id) => id,
+            None => {
+                self.conn.execute("INSERT INTO persons(name, manual) VALUES (NULL, 1)", [])?;
+                self.conn.last_insert_rowid()
+            }
+        };
+        for f in faces {
+            self.conn.execute("UPDATE faces SET person_id = ?1 WHERE id = ?2", params![to, f])?;
+        }
+        self.conn.execute("DELETE FROM persons WHERE id NOT IN (SELECT DISTINCT person_id FROM faces WHERE person_id IS NOT NULL)", [])?;
+        tx.commit()?;
+        Ok(to)
     }
 
     pub fn person_images(&self, id: i64) -> Result<Vec<PathBuf>> {
@@ -1243,6 +1315,35 @@ mod tests {
         let ben = c.persons(1).unwrap().into_iter().find(|p| p.id != anna).unwrap().id;
         c.name_person(ben, "anna").unwrap();
         assert_eq!(c.persons(1).unwrap().len(), 1);
+        // (Anna lives on as the person that was named last.)
+        let anna = ben;
+        // Merged by hand: Carl (unnamed, recognized apart) into Anna, who keeps her name.
+        c.store_analysis(Path::new("/f/c.ARW"), 0.1, &[face(unit(6), 0.0)], 0.42).unwrap();
+        let carl = c.persons(1).unwrap().into_iter().find(|p| p.id != anna).unwrap().id;
+        assert_eq!(c.merge_persons(anna, carl).unwrap().len(), 3);
+        let persons = c.persons(1).unwrap();
+        assert_eq!(persons.len(), 1);
+        assert_eq!((persons[0].id, persons[0].name.as_deref(), persons[0].count), (anna, Some("anna"), 3));
+        // Into an unnamed one: it takes the name.
+        c.store_analysis(Path::new("/f/c.ARW"), 0.1, &[face(unit(6), 0.0)], 0.42).unwrap();
+        let carl = c.persons(1).unwrap().into_iter().find(|p| p.id != anna).unwrap().id;
+        c.merge_persons(carl, anna).unwrap();
+        assert_eq!(c.person_name(carl).as_deref(), Some("anna"));
+        assert_eq!(c.person_name(anna), None);
+        // Split off by hand: Anna's face in c becomes a person of its own, shown with one image.
+        let faces = c.person_faces(carl).unwrap();
+        assert_eq!(faces.iter().map(|f| f.path.file_name().unwrap().to_str().unwrap()).collect::<Vec<_>>(), ["a.ARW", "b.ARW", "b.ARW", "c.ARW"]);
+        let in_c: Vec<i64> = faces.iter().filter(|f| f.path.ends_with("c.ARW")).map(|f| f.id).collect();
+        let split = c.move_faces(&in_c, None).unwrap();
+        assert_ne!(split, carl);
+        let persons = c.persons(2).unwrap();
+        assert_eq!(persons.len(), 2, "{persons:?}");
+        assert!(persons.iter().any(|p| p.id == split && p.manual && p.count == 1));
+        assert_eq!(c.person_faces(carl).unwrap().len(), 3);
+        // Given back: the split person is gone.
+        c.move_faces(&in_c, Some(carl)).unwrap();
+        assert_eq!(c.persons(1).unwrap().len(), 1);
+        c.store_analysis(Path::new("/f/c.ARW"), 0.1, &[], 0.42).unwrap();
         // Analysing again replaces the faces; persons without faces disappear.
         c.store_analysis(Path::new("/f/b.ARW"), 0.45, &[], 0.42).unwrap();
         c.store_analysis(Path::new("/f/a.ARW"), 0.5, &[], 0.42).unwrap();

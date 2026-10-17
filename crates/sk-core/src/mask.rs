@@ -19,9 +19,25 @@ pub struct MaskBitmap {
     pub w: usize,
     pub h: usize,
     pub data: Vec<f32>,
+    /// Identifies this content (a new number for every change), so that a copy elsewhere
+    /// (on the graphics card) can tell whether it is current.
+    pub version: u64,
+    /// The bitmap of version `.0` with only the rows `.1` changed: a copy of that version
+    /// needs only those rows (while a stroke is painted).
+    pub changed: Option<(u64, std::ops::Range<usize>)>,
+}
+
+/// A new [`MaskBitmap::version`].
+fn next_version() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl MaskBitmap {
+    pub fn new(w: usize, h: usize, data: Vec<f32>) -> Self {
+        Self { w, h, data, version: next_version(), changed: None }
+    }
+
     /// Bilinear sample at normalized source coordinates.
     #[inline]
     pub fn sample(&self, u: f32, v: f32) -> f32 {
@@ -96,7 +112,7 @@ pub fn rasterize(mask: &Mask, aspect: f32, guide: Option<&crate::brush::AutoGuid
         });
     }
 
-    let mut bm = MaskBitmap { w, h, data };
+    let mut bm = MaskBitmap::new(w, h, data);
     for stroke in &mask.strokes {
         paint_stroke_into(&mut bm, stroke, aspect, guide);
     }
@@ -193,31 +209,110 @@ fn cache_lookup(key: u64) -> Option<Arc<MaskBitmap>> {
 
 /// Rasterized mask from a small LRU cache (rasterization only runs when the mask changes).
 /// While a stroke is being painted only that stroke is drawn again: the mask without it stays
-/// in the cache. `src` (the oriented camera image) is needed for automatic masking.
+/// in the cache, and the stroke itself only gets the dabs of its new points (see
+/// [`crate::brush::LiveStroke`]). `src` (the oriented camera image) is needed for automatic
+/// masking.
 pub fn cached_bitmap(mask: &Mask, aspect: f32, src: Option<&LinearImage>) -> Arc<MaskBitmap> {
     let key = mask_key(mask, aspect, src);
     if let Some(bm) = cache_lookup(key) {
         return bm;
     }
-    let guide = mask.strokes.iter().any(|s| s.auto_mask).then(|| src.map(|s| crate::brush::AutoGuide::from_image(s, 1024))).flatten();
-    let prefix = mask.strokes.split_last().and_then(|(last, rest)| {
+    let guide = mask.strokes.iter().any(|s| s.auto_mask).then(|| src.map(cached_guide)).flatten();
+    let guide = guide.as_deref();
+    let prefix = mask.strokes.split_last().map(|(last, rest)| {
         let without = Mask { strokes: rest.to_vec(), ..mask.clone() };
-        cache_lookup(mask_key(&without, aspect, src)).map(|b| (b, last))
+        let prefix_key = mask_key(&without, aspect, src);
+        // Not in the cache (the first stroke of a layer, or a mask just loaded): made and kept,
+        // so that the next points of the stroke find it.
+        let base = cache_lookup(prefix_key).unwrap_or_else(|| {
+            let bm = Arc::new(rasterize(&without, aspect, guide));
+            cache_insert(prefix_key, bm.clone());
+            bm
+        });
+        (base, last, prefix_key)
     });
     let bm = match prefix {
-        Some((base, last)) => {
-            let mut b = (*base).clone();
-            paint_stroke_into(&mut b, last, aspect, guide.as_ref());
+        Some((base, last, prefix_key)) if last.build_up => paint_live(base, last, prefix_key, key, aspect, guide),
+        Some((base, last, _)) => {
+            let mut b = MaskBitmap::new(base.w, base.h, base.data.clone());
+            paint_stroke_into(&mut b, last, aspect, guide);
             Arc::new(b)
         }
-        None => Arc::new(rasterize(mask, aspect, guide.as_ref())),
+        None => Arc::new(rasterize(mask, aspect, guide)),
     };
+    cache_insert(key, bm.clone());
+    bm
+}
+
+fn cache_insert(key: u64, bm: Arc<MaskBitmap>) {
     let mut cache = MASK_CACHE.lock().unwrap();
-    cache.push((key, bm.clone()));
+    cache.push((key, bm));
     if cache.len() > 24 {
         cache.remove(0);
     }
-    bm
+}
+
+/// The stroke being painted: the mask it is painted on (by its key), the last result and
+/// the stroke's state.
+struct Live {
+    prefix_key: u64,
+    out: Arc<MaskBitmap>,
+    out_key: u64,
+    stroke: crate::brush::LiveStroke,
+}
+
+static LIVE: LazyLock<Mutex<Option<Live>>> = LazyLock::new(|| Mutex::new(None));
+
+/// `base` with the stroke `last` on top: continuing the stroke painted last time if `last`
+/// extends it, else starting anew.
+fn paint_live(
+    base: Arc<MaskBitmap>,
+    last: &crate::params::BrushStroke,
+    prefix_key: u64,
+    key: u64,
+    aspect: f32,
+    guide: Option<&crate::brush::AutoGuide>,
+) -> Arc<MaskBitmap> {
+    let mut live = LIVE.lock().unwrap();
+    let (w, h) = (base.w, base.h);
+    let continued = live.as_ref().is_some_and(|l| l.prefix_key == prefix_key && l.stroke.continues(last, w, h, aspect));
+    if continued {
+        // The stroke's previous state is not needed any more; dropping it keeps the cache from
+        // filling with the in-between states of one stroke.
+        let old = live.as_ref().unwrap().out_key;
+        MASK_CACHE.lock().unwrap().retain(|(k, _)| *k != old);
+    } else {
+        *live = Some(Live { prefix_key, out: base.clone(), out_key: key, stroke: crate::brush::LiveStroke::new(w, h, aspect) });
+    }
+    let l = live.as_mut().unwrap();
+    l.out_key = key;
+    // Usually nothing else holds the previous state any more: then it is changed in place
+    // instead of copying the whole mask.
+    let mut out = std::mem::replace(&mut l.out, base.clone());
+    let bm = Arc::make_mut(&mut out);
+    let rows = l.stroke.update(&mut bm.data, &base.data, last, guide);
+    // A new stroke starts from `base`; the rows are what changed against the bitmap copied.
+    bm.changed = Some((bm.version, rows));
+    bm.version = next_version();
+    l.out = out.clone();
+    out
+}
+
+type GuideCache = Mutex<Option<(u64, Arc<crate::brush::AutoGuide>)>>;
+
+/// Automatic masking's view of the image, made once per image (not on every update of a stroke).
+fn cached_guide(src: &LinearImage) -> Arc<crate::brush::AutoGuide> {
+    static GUIDE: LazyLock<GuideCache> = LazyLock::new(|| Mutex::new(None));
+    let key = image_fingerprint(src);
+    let mut g = GUIDE.lock().unwrap();
+    if let Some((k, guide)) = g.as_ref()
+        && *k == key
+    {
+        return guide.clone();
+    }
+    let guide = Arc::new(crate::brush::AutoGuide::from_image(src, 1024));
+    *g = Some((key, guide.clone()));
+    guide
 }
 
 // ------------------------------------------------------------------ retouching
@@ -752,6 +847,34 @@ mod tests {
         let b = rasterize(&Mask { radial: vec![g], ..Default::default() }, 1.0, None);
         assert!(b.sample(0.5, 0.72) > 0.9, "{}", b.sample(0.5, 0.72));
         assert!(b.sample(0.72, 0.5) < 0.05, "{}", b.sample(0.72, 0.5));
+    }
+
+    #[test]
+    fn stroke_painted_point_by_point_equals_painting_it_at_once() {
+        let aspect = 1.5;
+        let st = |pts: Vec<[f32; 2]>, erase: bool, opacity: f32| crate::params::BrushStroke {
+            points: pts,
+            radius: 0.04,
+            hardness: 0.2,
+            flow: 0.6,
+            erase,
+            opacity,
+            auto_mask: false,
+            build_up: true,
+        };
+        let path = |i: usize| [0.15 + i as f32 * 0.01, 0.45 + 0.15 * (i as f32 * 0.15).sin()];
+        let mut m = Mask { strokes: vec![st(vec![[0.2, 0.3], [0.7, 0.6]], false, 1.0)], ..Default::default() };
+        let _ = cached_bitmap(&m, aspect, None);
+        for (erase, opacity) in [(false, 0.8), (true, 1.0)] {
+            m.strokes.push(st(vec![path(0)], erase, opacity));
+            for i in 1..60 {
+                let live = cached_bitmap(&m, aspect, None);
+                let whole = rasterize(&m, aspect, None);
+                let diff = live.data.iter().zip(&whole.data).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+                assert!(diff < 1e-4, "Punkt {i}, löschen {erase}: Abweichung {diff}");
+                m.strokes.last_mut().unwrap().points.push(path(i));
+            }
+        }
     }
 
     #[test]

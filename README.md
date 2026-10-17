@@ -32,6 +32,42 @@ Build dauert aber etwa eine Viertelstunde statt gut einer Minute. Zusätzlich `s
 entfernt die Funktionsnamen und spart weitere 10–25 MB; dann fehlen die Namen aber in den Backtraces
 des Absturzprotokolls.
 
+### Releases und Updates
+
+Die Versionsnummer steht nur in `Cargo.toml` unter `[workspace.package]`. Ein neues Release:
+
+```bash
+# Version in Cargo.toml erhöhen, z. B. auf 0.2.0, dann:
+cargo check -p sk-app        # übernimmt die Nummer in Cargo.lock
+git commit -am "Version 0.2.0"
+git tag v0.2.0
+git push origin main v0.2.0
+```
+
+Der Tag startet `.github/workflows/release.yml`: GitHub Actions baut auf Windows mit `--profile dist`,
+erzeugt mit Inno Setup den Installer (`installer/silberkorn.iss`) und veröffentlicht
+`silberkorn-setup-x64.exe` und die einzelne `silberkorn-windows-x64.exe`, jeweils mit SHA-256-Datei, als
+Release. Die Notizen entstehen aus den Commits seit dem letzten Tag (auf der Release-Seite nachträglich
+bearbeitbar). Passt der Tag nicht zur Version in `Cargo.toml`, bricht der Workflow ab.
+
+Der Installer installiert nur für den angemeldeten Benutzer nach `%LOCALAPPDATA%\Programs\Silberkorn`
+(Startmenü-Eintrag, Deinstallation über die Windows-Einstellungen) und braucht deshalb nie
+Administratorrechte. Beim Deinstallieren fragt er, ob auch Einstellungen, Stile, Katalog, KI-Modelle
+und Vorschauen gelöscht werden sollen (Standard: behalten). Fotos und Sidecars bleiben immer erhalten.
+
+Die App fragt beim Start höchstens einmal am Tag `api.github.com` nach dem neuesten Release
+(nicht in Debug-Builds; abschaltbar unter Hilfe → „Nach Updates suchen …“). Ist eines neuer, erscheint
+unten rechts „Update x.y.z“. Unter Windows lädt „Jetzt aktualisieren“ den Installer und prüft die
+Prüfsumme; „Jetzt neu starten“ schließt die App, der Installer läuft still durch (nur ein
+Fortschrittsfenster) und startet die neue Version. Wer nicht neu startet, bekommt das Update beim
+Beenden. Auch eine einzeln gestartete `.exe` wird so zur installierten Version. Zum Testen:
+`SILBERKORN_UPDATE_REPO=<owner/repo>` fragt ein anderes Repository, `SILBERKORN_DIALOG=update`
+öffnet den Dialog beim Start.
+
+Die Dateien sind nicht signiert: Beim ersten Ausführen des heruntergeladenen Installers warnt Windows
+SmartScreen („Unbekannter Herausgeber“ → „Weitere Informationen“ → „Trotzdem ausführen“). Updates aus der
+App heraus sind davon nicht betroffen.
+
 Kommandozeilen-Entwicklung (ohne GUI):
 
 ```bash
@@ -46,6 +82,10 @@ SK_ADJ='{"exposure":0.5,"shadows":40}' cargo run --release -p sk-core --example 
 | `sk-ai`   | Neuronale Netze (tract/ONNX Runtime): Masken aus Bildinhalt, Tiefenkarte, Entrauschen, Entfernen, Vergrößern, Gesichter |
 | `sk-app`  | egui/wgpu-Oberfläche, Hintergrund-Worker |
 
+Bereiche für Spezialfunktionen starten zugeklappt und bleiben offen, sobald man sie einmal öffnet:
+Gesichter & Sichtung, Hauttöne, Schwarzweiß, Neu ausleuchten, Objektivunschärfe,
+Atmosphäre, Leuchten, Softproof, Wasserzeichen, Druckvorschau.
+
 Pipeline (Arbeitsfarbraum: lineares Rec.2020):
 
 1. Geometrie: Zuschnitt, Geraderichten, Spiegeln, Drehen, Perspektive, Objektivkorrektur
@@ -56,7 +96,7 @@ Pipeline (Arbeitsfarbraum: lineares Rec.2020):
 4. Belichtung, lokales HDR, Klarheit/Struktur, Kontrast, Basiskurve
 5. Farbe in Oklab: Farbeditor (8 Farbbereiche und bis zu 8 eigene), Farbbalance, Sättigung/Dynamik, Schwarzweiß mit Tonung
 6. Helligkeit, Tonwerte, Kurven (RGB, Rot, Grün, Blau, danach die Luma-Kurve: nur die Helligkeit folgt ihr, die Farben werden mitskaliert, Farbton und Sättigung bleiben)
-7. Schärfen, Vignette, Körnung
+7. Schärfen, Leuchten, Vignette, Körnung
 8. Ausgabefarbraum (sRGB, Adobe RGB, Display P3, ProPhoto) mit eingebettetem ICC-Profil
 
 Die frühen Stufen werden zwischengespeichert, sodass Ton- und Farbregler flüssig bleiben. Beim
@@ -93,6 +133,24 @@ misst die Pipeline auf Prozessor und Grafikkarte.
 Lokale Anpassungen (Tab „Ebenen“) wirken als Deltas auf die Hintergrund-Einstellungen und werden pro
 Pixel mit Maske × Deckkraft gemischt; überlappende Ebenen addieren sich. Masken bestehen aus
 Pinselstrichen, linearen und radialen Verläufen, „Füllen“ und „Invertieren“.
+
+**Ebenenmodus:** Ist eine Ebene gewählt, ändern die Regler in Belichtung, Farbe und Details diese Ebene
+statt des ganzen Bildes: Belichtung, Kontrast, Helligkeit, Lichter, Tiefen, Weiß, Schwarz, Temperatur und
+Tönung (relativ zum Hintergrund), Sättigung, Dynamik, die Bänder des Farbeditors, die Farbbalance,
+Klarheit, Struktur und Dunst entfernen. Was nur aufs ganze Bild wirkt, ist im Ebenenmodus deaktiviert:
+die Werkzeuge Tonwerte, Kurven, Schärfen, Rauschen usw. (zugeklappt, „nur ganzes Bild“), die Tabs
+Objektiv, Effekte, Retusche und Stile sowie Zuschneiden, Drehen, Weißabgleich-Pipette, Automatisch
+anpassen und Einfügen. Ein blauer Punkt in der Tab-Leiste markiert die Tabs, die auf die Ebene wirken.
+Woran man gerade arbeitet, zeigt:
+- eine Leiste oben in Belichtung, Farbe und Details: „Hintergrund“ oder blau „Ebene „…““, mit
+  Auswahlmenü, Maskenanzeige und ✕ zurück zum Hintergrund; „Neue Ebene“ im Menü führt gleich zur
+  Maske im Tab „Ebenen“, denn ohne Maske wirkt die Ebene noch nicht; fährt man mit der Maus
+  darüber, wird die Maske eingeblendet,
+- ein blauer Strich an den Werkzeugen und ein Schild „Ebene „…““ oben im Bild.
+
+Den Ebenenmodus verlässt man mit ✕ in der Leiste, „Hintergrund“ in der Ebenenliste oder Alt+↓.
+Im Tab „Ebenen“ fasst „Anpassungen“ zusammen, was die Ebene ändert; ein Klick springt zum Werkzeug.
+Alt+↑ / Alt+↓ wählen die Ebene darüber bzw. darunter (unter der untersten liegt der Hintergrund).
 
 **Verläufe** lassen sich nachträglich ändern. Mit gewähltem Werkzeug (L oder R) erscheinen
 drei Linien bzw. Ellipsen: volle Wirkung, Mitte (50 %) und Ende des Übergangs.
@@ -155,6 +213,11 @@ KI-Vergrößern startet nach dem Download). Modellnamen und Lizenzen stehen nur 
 ohne Internet holen. Jede Datei wird gegen Größe und SHA-256 geprüft (Hugging-Face-Links auf einen festen Stand
 festgelegt); ein abgebrochener Download wird beim nächsten Versuch fortgesetzt.
 
+**Kennzeichnung:** KI-Funktionen tragen ein gelbes Funken-Symbol hinter ihrem Namen, in den
+Werkzeugbereichen (Objektivunschärfe, Neu ausleuchten, Atmosphäre, Entfernen, Gesichter & Sichtung),
+an Werkzeugen und Knöpfen (Objekt, Motiv, Himmel, Tiefe, KI-Entrauschen, KI-Vergrößern), in den Menüs
+und in der Befehlspalette.
+
 **KI-Beschleunigung** (Bearbeiten → „Grafikkarte und KI-Modelle …“, Abschnitt „KI-Berechnung“, Windows): Die Netze rechnen dann über
 ONNX Runtime mit DirectML auf der Grafikkarte (jede DirectX-12-Karte). ONNX Runtime wird nicht
 gelinkt, sondern zur Laufzeit geladen: Auf Wunsch lädt Silberkorn `onnxruntime.dll` (1.24.4) und
@@ -191,7 +254,7 @@ erscheint zusätzlich oben im Bild.
   verkleinert berechnet. Das Ergebnis ist ein kleiner Flicken mit weicher Kante im Sidecar (Feld
   `removals`): Er wird vor Reparieren/Klonen eingesetzt, bleibt am Bildinhalt wie die Masken und
   ist ein Rückgängig-Schritt. „Letzten zurücknehmen“ und „Alle“ stellen das Original wieder her.
-- **Objektivunschärfe** (Tab „Details“): zeichnet Vorder- und
+- **Objektivunschärfe** (Tab „Effekte“): zeichnet Vorder- und
   Hintergrund weich wie eine offene Blende. Wie nah jede Stelle ist, schätzt Depth Anything V2
   Small (Lihe Yang et al.; das kleine Modell steht unter Apache-2.0, die größeren nicht; 99 MB,
   ONNX von onnx-community) einmal je Bild auf der Vorschau (etwa 7 s auf dem Prozessor). Die
@@ -213,6 +276,16 @@ erscheint zusätzlich oben im Bild.
 - **Tiefe auswählen** (Tab „Ebenen“, Maske → Automatisch auswählen): eine Maske aus derselben
   Tiefenkarte, anfangs das nächste Fünftel des Bildes; **Nah**, **Fern** und **Weichheit** stellen
   den Bereich danach ein (gespeichert mit der Maske, rückgängig zu machen).
+- **Neu ausleuchten** (Tab „Belichtung“): **Belichtung** und **Wärme** für
+  Vorder- und Hintergrund getrennt, etwa um ein Motiv im Gegenlicht aufzuhellen. **Grenze** legt fest,
+  wo der Vordergrund aufhört (0 fern … 1 nah), **Übergang**, wie weich er in den Hintergrund übergeht.
+- **Atmosphäre** (Tab „Effekte“): Dunst, der mit der Entfernung dichter
+  wird. **Reichweite** bestimmt, wie weit nach vorn er reicht, **Helligkeit** und **Wärme** färben ihn.
+
+  Beide nutzen dieselbe Tiefenkarte wie die Objektivunschärfe und werden intern zu Ebenen mit
+  Tiefenmasken (Belichtung/Wärme bzw. negatives „Dunst entfernen“), rechnen also auf Grafikkarte und
+  Prozessor gleich und gelten für Vorschau, Thumbnails und Export. Bis die Tiefenkarte da ist, wirken
+  sie nicht; der Export berechnet sie bei Bedarf.
 
 ### Gesichter und Sichtung
 
@@ -231,7 +304,16 @@ im Katalog bzw. in der Session:
   auch als Filteralbum speichern.
 - **Personen:** SFace (OpenCV Zoo, Apache-2.0) berechnet für jedes Gesicht einen Merkmalsvektor;
   ähnliche Gesichter werden derselben Person zugeordnet. Die Liste zeigt benannte Personen und
-  solche auf mindestens zwei Bildern; ein Klick zeigt ihre Bilder, ein Doppelklick benennt sie.
+  solche auf mindestens zwei Bildern, jede als Kachel mit ihrem Gesicht (dem größten, das von ihr
+  gefunden wurde), Name und Bildanzahl. Ein Klick zeigt ihre Bilder, ein zweiter wieder alle, ein
+  Doppelklick benennt sie. Wird dieselbe Person doppelt erkannt, eine Kachel auf die andere ziehen
+  (oder Rechtsklick → „Zusammenführen mit“). Nach einer Rückfrage gehören alle Gesichter zur
+  Zielperson; sie behält ihren Namen oder übernimmt den der anderen, und das Keyword folgt.
+  Umgekehrt zeigt eine gewählte Person darunter alle ihre Gesichter einzeln. Gehören welche zu
+  jemand anderem: anklicken (Strg+Klick für mehrere) und auf die richtige Person ziehen, oder
+  „Als neue Person“ abtrennen (die dann gleich benannt wird und auch mit einem Bild in der Liste
+  bleibt). Bilder, die die Person nicht mehr zeigen, verlieren ihren Namen als Keyword. Wird ein
+  Bild neu analysiert, ordnet die Erkennung seine Gesichter wieder selbst zu.
   Der Name wird als Keyword der Bilder gesetzt (auch im XMP, wenn aktiviert); eine Person, die
   bereits so heißt, wird zusammengeführt.
 - **Stapel → „Schärfstes Bild nach oben“** macht in jedem ausgewählten Stapel das schärfste Bild
@@ -272,10 +354,34 @@ bleiben unberührt. Die Bereiche rechnen auf Grafikkarte und Prozessor gleich.
   nebeneinander vergleichen“.
 - **Referenzbild** (Umschalt+Enter oder Rechtsklick in der Vergleichsansicht): Es bleibt links neben
   dem aktuellen Bild stehen, auch beim Durchblättern.
-- **An Referenz angleichen** (Menü „Entwickeln“): Belichtung und/oder Weißabgleich der Auswahl werden an das
-  Referenzbild angepasst. Die Belichtung bringt die mittlere Helligkeit auf die der Referenz, der
-  Weißabgleich übernimmt deren Abweichung von einer neutralen Szene. Eine bewusst warme Referenz
-  macht die anderen Bilder also gleich warm, auch wenn sie bei anderem Licht entstanden sind.
+- **Look angleichen** (Tab „Farbe“ oder Menü „Entwickeln“): Die Auswahl bekommt den Look einer oder
+  mehrerer Referenzen. Referenzen sind Bilddateien (JPEG, PNG, TIFF, WebP, etwa ein Filmstill; auch per
+  Ziehen und Ablegen) oder Bilder der Bibliothek, so wie sie bearbeitet sind. Die Liste zeigt jede
+  Referenz mit Vorschau und ihrer Ähnlichkeit zum aktuellen Bild. Verglichen wird, wie die Bilder
+  aussehen, über Statistiken, die keine gleichen Motive brauchen:
+  - Belichtung: mittlere Helligkeit.
+  - Weißabgleich: Farbstich der fast neutralen Töne.
+  - Tonwerte: Schwarz- und Weißpunkt, Helligkeit und Kontrast als Luma-Kurve.
+  - Farben: Sättigung und, pro Band des Farbeditors, Farbton, Sättigung und Helligkeit.
+  - Farbstimmung: Farbbalance in Schatten, Mitten und Lichtern (Split-Toning).
+
+  Der Himmel zählt dabei nicht mit, er sagt mehr über das Wetter als über den Look. Das Hauptmotiv
+  zählt dreifach, wenn das Motivmodell geladen ist.
+
+  Die **Ähnlichkeit** vergleicht Bildaufbau (ein grobes Helligkeitsraster nach Rang, unabhängig von
+  Belichtung und Kurven, tolerant gegen etwas anderen Ausschnitt und Zoom), Helligkeitsverteilung, Farben (mit herausgerechnetem Farbstich) und
+  Himmelsanteil. Sie wirkt zweifach: Mehrere Referenzen werden nach Ähnlichkeit gewichtet. Und ein ähnliches Bild, etwa aus derselben Serie, wird vollständig
+  angeglichen. Bei einem anderen Motiv werden Belichtung, Tonwerte und Farben nur teilweise
+  übernommen, damit z. B. ein Foto mit viel hellem Himmel nicht jedes Bild ausfrisst.
+
+  Das Ergebnis sind normale Regler, die sich weiter bearbeiten lassen. Gemessen wird am klein
+  gerenderten Bild, ein paar Runden je Stufe. Eine Schwarzweiß-Referenz (auch getönt, etwa Sepia)
+  nimmt die Farbe ganz heraus, und die Farbbalance übernimmt die Tönung. Was angeglichen wird, lässt
+  sich mit Schaltern wählen. Nach dem Angleichen lässt sich die Stärke (0–100 %) noch ändern. Darunter
+  steht, was sich geändert hat und welche Referenz wie viel beigetragen hat.
+
+  Ausprobieren ohne App: `cargo run --release -p sk-ai --example look -- aus.png bild.ARW referenz.jpg …`
+  (mit `SK_LOOK_DEBUG=1` werden die Teile der Ähnlichkeit ausgegeben).
 - **Fokusmaske** (K oder Ansicht → „Fokusmaske“): Scharfe Bereiche werden grün markiert, auch in der
   Vergleichsansicht, um schnell das schärfste Bild einer Serie zu finden. Gemessen wird die Energie der
   feinsten Details, die bei Unschärfe zuerst verschwinden; hineingezoomt in voller Auflösung. Die Empfindlichkeit lässt sich im Menü
@@ -284,17 +390,22 @@ bleiben unberührt. Die Bereiche rechnen auf Grafikkarte und Prozessor gleich.
   Farbton, Sättigung und Helligkeit der ähnlichen Farben zu diesem Ton hin (Flecken, Rötungen),
   „Hautton verändern“ verschiebt den ganzen Bereich.
 
+**Leuchten** (Tab „Effekte“, Orton-Effekt): eine weichgezeichnete Kopie des Bildes wird, vor allem aus
+ihren hellen Teilen, per „Negativ multiplizieren“ darübergelegt; Lichter strahlen in die Umgebung.
+**Größe** bestimmt die Weichzeichnung (0,3 bis 3,3 % der langen Kante); gerechnet wird nach dem
+Schärfen auf Grafikkarte und Prozessor gleich, in Kacheln mit passendem Rand.
+
 Weitere Funktionen: **Dunst entfernen** (Dark-Channel-Prior, global und pro Ebene), **Schnellbearbeitung**
 (Taste halten + Mausrad), **Vorher/Nachher** geteilt mit verschiebbarem Trenner (U) oder nebeneinander
 mit gemeinsamem Zoom und Ausschnitt (Umschalt+U), und **mehrere Ausgaberezepte**, die in einem Durchgang
 verarbeitet werden (das RAW wird pro Bild nur einmal entwickelt).
 
-### HDR und Panorama zusammenfügen
+### HDR, Panorama und Focus Stacking
 
 **Entwickeln → Zusammenfügen** (mindestens zwei Bilder ausgewählt) erzeugt ein neues
-**lineares DNG** neben den Originalen (`…-HDR.dng`, `…-Pano.dng`): demosaicte Kameradaten als
+**lineares DNG** neben den Originalen (`…-HDR.dng`, `…-Pano.dng`, `…-Fokus.dng`): demosaicte Kameradaten als
 16-Bit-Gleitkomma, verlustfrei komprimiert. Weißabgleich, Farbe und Tonwerte bleiben daher voll
-bearbeitbar, und auch Lightroom und Capture One öffnen die Datei. Beides läuft im Hintergrund
+bearbeitbar, und auch Lightroom und Capture One öffnen die Datei. Alles läuft im Hintergrund
 (Fortschritt in der Statusleiste); das Ergebnis wird danach ausgewählt.
 
 - **HDR:** Die Belichtungsunterschiede werden aus den Bilddaten gemessen (EXIF als Rückfall),
@@ -308,8 +419,73 @@ bearbeitbar, und auch Lightroom und Capture One öffnen die Datei. Beides läuft
   **zylindrisch** oder **perspektivisch**; Helligkeitsausgleich, weiche Übergänge im linearen Licht,
   auf Wunsch automatischer Beschnitt auf das größte Rechteck ohne leere Ränder. Die
   Objektivkorrektur der Einzelbilder (aus ihrem Sidecar) wird vorher angewendet.
+- **Focus Stacking:** Eine Reihe mit wandernder Schärfeebene wird zu einem Bild, das überall scharf
+  ist. Referenz ist das mittlere Bild; die anderen werden daran ausgerichtet (Harris-Ecken wie beim
+  Panorama, auf leicht weichgezeichneten Bildern, damit scharfe und unscharfe Fassung derselben Stelle
+  zusammenpassen; RANSAC, danach eine Ähnlichkeitstransformation über alle passenden Punkte). So
+  werden die Größenänderung beim Fokussieren („Focus Breathing“) und kleine Verschiebungen aus der
+  Hand ausgeglichen. Jedes Bild zählt pro Pixel mit dem Quadrat seiner örtlichen Schärfe
+  (geglättetes Quadrat des Laplace-Operators der Helligkeit): Das schärfste Bild überwiegt, Flächen
+  ohne Struktur mitteln alle Bilder und rauschen weniger. Die Bilder werden nacheinander addiert,
+  der Speicherbedarf hängt also nicht von ihrer Zahl ab.
 
 Kommandozeile: `cargo run --release -p sk-core --example merge -- hdr|pano <raw>...`
+
+### Kamera-Kurve
+
+In jeder RAW-Datei steckt das JPEG, das die Kamera selbst entwickelt hat. Neue Bilder starten mit
+dessen Tonkurve (Tab „Farbe“ → Basismerkmale → Kurve „Kamera“): Helligkeit, Kontrast und
+Lichter sehen aus wie in der Kamera, mit der Abstimmung des Herstellers und der beim Fotografieren
+eingestellten Belichtungskorrektur. Die übrigen Regler setzen darauf auf.
+
+- **Wie es funktioniert:** Die Helligkeitsverteilung des JPEGs wird pro Bild auf die RAW-Daten
+  abgebildet. Der n-dunkelste RAW-Wert bekommt die Helligkeit des n-dunkelsten JPEG-Pixels. So
+  braucht es keine pixelgenaue Deckung, auch wenn die Kamera Verzeichnung korrigiert oder das
+  Vorschaubild schwarze Ränder hat. Ein Durchgang durch die echte Pipeline gleicht den Rest aus.
+  Wie in der Kamera wirkt die Kurve auf jeden Farbkanal einzeln: Lichter laufen nach Weiß aus,
+  Schatten werden satter.
+- **Wann:** beim ersten Öffnen eines nie bearbeiteten Bildes (gleich gespeichert), beim Export
+  und bei „Automatisch anpassen“ noch nie geöffneter Bilder sowie nach „Alle Anpassungen
+  zurücksetzen“. Bereits bearbeitete Bilder behalten ihre Kurve. Eine andere Kurve lässt sich
+  jederzeit wählen, auch als Teil eines Stils.
+- **Ohne:** Zusammengefügte DNGs und Dateien ohne brauchbares eingebettetes JPEG bleiben bei
+  „Film Standard“. Eingefügte Einstellungen behalten die Kurve des Zielbildes; beim Öffnen bekommt es
+  seine eigene.
+
+### Automatisch anpassen
+
+**Automatisch anpassen** (Strg+L, Knopf im Tab „Belichtung“ oder Entwickeln → „Automatisch
+anpassen“) stellt mehrere Werkzeuge in einem Rückgängig-Schritt ein:
+Weißabgleich, Belichtung, Lichter, Schatten, Weiß, Schwarz, Kontrast und Dynamik. Was dabei
+gesetzt wird, legt das Menü neben dem Knopf fest. Sind mehrere Bilder ausgewählt, werden alle
+angepasst, im Hintergrund. Darunter steht der Regler **Stärke**, aktiv nach
+einer automatischen Anpassung des Bildes: Er blendet zwischen den Einstellungen vorher (0 %) und dem vollen Auto-Ergebnis (100 %)
+über, den Weißabgleich in Mired.
+
+- **Helligkeit:** Wie hell das Bild werden soll, gibt das Kamera-JPEG vor (siehe oben). Auf dem
+  Kamera-Look ändert Auto die Belichtung daher meist nur wenig und kümmert sich vor allem um Lichter,
+  Schatten und Weißabgleich.
+- **Tonwerte:** Die Regler werden nicht einzeln aus dem Histogramm abgeleitet, sondern gemeinsam
+  optimiert. Eine kleine Fassung des Bildes läuft durch die echte Pipeline und wird bewertet:
+  Helligkeit der Mitteltöne, ausgefressene und abgesoffene Flächen, Ausnutzung des Tonwertumfangs
+  und Kontrast. Die Regler werden verändert, bis das Ergebnis nicht mehr besser wird, ohne einen
+  davon zu übertreiben. Wie hell das Bild werden soll, gibt das in die RAW-Datei eingebettete
+  Kamera-JPEG vor: Seine mittlere Helligkeit enthält die Abstimmung des Herstellers und die
+  Belichtungskorrektur beim Fotografieren. Ein Wald bleibt so dunkler als ein Strandbild. Ohne
+  eingebettetes JPEG (etwa bei zusammengefügten DNGs) dient die gemessene Kamerabelichtung als
+  Anhalt.
+- **Gesichter und Hauptmotiv:** Sind die KI-Modelle geladen (Gesichter, Motiv), zählen Gesichter
+  und das Hauptmotiv mehr als der Rest. Gesichter sollen weder dunkel noch ausgefressen sein. Das ist
+  ein Bereich und kein fester Zielwert, denn Hauttöne sind verschieden. Geladen wird dafür nichts:
+  Ohne Modelle wiegt das ganze Bild gleich.
+- **Weißabgleich:** Ausgangspunkt ist der Weißabgleich der Kamera. Korrigiert wird anhand der fast
+  neutralen Stellen (Steine, Wasser, weiße Wände, Wolken), nicht nach dem Mittelwert des ganzen
+  Bildes. So ziehen ein Wald oder eine Holzwand ihn nicht weg. Je weniger solche Stellen es gibt,
+  desto mehr bleibt es beim Kamerawert. Warmes und kühles Licht behalten einen Teil ihrer Stimmung
+  (ein Sonnenuntergang bleibt warm). Der Knopf „Auto“ im Abschnitt Weißabgleich (Tab „Farbe“)
+  arbeitet genauso.
+
+Kommandozeile (Vorher | Nachher nebeneinander): `cargo run --release -p sk-ai --example auto -- <Ordner> <raw>...`
 
 ### Automatisch geraderichten
 
@@ -549,6 +725,10 @@ beziehen sich aber nur auf die Bilder der Session.
 - **Keywords** im Tab „Metadaten“ (mit Vorschlägen aus dem Katalog); Bewertung, Label und
   Keywords wirken auf die ganze Auswahl.
 - **Stile:** Anpassungen als Preset speichern (`~/.config/silberkorn/styles`) und auf die Auswahl anwenden.
+  Der Tab „Stile“ zeigt Filmsimulationen und eigene Stile als **Vorschauen**: jeder Stil auf das
+  aktuelle Bild angewendet, im Hintergrund klein gerechnet und nach jeder abgeschlossenen Änderung neu.
+  Klick wendet ihn auf die Auswahl an, der Zeiger zeigt ihn groß im Bild,
+  Rechtsklick löscht einen eigenen Stil. „Liste“ schaltet auf die knappe Ansicht um (wird gemerkt).
   Beim Speichern („Enthält: …“) wählt man die Werkzeuge; vorgewählt sind die bearbeiteten. Ein Stil
   setzt nur seine Werkzeuge, alle anderen bleiben, wie sie sind, so lassen sich Stile übereinander
   anwenden (etwa ein Farblook und danach ein Körnungs-Stil). Stile von vor dieser Funktion setzen
@@ -610,7 +790,7 @@ die Leertaste und die Tasten der Schnellbearbeitung.
 | Taste | Funktion |
 |---|---|
 | Strg+K | Befehlspalette: jede Funktion, jedes Werkzeug und jeden Tool-Abschnitt per Suche finden (auch über das Suchfeld in der Titelleiste) |
-| Strg+1 … Strg+0 | Werkzeug-Tabs in der Reihenfolge der Tab-Leiste (außer „Verlauf“) |
+| Strg+1 … Strg+0 | Werkzeug-Tabs in der Reihenfolge der Tab-Leiste (außer „Verlauf“; „Ausgabe“ hat keins mehr) |
 | Strg+Mausrad | Vorschaugröße im Raster (auch Regler in der Statusleiste) |
 | ← / → | vorheriges / nächstes Bild |
 | 0–5 | Bewertung |
@@ -631,8 +811,8 @@ die Leertaste und die Tasten der Schnellbearbeitung.
 | C / Enter / Esc | Zuschnitt-Werkzeug / übernehmen / beenden |
 | B / N / L / R | Pinsel / Radierer / linearer / radialer Verlauf |
 | H / S | Reparieren / Klonen · Entf: Punkt löschen |
-| X | Entfernen (KI) |
-| M | Maske anzeigen · [ / ]: Pinselgröße · mittlere Maustaste: verschieben |
+| X | Entfernen (KI-Funktion) |
+| M | Maske anzeigen · [ / ]: Pinselgröße · rechte Maustaste ziehen: Größe (links/rechts) und Härte (hoch/runter) · mittlere Maustaste: verschieben |
 | J | Zauberpinsel |
 | U / Umschalt+U | Vorher/Nachher geteilt / nebeneinander |
 | O / Umschalt+O | Hilfslinien wechseln / eigenes Overlay |
@@ -645,9 +825,12 @@ die Leertaste und die Tasten der Schnellbearbeitung.
 | F2 / F3 | neue Variante / Variante klonen |
 | Strg+G / Strg+Umschalt+G | Stapel bilden / auflösen |
 | Umschalt+G | Stapel auf-/zuklappen |
+| Alt+↑ / Alt+↓ | Ebene darüber / darunter bearbeiten (zuletzt der Hintergrund) |
 | Q / A / D / F / V / T + Mausrad | Schnellbearbeitung: Belichtung / Kontrast / Sättigung / Lichter / Tiefen / Temperatur (auf der aktiven Ebene, sonst global) |
 
-Doppelklick auf einen Reglernamen setzt den Regler zurück.
+Doppelklick auf einen Reglernamen setzt den Regler zurück. Nach einem Klick auf einen Regler ändern
+ihn die Pfeiltasten und das Mausrad (Umschalt: grob, Alt: fein); ohne diesen Klick scrollt das
+Mausrad nur das Panel.
 
 ## Tests
 
@@ -682,10 +865,11 @@ Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verklei
 - **Phase 3 (fertig):** Zuschnitt/Geraderichten/Keystone, Schärfen, Rauschreduzierung, Objektivkorrektur (manuell + Lensfun), Color Editor, Color Balance, Schwarzweiß, Klarheit/Struktur, lokales HDR, Körnung/Vignette, Auto-Anpassungen, echtes 100 % (Kachel-Rendering), Highlight-Rekonstruktion, Ausgabe-Farbräume mit ICC
 - **Phase 4 (fertig):** Ebenen und Masken (Pinsel, Radierer, linearer/radialer Verlauf, Deckkraft), Reparieren/Klonen
 - **Phase 5 (fertig):** Luma Range, Farbbereichsmasken, Style Brushes, KI-Motivmaske (ONNX), Himmelmaske, Magic Brush, Dunst entfernen, Speed Edit, Vergleichsansicht, mehrere Ausgaberezepte
-- **Phase 6 (fertig):** Mehrfachansicht mit Referenzbild und synchronem Zoom, Angleichen von Belichtung/Weißabgleich an eine Referenz, Hauttöne vereinheitlichen
+- **Phase 6 (fertig):** Mehrfachansicht mit Referenzbild und synchronem Zoom, Look angleichen (Referenzbild oder Bilddatei), Hauttöne vereinheitlichen
 - **Phase 7 (fertig):** Varianten (virtuelle Kopien), Fokusmaske
 - **Phase 8 (fertig):** Vorher/Nachher nebeneinander, Wasserzeichen (Text/Logo), EXIF und Copyright im Export, Hilfslinien und Layout-Overlay
 - **Phase 9 (fertig):** automatisches Geraderichten (Drehung, vertikaler/horizontaler Keystone)
 - **Phase 10 (fertig):** Lupe, Verlauf und Schnappschüsse, Umbenennen mit Platzhaltern (auch im Ausgaberezept)
 - **Phase 11 (fertig):** XMP-Austausch, Stapel, Viewer auf dem Zweitmonitor, Softproof, HDR und Panorama, KI-Entrauschen, Entfernen, Gesichter und Sichtung
 - **Phase 12 (fertig):** Anpassungen werkzeugweise kopieren und übertragen, Stile mit Werkzeugauswahl (übereinander anwendbar), eigene Tastenkürzel, eigene Farbbereiche im Farbeditor, Luma-Kurve
+- **Phase 13 (fertig):** Neu ausleuchten und Atmosphäre über die Tiefenkarte, Leuchten (Orton), Stile als Vorschau-Raster, Focus Stacking

@@ -1,4 +1,4 @@
-//! Tool tabs: Library, Exposure, Color, Metadata, Output.
+//! Tool tabs: Library, Exposure, Color, Effects, Metadata, Output.
 
 use sk_core::export::ExportFormat;
 use sk_core::watermark::{Anchor, WatermarkKind};
@@ -8,6 +8,7 @@ use egui::{Color32, RichText, Ui};
 
 use crate::ai_models::AiFeature;
 use crate::app::{App, CurveChannel, Tab};
+use crate::layer_target::Target;
 use crate::widgets::{self, section, slider_row};
 
 impl App {
@@ -15,6 +16,7 @@ impl App {
         // The copy buttons of the tool headers carry a tool over to the other selected images.
         let others = if self.current.is_some() { self.selected_paths().len().saturating_sub(1) } else { 0 };
         widgets::set_copy_targets(ui.ctx(), others);
+        widgets::set_edit_layer(ui.ctx(), self.on_layer());
         self.tool_tabs(ui);
         if let Some(tool) = widgets::take_copy_clicked(ui.ctx()) {
             self.transfer_tool(tool);
@@ -22,10 +24,17 @@ impl App {
     }
 
     fn tool_tabs(&mut self, ui: &mut Ui) {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.tab {
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            self.tool_tab(ui);
+        });
+    }
+
+    fn tool_tab(&mut self, ui: &mut Ui) {
+        match self.tab {
             Tab::Library => self.library_tab(ui),
             Tab::Lens => self.lens_tab(ui),
             Tab::Details => self.details_tab(ui),
+            Tab::Effects => self.effects_tab(ui),
             Tab::Layers => self.layers_tab(ui),
             Tab::Retouch => self.retouch_tab(ui),
             Tab::Styles => self.styles_tab(ui),
@@ -38,7 +47,7 @@ impl App {
                 self.softproof_section(ui);
                 self.print_section(ui);
             }
-        });
+        }
     }
 
     fn exposure_tab(&mut self, ui: &mut Ui) {
@@ -54,43 +63,45 @@ impl App {
             }
             ui.add_space(4.0);
         }
-        self.auto_section(ui);
+        // Automatic adjustment sets the whole image.
+        widgets::background_only(ui, |ui| self.auto_section(ui));
         let Some(cur) = self.current.as_mut() else {
             crate::widgets::no_image(ui);
             return;
         };
         let adj = &mut cur.adjustments;
+        let mut t = Target::new(adj, self.active_layer);
         let mut changed = false;
 
         let mut reset_exposure = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Exposure, Some(&mut || reset_exposure = true), |ui| {
-            changed |= slider_row(ui, "Belichtung", &mut adj.exposure, -4.0..=4.0, 0.0, 2);
-            changed |= slider_row(ui, "Kontrast", &mut adj.contrast, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Helligkeit", &mut adj.brightness, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Sättigung", &mut adj.saturation, -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Belichtung", t.pick(&mut adj.exposure, |l| &mut l.exposure), -4.0..=4.0, 0.0, 2);
+            changed |= slider_row(ui, "Kontrast", t.pick(&mut adj.contrast, |l| &mut l.contrast), -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Helligkeit", t.pick(&mut adj.brightness, |l| &mut l.brightness), -100.0..=100.0, 0.0, 0);
         });
         if reset_exposure {
-            adj.exposure = 0.0;
-            adj.contrast = 0.0;
-            adj.brightness = 0.0;
-            adj.saturation = 0.0;
+            match t.layer_mut() {
+                Some(l) => (l.exposure, l.contrast, l.brightness) = (0.0, 0.0, 0.0),
+                None => (adj.exposure, adj.contrast, adj.brightness) = (0.0, 0.0, 0.0),
+            }
             changed = true;
         }
 
         let mut reset_hdr = false;
         widgets::tool_section(ui, sk_core::tools::Tool::HighlightsShadows, Some(&mut || reset_hdr = true), |ui| {
-            changed |= slider_row(ui, "Lichter", &mut adj.highlights, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Tiefen", &mut adj.shadows, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Weiß", &mut adj.whites, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Schwarz", &mut adj.blacks, -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Lichter", t.pick(&mut adj.highlights, |l| &mut l.highlights), -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Tiefen", t.pick(&mut adj.shadows, |l| &mut l.shadows), -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Weiß", t.pick(&mut adj.whites, |l| &mut l.whites), -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Schwarz", t.pick(&mut adj.blacks, |l| &mut l.blacks), -100.0..=100.0, 0.0, 0);
         });
         if reset_hdr {
-            adj.highlights = 0.0;
-            adj.shadows = 0.0;
-            adj.whites = 0.0;
-            adj.blacks = 0.0;
+            match t.layer_mut() {
+                Some(l) => (l.highlights, l.shadows, l.whites, l.blacks) = (0.0, 0.0, 0.0, 0.0),
+                None => (adj.highlights, adj.shadows, adj.whites, adj.blacks) = (0.0, 0.0, 0.0, 0.0),
+            }
             changed = true;
         }
+        t.store(adj);
 
         let mut reset_levels = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Levels, Some(&mut || reset_levels = true), |ui| {
@@ -143,6 +154,7 @@ impl App {
         if changed {
             self.request_render();
         }
+        self.relight_section(ui);
     }
 
     fn color_tab(&mut self, ui: &mut Ui) {
@@ -153,20 +165,60 @@ impl App {
             return;
         };
         let as_shot = cur.as_shot_temp_tint;
+        // Matching a look sets the whole image.
+        widgets::background_only(ui, |ui| self.look_section(ui));
+        let Some(cur) = self.current.as_mut() else { return };
         let adj = &mut cur.adjustments;
+        let mut t = Target::new(adj, self.active_layer);
         let mut changed = false;
 
         widgets::tool_section(ui, sk_core::tools::Tool::BaseCurve, None, |ui| {
             widgets::combo_field(ui, "Kurve", adj.base_curve.label(), |ui| {
                     for c in BaseCurve::ALL {
-                        changed |= ui.selectable_value(&mut adj.base_curve, c, c.label()).changed();
+                        changed |= ui.selectable_value(&mut adj.base_curve, c, c.label()).on_hover_text(c.hint()).changed();
                     }
                 });
         });
+        // The camera's curve is fitted the first time it is chosen.
+        let mut no_camera_curve = false;
+        if adj.base_curve == BaseCurve::Camera && adj.camera_curve.is_none() {
+            match sk_core::camera_look::fit_cached(&cur.meta, &cur.preview) {
+                Some(c) => adj.camera_curve = Some(c),
+                None => {
+                    adj.base_curve = BaseCurve::FilmStandard;
+                    no_camera_curve = true;
+                }
+            }
+        }
 
         let mut reset_wb = false;
+        let mut auto_wb = false;
         widgets::tool_section(ui, sk_core::tools::Tool::WhiteBalance, Some(&mut || reset_wb = true), |ui| {
             let wb = &mut adj.white_balance;
+            // A layer warms or cools relative to the background: no mode, Kelvin or pipette.
+            if let Some(l) = t.layer_mut() {
+                ui.add_enabled_ui(false, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Modus");
+                        let _ = ui.selectable_label(wb.mode == WbMode::AsShot, "Aufnahme");
+                        let _ = ui.selectable_label(wb.mode == WbMode::Custom, "Benutzerdefiniert");
+                    });
+                })
+                .response
+                .on_disabled_hover_text(widgets::ONLY_IMAGE);
+                let opts = |rail| widgets::SliderOpts { rail: Some(rail), ..Default::default() };
+                changed |= widgets::slider_row_with(ui, "Temperatur", &mut l.temperature, -100.0..=100.0, 0.0, 0, opts(widgets::RAIL_KELVIN));
+                changed |= widgets::slider_row_with(ui, "Tönung", &mut l.tint, -100.0..=100.0, 0.0, 0, opts(widgets::RAIL_TINT));
+                ui.add_enabled_ui(false, |ui| {
+                    ui.horizontal(|ui| {
+                        let _ = ui.selectable_label(false, "\u{E568}  Weißabgleich-Pipette");
+                        let _ = ui.button(format!("{}  Auto", crate::theme::icon::MAGIC_WAND));
+                    });
+                })
+                .response
+                .on_disabled_hover_text(widgets::ONLY_IMAGE);
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.label("Modus");
                 if ui.selectable_label(wb.mode == WbMode::AsShot, "Aufnahme").clicked() && wb.mode != WbMode::AsShot {
@@ -180,7 +232,7 @@ impl App {
             });
             // In as-shot mode the sliders show the estimated values; moving one switches to custom.
             let (mut kelvin, mut tint) = if wb.mode == WbMode::AsShot { as_shot } else { (wb.kelvin, wb.tint) };
-            let mut wb_changed = widgets::slider_row_with(ui, "Kelvin", &mut kelvin, 2000.0..=15000.0, as_shot.0, 0, widgets::SliderOpts { suffix: " K", rail: Some(widgets::RAIL_KELVIN) });
+            let mut wb_changed = widgets::slider_row_with(ui, "Kelvin", &mut kelvin, 2000.0..=15000.0, as_shot.0, 0, widgets::SliderOpts { suffix: " K", rail: Some(widgets::RAIL_KELVIN), ..Default::default() });
             wb_changed |= widgets::slider_row_with(ui, "Tönung", &mut tint, -150.0..=150.0, as_shot.1, 1, widgets::SliderOpts { rail: Some(widgets::RAIL_TINT), ..Default::default() });
             if wb_changed {
                 *wb = WhiteBalance { mode: WbMode::Custom, kelvin, tint };
@@ -190,11 +242,28 @@ impl App {
                 if ui.selectable_label(picking, "\u{E568}  Weißabgleich-Pipette").on_hover_text("Auf eine neutrale (graue) Stelle im Bild klicken").clicked() {
                     toggle_picker = true;
                 }
+                if ui
+                    .button(format!("{}  Auto", crate::theme::icon::MAGIC_WAND))
+                    .on_hover_text("Weißabgleich aus den fast neutralen Stellen des Bildes (Steine, Wolken, weiße Wände), ausgehend vom Kamerawert")
+                    .clicked()
+                {
+                    auto_wb = true;
+                }
             });
         });
         if reset_wb {
-            adj.white_balance = Default::default();
+            match t.layer_mut() {
+                Some(l) => (l.temperature, l.tint) = (0.0, 0.0),
+                None => adj.white_balance = Default::default(),
+            }
             changed = true;
+        }
+        t.store(adj);
+        if no_camera_curve {
+            self.status = "Kein passendes Kamera-JPEG in dieser Datei: Film Standard bleibt".into();
+        }
+        if auto_wb {
+            self.auto_white_balance();
         }
         if toggle_picker {
             // Ends the other viewer tools; needs `self`, the adjustments are borrowed again below.
@@ -202,18 +271,22 @@ impl App {
         }
         let Some(cur) = self.current.as_mut() else { return };
         let adj = &mut cur.adjustments;
+        let mut t = Target::new(adj, self.active_layer);
 
         let mut reset_color = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Color, Some(&mut || reset_color = true), |ui| {
             let rail = widgets::SliderOpts { rail: Some(widgets::RAIL_SATURATION), ..Default::default() };
-            changed |= widgets::slider_row_with(ui, "Sättigung", &mut adj.saturation, -100.0..=100.0, 0.0, 0, rail);
-            changed |= slider_row(ui, "Dynamik", &mut adj.vibrance, -100.0..=100.0, 0.0, 0);
+            changed |= widgets::slider_row_with(ui, "Sättigung", t.pick(&mut adj.saturation, |l| &mut l.saturation), -100.0..=100.0, 0.0, 0, rail);
+            changed |= slider_row(ui, "Dynamik", t.pick(&mut adj.vibrance, |l| &mut l.vibrance), -100.0..=100.0, 0.0, 0);
         });
         if reset_color {
-            adj.saturation = 0.0;
-            adj.vibrance = 0.0;
+            match t.layer_mut() {
+                Some(l) => (l.saturation, l.vibrance) = (0.0, 0.0),
+                None => (adj.saturation, adj.vibrance) = (0.0, 0.0),
+            }
             changed = true;
         }
+        t.store(adj);
 
         if changed {
             self.request_render();
@@ -377,25 +450,26 @@ impl App {
             }
             let mut resize = r.long_edge.is_some();
             ui.checkbox(&mut resize, "Skalieren (lange Kante)");
-            if resize {
-                let mut edge = r.long_edge.unwrap_or(2048);
-                ui.add(egui::DragValue::new(&mut edge).range(64..=20000).suffix(" px"));
-                r.long_edge = Some(edge);
-            } else {
-                r.long_edge = None;
-            }
+            // Options without effect are shown, but disabled.
+            let mut edge = r.long_edge.unwrap_or(2048);
+            ui.add_enabled(resize, egui::DragValue::new(&mut edge).range(64..=20000).suffix(" px"));
+            r.long_edge = resize.then_some(edge);
             let mut upscale = r.upscale.is_some();
-            ui.checkbox(&mut upscale, "KI-Vergrößern").on_hover_text(
+            ui.checkbox(&mut upscale, widgets::ai_text(ui, "KI-Vergrößern")).on_hover_text(
                 "Vergrößert das fertige Bild mit einem neuronalen Netz, bevor es gespeichert wird (wie „Super Resolution“). Eine lange Kante verkleinert es danach wieder.",
             );
+            let mut factor = r.upscale.unwrap_or_default().factor;
+            ui.add_enabled_ui(upscale, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut factor, 2, "2×").on_hover_text("Doppelte Kantenlänge, vierfache Pixelzahl");
+                    ui.selectable_value(&mut factor, 4, "4×").on_hover_text("Vierfache Kantenlänge, sechzehnfache Pixelzahl");
+                });
+            });
             if !upscale {
                 r.upscale = None;
             } else {
                 let u = r.upscale.get_or_insert_with(Default::default);
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut u.factor, 2, "2×").on_hover_text("Doppelte Kantenlänge, vierfache Pixelzahl");
-                    ui.selectable_value(&mut u.factor, 4, "4×").on_hover_text("Vierfache Kantenlänge, sechzehnfache Pixelzahl");
-                });
+                u.factor = factor;
                 let f = AiFeature::for_upscale(*u);
                 if let Some(p) = upscale_download.filter(|_| upscale_feature == Some(f)) {
                     crate::ai_models::download_progress(ui, f, p);
@@ -434,48 +508,47 @@ impl App {
         section(ui, "Wasserzeichen", None, |ui| {
             let wm = &mut r.watermark;
             ui.checkbox(&mut wm.enabled, "Wasserzeichen einfügen");
-            if !wm.enabled {
-                return;
-            }
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut wm.kind, WatermarkKind::Text, "Text");
-                ui.selectable_value(&mut wm.kind, WatermarkKind::Image, "Logo");
+            ui.add_enabled_ui(wm.enabled, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut wm.kind, WatermarkKind::Text, "Text");
+                    ui.selectable_value(&mut wm.kind, WatermarkKind::Image, "Logo");
+                });
+                match wm.kind {
+                    WatermarkKind::Text => {
+                        ui.text_edit_singleline(&mut wm.text);
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(&mut wm.dark, false, "Weiß");
+                            ui.selectable_value(&mut wm.dark, true, "Schwarz");
+                        });
+                    }
+                    WatermarkKind::Image => {
+                        ui.horizontal(|ui| {
+                            if ui.button("Logo wählen …").clicked()
+                                && let Some(f) = rfd::FileDialog::new().set_title("Logo für das Wasserzeichen").add_filter("Bilder", &["png", "jpg", "jpeg", "tif", "tiff"]).pick_file()
+                            {
+                                wm.image = f;
+                            }
+                            let name = wm.image.file_name().map_or("kein Logo".into(), |n| n.to_string_lossy().to_string());
+                            ui.label(RichText::new(name).small().color(Color32::from_gray(160)));
+                        });
+                        ui.label(RichText::new("PNG mit Transparenz empfohlen").small().color(crate::theme::TEXT_FAINT));
+                    }
+                }
+                widgets::combo_field(ui, "Position", wm.anchor.label(), |ui| {
+                    for a in Anchor::ALL {
+                        ui.selectable_value(&mut wm.anchor, a, a.label());
+                    }
+                });
+                let pct = widgets::SliderOpts { suffix: " %", ..Default::default() };
+                let d = sk_core::watermark::Watermark::default();
+                widgets::slider_row_with(ui, "Größe", &mut wm.size, 1.0..=30.0, d.size, 1, pct);
+                widgets::slider_row_with(ui, "Abstand", &mut wm.margin, 0.0..=20.0, d.margin, 1, pct);
+                let mut opacity = wm.opacity * 100.0;
+                if widgets::slider_row_with(ui, "Deckkraft", &mut opacity, 5.0..=100.0, d.opacity * 100.0, 0, pct) {
+                    wm.opacity = opacity / 100.0;
+                }
+                ui.label(RichText::new("Größe und Abstand in % der kurzen Bildkante. Vorschau mit P (Ausgabevorschau).").small().color(crate::theme::TEXT_FAINT));
             });
-            match wm.kind {
-                WatermarkKind::Text => {
-                    ui.text_edit_singleline(&mut wm.text);
-                    ui.horizontal(|ui| {
-                        ui.selectable_value(&mut wm.dark, false, "Weiß");
-                        ui.selectable_value(&mut wm.dark, true, "Schwarz");
-                    });
-                }
-                WatermarkKind::Image => {
-                    ui.horizontal(|ui| {
-                        if ui.button("Logo wählen …").clicked()
-                            && let Some(f) = rfd::FileDialog::new().set_title("Logo für das Wasserzeichen").add_filter("Bilder", &["png", "jpg", "jpeg", "tif", "tiff"]).pick_file()
-                        {
-                            wm.image = f;
-                        }
-                        let name = wm.image.file_name().map_or("kein Logo".into(), |n| n.to_string_lossy().to_string());
-                        ui.label(RichText::new(name).small().color(Color32::from_gray(160)));
-                    });
-                    ui.label(RichText::new("PNG mit Transparenz empfohlen").small().color(crate::theme::TEXT_FAINT));
-                }
-            }
-            widgets::combo_field(ui, "Position", wm.anchor.label(), |ui| {
-                for a in Anchor::ALL {
-                    ui.selectable_value(&mut wm.anchor, a, a.label());
-                }
-            });
-            let pct = widgets::SliderOpts { suffix: " %", ..Default::default() };
-            let d = sk_core::watermark::Watermark::default();
-            widgets::slider_row_with(ui, "Größe", &mut wm.size, 1.0..=30.0, d.size, 1, pct);
-            widgets::slider_row_with(ui, "Abstand", &mut wm.margin, 0.0..=20.0, d.margin, 1, pct);
-            let mut opacity = wm.opacity * 100.0;
-            if widgets::slider_row_with(ui, "Deckkraft", &mut opacity, 5.0..=100.0, d.opacity * 100.0, 0, pct) {
-                wm.opacity = opacity / 100.0;
-            }
-            ui.label(RichText::new("Größe und Abstand in % der kurzen Bildkante. Vorschau mit P (Ausgabevorschau).").small().color(crate::theme::TEXT_FAINT));
         });
         section(ui, "Metadaten", None, |ui| {
             ui.checkbox(&mut r.capture_metadata, "Aufnahmedaten übernehmen").on_hover_text("Kamera, Objektiv, Belichtung und Aufnahmedatum");

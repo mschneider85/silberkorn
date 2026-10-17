@@ -424,6 +424,13 @@ impl Encoder<'_> {
         self.enc.clear_buffer(b, 0, None);
     }
 
+    /// Copies `bytes` from `from_offset` in `from` to `offset` in `to` (all in bytes).
+    pub(crate) fn copy_at(&mut self, from: &wgpu::Buffer, from_offset: u64, to: &wgpu::Buffer, offset: u64, bytes: u64) {
+        if bytes > 0 {
+            self.enc.copy_buffer_to_buffer(from, from_offset, to, offset, bytes);
+        }
+    }
+
     /// Copies `bytes` from the start of `from` to `offset` (bytes) in `to`.
     pub(crate) fn copy(&mut self, from: &wgpu::Buffer, to: &wgpu::Buffer, offset: u64, bytes: u64) {
         if bytes > 0 {
