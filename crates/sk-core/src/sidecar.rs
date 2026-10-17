@@ -683,9 +683,9 @@ mod tests {
             let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(secs);
             std::fs::File::options().write(true).open(&xmp).unwrap().set_modified(t).unwrap();
         };
-        write_xmp(crate::xmp::updated(None, 4, ColorLabel::Red, &["Lightroom".into()]).unwrap(), 1_000_000);
+        write_xmp(crate::xmp::updated(None, 4, ColorLabel::Red, &["Urlaub".into()]).unwrap(), 1_000_000);
         let sc = load(&img);
-        assert_eq!((sc.rating, sc.color_label, sc.keywords.clone()), (4, ColorLabel::Red, vec!["Lightroom".to_string()]));
+        assert_eq!((sc.rating, sc.color_label, sc.keywords.clone()), (4, ColorLabel::Red, vec!["Urlaub".to_string()]));
         // Changed in Silberkorn: the older XMP no longer counts.
         save(&img, &Sidecar { rating: 1, ..sc }).unwrap();
         assert_eq!(load(&img).rating, 1);

@@ -1686,13 +1686,13 @@ fn xmp_exchange() {
     let a = f.photo("_DSC0009.dng");
     let b = f.photo("_DSC0010.dng");
     // Written by another program: read on request and mirrored in catalog and browser.
-    std::fs::write(f.dir.join("photos/_DSC0010.xmp"), sk_core::xmp::updated(None, 3, ColorLabel::Green, &["Lightroom".into()]).unwrap()).unwrap();
+    std::fs::write(f.dir.join("photos/_DSC0010.xmp"), sk_core::xmp::updated(None, 3, ColorLabel::Green, &["Urlaub".into()]).unwrap()).unwrap();
     f.app.selection = [b.clone()].into_iter().collect();
     f.app.read_xmp_selection();
     let e = &f.app.entries[f.app.index_of(&b).unwrap()];
-    assert_eq!((e.rating, e.color_label, e.keywords.clone()), (3, ColorLabel::Green, vec!["Lightroom".to_string()]));
+    assert_eq!((e.rating, e.color_label, e.keywords.clone()), (3, ColorLabel::Green, vec!["Urlaub".to_string()]));
     assert_eq!(sidecar::load(&b).rating, 3);
-    assert!(f.app.lists.keywords.iter().any(|(k, _)| k == "Lightroom"));
+    assert!(f.app.lists.keywords.iter().any(|(k, _)| k == "Urlaub"));
     // Written on request for another image.
     f.app.selection = [a.clone()].into_iter().collect();
     f.app.set_rating(5);
