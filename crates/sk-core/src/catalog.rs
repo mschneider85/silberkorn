@@ -394,6 +394,10 @@ impl Catalog {
                 conn.execute_batch(&format!("ALTER TABLE images ADD COLUMN {name} {def}"))?;
             }
         }
+        // "Last import" (not in the oldest databases).
+        if columns.iter().any(|c| c == "import_id") {
+            conn.execute_batch("CREATE INDEX IF NOT EXISTS images_import ON images(import_id)")?;
+        }
         // Persons split off by hand stay in the list with a single image.
         let person_columns: Vec<String> =
             conn.prepare("SELECT name FROM pragma_table_info('persons')")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
@@ -537,6 +541,7 @@ impl Catalog {
             .prepare("SELECT id, path FROM images")?
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<_>>()?;
+        let tx = self.conn.unchecked_transaction()?;
         let mut n = 0;
         for (id, p) in paths {
             let path = self.resolve(&p);
@@ -552,6 +557,7 @@ impl Catalog {
                 n += 1;
             }
         }
+        tx.commit()?;
         Ok(n)
     }
 
@@ -870,33 +876,7 @@ impl Catalog {
                 args.push(Value::Integer(*id));
             }
         }
-        match filter.culling {
-            Some(CullFilter::EyesClosed) => sql += " AND i.analyzed > 0 AND i.eyes_closed > 0",
-            Some(CullFilter::Blurry) => sql += &format!(" AND i.analyzed > 0 AND i.sharpness < {BLURRY}"),
-            Some(CullFilter::WithFaces) => sql += " AND i.analyzed > 0 AND i.face_count > 0",
-            Some(CullFilter::NotAnalyzed) => sql += " AND i.analyzed = 0",
-            None => {}
-        }
-        if filter.min_rating > 0 {
-            sql += " AND i.rating >= ?";
-            args.push(Value::Integer(filter.min_rating as i64));
-        }
-        if let Some(l) = filter.color_label {
-            sql += " AND i.color_label = ?";
-            args.push(Value::Text(label_to_str(l)));
-        }
-        if let Some(k) = &filter.keyword {
-            sql += " AND EXISTS (SELECT 1 FROM keywords k WHERE k.image_id = i.id AND k.keyword = ?)";
-            args.push(Value::Text(k.clone()));
-        }
-        for term in filter.text.split_whitespace() {
-            sql += " AND (i.name LIKE ? OR i.camera LIKE ? OR i.lens LIKE ?
-                       OR EXISTS (SELECT 1 FROM keywords k WHERE k.image_id = i.id AND k.keyword LIKE ?))";
-            let like = format!("%{term}%");
-            for _ in 0..4 {
-                args.push(Value::Text(like.clone()));
-            }
-        }
+        filter_sql(filter, &mut sql, &mut args);
         let dir = if descending { "DESC" } else { "ASC" };
         sql += &match sort {
             SortKey::Name => format!(" ORDER BY i.name COLLATE NOCASE {dir}, i.path"),
@@ -982,13 +962,19 @@ impl Catalog {
             })
         })?;
         let mut albums: Vec<Album> = rows.collect::<rusqlite::Result<_>>()?;
-        for a in albums.iter_mut().filter(|a| a.smart.is_some()) {
-            a.count = self.query(&Scope::Album(a.id), &Filter::default(), SortKey::Name, false)?.len();
+        // Smart albums: counted with their filter, without loading the images.
+        for a in albums.iter_mut() {
+            if let Some(f) = &a.smart {
+                let (mut sql, mut args) = (String::from("SELECT count(*) FROM images i WHERE 1=1"), Vec::new());
+                filter_sql(f, &mut sql, &mut args);
+                a.count = self.conn.query_row(&sql, params_from_iter(args), |r| r.get::<_, i64>(0))? as usize;
+            }
         }
         Ok(albums)
     }
 
     pub fn add_to_album(&self, album: i64, paths: &[PathBuf]) -> Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
         let mut n = 0;
         for p in paths {
             n += self.conn.execute(
@@ -996,17 +982,51 @@ impl Catalog {
                 params![album, self.key(p)],
             )?;
         }
+        tx.commit()?;
         Ok(n)
     }
 
     pub fn remove_from_album(&self, album: i64, paths: &[PathBuf]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
         for p in paths {
             self.conn.execute(
                 "DELETE FROM album_images WHERE album_id = ?1 AND image_id = (SELECT id FROM images WHERE path = ?2)",
                 params![album, self.key(p)],
             )?;
         }
+        tx.commit()?;
         Ok(())
+    }
+}
+
+/// The conditions of `filter` on images `i`, appended to `sql` with their arguments.
+fn filter_sql(filter: &Filter, sql: &mut String, args: &mut Vec<Value>) {
+    match filter.culling {
+        Some(CullFilter::EyesClosed) => *sql += " AND i.analyzed > 0 AND i.eyes_closed > 0",
+        Some(CullFilter::Blurry) => *sql += &format!(" AND i.analyzed > 0 AND i.sharpness < {BLURRY}"),
+        Some(CullFilter::WithFaces) => *sql += " AND i.analyzed > 0 AND i.face_count > 0",
+        Some(CullFilter::NotAnalyzed) => *sql += " AND i.analyzed = 0",
+        None => {}
+    }
+    if filter.min_rating > 0 {
+        *sql += " AND i.rating >= ?";
+        args.push(Value::Integer(filter.min_rating as i64));
+    }
+    if let Some(l) = filter.color_label {
+        *sql += " AND i.color_label = ?";
+        args.push(Value::Text(label_to_str(l)));
+    }
+    if let Some(k) = &filter.keyword {
+        *sql += " AND EXISTS (SELECT 1 FROM keywords k WHERE k.image_id = i.id AND k.keyword = ?)";
+        args.push(Value::Text(k.clone()));
+    }
+    for term in filter.text.split_whitespace() {
+        *sql += " AND (i.name LIKE ? OR i.camera LIKE ? OR i.lens LIKE ?
+                   OR EXISTS (SELECT 1 FROM keywords k WHERE k.image_id = i.id AND k.keyword LIKE ?))";
+        let like = format!("%{term}%");
+        for _ in 0..4 {
+            args.push(Value::Text(like.clone()));
+        }
     }
 }
 
