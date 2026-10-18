@@ -64,9 +64,21 @@ pub struct RawMeta {
     pub lens_corrected: bool,
 }
 
+#[derive(Clone)]
 struct Decoded {
     raw: RawImage,
     meta: RawMeta,
+}
+
+/// The raw file last decoded by [`load_preview_and_keep`], until [`load_full`] takes it: by the
+/// image's path and the identity of its file (a changed file is decoded again).
+static KEPT: std::sync::Mutex<Option<(String, Decoded)>> = std::sync::Mutex::new(None);
+
+/// Raw data larger than this is not kept (float or multi-channel files).
+const KEEP_MAX_BYTES: usize = 256 << 20;
+
+fn kept_key(path: &Path) -> Option<String> {
+    Some(format!("{}|{}", path.display(), crate::cache::file_identity(path)?))
 }
 
 fn decode(path: &Path) -> Result<Decoded> {
@@ -222,7 +234,23 @@ pub fn read_meta(path: &Path) -> Result<RawMeta> {
 /// Fast preview: half-size "superpixel" demosaic, then box-downscaled so the
 /// long edge is at most `max_edge`. Returns camera-space linear RGB, oriented.
 pub fn load_preview(path: &Path, max_edge: usize) -> Result<(RawMeta, LinearImage)> {
-    let Decoded { mut raw, meta } = decode(path)?;
+    preview_of(decode(path)?, max_edge)
+}
+
+/// [`load_preview`] that keeps the decoded raw data for a [`load_full`] of the same image soon
+/// after (opening an image): decoding is a good part of loading.
+pub fn load_preview_and_keep(path: &Path, max_edge: usize) -> Result<(RawMeta, LinearImage)> {
+    let decoded = decode(path)?;
+    let bytes = match &decoded.raw.data {
+        RawImageData::Integer(d) => d.len() * 2,
+        RawImageData::Float(d) => d.len() * 4,
+    };
+    let key = kept_key(path).filter(|_| bytes <= KEEP_MAX_BYTES);
+    *KEPT.lock().unwrap() = key.map(|k| (k, decoded.clone()));
+    preview_of(decoded, max_edge)
+}
+
+fn preview_of(Decoded { mut raw, meta }: Decoded, max_edge: usize) -> Result<(RawMeta, LinearImage)> {
     raw.apply_scaling().map_err(|e| anyhow!("Skalierung fehlgeschlagen: {e}"))?;
     let img = match (&raw.photometric, raw.cpp) {
         (RawPhotometricInterpretation::Cfa(cfg), 1) if let Some(k) = superpixel_size(&cfg.cfa) && raw.fuji_rotation_width.is_none() => {
@@ -242,7 +270,17 @@ pub fn load_preview(path: &Path, max_edge: usize) -> Result<(RawMeta, LinearImag
 
 /// Full-resolution demosaic (PPG) in camera space, oriented.
 pub fn load_full(path: &Path) -> Result<(RawMeta, LinearImage)> {
-    let Decoded { raw, meta } = decode(path)?;
+    let kept = {
+        let mut kept = KEPT.lock().unwrap();
+        match (kept.as_ref(), kept_key(path)) {
+            (Some((k, _)), Some(key)) if *k == key => kept.take().map(|(_, d)| d),
+            _ => None,
+        }
+    };
+    let Decoded { raw, meta } = match kept {
+        Some(d) => d,
+        None => decode(path)?,
+    };
     let img = develop_full(&raw, XTransQuality::Best)?.oriented(meta.orientation);
     Ok((meta, img))
 }
@@ -514,6 +552,24 @@ mod tests {
         assert_eq!(valid_areas(120, 100, Some(active), Some(r(4, 10, 90, 70))), (Some(active), None));
         assert_eq!(valid_areas(120, 100, Some(active), Some(r(10, 10, 120, 70))), (Some(active), None));
         assert_eq!(valid_areas(120, 100, None, Some(r(usize::MAX, 0, 2, 2))), (None, None));
+    }
+
+    /// The full image from the raw data kept by `load_preview_and_keep` is that of decoding
+    /// again, and it is taken only once (on a sample raw, skipped without it).
+    #[test]
+    fn kept_raw_gives_the_same_full_image() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/_DSC0010.ARW");
+        if !path.exists() {
+            return;
+        }
+        let (_, small) = load_preview_and_keep(&path, 256).unwrap();
+        assert_eq!(small.width.max(small.height), 256);
+        assert!(KEPT.lock().unwrap().is_some());
+        let (_, kept) = load_full(&path).unwrap();
+        assert!(KEPT.lock().unwrap().is_none());
+        let (_, fresh) = load_full(&path).unwrap();
+        assert_eq!((kept.width, kept.height), (fresh.width, fresh.height));
+        assert!(kept.data == fresh.data);
     }
 
     /// The fast preview reader finds the same embedded image as rawler (on the sample raws in

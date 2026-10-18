@@ -445,7 +445,7 @@ impl Workers {
                     activity.touch();
                     // A panic (broken file) must still answer, or the viewer waits for ever.
                     let result = crate::guard::catch(|| {
-                        let (meta, preview) = raw::load_preview(&path, PREVIEW_EDGE).map_err(|e| format!("{e:#}"))?;
+                        let (meta, preview) = raw::load_preview_and_keep(&path, PREVIEW_EDGE).map_err(|e| format!("{e:#}"))?;
                         // Fitted here rather than when the image is shown (see `App::install`).
                         if sk_core::camera_look::wanted(&sidecar::load(&path).adjustments, sk_core::camera_look::for_new()) {
                             sk_core::camera_look::fit_cached(&meta, &preview);
@@ -1093,7 +1093,7 @@ impl Workers {
                         // An image never opened gets the camera's look it would show (see `camera_look`).
                         let for_new = sk_core::camera_look::for_new();
                         let adj = match sk_core::camera_look::wanted(&adj, for_new) {
-                            true => raw::load_preview(&path, 1024)
+                            true => raw::load_preview_and_keep(&path, 1024)
                                 .ok()
                                 .and_then(|(meta, preview)| sk_core::camera_look::apply_if_wanted(&meta, &preview, &adj, for_new))
                                 .unwrap_or(adj),
