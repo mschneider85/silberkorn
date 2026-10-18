@@ -9,9 +9,10 @@ use rayon::prelude::*;
 use crate::detail::{Plane, box_blur, gaussian_blur};
 
 /// Mean fine-detail amplitude (0..1 luminance) that maps to the top of the scale, in a
-/// rendering whose long edge is [`REFERENCE_EDGE`] pixels. Sharp textures in real photos reach
-/// only about 0.01..0.03; out-of-focus areas stay below about 0.004.
-const DETAIL_FULL: f32 = 0.04;
+/// rendering whose long edge is [`REFERENCE_EDGE`] pixels. On a landscape that is in focus
+/// throughout, sensitivity 0 then marks about 40 % of the image, 50 about 75 % and 100 about
+/// 90 %; with 0.04 even sensitivity 0 marked almost everything.
+const DETAIL_FULL: f32 = 0.10;
 
 /// Long edge of the renderings [`DETAIL_FULL`] is tuned for (the app's previews).
 pub const REFERENCE_EDGE: f32 = 2048.0;
