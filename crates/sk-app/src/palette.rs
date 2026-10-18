@@ -78,7 +78,7 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Lens, "Trapezkorrektur", "perspektive stürzende linien upright keystone trapez"),
     (Tab::Lens, "Objektivkorrektur", "lens verzeichnung chromatische aberration ca farbsaum farbsäume defringe lila grün vignette vignettierung randabschattung lensfun profil fisheye fischauge entzerren defish"),
     (Tab::Exposure, "Belichtung", "exposure kontrast helligkeit sättigung"),
-    (Tab::Exposure, "Lichter und Tiefen", "hdr lichter tiefen weiß schwarz highlights shadows"),
+    (Tab::Exposure, "Lichter & Tiefen", "hdr lichter tiefen weiß schwarz highlights shadows"),
     (Tab::Exposure, "Tonwerte", "levels schwarzpunkt weißpunkt"),
     (Tab::Exposure, "Gradationskurve", "curve kurve tonkurve luma helligkeitskurve"),
     (Tab::Exposure, "Neu ausleuchten", "relight licht vordergrund hintergrund gegenlicht aufhellen tiefe ki"),

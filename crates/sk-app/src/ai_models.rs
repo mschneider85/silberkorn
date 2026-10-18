@@ -217,6 +217,6 @@ impl App {
 /// Progress of a model download below a tool: what is loaded and how far.
 pub fn download_progress(ui: &mut egui::Ui, f: AiFeature, progress: f32) {
     ui.add(egui::ProgressBar::new(progress).desired_height(6.0));
-    crate::widgets::hint(ui, format!("KI-Modell wird geladen ({} MB, einmalig) … {:.0} %", f.download_mb(), progress * 100.0));
+    crate::widgets::hint(ui, format!("Lade KI-Modell ({} MB, einmalig) … {:.0} %", f.download_mb(), progress * 100.0));
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
 }

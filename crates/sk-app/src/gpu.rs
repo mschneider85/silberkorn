@@ -46,7 +46,7 @@ impl App {
                 _ if !develop => (Tone::Off, "Aus", "Alles rechnet auf dem Prozessor.".to_string()),
                 None => {
                     ctx.request_repaint_after(std::time::Duration::from_millis(200));
-                    (Tone::Accent, "Wird eingerichtet", "Die Grafikkarte wird vorbereitet …".to_string())
+                    (Tone::Accent, "Wird eingerichtet", "Bereite die Grafikkarte vor …".to_string())
                 }
                 Some(None) => (Tone::Warn, "Prozessor", "Keine geeignete Grafikkarte gefunden; es rechnet der Prozessor.".to_string()),
                 Some(Some(name)) => match sk_core::gpu::problem() {

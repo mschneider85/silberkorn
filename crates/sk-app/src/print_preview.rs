@@ -130,7 +130,7 @@ impl App {
             (false, _) => "",
             (true, true) => "  ·  Druckgröße",
             (true, false) => {
-                hints.push("Druckgröße ≈: Bildschirm nicht kalibriert, die Größe ist geschätzt (Tab „Ausgabe“ → Bildschirm kalibrieren).".to_string());
+                hints.push("Druckgröße ≈: Bildschirm nicht kalibriert, die Größe ist geschätzt (Tab „Ausgabe“ → Bildschirm kalibrieren)".to_string());
                 "  ·  Druckgröße ≈"
             }
         };
@@ -145,7 +145,7 @@ impl App {
         let colors = if self.softproof.on {
             ""
         } else {
-            hints.push(crate::commands::hint("Softproof aus: Die Farben zeigen den Bildschirm, nicht das Papier", "softproof") + ".");
+            hints.push(crate::commands::hint("Softproof aus: die Farben zeigen den Bildschirm, nicht das Papier", "softproof"));
             "  ·  Softproof aus"
         };
         let text = format!("DRUCK  ·  {}  ·  {}  ·  {:.0} ppi{off}{zoom}{colors}", s.format.label(), s.fit.label(), l.ppi);
@@ -236,7 +236,7 @@ impl App {
             .subtitle("Damit 100 % in der Druckvorschau echte Zentimeter sind")
             .width(area.x.max(460.0));
         let modal = dialog.show(ctx, |ui| {
-            ui.label("Halte eine Scheckkarte (EC- oder Kreditkarte) an den Bildschirm und ändere die Größe, bis das Rechteck genau so groß ist wie die Karte.");
+            ui.label("Eine Scheckkarte (EC- oder Kreditkarte) an den Bildschirm halten und die Größe ändern, bis das Rechteck genau so groß ist wie die Karte.");
             ui.add_space(6.0);
             let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), area.y), egui::Sense::hover());
             let painter = ui.painter_at(rect);

@@ -144,7 +144,7 @@ impl App {
                     app.request_removal();
                 }
             });
-            self.status = format!("Entfernen: KI-Modell wird geladen ({} MB, einmalig) …", AiFeature::Inpaint.download_mb());
+            self.status = format!("Entfernen: lade KI-Modell ({} MB, einmalig) …", AiFeature::Inpaint.download_mb());
             return;
         }
         let Some(cur) = &self.current else { return };

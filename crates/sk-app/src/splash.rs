@@ -116,9 +116,9 @@ impl App {
     /// What the app is doing, for the start screen.
     fn startup_status(&self) -> String {
         if let Some(p) = self.ai_preload_progress() {
-            format!("KI-Modelle werden geladen … {:.0} %", p * 100.0)
+            format!("Lade KI-Modelle … {:.0} %", p * 100.0)
         } else if let Some((done, total)) = self.index_progress {
-            format!("Indexiere Bilder … {done} / {total}")
+            format!("Indexiere {done} / {total} …")
         } else if self.loading.is_some() {
             "Öffne Bild …".into()
         } else if let Some(s) = &self.session {

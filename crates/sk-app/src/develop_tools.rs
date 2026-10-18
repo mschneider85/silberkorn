@@ -302,7 +302,7 @@ impl App {
                     }
                     (None, None) if downloading || (!db_loaded && lens_name.is_some()) => {
                         ui.spinner();
-                        ui.label("Objektivprofile werden geladen…");
+                        ui.label("Lade Objektivprofile …");
                     }
                     (None, None) if lens_name.is_some() => {
                         ui.label(RichText::new("Kein Profil für dieses Objektiv").color(crate::theme::TEXT_FAINT));

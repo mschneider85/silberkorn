@@ -164,7 +164,7 @@ impl App {
         self.picking_focus = false;
         let Some(cur) = &self.current else { return };
         let Some(map) = sk_core::depth::load(&cur.meta.path) else {
-            self.status = "Fokus: Die Tiefenkarte wird noch berechnet".into();
+            self.status = "Fokus: die Tiefenkarte wird noch berechnet".into();
             return;
         };
         let p = &cur.preview;
@@ -302,9 +302,9 @@ impl App {
         let Some(path) = self.current_path() else { return };
         let Some(map) = sk_core::depth::load(&path) else {
             if !self.ensure_ai(AiFeature::Depth) {
-                self.status = format!("Tiefe auswählen: KI-Modell wird geladen ({} MB, einmalig) …", AiFeature::Depth.download_mb());
+                self.status = format!("Tiefe auswählen: lade KI-Modell ({} MB, einmalig) …", AiFeature::Depth.download_mb());
             } else {
-                self.status = "Tiefe auswählen: Tiefenkarte wird berechnet …".into();
+                self.status = "Tiefe auswählen: berechne Tiefenkarte …".into();
             }
             self.depth.failed.remove(&path);
             self.depth.cancelled.remove(&path);
@@ -367,7 +367,7 @@ fn depth_status(ui: &mut Ui, state: &DepthState, active: bool) {
         _ if !active => {}
         DepthState::Running(p) => {
             ui.add(egui::ProgressBar::new(*p).desired_height(6.0));
-            ui.label(faint("Tiefenkarte wird berechnet …"));
+            ui.label(faint("Berechne Tiefenkarte …"));
         }
         DepthState::Waiting => {
             ui.label(faint("Tiefenkarte wird gleich berechnet …"));

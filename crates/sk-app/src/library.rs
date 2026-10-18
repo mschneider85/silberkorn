@@ -159,8 +159,8 @@ impl App {
             .filter(|s| !folder.starts_with(&s.root))
             .map(|s| s.folder(sk_core::session::SessionFolder::Capture));
         self.status = match &copy_to {
-            Some(_) => format!("Kopiere {} in die Session…", crate::widgets::image_count(paths.len())),
-            None => format!("Importiere {}…", crate::widgets::image_count(paths.len())),
+            Some(_) => format!("Kopiere {} in die Session …", crate::widgets::image_count(paths.len())),
+            None => format!("Importiere {} …", crate::widgets::image_count(paths.len())),
         };
         self.workers.index(IndexJob { catalog: self.catalog_path(), paths, import: true, copy_to });
     }
@@ -515,11 +515,11 @@ impl App {
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.library_ui.new_album).hint_text("Name").desired_width(110.0));
                 let name = self.library_ui.new_album.trim().to_string();
-                if ui.add_enabled(!name.is_empty(), egui::Button::new("+ Album")).on_hover_text("Neues Album mit der Auswahl").clicked() {
+                if ui.add_enabled(!name.is_empty(), egui::Button::new(format!("{}  Album", crate::theme::icon::PLUS))).on_hover_text("Neues Album mit der Auswahl").clicked() {
                     action = Some(AlbumAction::Create(name.clone(), false));
                 }
                 if ui
-                    .add_enabled(!name.is_empty() && !self.filter.is_empty(), egui::Button::new("+ Filteralbum"))
+                    .add_enabled(!name.is_empty() && !self.filter.is_empty(), egui::Button::new(format!("{}  Filteralbum", crate::theme::icon::PLUS)))
                     .on_hover_text("Album, das immer die Bilder des aktuellen Filters zeigt")
                     .clicked()
                 {
@@ -554,7 +554,7 @@ impl App {
                     AlbumAction::Delete(id, name) => self.pending_deletion = Some(crate::deletion::Deletion::Album(id, name)),
                     AlbumAction::AddSelection(id) => {
                         let n = c.add_to_album(id, &selected).unwrap_or(0);
-                        self.status = format!("{n} Bild(er) zum Album hinzugefügt");
+                        self.status = format!("{} zum Album hinzugefügt", crate::widgets::image_count(n));
                     }
                     AlbumAction::RemoveSelection(id) => {
                         let _ = c.remove_from_album(id, &selected);

@@ -105,12 +105,12 @@ impl App {
                 toggle = true;
             }
             let name = match &s.target {
-                ProofTarget::Recipe => format!("Wie Ausgabe-Rezept ({})", self.recipe_space().label()),
+                ProofTarget::Recipe => format!("Wie Ausgaberezept ({})", self.recipe_space().label()),
                 t => sk_core::softproof::target_name(t),
             };
             widgets::combo_field(ui, "Profil", name, |ui| {
-                ui.selectable_value(&mut s.target, ProofTarget::Recipe, "Wie Ausgabe-Rezept")
-                    .on_hover_text("Farbraum des gewählten Ausgabe-Rezepts");
+                ui.selectable_value(&mut s.target, ProofTarget::Recipe, "Wie Ausgaberezept")
+                    .on_hover_text("Farbraum des gewählten Ausgaberezepts");
                 ui.separator();
                 for sp in [OutputSpace::Srgb, OutputSpace::AdobeRgb, OutputSpace::DisplayP3] {
                     ui.selectable_value(&mut s.target, ProofTarget::Space(sp), sp.label());

@@ -1471,6 +1471,11 @@ pub fn image_count(n: usize) -> String {
     if n == 1 { "1 Bild".to_string() } else { format!("{n} Bilder") }
 }
 
+/// [`image_count`] after "von": "1 Bild", "3 Bildern".
+pub fn images_dative(n: usize) -> String {
+    if n == 1 { "1 Bild".to_string() } else { format!("{n} Bildern") }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

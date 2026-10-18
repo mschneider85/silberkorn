@@ -1799,7 +1799,7 @@ impl App {
         if self.status.is_empty() {
             self.status = match old.len() {
                 0 => format!("Alle ausgewählten Bilder nutzen schon Prozessversion {latest}"),
-                n => format!("{n} Bild(er) auf Prozessversion {latest} gehoben"),
+                n => format!("{} auf Prozessversion {latest} gehoben", crate::widgets::image_count(n)),
             };
         }
     }
@@ -1845,7 +1845,7 @@ impl App {
             return;
         }
         self.export_progress = Some((0, items.len()));
-        self.status = format!("Exportiere {}…", crate::widgets::image_count(items.len()));
+        self.status = format!("Exportiere {} …", crate::widgets::image_count(items.len()));
         self.save_settings();
         let mut recipes: Vec<ExportRecipe> = self.recipes.iter().filter(|r| r.enabled).cloned().collect();
         // In a session, relative output folders belong to the session (default: its Output folder).
@@ -2172,10 +2172,10 @@ impl App {
                             self.status = "Maske erstellt".into();
                         }
                         Err(e) if e == "OBJECT_MODEL_MISSING" => {
-                            self.status = "Objekt auswählen: Das KI-Modell wird noch geladen …".into();
+                            self.status = "Objekt auswählen: das KI-Modell wird noch geladen …".into();
                         }
                         Err(e) if e == "MODEL_MISSING" => {
-                            self.status = "Motiv und Himmel: Das KI-Modell wird noch geladen …".into();
+                            self.status = "Motiv und Himmel: das KI-Modell wird noch geladen …".into();
                         }
                         Err(e) => self.status = format!("Maske fehlgeschlagen: {e}"),
                     }
@@ -2456,7 +2456,7 @@ impl App {
     fn confirm_quit(&mut self, ctx: &egui::Context) {
         let mut busy: Vec<String> = self.activities().into_iter().map(|a| a.label).collect();
         if !self.unsaved.is_empty() {
-            busy.push(format!("Einstellungen von {} Bild(ern) konnten nicht gespeichert werden und gehen verloren", self.unsaved.len()));
+            busy.push(format!("Einstellungen von {} konnten nicht gespeichert werden und gehen verloren", crate::widgets::images_dative(self.unsaved.len())));
         }
         if ctx.input(|i| i.viewport().close_requested()) && !busy.is_empty() && !self.quit_confirmed {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);

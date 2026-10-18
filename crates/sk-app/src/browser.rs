@@ -89,7 +89,7 @@ impl App {
             let msg = if let Some(e) = &self.load_error {
                 format!("Fehler: {e}")
             } else if self.loading.is_some() {
-                "Lade…".into()
+                "Lade …".into()
             } else if self.entries.is_empty() {
                 // An empty folder of the session is not the start: say what is (not) in it.
                 match self.empty_session_folder() {
@@ -456,7 +456,7 @@ impl App {
             painter.galley(pos, galley, Color32::WHITE);
         }
         if self.loading.is_some() {
-            painter.text(rect.right_top() + vec2(-10.0, 8.0), egui::Align2::RIGHT_TOP, "Lade…", egui::FontId::proportional(13.0), Color32::from_gray(200));
+            painter.text(rect.right_top() + vec2(-10.0, 8.0), egui::Align2::RIGHT_TOP, "Lade …", egui::FontId::proportional(13.0), Color32::from_gray(200));
         }
         let mut labels: Vec<(String, Color32, Option<String>)> = Vec::new();
         if self.proof_view {
@@ -471,8 +471,8 @@ impl App {
                     let warn = if self.softproof.settings.gamut_warning && r.output_space != sk_core::color::OutputSpace::ProPhoto { "  ·  beschnitten: magenta" } else { "" };
                     format!("PROOF  ·  {name}{format}  ·  {} × {} px  ·  {}  ·  {}{warn}", p.width, p.height, r.output_space.label(), file_size(p.file_size))
                 }
-                (_, Some(r)) => format!("PROOF  ·  {}  ·  wird berechnet …", r.name),
-                (_, None) => "PROOF  ·  kein Ausgabe-Rezept".into(),
+                (_, Some(r)) => format!("PROOF  ·  {}  ·  Berechne …", r.name),
+                (_, None) => "PROOF  ·  kein Ausgaberezept".into(),
             };
             labels.push((text, theme::ACCENT.gamma_multiply(0.85), None));
         }

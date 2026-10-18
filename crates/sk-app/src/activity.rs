@@ -27,7 +27,7 @@ impl App {
             v.push(Activity { label: "Entfernen".into(), progress: Some(self.removal_progress), in_viewer: true, cancel: None });
         }
         if self.ai_busy {
-            v.push(Activity { label: "Maske wird berechnet".into(), progress: None, in_viewer: true, cancel: None });
+            v.push(Activity { label: "Berechne Maske".into(), progress: None, in_viewer: true, cancel: None });
         }
         if let Some((done, total)) = self.look_progress {
             v.push(Activity { label: "Look angleichen".into(), progress: Some(done as f32 / total.max(1) as f32), in_viewer: true, cancel: None });
@@ -40,17 +40,17 @@ impl App {
         }
         if let Some((done, total)) = self.export_progress {
             v.push(Activity {
-                label: format!("Exportieren {done} / {total}"),
+                label: format!("Exportiere {done} / {total}"),
                 progress: self.export_fraction(),
                 in_viewer: false,
                 cancel: self.export_cancel.clone(),
             });
         }
         if let Some((done, total)) = self.index_progress {
-            v.push(Activity { label: format!("Indexieren {done} / {total}"), progress: Some(done as f32 / total.max(1) as f32), in_viewer: false, cancel: None });
+            v.push(Activity { label: format!("Indexiere {done} / {total}"), progress: Some(done as f32 / total.max(1) as f32), in_viewer: false, cancel: None });
         }
         if self.lens_db_downloading {
-            v.push(Activity { label: "Objektivprofile werden geladen".into(), progress: None, in_viewer: false, cancel: None });
+            v.push(Activity { label: "Lade Objektivprofile".into(), progress: None, in_viewer: false, cancel: None });
         }
         v
     }

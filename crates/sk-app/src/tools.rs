@@ -460,7 +460,7 @@ impl App {
                 });
             }
             ui.horizontal(|ui| {
-                if ui.button("+ Rezept").clicked() {
+                if ui.button(format!("{}  Rezept", crate::theme::icon::PLUS)).clicked() {
                     add = true;
                 }
                 if self.recipes.len() > 1 && ui.button("\u{E4A6}  Löschen …").clicked() {
@@ -493,7 +493,7 @@ impl App {
                 for sp in sk_core::color::OutputSpace::ALL {
                     ui.add_enabled_ui(r.format.supports(sp), |ui| ui.selectable_value(&mut r.output_space, sp, sp.label()))
                         .response
-                        .on_disabled_hover_text("AVIF-Dateien kennzeichnen den Farbraum ohne ICC-Profil; das geht nur für sRGB und Display P3.");
+                        .on_disabled_hover_text("AVIF-Dateien kennzeichnen den Farbraum ohne ICC-Profil; das geht nur für sRGB und Display P3");
                 }
             });
             // Lossless formats have no quality: shown, but disabled.

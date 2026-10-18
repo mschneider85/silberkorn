@@ -107,7 +107,7 @@ impl Tool {
             Tool::ColorBalance => "Farbbalance",
             Tool::BlackWhite => "Schwarzweiß",
             Tool::Exposure => "Belichtung",
-            Tool::HighlightsShadows => "Lichter und Tiefen",
+            Tool::HighlightsShadows => "Lichter & Tiefen",
             Tool::Levels => "Tonwerte",
             Tool::Curves => "Gradationskurve",
             Tool::Sharpening => "Schärfen",

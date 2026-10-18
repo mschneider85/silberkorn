@@ -124,7 +124,7 @@ impl App {
         let deletable = current.as_ref().is_some_and(|p| variant::number(p) > 1);
         let delete = ui
             .add_enabled(deletable, Button::new(format!("{}  Variante löschen …", icon::X_SQUARE)))
-            .on_disabled_hover_text("Nur weitere Varianten lassen sich löschen; die erste gehört zur Datei.");
+            .on_disabled_hover_text("Nur weitere Varianten lassen sich löschen; die erste gehört zur Datei");
         if delete.clicked() {
             self.pending = Some(PendingAction::DeleteVariant);
         }

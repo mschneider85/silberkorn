@@ -494,7 +494,7 @@ impl App {
                         }
                     }
                 });
-                if tool(ui, icon::FILE_MAGNIFYING_GLASS, &crate::commands::hint("Ausgabevorschau: so, wie das Ausgabe-Rezept das Bild schreibt", "proof"), self.proof_view, has).clicked() {
+                if tool(ui, icon::FILE_MAGNIFYING_GLASS, &crate::commands::hint("Ausgabevorschau: so, wie das Ausgaberezept das Bild schreibt", "proof"), self.proof_view, has).clicked() {
                     self.toggle_proof();
                 }
                 if tool(ui, icon::CROSSHAIR, &crate::commands::hint("Schärfemaske: scharfe Bereiche markieren", "focus-mask"), self.focus_mask, has).clicked() {

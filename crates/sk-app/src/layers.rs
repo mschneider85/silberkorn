@@ -418,7 +418,7 @@ impl App {
             && let Some(layer) = self.layer_id(index)
         {
             if !self.ensure_ai(AiFeature::Object) {
-                self.status = "Objekt auswählen: Das KI-Modell wird noch geladen …".into();
+                self.status = "Objekt auswählen: das KI-Modell wird noch geladen …".into();
                 return;
             }
             let include = !ui.input(|i| i.modifiers.alt);
@@ -759,7 +759,7 @@ impl App {
         }
         let Some(cur) = &self.current else { return };
         self.ai_busy = true;
-        self.status = "Berechne Maske…".into();
+        self.status = "Berechne Maske …".into();
         self.workers.ai_mask(crate::workers::AiJob {
             generation: self.generation(),
             layer,

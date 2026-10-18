@@ -249,7 +249,7 @@ impl App {
             ui.label(RichText::new(format!("Gesichter von „{}“ ({})", person_name(person), faces.len())).strong());
         })
         .response
-        .on_hover_text("Falsch zugeordnete Gesichter auf die richtige Person ziehen oder abtrennen (Strg+Klick für mehrere). Doppelklick öffnet das Bild.");
+        .on_hover_text("Falsch zugeordnete Gesichter auf die richtige Person ziehen oder abtrennen (Strg+Klick für mehrere) · Doppelklick öffnet das Bild");
         let mut open_image = None;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);

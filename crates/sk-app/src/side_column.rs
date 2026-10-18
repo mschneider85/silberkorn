@@ -285,7 +285,7 @@ impl App {
 fn tool_of(name: &'static str) -> Option<(Tab, Option<&'static str>)> {
     let t = match name {
         "Belichtung" | "Kontrast" | "Helligkeit" => (Tab::Exposure, Some("Belichtung")),
-        "Lichter" | "Tiefen" | "Weiß" | "Schwarz" => (Tab::Exposure, Some("Lichter und Tiefen")),
+        "Lichter" | "Tiefen" | "Weiß" | "Schwarz" => (Tab::Exposure, Some("Lichter & Tiefen")),
         "Tonwerte" => (Tab::Exposure, Some("Tonwerte")),
         "Gradationskurve" => (Tab::Exposure, Some("Gradationskurve")),
         "Weißabgleich" => (Tab::Color, Some("Weißabgleich")),
