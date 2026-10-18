@@ -199,7 +199,7 @@ impl App {
         let help = "Zeichnet Vorder- und Hintergrund weich wie eine offene Blende.\n\nFokus: Pipette oder Regler (0 fern, 1 nah). Schärfebereich: wie viel davor und dahinter scharf bleibt. Lichter: helle Stellen werden zu leuchtenden Scheiben.";
         crate::widgets::tool_section_help(ui, sk_core::tools::Tool::LensBlur, help, Some(&mut || reset = true), |ui| {
             let d = LensBlur::default();
-            slider_row(ui, "Stärke", &mut lb.amount, 0.0..=100.0, 0.0, 0);
+            crate::widgets::percent_row(ui, "Stärke", &mut lb.amount, 0.0..=100.0, 0.0);
             ui.add_enabled_ui(!lb.is_off(), |ui| {
                 ui.horizontal(|ui| {
                     let pipette = format!("{}  Fokus setzen", crate::theme::icon::EYEDROPPER);
@@ -207,8 +207,8 @@ impl App {
                         toggle_pick = true;
                     }
                 });
-                slider_row(ui, "Fokus", &mut lb.focus, 0.0..=1.0, d.focus, 2);
-                slider_row(ui, "Schärfebereich", &mut lb.range, 0.0..=1.0, d.range, 2);
+                crate::widgets::unit_percent_row(ui, "Fokus", &mut lb.focus, 0.0..=1.0, d.focus, Default::default());
+                crate::widgets::unit_percent_row(ui, "Schärfebereich", &mut lb.range, 0.0..=1.0, d.range, Default::default());
                 slider_row(ui, "Lichter", &mut lb.bokeh, 0.0..=100.0, 0.0, 0);
             });
             depth_status(ui, &state, !lb.is_off());
@@ -254,8 +254,8 @@ impl App {
             ui.add_space(4.0);
             ui.add_enabled_ui(!rl.is_off(), |ui| {
                 crate::widgets::subheading(ui, "Trennung");
-                slider_row(ui, "Grenze", &mut rl.split, 0.0..=1.0, d.split, 2);
-                slider_row(ui, "Übergang", &mut rl.falloff, 0.02..=1.0, d.falloff, 2);
+                crate::widgets::unit_percent_row(ui, "Grenze", &mut rl.split, 0.0..=1.0, d.split, Default::default());
+                crate::widgets::unit_percent_row(ui, "Übergang", &mut rl.falloff, 0.02..=1.0, d.falloff, Default::default());
             });
             depth_status(ui, &state, !rl.is_off());
         });
@@ -279,9 +279,9 @@ impl App {
         let help = "Legt Dunst über das Bild, der mit der Entfernung dichter wird.\n\nReichweite: wie weit nach vorn er reicht. Helligkeit und Wärme färben ihn.";
         crate::widgets::tool_section_help(ui, sk_core::tools::Tool::Atmosphere, help, Some(&mut || reset = true), |ui| {
             let d = Atmosphere::default();
-            slider_row(ui, "Stärke", &mut at.amount, 0.0..=100.0, 0.0, 0);
+            crate::widgets::percent_row(ui, "Stärke", &mut at.amount, 0.0..=100.0, 0.0);
             ui.add_enabled_ui(!at.is_off(), |ui| {
-                slider_row(ui, "Reichweite", &mut at.reach, 0.02..=1.0, d.reach, 2);
+                crate::widgets::unit_percent_row(ui, "Reichweite", &mut at.reach, 0.02..=1.0, d.reach, Default::default());
                 slider_row_with(ui, "Helligkeit", &mut at.brightness, -100.0..=100.0, 0.0, 0, SliderOpts { rail: Some(RAIL_TONE), ..Default::default() });
                 slider_row_with(ui, "Wärme", &mut at.warmth, -100.0..=100.0, 0.0, 0, SliderOpts { rail: Some(RAIL_KELVIN), ..Default::default() });
             });
@@ -326,10 +326,10 @@ impl App {
         let mut r = *range;
         let d = DepthRange::default();
         let mut changed = false;
-        ui.label(RichText::new("Tiefe (0 fern, 1 nah)").strong());
-        changed |= slider_row(ui, "Nah", &mut r.near, 0.0..=1.0, d.near, 2);
-        changed |= slider_row(ui, "Fern", &mut r.far, 0.0..=1.0, d.far, 2);
-        changed |= slider_row(ui, "Weichheit", &mut r.falloff, 0.0..=0.5, d.falloff, 2);
+        ui.label(RichText::new("Tiefe (0 % fern, 100 % nah)").strong());
+        changed |= crate::widgets::unit_percent_row(ui, "Nah", &mut r.near, 0.0..=1.0, d.near, Default::default());
+        changed |= crate::widgets::unit_percent_row(ui, "Fern", &mut r.far, 0.0..=1.0, d.far, Default::default());
+        changed |= crate::widgets::unit_percent_row(ui, "Weichheit", &mut r.falloff, 0.0..=0.5, d.falloff, Default::default());
         changed.then_some(r)
     }
 }
@@ -348,7 +348,7 @@ fn relight_card(ui: &mut Ui, symbol: &str, title: &str, color: Color32, ev: &mut
     let resp = frame.show(ui, |ui| {
         ui.label(RichText::new(format!("{symbol}  {title}")).size(12.5).strong().color(if active { color } else { color.gamma_multiply(0.8) }));
         ui.add_space(2.0);
-        slider_row_with(ui, "Belichtung", ev, -2.0..=2.0, 0.0, 2, SliderOpts { rail: Some(RAIL_TONE), ..Default::default() });
+        slider_row_with(ui, "Belichtung", ev, -2.0..=2.0, 0.0, 2, SliderOpts { suffix: " EV", rail: Some(RAIL_TONE), ..Default::default() });
         let opts = SliderOpts { rail: Some(RAIL_KELVIN), ..Default::default() };
         slider_row_with(ui, "Wärme", warmth, -100.0..=100.0, 0.0, 0, opts);
     });

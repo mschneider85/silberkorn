@@ -96,7 +96,7 @@ fn band_slider(ui: &mut Ui, label: &str, band: &mut HslBand, view: ColorView, hu
     let rail = band_rail(view, hue);
     let opts = widgets::SliderOpts { rail: Some(&rail), ..Default::default() };
     match view {
-        ColorView::Hue => widgets::slider_row_with(ui, label, &mut band.hue, -30.0..=30.0, 0.0, 1, opts),
+        ColorView::Hue => widgets::slider_row_with(ui, label, &mut band.hue, -30.0..=30.0, 0.0, 1, widgets::SliderOpts { suffix: "°", ..opts }),
         ColorView::Saturation => widgets::slider_row_with(ui, label, &mut band.saturation, -100.0..=100.0, 0.0, 0, opts),
         ColorView::Lightness | ColorView::Single | ColorView::Zones => widgets::slider_row_with(ui, label, &mut band.lightness, -100.0..=100.0, 0.0, 0, opts),
     }
@@ -375,7 +375,7 @@ impl App {
         let mut reset_rot = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Rotation, Some(&mut || reset_rot = true), |ui| {
             let g = &mut adj.geometry;
-            let moved = slider_row(ui, "Geraderichten", &mut g.straighten, -45.0..=45.0, 0.0, 1);
+            let moved = widgets::slider_row_with(ui, "Geraderichten", &mut g.straighten, -45.0..=45.0, 0.0, 1, widgets::SliderOpts { suffix: "°", ..Default::default() });
             changed |= moved;
             grid_moved |= moved;
             ui.horizontal_wrapped(|ui| {
@@ -545,7 +545,7 @@ impl App {
 
         let (mut r_sharp, mut r_clarity, mut r_haze) = (false, false, false);
         widgets::tool_section(ui, sk_core::tools::Tool::Sharpening, Some(&mut || r_sharp = true), |ui| {
-            changed |= slider_row(ui, "Stärke", &mut d.sharpen_amount, 0.0..=500.0, defaults.sharpen_amount, 0);
+            changed |= crate::widgets::percent_row(ui, "Stärke", &mut d.sharpen_amount, 0.0..=500.0, defaults.sharpen_amount);
             // Without an effect, what shapes it is shown but disabled (here and below).
             ui.add_enabled_ui(d.sharpen_amount > 0.0, |ui| {
                 changed |= slider_row(ui, "Radius", &mut d.sharpen_radius, 0.2..=3.0, defaults.sharpen_radius, 1);
@@ -558,7 +558,7 @@ impl App {
             changed |= slider_row(ui, "Struktur", t.pick(&mut d.structure, |l| &mut l.structure), -100.0..=100.0, 0.0, 0);
         });
         widgets::tool_section(ui, sk_core::tools::Tool::Dehaze, Some(&mut || r_haze = true), |ui| {
-            changed |= slider_row(ui, "Stärke", t.pick(&mut d.dehaze, |l| &mut l.dehaze), -100.0..=100.0, 0.0, 0);
+            changed |= crate::widgets::percent_row(ui, "Stärke", t.pick(&mut d.dehaze, |l| &mut l.dehaze), -100.0..=100.0, 0.0);
         });
         if r_sharp {
             (d.sharpen_amount, d.sharpen_radius, d.sharpen_threshold) = (defaults.sharpen_amount, defaults.sharpen_radius, defaults.sharpen_threshold);
@@ -597,16 +597,16 @@ impl App {
         let (mut r_glow, mut r_vig, mut r_grain) = (false, false, false);
         let glow_help = "Lässt Lichter leuchten und in ihre Umgebung strahlen, wie der Orton-Effekt.\n\nGröße: wie weit das Leuchten reicht.";
         widgets::tool_section_help(ui, sk_core::tools::Tool::Glow, glow_help, Some(&mut || r_glow = true), |ui| {
-            changed |= slider_row(ui, "Stärke", &mut d.glow_amount, 0.0..=100.0, 0.0, 0);
+            changed |= crate::widgets::percent_row(ui, "Stärke", &mut d.glow_amount, 0.0..=100.0, 0.0);
             ui.add_enabled_ui(d.glow_amount > 0.0, |ui| {
                 changed |= slider_row(ui, "Größe", &mut d.glow_size, 0.0..=100.0, sk_core::params::GLOW_SIZE, 0);
             });
         });
         widgets::tool_section(ui, sk_core::tools::Tool::Vignette, Some(&mut || r_vig = true), |ui| {
-            changed |= slider_row(ui, "Stärke", &mut d.vignette_amount, -100.0..=100.0, 0.0, 0);
+            changed |= crate::widgets::percent_row(ui, "Stärke", &mut d.vignette_amount, -100.0..=100.0, 0.0);
         });
         widgets::tool_section(ui, sk_core::tools::Tool::Grain, Some(&mut || r_grain = true), |ui| {
-            changed |= slider_row(ui, "Stärke", &mut d.grain_amount, 0.0..=100.0, 0.0, 0);
+            changed |= crate::widgets::percent_row(ui, "Stärke", &mut d.grain_amount, 0.0..=100.0, 0.0);
             ui.add_enabled_ui(d.grain_amount > 0.0, |ui| {
                 changed |= slider_row(ui, "Größe", &mut d.grain_size, 0.0..=100.0, defaults.grain_size, 0);
             });
@@ -780,7 +780,7 @@ impl App {
             let rail = |view| band_rail(view, st.hue);
             let (hue_rail, sat_rail, light_rail) = (rail(ColorView::Hue), rail(ColorView::Saturation), rail(ColorView::Lightness));
             let opts = |rail| widgets::SliderOpts { rail: Some(rail), ..Default::default() };
-            changed |= widgets::slider_row_with(ui, "Farbton", &mut st.hue_shift, -30.0..=30.0, 0.0, 1, opts(&hue_rail));
+            changed |= widgets::slider_row_with(ui, "Farbton", &mut st.hue_shift, -30.0..=30.0, 0.0, 1, widgets::SliderOpts { suffix: "°", ..opts(&hue_rail) });
             changed |= widgets::slider_row_with(ui, "Sättigung", &mut st.saturation, -100.0..=100.0, 0.0, 0, opts(&sat_rail));
             changed |= widgets::slider_row_with(ui, "Helligkeit", &mut st.lightness_shift, -100.0..=100.0, 0.0, 0, opts(&light_rail));
         });

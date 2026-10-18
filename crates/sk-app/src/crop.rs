@@ -79,7 +79,7 @@ impl App {
         } else {
             String::new()
         };
-        self.status = format!("Automatisch geraderichten: {:.1}°{keystone}", g.straighten).replace('.', ",");
+        self.status = format!("Automatisch geraderichten: {:.1}°{keystone}", g.straighten);
         self.edit(|a| a.geometry = g);
         self.commit_and_save();
     }
@@ -139,7 +139,7 @@ impl App {
         let adj = &cur.adjustments;
         let src = (cur.preview.width, cur.preview.height);
         let Some(g) = sk_core::upright::solve_guides(&segments, &adj.geometry, &adj.lens, cur.meta.lens.as_ref(), adj.rotation, src) else { return };
-        self.status = format!("Trapezkorrektur: vertikal {:.0}, horizontal {:.0}, Drehung {:.1}°", g.keystone_v, g.keystone_h, g.straighten).replace('.', ",");
+        self.status = format!("Trapezkorrektur: vertikal {:.0}, horizontal {:.0}, Drehung {:.1}°", g.keystone_v, g.keystone_h, g.straighten);
         self.edit(|a| a.geometry = g);
         self.commit_and_save();
     }

@@ -411,6 +411,24 @@ pub fn slider_row(
     slider_row_with(ui, label, value, range, default, decimals, SliderOpts::default())
 }
 
+/// [`slider_row`] for an amount in percent ("Stärke", "Deckkraft" …), whole numbers.
+pub fn percent_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, default: f32) -> bool {
+    slider_row_with(ui, label, value, range, default, 0, SliderOpts { suffix: " %", ..Default::default() })
+}
+
+/// [`percent_row`] for a share stored as 0..1 (`range` and `default` in that unit too): shown
+/// in percent like every other amount. Writes back only when moved, so stored values keep
+/// their precision.
+pub fn unit_percent_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, default: f32, opts: SliderOpts) -> bool {
+    let mut p = *value * 100.0;
+    let range = range.start() * 100.0..=range.end() * 100.0;
+    let moved = slider_row_with(ui, label, &mut p, range, default * 100.0, 0, SliderOpts { suffix: " %", ..opts });
+    if moved {
+        *value = p / 100.0;
+    }
+    moved
+}
+
 /// [`slider_row`] with a unit and/or a colored rail.
 pub fn slider_row_with(
     ui: &mut Ui,
@@ -464,12 +482,16 @@ pub fn slider_row_with(
             let span = range.end() - range.start();
             // Without `clamp_existing_to_range(false)` merely drawing the row would pull a value
             // from an older, wider range (e.g. keystone ±100) into the current one.
-            let drag = egui::DragValue::new(value)
+            let mut drag = egui::DragValue::new(value)
                 .range(range.clone())
                 .clamp_existing_to_range(false)
                 .fixed_decimals(decimals)
                 .suffix(opts.suffix)
                 .speed(span as f64 / 400.0);
+            // Sliders that go both ways show the direction: "+12", "-12", "0".
+            if *range.start() < 0.0 {
+                drag = drag.custom_formatter(move |v, _| if v.abs() < 0.5 * 10f64.powi(-(decimals as i32)) { format!("{:.decimals$}", 0.0) } else { format!("{v:+.decimals$}") });
+            }
             changed |= ui.add_sized(vec2(value_w, 20.0), drag).changed();
         });
     });
@@ -943,7 +965,7 @@ pub fn color_wheel(ui: &mut Ui, label: &str, wheel: &mut ColorWheel, with_lightn
                 None => {}
             }
         }
-        let mut tip = format!("Farbton {:.0}° · Stärke {:.0}", wheel.hue, wheel.amount);
+        let mut tip = format!("Farbton {:.0}° · Stärke {:.0} %", wheel.hue, wheel.amount);
         if with_lightness {
             tip += &format!(" · Helligkeit {:+.0}", wheel.lightness);
         }

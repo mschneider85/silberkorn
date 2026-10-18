@@ -32,12 +32,12 @@ pub const SPEED_KEYS: [(egui::Key, SpeedParam); 6] = [
     (egui::Key::T, SpeedParam::Temperature),
 ];
 
-/// "850 KB", "3,4 MB"
+/// "850 KB", "3.4 MB"
 fn file_size(bytes: usize) -> String {
     if bytes < 1024 * 1024 {
         format!("{} KB", bytes.div_ceil(1024))
     } else {
-        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0)).replace('.', ",")
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
 }
 
@@ -603,6 +603,13 @@ impl App {
         let Some(cur) = self.current.as_mut() else { return };
         let as_shot = cur.as_shot_temp_tint;
         let msg;
+        // As on the sliders: exposure in EV with two decimals, the rest whole numbers with sign,
+        // the color temperature of the whole image in Kelvin.
+        let value = |param: SpeedParam, v: f32| match param {
+            SpeedParam::Exposure => format!("{v:+.2} EV"),
+            _ if v.abs() < 0.5 => "0".to_string(),
+            _ => format!("{v:+.0}"),
+        };
         let adj = &mut cur.adjustments;
         if let Some(l) = layer.and_then(|i| adj.layers.get_mut(i)) {
             let a = &mut l.adjustments;
@@ -615,7 +622,7 @@ impl App {
                 SpeedParam::Temperature => ("Temperatur", &mut a.temperature, 2.0, -100.0, 100.0),
             };
             *v = (*v + step * dir).clamp(lo, hi);
-            msg = format!("   SPEED EDIT ({}) {name}: {:+.2}", l.name, *v);
+            msg = format!("   Schnellbearbeitung ({}) {name}: {}", l.name, value(param, *v));
         } else {
             if param == SpeedParam::Temperature && adj.white_balance.mode == sk_core::params::WbMode::AsShot {
                 adj.white_balance = sk_core::params::WhiteBalance { mode: sk_core::params::WbMode::Custom, kelvin: as_shot.0, tint: as_shot.1 };
@@ -626,10 +633,11 @@ impl App {
                 SpeedParam::Saturation => ("Sättigung", &mut adj.saturation, 2.0, -100.0, 100.0),
                 SpeedParam::Highlights => ("Lichter", &mut adj.highlights, 2.0, -100.0, 100.0),
                 SpeedParam::Shadows => ("Tiefen", &mut adj.shadows, 2.0, -100.0, 100.0),
-                SpeedParam::Temperature => ("Kelvin", &mut adj.white_balance.kelvin, 50.0, 2000.0, 15000.0),
+                SpeedParam::Temperature => ("Temperatur", &mut adj.white_balance.kelvin, 50.0, 2000.0, 15000.0),
             };
             *v = (*v + step * dir).clamp(lo, hi);
-            msg = format!("   SPEED EDIT {name}: {:+.2}", *v);
+            let shown = if param == SpeedParam::Temperature { format!("{:.0} K", *v) } else { value(param, *v) };
+            msg = format!("   Schnellbearbeitung {name}: {shown}");
         }
         self.speed_message = Some(msg);
         self.request_render();

@@ -542,7 +542,7 @@ impl App {
 
 /// What a match changed, in words.
 fn summary(before: &Adjustments, after: &Adjustments, opts: LookOptions) -> String {
-    let num = |v: f32, digits: usize| format!("{v:+.digits$}").replace('.', ",");
+    let num = |v: f32, digits: usize| format!("{v:+.digits$}");
     let mut parts = Vec::new();
     if opts.exposure && (after.exposure - before.exposure).abs() >= 0.01 {
         parts.push(format!("Belichtung {}", num(after.exposure - before.exposure, 2)));

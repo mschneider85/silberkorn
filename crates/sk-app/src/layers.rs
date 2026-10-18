@@ -175,10 +175,10 @@ pub fn brush_controls(ui: &mut Ui, b: &mut BrushSettings, tool: Option<LocalTool
     let d = Brushes::defaults_of(tool);
     let before = b.clone();
     slider_row(ui, "Größe", &mut b.size, 2.0..=400.0, d.size, 0);
-    slider_row(ui, "Härte", &mut b.hardness, 0.0..=1.0, d.hardness, 2);
-    slider_row(ui, "Deckkraft", &mut b.opacity, 0.05..=1.0, d.opacity, 2);
+    crate::widgets::unit_percent_row(ui, "Härte", &mut b.hardness, 0.0..=1.0, d.hardness, Default::default());
+    crate::widgets::unit_percent_row(ui, "Deckkraft", &mut b.opacity, 0.05..=1.0, d.opacity, Default::default());
     if flow_and_auto {
-        slider_row(ui, "Fluss", &mut b.flow, 0.02..=1.0, d.flow, 2);
+        crate::widgets::unit_percent_row(ui, "Fluss", &mut b.flow, 0.02..=1.0, d.flow, Default::default());
         ui.checkbox(&mut b.auto_mask, "Kanten beachten")
             .on_hover_text("Wirkt nur, wo das Bild der Pinselmitte ähnelt – hält Kanten wie den Horizont sauber");
     }
@@ -928,9 +928,9 @@ impl App {
                 let mut r = m.luma_range.unwrap_or_default();
                 ui.add_enabled_ui(luma_on, |ui| {
                     let luma = SliderOpts { rail: Some(RAIL_LUMA), ..Default::default() };
-                    *changed |= slider_row_with(ui, "Von", &mut r.low, 0.0..=1.0, 0.0, 2, luma);
-                    *changed |= slider_row_with(ui, "Bis", &mut r.high, 0.0..=1.0, 1.0, 2, luma);
-                    *changed |= slider_row(ui, "Weichheit", &mut r.falloff, 0.0..=0.5, 0.1, 2);
+                    *changed |= crate::widgets::unit_percent_row(ui, "Von", &mut r.low, 0.0..=1.0, 0.0, luma);
+                    *changed |= crate::widgets::unit_percent_row(ui, "Bis", &mut r.high, 0.0..=1.0, 1.0, luma);
+                    *changed |= crate::widgets::unit_percent_row(ui, "Weichheit", &mut r.falloff, 0.0..=0.5, 0.1, Default::default());
                     *changed |= ui.checkbox(&mut r.invert, "Bereich umkehren").changed();
                 });
                 if luma_on {
@@ -948,8 +948,8 @@ impl App {
                     }
                     let rail = hue_rail();
                     *changed |= slider_row_with(ui, "Farbton", &mut c.hue, 0.0..=360.0, 30.0, 0, SliderOpts { suffix: "°", rail: Some(&rail), ..Default::default() });
-                    *changed |= slider_row(ui, "Breite", &mut c.width, 2.0..=90.0, 25.0, 0);
-                    *changed |= slider_row(ui, "Weichheit", &mut c.falloff, 0.0..=60.0, 15.0, 0);
+                    *changed |= slider_row_with(ui, "Breite", &mut c.width, 2.0..=90.0, 25.0, 0, SliderOpts { suffix: "°", ..Default::default() });
+                    *changed |= slider_row_with(ui, "Weichheit", &mut c.falloff, 0.0..=60.0, 15.0, 0, SliderOpts { suffix: "°", ..Default::default() });
                     *changed |= slider_row(ui, "Min. Chroma", &mut c.min_chroma, 0.0..=0.2, 0.03, 3);
                 });
                 if color_on {
@@ -1538,7 +1538,7 @@ impl App {
             Some(LocalTool::Magic) => {
                 let d = Brushes::defaults_of(Some(LocalTool::Magic));
                 brushes_changed |= slider_row(ui, "Größe", &mut self.brushes.magic.size, 2.0..=400.0, d.size, 0);
-                slider_row(ui, "Toleranz", &mut self.magic_tolerance, 0.0..=1.0, 0.3, 2);
+                crate::widgets::unit_percent_row(ui, "Toleranz", &mut self.magic_tolerance, 0.0..=1.0, 0.3, Default::default());
             }
             Some(LocalTool::Object) => self.object_controls(ui),
             _ => {}
@@ -1678,7 +1678,7 @@ fn layer_changes(a: &LayerAdjustments) -> Vec<Change> {
     for (i, (label, tool, field, decimals)) in LAYER_FIELDS.iter().enumerate() {
         let v = *field(&mut a);
         if v != 0.0 {
-            let value = format!("{v:+.decimals$}").replace('.', ",");
+            let value = format!("{v:+.decimals$}");
             out.push(Change { label: label.to_string(), value, tool: *tool, key: ChangeKey::Field(i) });
         }
     }
@@ -1900,7 +1900,7 @@ mod tests {
         a.color_balance.shadows.amount = 25.0;
         let changes = layer_changes(&a);
         let labels: Vec<String> = changes.iter().map(|c| format!("{} {}", c.label, c.value)).collect();
-        assert_eq!(labels, ["Belichtung +0,40", "Weiß -12", "Farbeditor · Blau +0° +30 +0", "Farbbalance · Schatten 25 %"]);
+        assert_eq!(labels, ["Belichtung +0.40", "Weiß -12", "Farbeditor · Blau +0° +30 +0", "Farbbalance · Schatten 25 %"]);
         assert_eq!(tab_of(changes[2].tool), Tab::Color);
         changes[0].key.reset(&mut a);
         changes[3].key.reset(&mut a);

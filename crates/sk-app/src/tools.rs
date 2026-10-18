@@ -96,7 +96,8 @@ impl App {
         let mut reset_exposure = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Exposure, Some(&mut || reset_exposure = true), |ui| {
             let tone = widgets::SliderOpts { rail: Some(widgets::RAIL_TONE), ..Default::default() };
-            changed |= widgets::slider_row_with(ui, "Belichtung", t.pick(&mut adj.exposure, |l| &mut l.exposure), -4.0..=4.0, 0.0, 2, tone);
+            let ev = widgets::SliderOpts { suffix: " EV", ..tone };
+            changed |= widgets::slider_row_with(ui, "Belichtung", t.pick(&mut adj.exposure, |l| &mut l.exposure), -4.0..=4.0, 0.0, 2, ev);
             changed |= slider_row(ui, "Kontrast", t.pick(&mut adj.contrast, |l| &mut l.contrast), -100.0..=100.0, 0.0, 0);
             changed |= widgets::slider_row_with(ui, "Helligkeit", t.pick(&mut adj.brightness, |l| &mut l.brightness), -100.0..=100.0, 0.0, 0, tone);
         });
@@ -255,7 +256,7 @@ impl App {
                 .on_disabled_hover_text(widgets::ONLY_IMAGE);
                 let opts = |rail| widgets::SliderOpts { rail: Some(rail), ..Default::default() };
                 changed |= widgets::slider_row_with(ui, "Temperatur", &mut l.temperature, -100.0..=100.0, 0.0, 0, opts(widgets::RAIL_KELVIN));
-                changed |= widgets::slider_row_with(ui, "Tönung", &mut l.tint, -100.0..=100.0, 0.0, 0, opts(widgets::RAIL_TINT));
+                changed |= widgets::slider_row_with(ui, "Tönung", &mut l.tint, -150.0..=150.0, 0.0, 0, opts(widgets::RAIL_TINT));
                 ui.add_enabled_ui(false, |ui| {
                     ui.horizontal(|ui| {
                         let _ = ui.selectable_label(false, "\u{E568}  Weißabgleich-Pipette");
@@ -280,7 +281,7 @@ impl App {
             // In as-shot mode the sliders show the estimated values; moving one switches to custom.
             let (mut kelvin, mut tint) = if wb.mode == WbMode::AsShot { as_shot } else { (wb.kelvin, wb.tint) };
             let mut wb_changed = widgets::slider_row_with(ui, "Kelvin", &mut kelvin, 2000.0..=15000.0, as_shot.0, 0, widgets::SliderOpts { suffix: " K", rail: Some(widgets::RAIL_KELVIN), ..Default::default() });
-            wb_changed |= widgets::slider_row_with(ui, "Tönung", &mut tint, -150.0..=150.0, as_shot.1, 1, widgets::SliderOpts { rail: Some(widgets::RAIL_TINT), ..Default::default() });
+            wb_changed |= widgets::slider_row_with(ui, "Tönung", &mut tint, -150.0..=150.0, as_shot.1, 0, widgets::SliderOpts { rail: Some(widgets::RAIL_TINT), ..Default::default() });
             if wb_changed {
                 *wb = WhiteBalance { mode: WbMode::Custom, kelvin, tint };
                 changed = true;
