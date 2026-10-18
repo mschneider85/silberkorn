@@ -280,7 +280,7 @@ impl GeoMap {
     }
 
     /// Whether any vignetting correction brightens the image (manual or the camera's).
-    fn has_vignetting(&self) -> bool {
+    pub(crate) fn has_vignetting(&self) -> bool {
         self.vig != [0.0; 3] || self.camera.as_ref().is_some_and(|c| c.has_vignette())
     }
 

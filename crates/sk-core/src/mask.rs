@@ -393,8 +393,97 @@ struct PreparedSpot {
     r: f32,
     inner: f32,
     /// Per-pixel color gain for heal areas (none for clone).
-    heal: Option<HealField>,
+    heal: Option<Arc<HealField>>,
+    /// Clone: the vignetting gain of the source pixels over the area (see [`GainGrid`]).
+    clone_gain: Option<GainGrid>,
+    /// Output pixels that can show the area (see [`output_box`]).
+    output: Option<(f32, f32, f32, f32)>,
     opacity: f32,
+}
+
+/// `GeoMap::source_gain` on a coarse grid over a box of source pixels: that takes a search
+/// for the output position, too slow for each pixel, and vignetting changes slowly.
+struct GainGrid {
+    origin: (f32, f32),
+    cell: f32,
+    w: usize,
+    h: usize,
+    gain: Vec<f32>,
+}
+
+impl GainGrid {
+    fn new(geo: &GeoMap, b: (f32, f32, f32, f32)) -> Self {
+        let cell = 8.0;
+        let (w, h) = (((b.2 - b.0) / cell).ceil() as usize + 2, ((b.3 - b.1) / cell).ceil() as usize + 2);
+        let gain = (0..w * h).into_par_iter().map(|i| geo.source_gain(b.0 + (i % w) as f32 * cell, b.1 + (i / w) as f32 * cell)).collect();
+        Self { origin: (b.0, b.1), cell, w, h, gain }
+    }
+
+    fn sample(&self, x: f32, y: f32) -> f32 {
+        let gx = ((x - self.origin.0) / self.cell).clamp(0.0, (self.w - 1) as f32);
+        let gy = ((y - self.origin.1) / self.cell).clamp(0.0, (self.h - 1) as f32);
+        let (x0, y0) = (gx as usize, gy as usize);
+        let (x1, y1) = ((x0 + 1).min(self.w - 1), (y0 + 1).min(self.h - 1));
+        let (tx, ty) = (gx - x0 as f32, gy - y0 as f32);
+        let at = |xx: usize, yy: usize| self.gain[yy * self.w + xx];
+        let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
+        let bot = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
+        top + (bot - top) * ty
+    }
+}
+
+/// Output pixels (x0, y0, x1, y1) that can show the box `b` of source pixels: its outline
+/// mapped to the output, with a margin for the bending between the samples. `None` when that
+/// can't be told reliably (then every pixel is checked).
+fn output_box(geo: &GeoMap, b: (f32, f32, f32, f32)) -> Option<(f32, f32, f32, f32)> {
+    let n = 32;
+    let mut o = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+    for k in 0..4 * n {
+        let t = (k % n) as f32 / n as f32;
+        let p = match k / n {
+            0 => (b.0 + (b.2 - b.0) * t, b.1),
+            1 => (b.2, b.1 + (b.3 - b.1) * t),
+            2 => (b.2 - (b.2 - b.0) * t, b.3),
+            _ => (b.0, b.3 - (b.3 - b.1) * t),
+        };
+        let q = geo.output_point(p.0, p.1);
+        let back = geo.source_point(q.0, q.1);
+        if !q.0.is_finite() || !q.1.is_finite() || (back.0 - p.0).abs() > 0.5 || (back.1 - p.1).abs() > 0.5 {
+            return None;
+        }
+        o = (o.0.min(q.0), o.1.min(q.1), o.2.max(q.0), o.3.max(q.1));
+    }
+    let m = 2.0 + 0.05 * (o.2 - o.0).max(o.3 - o.1);
+    Some((o.0 - m, o.1 - m, o.2 + m, o.3 + m))
+}
+
+/// Whether the output pixel (x, y) can be in one of `boxes` (an unknown box takes all).
+fn in_any(boxes: &[Option<(f32, f32, f32, f32)>], x: f32, y: f32) -> bool {
+    boxes.iter().any(|b| b.is_none_or(|b| x >= b.0 && x <= b.2 && y >= b.1 && y <= b.3))
+}
+
+type HealCache = Mutex<Vec<(u64, Arc<HealField>)>>;
+
+/// [`HealField::solve`] from a small cache: it is the slow part of a heal area and would
+/// otherwise run again for every area on every change of any of them.
+fn cached_heal(src: &LinearImage, segments: &[((f32, f32), (f32, f32), (f32, f32, f32, f32))], offset: (f32, f32), r: f32) -> Arc<HealField> {
+    static CACHE: LazyLock<HealCache> = LazyLock::new(|| Mutex::new(Vec::new()));
+    let mut h = image_fingerprint(src);
+    let mut add = |v: f32| h = (h ^ v.to_bits() as u64).wrapping_mul(0x0100_0000_01b3);
+    for (a, b, _) in segments {
+        [a.0, a.1, b.0, b.1].into_iter().for_each(&mut add);
+    }
+    [offset.0, offset.1, r].into_iter().for_each(&mut add);
+    if let Some((_, f)) = CACHE.lock().unwrap().iter().find(|(k, _)| *k == h) {
+        return f.clone();
+    }
+    let f = Arc::new(HealField::solve(src, segments, offset, r));
+    let mut cache = CACHE.lock().unwrap();
+    cache.push((h, f.clone()));
+    if cache.len() > 32 {
+        cache.remove(0);
+    }
+    f
 }
 
 /// Color gain over a heal area on a coarse grid (source pixels): on a band just outside the
@@ -583,14 +672,38 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
             }
             // Heal: take texture from the source but brightness/color from the target's
             // surroundings, matched along the whole edge and blended smoothly inwards.
-            let heal = (s.mode == SpotMode::Heal).then(|| HealField::solve(src, &segments, offset, r));
-            PreparedSpot { segments, grid, grid_w, cell, bounds, offset, r, inner: r * (1.0 - s.feather.clamp(0.0, 1.0)), heal, opacity: s.opacity.clamp(0.0, 1.0) }
+            let heal = (s.mode == SpotMode::Heal).then(|| cached_heal(src, &segments, offset, r));
+            let shifted = (bounds.0 + offset.0, bounds.1 + offset.1, bounds.2 + offset.0, bounds.3 + offset.1);
+            let clone_gain = (s.mode != SpotMode::Heal && geo.has_vignetting()).then(|| GainGrid::new(geo, shifted));
+            let output = output_box(geo, bounds);
+            PreparedSpot {
+                segments,
+                grid,
+                grid_w,
+                cell,
+                bounds,
+                offset,
+                r,
+                inner: r * (1.0 - s.feather.clamp(0.0, 1.0)),
+                heal,
+                clone_gain,
+                output,
+                opacity: s.opacity.clamp(0.0, 1.0),
+            }
         })
         .collect();
+    let boxes: Vec<_> = prepared.iter().map(|s| s.output).collect();
     img.data.par_chunks_mut(region.w).enumerate().for_each(|(ry, line)| {
         let oy = (region.y + ry) as f32 + 0.5;
+        // Rows and pixels away from every area skip the mapping to the source.
+        if !boxes.iter().any(|b| b.is_none_or(|b| oy >= b.1 && oy <= b.3)) {
+            return;
+        }
         for (rx, px) in line.iter_mut().enumerate() {
             let ox = (region.x + rx) as f32 + 0.5;
+            if !in_any(&boxes, ox, oy) {
+                continue;
+            }
             // Source position and the vignetting gain `resample` applied there.
             let mut pt: Option<(f32, f32, f32)> = None;
             for s in &prepared {
@@ -613,7 +726,7 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
                 // brightness the source shows.
                 let gain = match &s.heal {
                     Some(h) => h.sample(sx, sy).map(|g| g * vig),
-                    None => [geo.source_gain(sx + s.offset.0, sy + s.offset.1); 3],
+                    None => [s.clone_gain.as_ref().map_or(1.0, |g| g.sample(sx + s.offset.0, sy + s.offset.1)); 3],
                 };
                 for c in 0..3 {
                     let repl = v[c] * gain[c];
@@ -802,10 +915,24 @@ pub fn apply_removals(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, re
         return;
     }
     let (sw, sh) = (src.width as f32, src.height as f32);
+    let boxes: Vec<_> = patches
+        .iter()
+        .map(|(r, _)| {
+            let [x, y, w, h] = r.rect;
+            output_box(geo, (x * sw - 0.5, y * sh - 0.5, (x + w) * sw - 0.5, (y + h) * sh - 0.5))
+        })
+        .collect();
     img.data.par_chunks_mut(region.w).enumerate().for_each(|(ry, line)| {
         let oy = (region.y + ry) as f32 + 0.5;
+        // Rows and pixels away from every removal skip the mapping to the source.
+        if !boxes.iter().any(|b| b.is_none_or(|b| oy >= b.1 && oy <= b.3)) {
+            return;
+        }
         for (rx, px) in line.iter_mut().enumerate() {
             let ox = (region.x + rx) as f32 + 0.5;
+            if !in_any(&boxes, ox, oy) {
+                continue;
+            }
             // Source position and the vignetting gain `resample` applied there: the patch is
             // made in camera space without it.
             let mut uv: Option<(f32, f32, f32)> = None;
@@ -831,6 +958,38 @@ pub fn apply_removals(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every output pixel whose source lies in a box is within its output box, also with
+    /// straightening, keystone, lens distortion and a quarter turn.
+    #[test]
+    fn output_box_holds_all_pixels_of_the_area() {
+        use crate::params::{Geometry, LensCorrection};
+        let (sw, sh) = (600usize, 400usize);
+        let mut boxes = 0;
+        for turns in [0u8, 1] {
+            let geom = Geometry { straighten: 7.0, keystone_v: 20.0, keystone_amount: 100.0, ..Default::default() };
+            let lens = LensCorrection { distortion: 40.0, vignetting: 50.0, ..Default::default() };
+            let geo = GeoMap::new(&geom, &lens, None, turns, sw, sh, false);
+            for b in [(100.0, 80.0, 180.0, 140.0), (300.0, 200.0, 360.0, 250.0), (400.0, 90.0, 490.0, 170.0), (480.0, 300.0, 590.0, 395.0), (5.0, 5.0, 40.0, 30.0)] {
+                // Areas cut off by the framing are left to the check of every pixel.
+                let Some(o) = output_box(&geo, b) else { continue };
+                boxes += 1;
+                for oy in 0..geo.out_h {
+                    for ox in 0..geo.out_w {
+                        let (x, y) = (ox as f32 + 0.5, oy as f32 + 0.5);
+                        let (sx, sy) = geo.source_point(x, y);
+                        if sx >= b.0 && sx <= b.2 && sy >= b.1 && sy <= b.3 {
+                            assert!(x >= o.0 && x <= o.2 && y >= o.1 && y <= o.3, "{turns} {b:?}: ({x}, {y}) außerhalb {o:?}");
+                        }
+                    }
+                }
+            }
+        }
+        assert!(boxes >= 6, "nur {boxes} Rahmen bestimmt");
+        // Without any geometry every box is known.
+        let geo = GeoMap::new(&Default::default(), &Default::default(), None, 0, sw, sh, false);
+        assert!(output_box(&geo, (5.0, 5.0, 40.0, 30.0)).is_some() && output_box(&geo, (480.0, 300.0, 590.0, 395.0)).is_some());
+    }
 
     #[test]
     fn long_thin_heal_stroke_stays_within_the_cell_limit() {

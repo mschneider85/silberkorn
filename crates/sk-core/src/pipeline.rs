@@ -87,6 +87,11 @@ pub struct Histogram {
 #[derive(Default)]
 pub struct StageCache {
     entry: Mutex<Option<(u64, Arc<LinearImage>)>>,
+    /// Resampled with heal/clone and removals, before white balance and noise reduction (so
+    /// that changing those doesn't repeat it).
+    resampled: Mutex<Option<(u64, Arc<LinearImage>)>>,
+    /// Source position (normalized) of each output pixel, for layer masks.
+    uv: Mutex<Option<(u64, Arc<Vec<[f32; 2]>>)>>,
     local: Mutex<Option<(u64, Arc<LocalPlanes>)>>,
     gpu: Mutex<gpu::Cache>,
 }
@@ -720,7 +725,7 @@ impl Processor {
             src
         };
         let plan = self.plan(img, None, 1);
-        let working = self.early_stages(img, &plan.geo, plan.ext, plan.scale);
+        let working = self.early_stages(img, &plan.geo, plan.ext, plan.scale, None);
         let a = gpu::airlight_of(working.data.iter().step_by(7).copied().collect());
         let mut cache = CACHE.lock().unwrap();
         cache.push((key, a));
@@ -746,18 +751,41 @@ impl Processor {
             // Depends on the process version and the light, not only on the multipliers.
             "cw": self.cam_to_working,
         });
+        Self::source_key(src, region, &relevant)
+    }
+
+    /// Key of what depends on `src` and the settings in `relevant` for `region`.
+    fn source_key(src: &LinearImage, region: Region, relevant: &serde_json::Value) -> u64 {
         // The address alone could be that of a freed image whose memory went to the next one.
         let key = format!("{:p}|{}x{}|{}|{region:?}|{relevant}", src.data.as_ptr(), src.width, src.height, crate::ai_denoise::fingerprint(src));
         crate::cache::fnv1a(key.as_bytes())
     }
 
     /// Geometry + white balance + noise reduction -> linear working RGB.
-    fn early_stages(&self, src: &LinearImage, geo: &GeoMap, region: Region, scale: f32) -> LinearImage {
+    fn early_stages(&self, src: &LinearImage, geo: &GeoMap, region: Region, scale: f32, cache: Option<&StageCache>) -> LinearImage {
         let mut timer = Timer::start();
-        let mut img = geo.resample(src, region);
+        let resample = || {
+            let mut img = geo.resample(src, region);
+            crate::mask::apply_removals(&mut img, src, geo, region, &self.adj.removals);
+            apply_retouch(&mut img, src, geo, region, &self.adj.retouch);
+            img
+        };
+        let mut img = match cache {
+            Some(c) => {
+                let key = Self::source_key(src, region, &self.retouch_relevant());
+                let mut entry = c.resampled.lock().unwrap();
+                match &*entry {
+                    Some((k, img)) if *k == key => (**img).clone(),
+                    _ => {
+                        let img = resample();
+                        *entry = Some((key, Arc::new(img.clone())));
+                        img
+                    }
+                }
+            }
+            None => resample(),
+        };
         timer.lap("  resample");
-        crate::mask::apply_removals(&mut img, src, geo, region, &self.adj.removals);
-        apply_retouch(&mut img, src, geo, region, &self.adj.retouch);
         img.data.par_iter_mut().for_each(|p| *p = self.to_working(*p));
         timer.lap("  to working");
         self.defringe(&mut img, scale);
@@ -906,13 +934,13 @@ impl Processor {
                 match &*entry {
                     Some((k, img)) if *k == key => img.clone(),
                     _ => {
-                        let img = Arc::new(self.early_stages(src, &geo, ext, scale));
+                        let img = Arc::new(self.early_stages(src, &geo, ext, scale, Some(c)));
                         *entry = Some((key, img.clone()));
                         img
                     }
                 }
             }
-            (None, None) => Arc::new(self.early_stages(src, &geo, ext, scale)),
+            (None, None) => Arc::new(self.early_stages(src, &geo, ext, scale, None)),
         };
         let (w, h) = (ext.w, ext.h);
         timer.lap("early stages");
@@ -979,6 +1007,38 @@ impl Processor {
             self.layers.iter().map(|l| (!l.mask.is_empty()).then(|| cached_bitmap(&l.mask, aspect, Some(src)))).collect();
         let overlay_layer = self.opts.mask_overlay.and_then(|i| self.layers.iter().position(|l| l.index == i));
         let (sw, sh) = (src.width as f32, src.height as f32);
+        // Source position of each pixel: the full lens mapping, kept while the geometry stays.
+        let uv: Option<Arc<Vec<[f32; 2]>>> = (!self.layers.is_empty()).then(|| {
+            let compute = || {
+                Arc::new(
+                    (0..w * h)
+                        .into_par_iter()
+                        .map(|i| {
+                            let (sx, sy) = geo.source_point((ext.x + i % w) as f32 + 0.5, (ext.y + i / w) as f32 + 0.5);
+                            [(sx + 0.5) / sw, (sy + 0.5) / sh]
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            };
+            match cache {
+                Some(c) => {
+                    let relevant = serde_json::json!({
+                        "g": self.adj.geometry, "l": self.adj.lens, "r": self.adj.rotation, "ic": self.opts.ignore_crop,
+                    });
+                    let key = Self::source_key(src, ext, &relevant);
+                    let mut entry = c.uv.lock().unwrap();
+                    match &*entry {
+                        Some((k, uv)) if *k == key => uv.clone(),
+                        _ => {
+                            let uv = compute();
+                            *entry = Some((key, uv.clone()));
+                            uv
+                        }
+                    }
+                }
+                None => compute(),
+            }
+        });
         timer.lap("masks");
 
         // Per pixel: encoded result and mask overlay weight.
@@ -997,9 +1057,7 @@ impl Processor {
             if self.layers.is_empty() {
                 return (self.encode(base_disp()), 0.0);
             }
-            let (ox, oy) = ((ext.x + i % w) as f32 + 0.5, (ext.y + i / w) as f32 + 0.5);
-            let (sx, sy) = geo.source_point(ox, oy);
-            let (u, v) = ((sx + 0.5) / sw, (sy + 0.5) / sh);
+            let [u, v] = uv.as_ref().expect("with layers")[i];
             let mut tp = self.base;
             let mut any = false;
             let mut overlay = 0.0;
@@ -1794,6 +1852,33 @@ mod tests {
             }
         }
         max_diff
+    }
+
+    /// The resampled image with heal/clone and the layers' source positions stay cached when
+    /// the white balance changes, and the result is that of a rendering without cache.
+    #[test]
+    fn resampling_stays_cached_across_white_balance() {
+        let (src, mut adj) = neighborhood_scene();
+        adj.geometry.straighten = 3.0;
+        adj.retouch = vec![crate::params::Spot {
+            mode: crate::params::SpotMode::Clone,
+            target: [0.3, 0.3],
+            source: [0.6, 0.6],
+            path: vec![],
+            radius: 0.05,
+            feather: 0.5,
+            opacity: 1.0,
+        }];
+        let cache = StageCache::default();
+        Processor::new(&meta(), &adj).render_cpu(&src, None, Some(&cache));
+        let keys = |c: &StageCache| (c.resampled.lock().unwrap().as_ref().unwrap().0, c.uv.lock().unwrap().as_ref().unwrap().0);
+        let before = keys(&cache);
+        adj.white_balance.mode = crate::params::WbMode::Custom;
+        adj.white_balance.kelvin = 3500.0;
+        let p = Processor::new(&meta(), &adj);
+        let cached = p.render_cpu(&src, None, Some(&cache));
+        assert_eq!(keys(&cache), before, "not resampled again");
+        assert_eq!(cached.rgba, p.render_cpu(&src, None, None).rgba);
     }
 
     /// With the whole image in the cache, a part of it (what the brush changed) is cut out of
