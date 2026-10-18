@@ -984,6 +984,9 @@ impl App {
             Select(usize),
             Delete,
             NewSource,
+            /// From the context menu of an area (it becomes the chosen one first).
+            DeleteAt(usize),
+            SourceOf(usize),
             Clear,
             Find,
         }
@@ -1030,9 +1033,18 @@ impl App {
                 };
                 let text = format!("{ic}  {kind} {}", i + 1);
                 let w = ui.available_width();
-                if ui.add_sized([w, 24.0], egui::Button::selectable(selected == Some(i), text)).clicked() {
+                let r = ui.add_sized([w, 24.0], egui::Button::selectable(selected == Some(i), text));
+                if r.clicked() {
                     act = Some(Act::Select(i));
                 }
+                r.context_menu(|ui| {
+                    if ui.button(format!("{}  Neue Quelle", crate::theme::icon::MAGIC_WAND)).clicked() {
+                        act = Some(Act::SourceOf(i));
+                    }
+                    if ui.button(format!("{}  Löschen", crate::theme::icon::TRASH)).clicked() {
+                        act = Some(Act::DeleteAt(i));
+                    }
+                });
             }
             // The settings of the chosen area; without one they are shown, but disabled.
             let mut placeholder = Spot { mode: SpotMode::Heal, target: [0.0; 2], source: [0.0; 2], path: Vec::new(), radius: 0.0, feather: 0.4, opacity: 1.0 };
@@ -1078,6 +1090,18 @@ impl App {
         if changed {
             self.request_render();
         }
+        // The context menu acts on its area as the panel buttons act on the chosen one.
+        let act = match act {
+            Some(Act::DeleteAt(i)) => {
+                self.selected_spot = Some(i);
+                Some(Act::Delete)
+            }
+            Some(Act::SourceOf(i)) => {
+                self.selected_spot = Some(i);
+                Some(Act::NewSource)
+            }
+            a => a,
+        };
         match act {
             Some(Act::Select(i)) => {
                 self.selected_spot = Some(i);
@@ -1101,7 +1125,8 @@ impl App {
                 self.edit(|a| a.retouch.clear());
             }
             Some(Act::Find) => self.find_spots(),
-            None => {}
+            // Turned into Delete and NewSource above.
+            Some(Act::DeleteAt(_) | Act::SourceOf(_)) | None => {}
         }
     }
 
@@ -1291,6 +1316,18 @@ impl App {
                     } else if resp.clicked() {
                         action = Some(LayerAction::Select(Some(li)));
                     }
+                    resp.context_menu(|ui| {
+                        if ui.button("Umbenennen").clicked() {
+                            *renaming = Some(Rename { index: li, original: l.name.clone(), focus: true });
+                            action = Some(LayerAction::Select(Some(li)));
+                        }
+                        if ui.button(if on { "Ausblenden" } else { "Einblenden" }).clicked() {
+                            action = Some(LayerAction::Toggle(li));
+                        }
+                        if ui.button(format!("{}  Löschen", icon::TRASH)).clicked() {
+                            action = Some(LayerAction::Delete(li));
+                        }
+                    });
                 }
             }
             if rows == 0 {

@@ -213,30 +213,35 @@ impl App {
     }
 
     /// Organizing: rating, labels, metadata, names, variants, stacks, where the files are.
+    /// "Bewertung" and "Farb-Label" submenus for the selection (photo menu and thumbnails).
+    pub(crate) fn rating_label_menus(&mut self, ui: &mut Ui) {
+        ui.menu_button(format!("{}  Bewertung", icon::STAR), |ui| {
+            for r in 0..=5u8 {
+                let text = if r == 0 { "Keine".to_string() } else { "★".repeat(r as usize) };
+                if ui.add(Button::new(text).shortcut_text(shortcut(&format!("rating-{r}")))).clicked() {
+                    self.set_rating(r);
+                }
+            }
+        });
+        ui.menu_button(format!("{}  Farb-Label", icon::TAG), |ui| {
+            for (l, id) in [
+                (ColorLabel::None, "label-none"),
+                (ColorLabel::Red, "label-red"),
+                (ColorLabel::Yellow, "label-yellow"),
+                (ColorLabel::Green, "label-green"),
+                (ColorLabel::Blue, "label-blue"),
+            ] {
+                if ui.add(Button::new(l.label()).shortcut_text(shortcut(id))).clicked() {
+                    self.set_color_label(l);
+                }
+            }
+        });
+    }
+
     fn photo_menu(&mut self, ui: &mut Ui) {
         let n_sel = self.selected_paths().len();
         ui.add_enabled_ui(n_sel > 0, |ui| {
-            ui.menu_button(format!("{}  Bewertung", icon::STAR), |ui| {
-                for r in 0..=5u8 {
-                    let text = if r == 0 { "Keine".to_string() } else { "★".repeat(r as usize) };
-                    if ui.add(Button::new(text).shortcut_text(shortcut(&format!("rating-{r}")))).clicked() {
-                        self.set_rating(r);
-                    }
-                }
-            });
-            ui.menu_button(format!("{}  Farb-Label", icon::TAG), |ui| {
-                for (l, id) in [
-                    (ColorLabel::None, "label-none"),
-                    (ColorLabel::Red, "label-red"),
-                    (ColorLabel::Yellow, "label-yellow"),
-                    (ColorLabel::Green, "label-green"),
-                    (ColorLabel::Blue, "label-blue"),
-                ] {
-                    if ui.add(Button::new(l.label()).shortcut_text(shortcut(id))).clicked() {
-                        self.set_color_label(l);
-                    }
-                }
-            });
+            self.rating_label_menus(ui);
             ui.menu_button(format!("{}  XMP", icon::FILE_CODE), |ui| {
                 if item(ui, icon::UPLOAD_SIMPLE, "Metadaten in XMP schreiben", "", true) {
                     self.write_xmp_selection();

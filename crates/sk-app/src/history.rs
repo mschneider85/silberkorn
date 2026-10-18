@@ -116,6 +116,17 @@ impl App {
                             } else if r.clicked() {
                                 action = Some(SnapshotAction::Apply(i));
                             }
+                            r.context_menu(|ui| {
+                                if ui.button("Anwenden").clicked() {
+                                    action = Some(SnapshotAction::Apply(i));
+                                }
+                                if ui.button("Umbenennen").clicked() {
+                                    action = Some(SnapshotAction::StartRename(i));
+                                }
+                                if ui.button(format!("{}  Löschen …", icon::TRASH)).clicked() {
+                                    action = Some(SnapshotAction::Delete(i));
+                                }
+                            });
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                 if ui.small_button(icon::TRASH).on_hover_text("Schnappschuss löschen …").clicked() {
                                     action = Some(SnapshotAction::Delete(i));

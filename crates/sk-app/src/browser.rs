@@ -952,7 +952,15 @@ impl App {
                 self.select_path(&path, Modifiers::NONE);
             }
         }
+        // The photo commands that matter most for a picked image, like in the photo menu.
         resp.context_menu(|ui| {
+            self.rating_label_menus(ui);
+            ui.separator();
+            self.command_item(ui, "copy-adjustments");
+            self.command_item(ui, "paste-adjustments");
+            self.command_item(ui, "rename");
+            self.command_item(ui, "export");
+            ui.separator();
             self.variant_menu(ui);
             self.stack_menu(ui);
             ui.separator();

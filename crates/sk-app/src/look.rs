@@ -437,7 +437,8 @@ impl App {
     /// pushed out at the right edge.
     fn look_ref_row(&self, ui: &mut Ui, r: &LookRef, share: Option<f32>) -> Option<RowAction> {
         let mut action = None;
-        let (row, row_resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), THUMB.y + 6.0), Sense::hover());
+        // Click sense for the context menu (the thumbnail and the ✕ take their own clicks).
+        let (row, row_resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), THUMB.y + 6.0), Sense::click());
         let painter = ui.painter_at(row);
         let hovered = ui.rect_contains_pointer(row);
         if hovered {
@@ -539,6 +540,14 @@ impl App {
         if close_resp.on_hover_text("Referenz entfernen").clicked() {
             action = Some(RowAction::Remove);
         }
+        row_resp.context_menu(|ui| {
+            if ui.button("Öffnen").clicked() {
+                action = Some(RowAction::Open);
+            }
+            if ui.button(format!("{}  Referenz entfernen", icon::X)).clicked() {
+                action = Some(RowAction::Remove);
+            }
+        });
         action
     }
 }
