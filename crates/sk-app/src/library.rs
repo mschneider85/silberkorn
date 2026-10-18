@@ -193,7 +193,8 @@ impl App {
         sort_records(&mut records, self.sort, self.sort_desc);
         self.entries = records;
         self.forget_unlisted_thumbs();
-        self.selection.retain(|p| self.entries.iter().any(|e| &e.path == p));
+        let listed: std::collections::HashSet<&PathBuf> = self.entries.iter().map(|e| &e.path).collect();
+        self.selection.retain(|p| listed.contains(p));
         self.refilter();
         self.refresh_catalog_lists();
         self.request_proxies();
@@ -242,6 +243,9 @@ impl App {
         let mut out = Vec::new();
         // One transaction for the whole batch instead of one commit per statement.
         let batch = self.catalog.as_ref().is_some_and(|c| c.begin_batch().is_ok());
+        let wanted: std::collections::HashSet<&PathBuf> = paths.iter().collect();
+        let index: HashMap<PathBuf, usize> =
+            self.entries.iter().enumerate().filter(|(_, e)| wanted.contains(&e.path)).map(|(i, e)| (e.path.clone(), i)).collect();
         for path in paths {
             let (before, sc) = if Some(path) == current.as_ref() {
                 let cur = self.current.as_mut().expect("current");
@@ -270,7 +274,7 @@ impl App {
                     }
                 }
             };
-            if let Some(i) = self.index_of(path) {
+            if let Some(&i) = index.get(path) {
                 let e = &mut self.entries[i];
                 e.rating = sc.rating;
                 e.color_label = sc.color_label;

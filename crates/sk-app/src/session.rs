@@ -464,11 +464,23 @@ impl App {
             });
         });
 
+        // Whether the favorites are reachable, checked every few seconds rather than every frame
+        // (slow on network paths).
+        let reach_id = egui::Id::new("favorites reachable");
+        let now = ui.input(|i| i.time);
+        let reachable = match ui.data(|d| d.get_temp::<(f64, Vec<PathBuf>, Vec<bool>)>(reach_id)) {
+            Some((t, favs, r)) if now - t < 5.0 && favs == self.lists.favorites => r,
+            _ => {
+                let r: Vec<bool> = self.lists.favorites.iter().map(|f| f.is_dir()).collect();
+                ui.data_mut(|d| d.insert_temp(reach_id, (now, self.lists.favorites.clone(), r.clone())));
+                r
+            }
+        };
         section(ui, "Session-Favoriten", None, |ui| {
-            for fav in &self.lists.favorites {
+            for (fav, reachable) in self.lists.favorites.iter().zip(reachable) {
                 let selected = matches!(&self.scope, Scope::Folder { path, .. } if path == fav);
                 let mut text = RichText::new(format!("{}  {}", icon::STAR, dir_name(fav)));
-                if !fav.is_dir() {
+                if !reachable {
                     text = text.color(theme::TEXT_DIM).strikethrough();
                 }
                 let resp = ui.selectable_label(selected, text).on_hover_text(fav.display().to_string());

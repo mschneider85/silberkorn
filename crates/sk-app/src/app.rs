@@ -2098,6 +2098,8 @@ impl App {
                         continue;
                     }
                     let [image_w, image_h] = image.size;
+                    // Shared with the focus analysis (no copy of the image).
+                    let image = Arc::new(image);
                     // Also with the clip warning or a mask overlay: they hardly change the sharpness,
                     // and the framing (crop, rotation) must be current.
                     if !draft
@@ -2277,6 +2279,7 @@ impl App {
                 Event::CompareImage { path, image } => {
                     // The current image is shown from its live rendering.
                     if self.compare_requested.remove(&path) && self.current_path().as_ref() != Some(&path) {
+                        let image = Arc::new(image);
                         self.request_focus(&path, &image, None);
                         match self.compare_textures.get_mut(&path) {
                             Some(t) => t.set(image, TextureOptions::LINEAR),

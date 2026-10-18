@@ -198,8 +198,8 @@ impl App {
         let img_rect = img_rect.translate((img_rect.min.to_vec2() * ppp).round() / ppp - img_rect.min.to_vec2());
         self.view_geometry = Some((rect, img_rect));
         // Proof view: the exported image instead of the preview, once it is ready.
-        let proof_key = self.proof_key();
-        let proof = self.proof.as_ref().filter(|p| self.proof_view && p.version == self.edit_version && Some(p.key) == proof_key);
+        // The key (recipe as JSON, logo file) only when there is a proof to check.
+        let proof = self.proof.as_ref().filter(|p| self.proof_view && p.version == self.edit_version && Some(p.key) == self.proof_key());
         let shown = proof.map_or(tex_id, |p| p.texture.id());
         let paper_rect = paper.as_ref().map(|p| Rect::from_center_size(img_rect.center(), img_rect.size() * p.rel));
         if let (Some(p), Some(r)) = (&paper, paper_rect) {
@@ -928,18 +928,22 @@ impl App {
         widgets::paint_badges(ui, img_area, entry.rating, entry.color_label.rgb());
         let stack_toggle = self.stack_badge(ui, idx, img_area);
         self.culling_badges(ui, idx, img_area);
-        let tooltip = [
-            Some(entry.name.clone()),
-            entry.capture_date.clone(),
-            entry.camera.clone(),
-            entry.lens.clone(),
-            (!entry.keywords.is_empty()).then(|| entry.keywords.join(", ")),
-        ]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join("\n");
-        let resp = resp.on_hover_text_at_pointer(tooltip);
+        let resp = if resp.hovered() {
+            let tooltip = [
+                Some(entry.name.clone()),
+                entry.capture_date.clone(),
+                entry.camera.clone(),
+                entry.lens.clone(),
+                (!entry.keywords.is_empty()).then(|| entry.keywords.join(", ")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n");
+            resp.on_hover_text_at_pointer(tooltip)
+        } else {
+            resp
+        };
         // Right-click acts on the selection; an unselected image becomes the selection first.
         // It also becomes the image in the viewer, which the variant commands act on.
         if resp.secondary_clicked() {
@@ -1092,6 +1096,12 @@ impl App {
         egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
             ui.horizontal(|ui| {
                 for &i in &visible {
+                    // Cells out of sight only take their place (thousands in a large folder).
+                    let wanted = self.scroll_to_primary && primary.as_ref() == Some(&self.entries[i].path);
+                    if !wanted && !ui.is_rect_visible(Rect::from_min_size(ui.cursor().min, cell)) {
+                        ui.allocate_space(cell);
+                        continue;
+                    }
                     if let (Some(m), _) = self.thumb_cell(ui, i, cell, primary.as_ref()) {
                         clicked = Some((self.entries[i].path.clone(), m));
                     }
@@ -1132,6 +1142,12 @@ impl App {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             ui.add_space(12.0);
             for row in visible.chunks(cols) {
+                // Rows out of sight only take their place (thousands in a large folder).
+                let wanted = self.scroll_to_primary && row.iter().any(|&i| primary.as_ref() == Some(&self.entries[i].path));
+                if !wanted && !ui.is_rect_visible(Rect::from_min_size(ui.cursor().min, vec2(ui.available_width(), cell.y))) {
+                    ui.allocate_space(vec2(ui.available_width(), cell.y));
+                    continue;
+                }
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = gap;
                     ui.add_space(12.0);

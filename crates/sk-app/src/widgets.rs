@@ -1124,14 +1124,19 @@ pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>) -> Rect {
         (&h.b, Color32::from_rgba_unmultiplied(70, 110, 240, 90)),
     ] {
         let pts = channel(bins);
-        // Draw as vertical bars to avoid concave polygon filling artifacts.
-        for w in pts.windows(2).skip(1).take(255) {
-            painter.add(Shape::convex_polygon(
-                vec![pos2(w[0].x, rect.bottom()), w[0], w[1], pos2(w[1].x, rect.bottom())],
-                color,
-                Stroke::NONE,
-            ));
+        // One strip of triangles down to the bottom (a concave polygon would fill wrongly), in a
+        // single mesh rather than 255 shapes.
+        let mut mesh = egui::Mesh::default();
+        for (i, p) in pts[1..pts.len() - 1].iter().enumerate() {
+            mesh.colored_vertex(*p, color);
+            mesh.colored_vertex(pos2(p.x, rect.bottom()), color);
+            if i > 0 {
+                let k = 2 * i as u32;
+                mesh.add_triangle(k - 2, k - 1, k);
+                mesh.add_triangle(k - 1, k + 1, k);
+            }
         }
+        painter.add(Shape::mesh(mesh));
     }
     let luma = channel(&h.luma);
     painter.add(Shape::line(luma[1..luma.len() - 1].to_vec(), Stroke::new(1.0, Color32::from_gray(200))));

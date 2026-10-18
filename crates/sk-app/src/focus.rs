@@ -64,10 +64,10 @@ impl App {
 
     /// Analyses a rendering of an image if the focus mask is on. `version`: edit version of a
     /// rendering of the image being edited.
-    pub(crate) fn request_focus(&mut self, path: &Path, image: &ColorImage, version: Option<u64>) {
+    pub(crate) fn request_focus(&mut self, path: &Path, image: &Arc<ColorImage>, version: Option<u64>) {
         if self.focus_mask {
             self.focus_pending.insert(path.to_path_buf());
-            self.workers.focus(path.to_path_buf(), Arc::new(image.clone()), version);
+            self.workers.focus(path.to_path_buf(), image.clone(), version);
         }
     }
 

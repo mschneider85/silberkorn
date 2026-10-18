@@ -86,7 +86,7 @@ impl App {
         let (pw, ph) = (cur.preview.width as f32, cur.preview.height as f32);
         let aspect = pw / ph;
         let (kx, ky) = if aspect >= 1.0 { (1.0, 1.0 / aspect) } else { (aspect, 1.0) };
-        let key = sk_core::cache::fnv1a(serde_json::to_string(&self.remove_strokes).unwrap_or_default().as_bytes()) ^ (scale.to_bits() as u64);
+        let key = strokes_key(&self.remove_strokes) ^ (scale.to_bits() as u64);
         if self.remove_overlay.as_ref().is_none_or(|(k, ..)| *k != key) {
             // Area of the strokes (normalized), with their radius.
             let (mut u0, mut v0, mut u1, mut v1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
@@ -110,7 +110,14 @@ impl App {
             let cover = sk_core::mask::rasterize_strokes_in(&self.remove_strokes, rect, w, h, aspect, guide.as_deref());
             let pixels: Vec<Color32> = cover.iter().map(|c| Color32::from_rgba_unmultiplied(235, 45, 45, (c.clamp(0.0, 1.0) * 150.0) as u8)).collect();
             let image = egui::ColorImage { size: [w, h], source_size: egui::vec2(w as f32, h as f32), pixels };
-            let tex = ui.ctx().load_texture("remove overlay", image, egui::TextureOptions::LINEAR);
+            // The texture of the last overlay is filled again rather than a new one made.
+            let tex = match self.remove_overlay.take() {
+                Some((_, mut tex, _)) => {
+                    tex.set(image, egui::TextureOptions::LINEAR);
+                    tex
+                }
+                None => ui.ctx().load_texture("remove overlay", image, egui::TextureOptions::LINEAR),
+            };
             self.remove_overlay = Some((key, tex, rect));
         }
         let Some((_, tex, rect)) = &self.remove_overlay else { return };
@@ -240,4 +247,22 @@ pub fn compute(job: &InpaintJob, model: &mut Option<(sk_ai::inpaint::Inpainter, 
     };
     progress(0.05);
     sk_ai::inpaint::make_removal(&full, job.wb, &job.strokes, &model.as_ref().expect("loaded").0, progress).map_err(|e| format!("{e:#}"))
+}
+
+/// Identifies the strokes (every frame while the tool is on: without serializing them).
+fn strokes_key(strokes: &[sk_core::params::BrushStroke]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+    let mut add = |v: u32| h = (h ^ v as u64).wrapping_mul(0x0100_0000_01b3);
+    for s in strokes {
+        for v in [s.radius, s.hardness, s.flow, s.opacity] {
+            add(v.to_bits());
+        }
+        add(s.erase as u32 | (s.auto_mask as u32) << 1 | (s.build_up as u32) << 2);
+        add(s.points.len() as u32);
+        for p in &s.points {
+            add(p[0].to_bits());
+            add(p[1].to_bits());
+        }
+    }
+    h
 }
