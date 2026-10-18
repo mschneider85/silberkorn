@@ -1070,6 +1070,10 @@ impl App {
             Ok(d) if d.starts_with("palette") => app.palette.show_with(d.trim_start_matches("palette").trim_start_matches(':')),
             _ => {}
         }
+        if crate::guard::take_previous_crash() {
+            let dir = sk_core::paths::data_dir();
+            app.report_error(format!("Silberkorn wurde zuletzt unerwartet beendet – Hinweise in {}", dir.join("panic.log").display()));
+        }
         app
     }
 
@@ -2968,6 +2972,7 @@ impl eframe::App for App {
         self.commit_and_save();
         self.save_settings();
         self.install_update_on_exit();
+        crate::guard::mark_clean_exit();
     }
 }
 

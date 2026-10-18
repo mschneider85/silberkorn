@@ -937,7 +937,7 @@ pub fn stitch_files(paths: &[PathBuf], opts: &PanoramaOptions, progress: &dyn Fn
     }
     let full_long = images[0].width.max(images[0].height);
     let factor = (full_long as f32 / FEATURE_EDGE as f32).max(1.0);
-    let guides: Vec<Plane> = images.par_iter().map(|img| guide(&img.clone().fit_within(FEATURE_EDGE))).collect();
+    let guides: Vec<Plane> = images.par_iter().map(|img| guide(&img.fitted(FEATURE_EDGE))).collect();
     let (cams, pairs) = estimate(&guides, &|p| progress(0.15 + p * 0.5))?;
     let gains = exposure_gains(images.len(), &pairs, &guides);
     let mut rot = cams.rot;

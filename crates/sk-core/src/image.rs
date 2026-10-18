@@ -51,6 +51,17 @@ impl LinearImage {
     }
 
     /// Area-averaging downscale so that the long edge is at most `max_edge` (fractional factors).
+    /// Like [`Self::fit_within`] without taking the image: reduces first, so that a full-size
+    /// image is never copied just to make a small version of it.
+    pub fn fitted(&self, max_edge: usize) -> Self {
+        let long = self.width.max(self.height);
+        if long <= max_edge || max_edge == 0 {
+            return self.clone();
+        }
+        let pre = long / max_edge;
+        if pre >= 2 { self.box_downscaled(pre).fit_within(max_edge) } else { self.clone().fit_within(max_edge) }
+    }
+
     pub fn fit_within(self, max_edge: usize) -> Self {
         let long = self.width.max(self.height);
         if long <= max_edge || max_edge == 0 {
@@ -273,5 +284,15 @@ mod tests {
     fn downscale_averages() {
         let i = LinearImage::new(2, 2, vec![[0.0; 3], [1.0; 3], [2.0; 3], [3.0; 3]]).box_downscale(2);
         assert_eq!(i.data, vec![[1.5; 3]]);
+    }
+
+    #[test]
+    fn fitted_equals_fit_within() {
+        let img = LinearImage::new(130, 70, (0..130 * 70).map(|i| [(i % 13) as f32, (i % 7) as f32, (i % 5) as f32]).collect());
+        for edge in [200, 130, 60, 31, 9] {
+            let a = img.fitted(edge);
+            let b = img.clone().fit_within(edge);
+            assert_eq!((a.width, a.height, &a.data), (b.width, b.height, &b.data), "Kante {edge}");
+        }
     }
 }

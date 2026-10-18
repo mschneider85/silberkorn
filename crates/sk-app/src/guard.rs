@@ -2,10 +2,17 @@
 //! the pipeline) must not silently kill the worker for the rest of the session. Worker threads
 //! catch panics and keep serving, every panic is logged to `panic.log`, and the app shows it in
 //! the status bar.
+//!
+//! What ends the process without a panic leaves traces too: running out of memory is written to
+//! `panic.log` before Rust aborts (see `GuardedAlloc` in main.rs), warnings and errors go to
+//! `silberkorn.log` (the release build on Windows has no console), and a marker file tells the
+//! next start that the last session did not end normally.
 
+use std::fs::File;
 use std::io::Write;
 use std::panic::AssertUnwindSafe;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 /// Panics not shown to the user yet.
 static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -13,9 +20,20 @@ static PENDING: Mutex<Vec<String>> = Mutex::new(Vec::new());
 /// `panic.log` is started anew beyond this size.
 const LOG_LIMIT: u64 = 1 << 20;
 
+/// `panic.log`, opened at the start: writing to it when memory has run out must not allocate.
+static CRASH_LOG: OnceLock<File> = OnceLock::new();
+
+/// The last session ended without closing the app (see [`mark_running`]).
+static PREVIOUS_CRASH: AtomicBool = AtomicBool::new(false);
+
 /// Logs every panic (with thread, location and backtrace) and remembers it for [`take_panics`];
 /// the default output on stderr stays.
 pub fn install_hook() {
+    let dir = sk_core::paths::data_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Ok(f) = File::options().create(true).append(true).open(dir.join("panic.log")) {
+        let _ = CRASH_LOG.set(f);
+    }
     let default = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current().name().unwrap_or("unbenannt").to_string();
@@ -27,6 +45,75 @@ pub fn install_hook() {
         PENDING.lock().unwrap_or_else(|e| e.into_inner()).push(format!("Interner Fehler in „{thread}“: {message}"));
         default(info);
     }));
+}
+
+/// Called when an allocation failed, right before Rust aborts the process: one line in
+/// `panic.log`, written without allocating.
+pub fn out_of_memory(size: usize) {
+    let Some(mut f) = CRASH_LOG.get() else { return };
+    let mut buf = [0u8; 20];
+    let mut n = size;
+    let mut i = buf.len();
+    loop {
+        i -= 1;
+        buf[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    let _ = f.write_all(b"Speicher erschoepft: Anforderung von ");
+    let _ = f.write_all(&buf[i..]);
+    let _ = f.write_all(b" Bytes abgelehnt, Silberkorn wird beendet\n");
+}
+
+/// Marks the session as running; true when the last one did not end normally (the marker was
+/// still there).
+pub fn mark_running() -> bool {
+    let marker = sk_core::paths::data_dir().join("running");
+    let crashed = marker.exists();
+    PREVIOUS_CRASH.store(crashed, Ordering::Relaxed);
+    let _ = std::fs::write(&marker, timestamp());
+    crashed
+}
+
+/// The session ends normally.
+pub fn mark_clean_exit() {
+    let _ = std::fs::remove_file(sk_core::paths::data_dir().join("running"));
+}
+
+/// Whether the last session ended unexpectedly (once).
+pub fn take_previous_crash() -> bool {
+    PREVIOUS_CRASH.swap(false, Ordering::Relaxed)
+}
+
+/// Writes log messages to stderr and to `silberkorn.log` (started anew beyond 1 MB).
+pub fn log_target() -> Box<dyn Write + Send> {
+    let path = sk_core::paths::data_dir().join("silberkorn.log");
+    let too_big = std::fs::metadata(&path).is_ok_and(|m| m.len() > LOG_LIMIT);
+    let file = File::options().create(true).append(!too_big).write(true).truncate(too_big).open(&path).ok();
+    Box::new(Tee { file })
+}
+
+struct Tee {
+    file: Option<File>,
+}
+
+impl Write for Tee {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let _ = std::io::stderr().write_all(buf);
+        if let Some(f) = &mut self.file {
+            let _ = f.write_all(buf);
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if let Some(f) = &mut self.file {
+            let _ = f.flush();
+        }
+        Ok(())
+    }
 }
 
 /// Panics since the last call, as messages for the user.

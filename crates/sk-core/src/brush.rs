@@ -17,7 +17,7 @@ pub struct AutoGuide {
 impl AutoGuide {
     /// From the (oriented, camera RGB) source image.
     pub fn from_image(img: &LinearImage, max_edge: usize) -> Self {
-        let small = img.clone().fit_within(max_edge);
+        let small = img.fitted(max_edge);
         let data = small.data.par_iter().map(|p| p.map(|v| (v.max(0.0) + 0.002).ln())).collect();
         Self { w: small.width, h: small.height, data }
     }

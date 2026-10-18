@@ -58,9 +58,52 @@ mod workers;
 
 use std::path::PathBuf;
 
+/// The system allocator, which notes in `panic.log` when memory runs out (Rust then aborts
+/// without a panic, so nothing else would be left of it).
+struct GuardedAlloc;
+
+unsafe impl std::alloc::GlobalAlloc for GuardedAlloc {
+    unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
+        let p = unsafe { std::alloc::System.alloc(layout) };
+        if p.is_null() {
+            guard::out_of_memory(layout.size());
+        }
+        p
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: std::alloc::Layout) -> *mut u8 {
+        let p = unsafe { std::alloc::System.alloc_zeroed(layout) };
+        if p.is_null() {
+            guard::out_of_memory(layout.size());
+        }
+        p
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: std::alloc::Layout, new_size: usize) -> *mut u8 {
+        let p = unsafe { std::alloc::System.realloc(ptr, layout, new_size) };
+        if p.is_null() {
+            guard::out_of_memory(new_size);
+        }
+        p
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
+        unsafe { std::alloc::System.dealloc(ptr, layout) }
+    }
+}
+
+#[global_allocator]
+static ALLOC: GuardedAlloc = GuardedAlloc;
+
 fn main() -> eframe::Result {
-    env_logger::init();
     guard::install_hook();
+    // Warnings and errors also into silberkorn.log: the Windows release has no console.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,wgpu_core=error,wgpu_hal=error,naga=error"))
+        .target(env_logger::Target::Pipe(guard::log_target()))
+        .init();
+    if guard::mark_running() {
+        log::warn!("Die letzte Sitzung wurde nicht normal beendet");
+    }
     // The argument is a folder to browse, or a session (its `.sksession` file or folder).
     let arg = std::env::args().nth(1).map(PathBuf::from);
     let is_session = arg.as_ref().is_some_and(|p| sk_core::session::is_session_file(p) || (p.is_dir() && sk_core::session::find_session_file(p).is_some()));

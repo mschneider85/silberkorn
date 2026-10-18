@@ -172,7 +172,7 @@ fn similarity(pairs: &[([f64; 2], [f64; 2])]) -> Option<M3> {
 /// Corners of an image for the alignment, and the size of the image they were found in. That
 /// image is softened, so that a part in focus and the same part out of focus look more alike.
 fn features(img: &LinearImage) -> (Features, (usize, usize)) {
-    let g = gaussian_blur(&guide(&img.clone().fit_within(FEATURE_EDGE)), FEATURE_BLUR);
+    let g = gaussian_blur(&guide(&img.fitted(FEATURE_EDGE)), FEATURE_BLUR);
     (detect(&g), (g.w, g.h))
 }
 

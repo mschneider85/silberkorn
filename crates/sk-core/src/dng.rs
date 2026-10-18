@@ -316,7 +316,7 @@ pub fn write_linear_dng(path: &Path, d: &LinearDng) -> Result<()> {
 
 /// Small sRGB preview of camera data (for the file's embedded preview).
 pub fn quick_preview(meta: &crate::raw::RawMeta, img: &crate::image::LinearImage, max_edge: usize) -> ::image::RgbImage {
-    let small = img.clone().fit_within(max_edge);
+    let small = img.fitted(max_edge);
     let r = crate::pipeline::Processor::new(meta, &crate::params::Adjustments::default()).render(&small, None, None);
     let rgb: Vec<u8> = r.rgba.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
     ::image::RgbImage::from_raw(r.width as u32, r.height as u32, rgb).expect("size")
