@@ -512,7 +512,7 @@ impl App {
             tool.drag = None;
         }
         if let Some(c) = new_crop {
-            // The crop is applied when the tool closes; while active only the overlay changes.
+            // Committed (one undo step) when the tool closes; Esc restores the crop it opened with.
             if let Some(cur) = &mut self.current {
                 cur.adjustments.geometry.crop = c;
             }

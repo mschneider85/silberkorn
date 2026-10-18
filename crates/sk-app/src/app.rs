@@ -2518,8 +2518,9 @@ impl App {
         // Commit edits once the user lets go of the mouse (one undo step per gesture). Arrow keys
         // and wheel notches change a value step by step: the steps of one control are one gesture
         // until they pause. Any other change (another control, a button, an action) ends them
-        // first, as an undo step of their own.
-        if !ctx.input(|i| i.pointer.any_down()) && !self.viewer_pointer_down {
+        // first, as an undo step of their own. A crop is one step from opening the tool to
+        // closing it, however often the frame is adjusted.
+        if !ctx.input(|i| i.pointer.any_down()) && !self.viewer_pointer_down && self.crop_tool.is_none() {
             let pending = crate::widgets::take_steps(ctx);
             let mut other = std::mem::take(&mut self.steps_ended);
             if let Some((base, source)) = self.step_base.take() {

@@ -3241,3 +3241,28 @@ fn about_card_blocks_shortcuts() {
     assert!(!f.app.palette.open);
     assert_eq!(f.app.grid_view, grid);
 }
+
+/// However often the crop frame is adjusted, the crop is one undo step.
+#[test]
+fn a_crop_is_one_undo_step() {
+    let Some(mut f) = Fixture::new("crop-undo") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let frame = |f: &mut Fixture| {
+        let app = &mut f.app;
+        let mut out = f.ctx.run_ui(Default::default(), |ui| app.finish_frame(ui.ctx()));
+        out.textures_delta.clear();
+    };
+    frame(&mut f);
+    let steps = f.app.undo.len();
+    f.app.start_crop_tool();
+    for w in [0.9, 0.8, 0.7] {
+        f.app.current.as_mut().unwrap().adjustments.geometry.crop = sk_core::params::CropRect { x: 0.0, y: 0.0, w, h: w };
+        frame(&mut f);
+    }
+    assert_eq!(f.app.undo.len(), steps, "Während des Zuschneidens kein Schritt");
+    f.app.finish_crop_tool();
+    frame(&mut f);
+    assert_eq!(f.app.undo.len(), steps + 1);
+    f.app.undo();
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.geometry.crop, sk_core::params::CropRect::default());
+}
