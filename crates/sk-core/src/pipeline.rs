@@ -82,6 +82,9 @@ pub struct Histogram {
     pub luma: Vec<u32>,
 }
 
+/// Normalized source position of each output pixel.
+type SourcePositions = Vec<[f32; 2]>;
+
 /// Caches the expensive early stages (geometry, white balance, noise reduction)
 /// so that tone and color edits only re-run the later stages.
 #[derive(Default)]
@@ -91,7 +94,7 @@ pub struct StageCache {
     /// that changing those doesn't repeat it).
     resampled: Mutex<Option<(u64, Arc<LinearImage>)>>,
     /// Source position (normalized) of each output pixel, for layer masks.
-    uv: Mutex<Option<(u64, Arc<Vec<[f32; 2]>>)>>,
+    uv: Mutex<Option<(u64, Arc<SourcePositions>)>>,
     local: Mutex<Option<(u64, Arc<LocalPlanes>)>>,
     gpu: Mutex<gpu::Cache>,
 }

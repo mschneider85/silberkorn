@@ -377,11 +377,14 @@ fn ring_mean(src: &LinearImage, c: (f32, f32), r0: f32, r1: f32) -> [f32; 3] {
     acc.map(|v| v / n)
 }
 
+/// A segment of an area's center line in source pixels, with its box grown by the radius.
+type Segment = ((f32, f32), (f32, f32), (f32, f32, f32, f32));
+
 struct PreparedSpot {
     /// The area's segments in source pixels (a round spot is one of zero length), each with
     /// its bounding box grown by the radius, (x0, y0, x1, y1): a pixel only needs the few
     /// segments whose box contains it.
-    segments: Vec<((f32, f32), (f32, f32), (f32, f32, f32, f32))>,
+    segments: Vec<Segment>,
     /// Grid over `bounds` with cells of `cell` pixels, listing the segments whose box
     /// overlaps each cell.
     grid: Vec<Vec<u32>>,
@@ -466,7 +469,7 @@ type HealCache = Mutex<Vec<(u64, Arc<HealField>)>>;
 
 /// [`HealField::solve`] from a small cache: it is the slow part of a heal area and would
 /// otherwise run again for every area on every change of any of them.
-fn cached_heal(src: &LinearImage, segments: &[((f32, f32), (f32, f32), (f32, f32, f32, f32))], offset: (f32, f32), r: f32) -> Arc<HealField> {
+fn cached_heal(src: &LinearImage, segments: &[Segment], offset: (f32, f32), r: f32) -> Arc<HealField> {
     static CACHE: LazyLock<HealCache> = LazyLock::new(|| Mutex::new(Vec::new()));
     let mut h = image_fingerprint(src);
     let mut add = |v: f32| h = (h ^ v.to_bits() as u64).wrapping_mul(0x0100_0000_01b3);
@@ -503,7 +506,7 @@ struct HealField {
 }
 
 impl HealField {
-    fn solve(src: &LinearImage, segments: &[((f32, f32), (f32, f32), (f32, f32, f32, f32))], offset: (f32, f32), r: f32) -> Self {
+    fn solve(src: &LinearImage, segments: &[Segment], offset: (f32, f32), r: f32) -> Self {
         let b = segments.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |b, (p, q, _)| {
             (b.0.min(p.0.min(q.0)), b.1.min(p.1.min(q.1)), b.2.max(p.0.max(q.0)), b.3.max(p.1.max(q.1)))
         });
