@@ -423,9 +423,9 @@ impl App {
         let mode = if let Some(msg) = &self.speed_message {
             Some(msg.trim().to_string())
         } else if self.crop_tool.is_some() {
-            Some("Zuschneiden – Enter übernimmt, Esc bricht ab".into())
+            Some(format!("Zuschneiden – {} übernimmt, Esc bricht ab", crate::commands::key_or("finish-crop", "„Übernehmen“")))
         } else if self.keystone_guides_active() {
-            Some("Trapezkorrektur – Linien an Kanten legen, Enter übernimmt, Esc bricht ab".into())
+            Some(format!("Trapezkorrektur – Linien an Kanten legen, {} übernimmt, Esc bricht ab", crate::commands::key_or("finish-crop", "„Übernehmen“")))
         } else if self.straighten_tool.is_some() {
             Some("Geraderichten – Linie entlang des Horizonts ziehen".into())
         } else if self.picking_wb {
@@ -497,7 +497,7 @@ impl App {
             let left = until.saturating_duration_since(std::time::Instant::now()).as_secs_f32();
             if left > 0.0 {
                 let alpha = left.min(0.6) / 0.6;
-                let galley = painter.layout_no_wrap("Vollbild  ·  Esc oder F11 beendet".into(), egui::FontId::proportional(13.0), Color32::WHITE.gamma_multiply(alpha));
+                let galley = painter.layout_no_wrap(format!("Vollbild  ·  Esc oder {} beendet", crate::commands::key_or("fullscreen", "F11")), egui::FontId::proportional(13.0), Color32::WHITE.gamma_multiply(alpha));
                 let pos = pos2(rect.center().x - galley.size().x / 2.0, rect.top() + 16.0);
                 painter.rect_filled(Rect::from_min_size(pos, galley.size()).expand2(vec2(12.0, 6.0)), 12.0, Color32::from_black_alpha((170.0 * alpha) as u8));
                 painter.galley(pos, galley, Color32::WHITE.gamma_multiply(alpha));

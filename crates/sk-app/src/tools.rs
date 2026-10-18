@@ -577,7 +577,7 @@ impl App {
                 if widgets::slider_row_with(ui, "Deckkraft", &mut opacity, 5.0..=100.0, d.opacity * 100.0, 0, pct) {
                     wm.opacity = opacity / 100.0;
                 }
-                ui.label(RichText::new("Größe und Abstand in % der kurzen Bildkante. Vorschau mit P (Ausgabevorschau).").small().color(crate::theme::TEXT_FAINT));
+                ui.label(RichText::new(format!("Größe und Abstand in % der kurzen Bildkante. {}.", crate::commands::hint("Vorschau in der Ausgabevorschau", "proof"))).small().color(crate::theme::TEXT_FAINT));
             });
         });
         section(ui, "Metadaten", None, |ui| {

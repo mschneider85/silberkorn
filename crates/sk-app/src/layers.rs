@@ -52,16 +52,16 @@ const ZERO: LayerAdjustments = LayerAdjustments::NEUTRAL;
 impl LocalTool {
     pub fn label(self) -> &'static str {
         match self {
-            LocalTool::Brush => "\u{E6F0}  Pinsel (B)",
-            LocalTool::Eraser => "\u{E21E}  Radierer (N)",
-            LocalTool::Linear => "\u{E098}  Linear (L)",
-            LocalTool::Radial => "\u{E602}  Radial (R)",
-            LocalTool::Heal => "\u{E0B2}  Reparieren (H)",
-            LocalTool::Clone => "\u{EA48}  Klonen (S)",
-            LocalTool::Magic => "\u{E6B6}  Zauberpinsel (J)",
-            LocalTool::Object => "\u{E7C8}  Objekt (Umschalt+J)",
+            LocalTool::Brush => "\u{E6F0}  Pinsel",
+            LocalTool::Eraser => "\u{E21E}  Radierer",
+            LocalTool::Linear => "\u{E098}  Linear",
+            LocalTool::Radial => "\u{E602}  Radial",
+            LocalTool::Heal => "\u{E0B2}  Reparieren",
+            LocalTool::Clone => "\u{EA48}  Klonen",
+            LocalTool::Magic => "\u{E6B6}  Zauberpinsel",
+            LocalTool::Object => "\u{E7C8}  Objekt",
             LocalTool::ColorPick => "\u{E568}  Farbe wählen",
-            LocalTool::Remove => "\u{E6F0}  Entfernen (X)",
+            LocalTool::Remove => "\u{E6F0}  Entfernen",
         }
     }
 
@@ -988,10 +988,16 @@ impl App {
         let selected = self.selected_spot;
         let Some(cur) = self.current.as_mut() else { return };
         let spots = &mut cur.adjustments.retouch;
-        let help = "Mit Reparieren (H) oder Klonen (S) über eine Stelle malen. Pins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · Entf: löschen\n\nStaub und Flecken finden: repariert kleine dunkle Flecken auf ruhigen Flächen, etwa Sensorstaub.";
+        use crate::commands::hint;
+        let help = format!(
+            "Mit {} oder {} über eine Stelle malen. Pins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · {}\n\nStaub und Flecken finden: repariert kleine dunkle Flecken auf ruhigen Flächen, etwa Sensorstaub.",
+            hint("Reparieren", "tool-heal"),
+            hint("Klonen", "tool-clone"),
+            hint("Löschen", "delete-spot")
+        );
         let searching = self.spot_search.is_some();
         let sensitivity = &mut self.spot_sensitivity;
-        crate::widgets::section_help(ui, "Reparieren & Klonen", help, None, |ui| {
+        crate::widgets::section_help(ui, "Reparieren & Klonen", &help, None, |ui| {
             ui.horizontal(|ui| {
                 if ui.add_enabled(!searching, egui::Button::new(format!("{}  Staub und Flecken finden", crate::theme::icon::BROOM))).clicked() {
                     act = Some(Act::Find);
@@ -1451,8 +1457,16 @@ impl App {
             crate::widgets::no_image(ui);
             return;
         }
-        let help = "Reparieren (H) und Klonen (S): über eine Stelle malen. Entfernen (X): die KI füllt die Stelle passend zur Umgebung.\n\n[ und ] oder Ziehen mit der rechten Maustaste: Pinselgröße und Härte.";
-        self.tools_section(ui, help, &[LocalTool::Heal, LocalTool::Clone, LocalTool::Remove]);
+        use crate::commands::{hint, shortcut_of};
+        let help = format!(
+            "{} und {}: über eine Stelle malen. {}: die KI füllt die Stelle passend zur Umgebung.\n\n{} und {} oder Ziehen mit der rechten Maustaste: Pinselgröße und Härte.",
+            hint("Reparieren", "tool-heal"),
+            hint("Klonen", "tool-clone"),
+            hint("Entfernen", "tool-remove"),
+            shortcut_of("brush-smaller"),
+            shortcut_of("brush-larger")
+        );
+        self.tools_section(ui, &help, &[LocalTool::Heal, LocalTool::Clone, LocalTool::Remove]);
         self.remove_section(ui);
         self.retouch_section(ui);
     }

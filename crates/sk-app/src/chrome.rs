@@ -337,12 +337,13 @@ impl App {
         if check(ui, self.focus_mask, "Schärfemaske", &shortcut("focus-mask")) {
             self.toggle_focus_mask();
         }
-        ui.horizontal(|ui| {
-            ui.add_space(24.0);
-            ui.label("Empfindlichkeit");
-            ui.add(egui::Slider::new(&mut self.focus_sensitivity, 0.0..=100.0).fixed_decimals(0))
-                .on_hover_text("Höher: auch weniger scharfe Bereiche markieren");
-        });
+        // The same slider as in the panels; without the mask it has no effect.
+        ui.add_enabled_ui(self.focus_mask, |ui| {
+            ui.set_min_width(260.0);
+            crate::widgets::slider_row(ui, "Empfindlichkeit", &mut self.focus_sensitivity, 0.0..=100.0, 50.0, 0);
+        })
+        .response
+        .on_hover_text("Höher: auch weniger scharfe Bereiche markieren");
         if check(ui, self.proof_view, "Ausgabevorschau", &shortcut("proof")) {
             self.toggle_proof();
         }

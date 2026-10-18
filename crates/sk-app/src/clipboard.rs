@@ -143,7 +143,7 @@ impl App {
                 });
             });
             dialog::footer(ui, |ui| {
-                copy = ui.add_enabled(!chosen.is_empty(), dialog::primary("Kopieren")).on_hover_text("Mit Strg+Umschalt+V auf die Auswahl anwenden").clicked();
+                copy = ui.add_enabled(!chosen.is_empty(), dialog::primary("Kopieren")).on_hover_text(crate::commands::hint("Danach mit „Anpassungen auf Auswahl anwenden“ einfügen", "paste-adjustments")).clicked();
                 let to = if others.is_empty() { "Auf Auswahl anwenden".to_string() } else { format!("Auf {} anwenden", image_count(others.len())) };
                 apply = ui
                     .add_enabled(!chosen.is_empty() && !others.is_empty(), dialog::secondary(to))

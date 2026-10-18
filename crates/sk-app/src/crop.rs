@@ -215,7 +215,7 @@ impl App {
         let at = pos2(img_rect.center().x, img_rect.bottom().min(ui.clip_rect().bottom()) - 44.0);
         let apply = ui.put(Rect::from_center_size(at - vec2(size.x / 2.0 + 4.0, 0.0), size), egui::Button::new(format!("{}  Übernehmen", crate::theme::icon::CHECK)));
         let cancel = ui.put(Rect::from_center_size(at + vec2(size.x / 2.0 + 4.0, 0.0), size), egui::Button::new("Abbrechen"));
-        if apply.on_hover_text("Enter").clicked() {
+        if apply.on_hover_text(crate::commands::shortcut_of("finish-crop")).clicked() {
             self.apply_keystone_guides();
         } else if cancel.on_hover_text("Esc").clicked() {
             self.cancel_viewer_tools();

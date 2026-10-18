@@ -118,7 +118,7 @@ impl App {
         let fit = ((rect.width() - 20.0) / size.x).min((rect.height() - 20.0) / size.y).max(0.01);
         let uv = egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0));
         painter.image(tex.id(), egui::Rect::from_center_size(rect.center(), size * fit), uv, Color32::WHITE);
-        response.on_hover_text("Zoomen und Werkzeuge im Bildfenster (Umschalt+F11 schließt es)");
+        response.on_hover_text(format!("Zoomen und Werkzeuge im Bildfenster ({} schließt es)", crate::commands::key_or("viewer-window", "Menü Ansicht")));
     }
 
     /// Remembers where the window is (saved when it changes).

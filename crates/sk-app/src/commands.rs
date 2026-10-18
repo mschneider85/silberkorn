@@ -243,6 +243,12 @@ pub fn shortcut_of(id: &str) -> String {
     get(id).map(|c| c.shortcut()).unwrap_or_default()
 }
 
+/// The shortcut of a command for running text ("Enter übernimmt"), or `fallback` (e.g. the
+/// button's name) when it has none.
+pub fn key_or(id: &str, fallback: &str) -> String {
+    Some(shortcut_of(id)).filter(|k| !k.is_empty()).unwrap_or_else(|| fallback.to_string())
+}
+
 pub fn get(id: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|c| c.id == id)
 }

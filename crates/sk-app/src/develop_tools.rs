@@ -338,7 +338,7 @@ impl App {
         widgets::tool_section(ui, sk_core::tools::Tool::Crop, Some(&mut || reset_crop = true), |ui| {
             ui.horizontal(|ui| {
                 if crop_active {
-                    if ui.button(format!("{}  Übernehmen", icon::CHECK)).on_hover_text("Enter").clicked() {
+                    if ui.button(format!("{}  Übernehmen", icon::CHECK)).on_hover_text(crate::commands::shortcut_of("finish-crop")).clicked() {
                         finish_crop = true;
                     }
                     if ui.button("Abbrechen").on_hover_text("Esc").clicked() {
@@ -459,7 +459,7 @@ impl App {
             });
             if guide_mode.is_some() {
                 ui.horizontal(|ui| {
-                    if ui.button(format!("{}  Übernehmen", icon::CHECK)).on_hover_text("Enter").clicked() {
+                    if ui.button(format!("{}  Übernehmen", icon::CHECK)).on_hover_text(crate::commands::shortcut_of("finish-crop")).clicked() {
                         apply_guides = true;
                     }
                     if ui.button("Abbrechen").on_hover_text("Esc").clicked() {
