@@ -697,8 +697,6 @@ impl App {
 
     pub(crate) fn full_output_width(&self) -> Option<f32> {
         let cur = self.current.as_ref()?;
-        let opts = sk_core::pipeline::RenderOptions { ignore_crop: self.crop_tool.is_some(), ..Default::default() };
-        let p = sk_core::pipeline::Processor::with_options(&cur.meta, &cur.adjustments, opts);
         let (w, h) = match &cur.full {
             Some(f) => (f.width, f.height),
             None => {
@@ -706,7 +704,7 @@ impl App {
                 ((cur.preview.width as f32 * k) as usize, (cur.preview.height as f32 * k) as usize)
             }
         };
-        Some(p.output_size(w, h).0 as f32)
+        Some(sk_core::pipeline::geomap(&cur.meta, &cur.adjustments, self.crop_tool.is_some(), w, h).out_w as f32)
     }
 
     /// Zoom to 100 % (one full-resolution pixel per physical screen pixel) or back to fit.
@@ -756,8 +754,8 @@ impl App {
         if !zoomed && (requested || self.edited_at.elapsed() < std::time::Duration::from_secs(1)) {
             return;
         }
-        let p = sk_core::pipeline::Processor::new(&cur.meta, &cur.adjustments);
-        let (fw, fh) = p.output_size(full.width, full.height);
+        let g = sk_core::pipeline::geomap(&cur.meta, &cur.adjustments, false, full.width, full.height);
+        let (fw, fh) = (g.out_w, g.out_h);
         let k = fw as f32 / size.x;
         let to_full = |pt: Pos2| (((pt - img_rect.min) / scale) * k).to_pos2();
         let center = to_full(viewport.center());

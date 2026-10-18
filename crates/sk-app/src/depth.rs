@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 
 use egui::{Color32, RichText, Ui, Vec2};
 use sk_core::params::{Atmosphere, DepthRange, LensBlur, Relight};
-use sk_core::pipeline::{Processor, RenderOptions};
 
 use crate::ai_models::{self, AiFeature};
 use crate::app::App;
@@ -168,8 +167,7 @@ impl App {
             return;
         };
         let p = &cur.preview;
-        let opts = RenderOptions { ignore_crop: self.crop_tool.is_some(), ..Default::default() };
-        let geo = Processor::with_options(&cur.meta, &cur.adjustments, opts).geomap(p.width, p.height);
+        let geo = sk_core::pipeline::geomap(&cur.meta, &cur.adjustments, self.crop_tool.is_some(), p.width, p.height);
         let (sx, sy) = geo.source_point(image_pos.x, image_pos.y);
         let (u, v) = (sx / p.width as f32, sy / p.height as f32);
         if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {

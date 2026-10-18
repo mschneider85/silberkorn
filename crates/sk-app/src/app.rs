@@ -9,7 +9,7 @@ use sk_core::catalog::{self, Catalog, Filter, ImageRecord, Scope, SortKey};
 use sk_core::export::ExportRecipe;
 use sk_core::image::LinearImage;
 use sk_core::params::{Adjustments, WbMode, WhiteBalance};
-use sk_core::pipeline::{Histogram, Processor, RenderOptions};
+use sk_core::pipeline::{Histogram, Processor};
 use sk_core::raw::RawMeta;
 use sk_core::session::Session;
 use sk_core::sidecar::{self, ColorLabel, Sidecar};
@@ -1947,8 +1947,7 @@ impl App {
     fn sample_camera_rgb(&self, image_pos: Vec2) -> Option<[f32; 3]> {
         let cur = self.current.as_ref()?;
         let p = &cur.preview;
-        let opts = RenderOptions { ignore_crop: self.crop_tool.is_some(), ..Default::default() };
-        let geo = Processor::with_options(&cur.meta, &cur.adjustments, opts).geomap(p.width, p.height);
+        let geo = sk_core::pipeline::geomap(&cur.meta, &cur.adjustments, self.crop_tool.is_some(), p.width, p.height);
         let mut acc = [0.0f32; 3];
         let mut n = 0.0;
         for dy in -3..=3 {

@@ -77,6 +77,7 @@ const MAX_PIXELS: usize = 12_000_000;
 /// Results of the expensive stages kept on the graphics card between renderings.
 #[derive(Default)]
 pub(super) struct Cache {
+    /// The camera image as uploaded: as it is, or resampled with heal/clone and removals.
     source: Option<(u64, Arc<Buffer>)>,
     early: Option<(u64, Arc<Buffer>)>,
     local: Option<(u64, Arc<Local>)>,
@@ -614,15 +615,34 @@ impl Processor {
             }
         } else {
             // Heal/clone and removals stay on the CPU: resample there and let the graphics
-            // card only copy pixel by pixel.
-            let mut img = plan.geo.resample(src, ext);
-            apply_removals(&mut img, src, &plan.geo, ext, &self.adj.removals);
-            apply_retouch(&mut img, src, &plan.geo, ext, &self.adj.retouch);
+            // card only copy pixel by pixel. Kept apart from white balance and noise
+            // reduction, so that moving those sliders doesn't repeat it.
             let id = GeoMap::new(&Default::default(), &Default::default(), None, 0, ext.w, ext.h, false);
             args.geo = id.gpu();
             args.region = [0, 0, ext.w as u32, ext.h as u32];
             args.win = [0, 0, ext.w as u32, ext.h as u32];
-            Arc::new(upload_window(g, &img, (0, 0, ext.w, ext.h)))
+            let k = key(&format!(
+                "{:p}|{}x{}|{}|{ext:?}|{}",
+                src.data.as_ptr(),
+                src.width,
+                src.height,
+                crate::ai_denoise::fingerprint(src),
+                self.retouch_relevant()
+            ));
+            let mut c = cache.map(|c| c.gpu.lock().unwrap());
+            match c.as_mut().and_then(|c| c.source.as_ref().filter(|(ck, _)| *ck == k).map(|(_, b)| b.clone())) {
+                Some(b) => b,
+                None => {
+                    let mut img = plan.geo.resample(src, ext);
+                    apply_removals(&mut img, src, &plan.geo, ext, &self.adj.removals);
+                    apply_retouch(&mut img, src, &plan.geo, ext, &self.adj.retouch);
+                    let b = Arc::new(upload_window(g, &img, (0, 0, ext.w, ext.h)));
+                    if let Some(c) = c.as_mut() {
+                        c.source = Some((k, b.clone()));
+                    }
+                    b
+                }
+            }
         };
         let a = ops.args(&args);
         ops.enc.run_2d(RESAMPLE, &[&a, &input, &out], ext.w, ext.h);
@@ -1386,6 +1406,29 @@ mod tests {
             let max = on_card.rgba.iter().zip(&cpu.rgba).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap_or(0);
             assert!(max <= 4, "Punkt {i}: {max}");
         }
+    }
+
+    /// Heal/clone stays cached when only the white balance changes, and the result is that
+    /// of a rendering without cache.
+    #[test]
+    fn retouch_stays_cached_across_white_balance() {
+        let Some(g) = gpu() else { return };
+        let (w, h) = (200, 150);
+        let src = image(w, h);
+        let mut adj = Adjustments {
+            retouch: vec![Spot { mode: SpotMode::Clone, target: [0.3, 0.3], source: [0.6, 0.6], path: vec![], radius: 0.05, feather: 0.5, opacity: 1.0 }],
+            ..Default::default()
+        };
+        let cache = StageCache::default();
+        Processor::new(&meta(w, h), &adj).render_gpu(g, &src, None, Some(&cache)).unwrap();
+        let source_key = cache.gpu.lock().unwrap().source.as_ref().unwrap().0;
+        adj.white_balance.mode = crate::params::WbMode::Custom;
+        adj.white_balance.kelvin = 3500.0;
+        let p = Processor::new(&meta(w, h), &adj);
+        let cached = p.render_gpu(g, &src, None, Some(&cache)).unwrap();
+        assert_eq!(cache.gpu.lock().unwrap().source.as_ref().unwrap().0, source_key, "retouch not done again");
+        let fresh = p.render_gpu(g, &src, None, None).unwrap();
+        assert_eq!(cached.rgba, fresh.rgba);
     }
 
     #[test]

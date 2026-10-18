@@ -90,7 +90,7 @@ impl App {
     fn shown_geomap(&self) -> Option<sk_core::geometry::GeoMap> {
         let cur = self.current.as_ref()?;
         let p = &cur.preview;
-        Some(sk_core::pipeline::Processor::new(&cur.meta, &cur.adjustments).geomap(p.width, p.height))
+        Some(sk_core::pipeline::geomap(&cur.meta, &cur.adjustments, false, p.width, p.height))
     }
 
     /// The keystone tool with lines for `mode`, placed over the middle of the image.
@@ -386,13 +386,8 @@ impl App {
         let frame = if self.crop_tool.is_some() {
             tex.size_vec2()
         } else {
-            let p = sk_core::pipeline::Processor::with_options(
-                &cur.meta,
-                &cur.adjustments,
-                sk_core::pipeline::RenderOptions { ignore_crop: true, ..Default::default() },
-            );
-            let (w, h) = p.output_size(cur.preview.width, cur.preview.height);
-            vec2(w as f32, h as f32)
+            let g = sk_core::pipeline::geomap(&cur.meta, &cur.adjustments, true, cur.preview.width, cur.preview.height);
+            vec2(g.out_w as f32, g.out_h as f32)
         };
         let ratio = self.aspect_value(frame);
         self.edit(|a| {

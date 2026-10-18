@@ -413,6 +413,13 @@ pub struct Processor {
     lens_blur: Option<(std::path::PathBuf, crate::params::LensBlur)>,
 }
 
+/// The geometric map of [`Processor::geomap`] without building a processor (no tone tables, no
+/// copy of the layers and their strokes): for tools that only map points, several times a frame.
+pub fn geomap(meta: &RawMeta, adj: &Adjustments, ignore_crop: bool, src_w: usize, src_h: usize) -> GeoMap {
+    let adj = adj.visible();
+    GeoMap::new(&adj.geometry, &adj.lens, meta.lens.as_ref(), adj.rotation, src_w, src_h, ignore_crop)
+}
+
 impl Processor {
     pub fn new(meta: &RawMeta, adj: &Adjustments) -> Self {
         Self::with_options(meta, adj, RenderOptions::default())
@@ -721,11 +728,19 @@ impl Processor {
         a
     }
 
+    /// What the resampled camera image with heal/clone and removals depends on (not white
+    /// balance or noise reduction).
+    fn retouch_relevant(&self) -> serde_json::Value {
+        serde_json::json!({
+            "g": self.adj.geometry, "l": self.adj.lens, "r": self.adj.rotation, "ic": self.opts.ignore_crop,
+            "rt": self.adj.retouch, "rm": self.adj.removals.iter().map(|r| (r.id, r.rect)).collect::<Vec<_>>(),
+        })
+    }
+
     fn stage_key(&self, src: &LinearImage, region: Region) -> u64 {
         let relevant = serde_json::json!({
-            "g": self.adj.geometry, "l": self.adj.lens, "r": self.adj.rotation, "ic": self.opts.ignore_crop,
-            "wb": self.wb, "nl": self.adj.detail.nr_luma, "nc": self.adj.detail.nr_color, "rt": self.adj.retouch,
-            "rm": self.adj.removals.iter().map(|r| (r.id, r.rect)).collect::<Vec<_>>(),
+            "geo": self.retouch_relevant(),
+            "wb": self.wb, "nl": self.adj.detail.nr_luma, "nc": self.adj.detail.nr_color,
             // Depends on the process version and the light, not only on the multipliers.
             "cw": self.cam_to_working,
         });

@@ -3,7 +3,7 @@
 
 use sk_core::mask;
 use sk_core::params::{BrushStroke, Layer, LayerAdjustments, Mask, Spot, SpotMode};
-use sk_core::pipeline::{Processor, RenderOptions};
+use sk_core::pipeline::Processor;
 use sk_core::tools::Tool;
 use egui::{Color32, Pos2, Rect, Response, RichText, Stroke, Ui, Vec2, pos2, vec2};
 
@@ -227,10 +227,8 @@ pub enum LocalDrag {
 impl App {
     fn mapping(&self) -> Option<(sk_core::geometry::GeoMap, f32, f32)> {
         let cur = self.current.as_ref()?;
-        let opts = RenderOptions { ignore_crop: self.crop_tool.is_some(), ..Default::default() };
-        let p = Processor::with_options(&cur.meta, &cur.adjustments, opts);
         let (pw, ph) = (cur.preview.width as f32, cur.preview.height as f32);
-        Some((p.geomap(cur.preview.width, cur.preview.height), pw, ph))
+        Some((sk_core::pipeline::geomap(&cur.meta, &cur.adjustments, self.crop_tool.is_some(), cur.preview.width, cur.preview.height), pw, ph))
     }
 
     /// Screen position -> normalized source coordinates.
@@ -241,8 +239,7 @@ impl App {
         Some([(sx + 0.5) / pw, (sy + 0.5) / ph])
     }
 
-    /// Normalized source coordinates -> screen positions. Building the geometry mapping costs
-    /// about a millisecond, so it is done once per frame and used for all points.
+    /// Normalized source coordinates -> screen positions.
     pub(crate) fn uv_mapper(&self, img_rect: Rect, scale: f32) -> Option<UvToScreen> {
         let (geo, pw, ph) = self.mapping()?;
         Some(UvToScreen { geo, pw, ph, origin: img_rect.min, scale })
