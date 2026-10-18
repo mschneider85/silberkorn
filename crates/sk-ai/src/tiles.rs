@@ -1,5 +1,5 @@
 //! Running an image network with a fixed input size over a larger image: in overlapping tiles,
-//! blended where they meet. Used for denoising and upscaling.
+//! blended where they meet. Used for denoising.
 
 use std::sync::Mutex;
 

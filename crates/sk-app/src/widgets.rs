@@ -1,6 +1,6 @@
 //! Custom widgets: histogram, curve editor, star rating, slider rows.
 
-use sk_core::params::{Curve, LevelSet};
+use sk_core::params::{ColorWheel, Curve, LevelSet};
 use sk_core::pipeline::Histogram;
 use egui::{Color32, Pos2, Rect, Response, RichText, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
@@ -68,6 +68,35 @@ fn copy_clicked_id() -> egui::Id {
 /// button); set before the tool tabs are drawn.
 pub fn set_copy_targets(ctx: &egui::Context, n: usize) {
     ctx.data_mut(|d| d.insert_temp(copy_targets_id(), n));
+}
+
+fn tool_states_id() -> egui::Id {
+    egui::Id::new("tool_states")
+}
+
+fn eye_clicked_id() -> egui::Id {
+    egui::Id::new("tool_eye_clicked")
+}
+
+/// Which tools of the image are switched off and which are changed: a tool section shows its
+/// eye for these. Set before the tool tabs are drawn.
+#[derive(Clone, Default)]
+pub struct ToolStates {
+    pub hidden: Vec<sk_core::tools::Tool>,
+    pub edited: Vec<sk_core::tools::Tool>,
+}
+
+pub fn set_tool_states(ctx: &egui::Context, states: ToolStates) {
+    ctx.data_mut(|d| d.insert_temp(tool_states_id(), states));
+}
+
+/// The tool whose eye was clicked since the last call.
+pub fn take_eye_clicked(ctx: &egui::Context) -> Option<sk_core::tools::Tool> {
+    ctx.data_mut(|d| {
+        let tool = d.get_temp(eye_clicked_id());
+        d.remove::<sk_core::tools::Tool>(eye_clicked_id());
+        tool
+    })
 }
 
 fn edit_layer_id() -> egui::Id {
@@ -179,7 +208,17 @@ fn section_inner(
     if hovered {
         painter.rect_filled(inner, 5.0, Color32::from_rgb(42, 42, 46));
     }
-    let title_color = if open || hovered { Color32::WHITE } else { theme::TEXT };
+    // The eye switches the tool's effect off and on (on the background, not on a layer).
+    let eye_tool = copy.filter(|_| !on_layer);
+    let states = eye_tool.and_then(|_| ui.data(|d| d.get_temp::<ToolStates>(tool_states_id()))).unwrap_or_default();
+    let hidden = eye_tool.is_some_and(|t| states.hidden.contains(&t));
+    let title_color = if hidden {
+        theme::TEXT_FAINT
+    } else if open || hovered {
+        Color32::WHITE
+    } else {
+        theme::TEXT
+    };
     let galley = painter.layout_no_wrap(title.to_string(), egui::FontId::proportional(13.5), title_color);
     let mut title_w = galley.size().x;
     painter.galley(pos2(inner.left() + 6.0, inner.center().y - galley.size().y / 2.0), galley, title_color);
@@ -217,20 +256,41 @@ fn section_inner(
             ui.label(help);
         });
     }
-    let has_reset = reset.is_some();
+    // Right to left: caret, eye (tools only; its place stays free while there is nothing to
+    // switch off), reset, copy.
+    let mut x = 34.0;
+    if let Some(tool) = eye_tool {
+        if hidden || states.edited.contains(&tool) {
+            let r = Rect::from_center_size(inner.right_center() - vec2(x, 0.0), vec2(24.0, 22.0));
+            let (symbol, color) = if hidden {
+                (theme::icon::EYE_SLASH, theme::ACCENT)
+            } else if hovered || ui.rect_contains_pointer(r) {
+                (theme::icon::EYE, theme::TEXT)
+            } else {
+                (theme::icon::EYE, theme::TEXT_FAINT)
+            };
+            let b = egui::Button::new(RichText::new(symbol).size(13.0).color(color)).frame_when_inactive(false);
+            let hover = if hidden { "Wirkung wieder einblenden" } else { "Wirkung ausblenden (Einstellungen bleiben erhalten)" };
+            if ui.put(r, b).on_hover_text(hover).clicked() {
+                ui.data_mut(|d| d.insert_temp(eye_clicked_id(), tool));
+                header_button_clicked = true;
+            }
+        }
+        x += 26.0;
+    }
     if let Some(reset) = reset {
-        let r = Rect::from_center_size(inner.right_center() - vec2(34.0, 0.0), vec2(24.0, 22.0));
+        let r = Rect::from_center_size(inner.right_center() - vec2(x, 0.0), vec2(24.0, 22.0));
         let color = if hovered || ui.rect_contains_pointer(r) { theme::TEXT } else { theme::TEXT_FAINT };
         let b = egui::Button::new(RichText::new(theme::icon::ARROW_COUNTER_CLOCKWISE).size(13.0).color(color)).frame_when_inactive(false);
         if ui.put(r, b).on_hover_text("Werkzeug zurücksetzen").clicked() {
             reset();
             header_button_clicked = true;
         }
+        x += 26.0;
     }
     let targets = ui.data(|d| d.get_temp::<usize>(copy_targets_id())).unwrap_or(0);
     // Layers belong to one image: nothing to carry over while one is chosen.
     if let Some(tool) = copy.filter(|_| targets > 0 && !on_layer) {
-        let x = if has_reset { 60.0 } else { 34.0 };
         let r = Rect::from_center_size(inner.right_center() - vec2(x, 0.0), vec2(24.0, 22.0));
         let color = if hovered || ui.rect_contains_pointer(r) { theme::TEXT } else { theme::TEXT_FAINT };
         let b = egui::Button::new(RichText::new(theme::icon::COPY).size(13.0).color(color)).frame_when_inactive(false);
@@ -247,7 +307,12 @@ fn section_inner(
     if open {
         ui.add_space(2.0);
         let frame = egui::Frame::new().inner_margin(egui::Margin { left: 6, right: 4, top: 0, bottom: 0 });
-        let r = frame.show(ui, body).response;
+        // Switched off: shown as it is set, but only to be changed once switched on again.
+        let r = frame
+            .show(ui, |ui| {
+                ui.add_enabled_ui(!hidden, body).response.on_disabled_hover_text("Ausgeblendet: zum Bearbeiten mit dem Auge wieder einblenden");
+            })
+            .response;
         if marked {
             ui.painter().rect_filled(Rect::from_min_size(r.rect.left_top(), vec2(2.0, r.rect.height())), 1.0, theme::ACCENT.gamma_multiply(0.45));
         }
@@ -300,18 +365,23 @@ pub struct SliderOpts<'a> {
 pub const RAIL_KELVIN: &[Color32] = &[Color32::from_rgb(70, 120, 230), Color32::from_rgb(200, 200, 200), Color32::from_rgb(235, 190, 60)];
 /// Rail colors for tint (green to magenta).
 pub const RAIL_TINT: &[Color32] = &[Color32::from_rgb(70, 190, 90), Color32::from_rgb(200, 200, 200), Color32::from_rgb(210, 80, 200)];
-/// Rail colors for a hue from 0° to 360°.
-pub const RAIL_HUE: &[Color32] = &[
-    Color32::from_rgb(230, 70, 70),
-    Color32::from_rgb(230, 200, 60),
-    Color32::from_rgb(80, 200, 80),
-    Color32::from_rgb(70, 200, 210),
-    Color32::from_rgb(80, 100, 230),
-    Color32::from_rgb(210, 80, 210),
-    Color32::from_rgb(230, 70, 70),
-];
 /// Rail colors for saturation (grey to colorful).
 pub const RAIL_SATURATION: &[Color32] = &[Color32::from_rgb(140, 140, 140), Color32::from_rgb(220, 90, 170), Color32::from_rgb(240, 160, 40)];
+
+/// Rail colors for tones (dark to light).
+pub const RAIL_TONE: &[Color32] = &[Color32::from_rgb(40, 40, 40), Color32::from_rgb(125, 125, 125), Color32::from_rgb(215, 215, 215)];
+/// Rail colors for a luminance from black to white.
+pub const RAIL_LUMA: &[Color32] = &[Color32::from_rgb(0, 0, 0), Color32::from_rgb(255, 255, 255)];
+
+/// A hue (Oklab degrees) at the given HSV saturation and value, for display.
+pub fn band_hsv(hue: f32, s: f32, v: f32) -> Color32 {
+    egui::ecolor::Hsva::new(((hue - 25.0 + 720.0) % 360.0 + 5.0) / 360.0, s, v, 1.0).into()
+}
+
+/// Colors of the hue circle (Oklab degrees 0..360), for a hue rail.
+pub fn hue_rail() -> Vec<Color32> {
+    (0..=12).map(|i| band_hsv(i as f32 * 30.0, 0.75, 0.9)).collect()
+}
 
 /// A labeled slider that resets to `default` on double-click of the label.
 /// Returns true when the value changed.
@@ -478,6 +548,7 @@ fn rail_slider(
         });
         if delta != 0.0 {
             *value = (*value + delta).clamp(lo, hi);
+            mark_stepped(ui.ctx(), resp.id);
         }
     }
     if resp.hovered() {
@@ -508,6 +579,7 @@ fn rail_slider(
         ui.data_mut(|d| d.insert_temp(acc_id, total - whole));
         if whole != 0.0 && !mods.command {
             *value = (*value + whole * step(mods)).clamp(lo, hi);
+            mark_stepped(ui.ctx(), resp.id);
         }
         // The wheel belongs to the slider, not to the panel around it.
         ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
@@ -600,6 +672,57 @@ struct HoveredRail(egui::Id, u64);
 /// Wheel events closer together than this belong to the same gesture.
 const WHEEL_GESTURE_GAP: f64 = 0.3;
 
+/// Changes by arrow keys or wheel notches come one step at a time: the steps of one control
+/// become one undo step once they have paused this long (see `App::finish_frame`).
+const STEP_PAUSE: f64 = 0.8;
+
+fn stepped_id() -> egui::Id {
+    egui::Id::new("value_stepped")
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Stepped {
+    time: f64,
+    source: egui::Id,
+    /// Not yet seen by `take_steps` (the viewer window has frames of its own, so no frame number).
+    fresh: bool,
+}
+
+/// Steps of one control that haven't paused yet.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PendingSteps {
+    /// The control (slider, speed edit key).
+    pub source: egui::Id,
+    /// Seconds until they count as finished.
+    pub left: f64,
+    /// A step came in since the last call.
+    pub now: bool,
+}
+
+/// A value of `source` was changed by a key or a wheel notch (not by dragging).
+pub fn mark_stepped(ctx: &egui::Context, source: egui::Id) {
+    let s = Stepped { time: ctx.input(|i| i.time), source, fresh: true };
+    ctx.data_mut(|d| d.insert_temp(stepped_id(), Some(s)));
+}
+
+/// The key or wheel steps still running (`None`: they have paused, or there were none). Called
+/// once per frame, by `App::finish_frame`.
+pub fn take_steps(ctx: &egui::Context) -> Option<PendingSteps> {
+    let s = ctx.data_mut(|d| {
+        let s = d.get_temp_mut_or_default::<Option<Stepped>>(stepped_id()).as_mut()?;
+        let seen = *s;
+        s.fresh = false;
+        Some(seen)
+    })?;
+    let left = STEP_PAUSE - (ctx.input(|i| i.time) - s.time);
+    (left > 0.0).then_some(PendingSteps { source: s.source, left, now: s.fresh })
+}
+
+/// The running steps count as finished (another change ended them).
+pub fn end_steps(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<Option<Stepped>>(stepped_id()));
+}
+
 fn wheel_gesture_id() -> egui::Id {
     egui::Id::new("slider_wheel_gesture")
 }
@@ -639,6 +762,237 @@ pub fn slider_has_focus(ctx: &egui::Context) -> bool {
 /// Slider without label and number, e.g. for the thumbnail size; double-click resets.
 pub fn compact_slider(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, default: f32, width: f32) -> bool {
     rail_slider(ui, name, value, range, default, 2, width, None)
+}
+
+/// What a drag on a color wheel changes, and where it was pressed (or re-anchored when Shift
+/// changed) with the value then.
+#[derive(Clone, Copy)]
+struct WheelDrag {
+    part: WheelPart,
+    pos: Pos2,
+    /// The point as an offset from the center in radii (disc), or the value (arcs).
+    start: Vec2,
+    fine: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum WheelPart {
+    Disc,
+    /// The arc on the left: the amount.
+    Amount,
+    /// The arc on the right: the lightness.
+    Lightness,
+}
+
+/// Half the angle an arc beside the wheel spans.
+const ARC_SPAN: f32 = 62.0;
+
+/// Point at `deg` (counter-clockwise from the right, as the hue) on a circle.
+fn on_circle(center: Pos2, radius: f32, deg: f32) -> Pos2 {
+    let a = deg.to_radians();
+    center + vec2(a.cos(), -a.sin()) * radius
+}
+
+/// An arc from `from` to `to` degrees, its color running through `colors` along the way.
+fn paint_arc(p: &egui::Painter, center: Pos2, radius: f32, from: f32, to: f32, width: f32, colors: impl Fn(f32) -> Color32) {
+    let n = 40;
+    let mut mesh = egui::Mesh::default();
+    for i in 0..=n {
+        let t = i as f32 / n as f32;
+        let deg = from + (to - from) * t;
+        let c = colors(t);
+        mesh.colored_vertex(on_circle(center, radius - width / 2.0, deg), c);
+        mesh.colored_vertex(on_circle(center, radius + width / 2.0, deg), c);
+        if i > 0 {
+            let k = 2 * i;
+            mesh.add_triangle(k - 2, k - 1, k);
+            mesh.add_triangle(k - 1, k, k + 1);
+        }
+    }
+    p.add(mesh);
+}
+
+/// A color wheel `width` wide, after Capture One: the name above, a dark disc in a ring of
+/// hues whose point gives the hue (angle) and the amount (distance from the center), on the
+/// left an arc for the amount alone, on the right one for the lightness when `with_lightness`.
+/// A click sets the point or the arc's value, dragging moves it from where it is (Shift:
+/// finely); double-click resets the part under the pointer. Returns true when it changed.
+pub fn color_wheel(ui: &mut Ui, label: &str, wheel: &mut ColorWheel, with_lightness: bool, width: f32) -> bool {
+    let before = *wheel;
+    ui.vertical(|ui| {
+        ui.set_width(width);
+        ui.spacing_mut().item_spacing.y = 2.0;
+        let modified = *wheel != ColorWheel::default();
+        ui.vertical_centered(|ui| {
+            ui.label(RichText::new(label).color(if modified { Color32::WHITE } else { theme::TEXT_DIM }));
+        });
+        let (rect, resp) = ui.allocate_exact_size(vec2(width, width * 0.86), Sense::click_and_drag());
+        let center = rect.center();
+        let arc_r = rect.height() / 2.0 - 4.0;
+        let radius = arc_r - 11.0;
+        let offset_of = |w: &ColorWheel| {
+            let a = w.hue.to_radians();
+            vec2(a.cos(), -a.sin()) * (w.amount / 100.0)
+        };
+        let set_point = |w: &mut ColorWheel, v: Vec2| {
+            let len = v.length().min(1.0);
+            w.amount = (len * 100.0).round();
+            // At the center the hue has no direction: it stays.
+            if len > 0.005 {
+                w.hue = (-v.y).atan2(v.x).to_degrees().rem_euclid(360.0).round() % 360.0;
+            }
+        };
+        // Angle of the pointer on an arc as 0..1 from its lower end, left (amount) or right.
+        let arc_t = |p: Pos2, left: bool| {
+            let d = p - center;
+            let deg = (-d.y).atan2(if left { -d.x } else { d.x }).to_degrees();
+            ((deg + ARC_SPAN) / (2.0 * ARC_SPAN)).clamp(0.0, 1.0)
+        };
+        let part_at = |p: Pos2| {
+            let d = p - center;
+            if d.length() <= radius + 4.0 {
+                Some(WheelPart::Disc)
+            } else if d.length() <= arc_r + 9.0 && d.x < 0.0 {
+                Some(WheelPart::Amount)
+            } else if d.length() <= arc_r + 9.0 && with_lightness {
+                Some(WheelPart::Lightness)
+            } else {
+                None
+            }
+        };
+
+        let drag_id = resp.id.with("drag");
+        let fine = ui.input(|i| i.modifiers.shift);
+        if resp.is_pointer_button_down_on()
+            && ui.input(|i| i.pointer.primary_pressed())
+            && let Some(p) = resp.interact_pointer_pos()
+            && let Some(part) = part_at(p)
+        {
+            match part {
+                WheelPart::Disc => {
+                    let on_point = (p - (center + offset_of(wheel) * radius)).length() <= 9.0;
+                    if !on_point && !fine {
+                        set_point(wheel, (p - center) / radius);
+                    }
+                }
+                WheelPart::Amount if !fine => wheel.amount = (arc_t(p, true) * 100.0).round(),
+                WheelPart::Lightness if !fine => wheel.lightness = (arc_t(p, false) * 200.0 - 100.0).round(),
+                _ => {}
+            }
+            let start = match part {
+                WheelPart::Disc => offset_of(wheel),
+                WheelPart::Amount => vec2(wheel.amount, 0.0),
+                WheelPart::Lightness => vec2(wheel.lightness, 0.0),
+            };
+            ui.data_mut(|d| d.insert_temp(drag_id, WheelDrag { part, pos: p, start, fine }));
+        }
+        let drag = ui.data(|d| d.get_temp::<WheelDrag>(drag_id)).filter(|_| resp.is_pointer_button_down_on());
+        if let (Some(mut a), Some(p)) = (drag, resp.interact_pointer_pos()) {
+            // The disc follows the pointer's way; an arc its way upwards along it.
+            let delta = |a: &WheelDrag, p: Pos2| match a.part {
+                WheelPart::Disc => (p - a.pos) / radius,
+                WheelPart::Amount => vec2((a.pos.y - p.y) / (arc_r * 1.6) * 100.0, 0.0),
+                WheelPart::Lightness => vec2((a.pos.y - p.y) / (arc_r * 1.6) * 200.0, 0.0),
+            };
+            let scale = |fine: bool| if fine { 0.1 } else { 1.0 };
+            if a.fine != fine {
+                a = WheelDrag { pos: p, start: a.start + delta(&a, p) * scale(a.fine), fine, ..a };
+                ui.data_mut(|d| d.insert_temp(drag_id, a));
+            }
+            if p != a.pos {
+                let v = a.start + delta(&a, p) * scale(fine);
+                match a.part {
+                    WheelPart::Disc => set_point(wheel, v),
+                    WheelPart::Amount => wheel.amount = v.x.clamp(0.0, 100.0).round(),
+                    WheelPart::Lightness => wheel.lightness = v.x.clamp(-100.0, 100.0).round(),
+                }
+            }
+        }
+        let hovered_part = resp.hover_pos().and_then(part_at);
+        if resp.double_clicked() {
+            match hovered_part {
+                Some(WheelPart::Disc) => (wheel.hue, wheel.amount) = (0.0, 0.0),
+                Some(WheelPart::Amount) => wheel.amount = 0.0,
+                Some(WheelPart::Lightness) => wheel.lightness = 0.0,
+                None => {}
+            }
+        }
+        let shown_part = drag.map(|d| d.part).or(hovered_part);
+        if ui.is_enabled() {
+            match shown_part {
+                Some(WheelPart::Disc) => ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair),
+                Some(_) => ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical),
+                None => {}
+            }
+        }
+        let mut tip = format!("Farbton {:.0}° · Stärke {:.0}", wheel.hue, wheel.amount);
+        if with_lightness {
+            tip += &format!(" · Helligkeit {:+.0}", wheel.lightness);
+        }
+        let resp = resp.on_hover_text(tip + "\nZiehen (Umschalt: fein) · Doppelklick: zurücksetzen");
+
+        if ui.is_rect_visible(rect) {
+            let p = ui.painter();
+            let lit = |part: WheelPart| shown_part == Some(part);
+            // The disc: dark inside, the hues as a ring around it.
+            p.circle_filled(center, radius, Color32::from_rgb(26, 26, 28));
+            let ring = 4.5;
+            let n = 120;
+            let mut mesh = egui::Mesh::default();
+            for i in 0..=n {
+                let deg = i as f32 * 360.0 / n as f32;
+                let c = band_hsv(deg, 0.85, 0.95);
+                mesh.colored_vertex(on_circle(center, radius - ring, deg), c);
+                mesh.colored_vertex(on_circle(center, radius, deg), c);
+                if i > 0 {
+                    let k = 2 * i;
+                    mesh.add_triangle(k - 2, k - 1, k);
+                    mesh.add_triangle(k - 1, k, k + 1);
+                }
+            }
+            p.add(mesh);
+            p.circle_stroke(center, radius + 0.5, Stroke::new(1.0, Color32::from_black_alpha(160)));
+
+            // The arcs: amount from white to the hue, lightness from dark to light.
+            let arc_w = if lit(WheelPart::Amount) { 4.0 } else { 3.0 };
+            let hue = wheel.hue;
+            paint_arc(p, center, arc_r, 180.0 + ARC_SPAN, 180.0 - ARC_SPAN, arc_w, |t| {
+                lerp_color(Color32::from_gray(225), band_hsv(hue, 0.9, 0.95), t)
+            });
+            let handle = |deg: f32| {
+                let s = Stroke::new(2.0, if ui.is_enabled() { Color32::WHITE } else { Color32::from_gray(120) });
+                p.line_segment([on_circle(center, arc_r - 5.0, deg), on_circle(center, arc_r + 6.0, deg)], s);
+            };
+            handle(180.0 + ARC_SPAN - wheel.amount / 100.0 * 2.0 * ARC_SPAN);
+            if with_lightness {
+                let arc_w = if lit(WheelPart::Lightness) { 4.0 } else { 3.0 };
+                paint_arc(p, center, arc_r, -ARC_SPAN, ARC_SPAN, arc_w, |t| lerp_color(Color32::from_gray(20), Color32::from_gray(235), t));
+                // The middle (no change) as a fine mark.
+                p.line_segment([on_circle(center, arc_r + 3.0, 0.0), on_circle(center, arc_r + 6.0, 0.0)], Stroke::new(1.0, theme::TEXT_FAINT));
+                handle(-ARC_SPAN + (wheel.lightness + 100.0) / 200.0 * 2.0 * ARC_SPAN);
+            }
+
+            // The point: a ring with a dot, joined to the center once moved.
+            let point = center + offset_of(wheel) * radius * (1.0 - (ring + 3.0) / radius).max(0.0);
+            if wheel.amount > 0.0 {
+                p.circle_filled(center, 1.5, theme::TEXT_FAINT);
+                p.line_segment([center, point], Stroke::new(1.0, Color32::from_white_alpha(70)));
+            }
+            let r = if lit(WheelPart::Disc) { 6.5 } else { 5.5 };
+            let r = ui.ctx().animate_value_with_time(resp.id.with("r"), r, 0.08);
+            let stroke = if ui.is_enabled() { Color32::from_rgb(230, 230, 234) } else { Color32::from_gray(120) };
+            p.circle_filled(point, r, Color32::from_black_alpha(120));
+            p.circle_stroke(point, r, Stroke::new(1.5, stroke));
+            p.circle_filled(point, 1.6, stroke);
+        }
+    });
+    *wheel != before
+}
+
+/// Linear blend of two colors, `t` from 0 (a) to 1 (b).
+fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
+    let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgb(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()))
 }
 
 /// Tool tile: icon above the name, the key in the corner; `selected` highlights it.
@@ -1080,6 +1434,28 @@ pub fn image_count(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Key and wheel steps count as one gesture until they pause.
+    #[test]
+    fn steps_are_pending_until_they_pause() {
+        let ctx = egui::Context::default();
+        let run = |t: f64, f: &dyn Fn(&egui::Context)| {
+            ctx.run_ui(egui::RawInput { time: Some(t), ..Default::default() }, |ui| f(ui.ctx())).textures_delta.clear();
+        };
+        let id = egui::Id::new("slider");
+        run(0.0, &|ctx| assert_eq!(take_steps(ctx), None));
+        run(1.0, &|ctx| {
+            mark_stepped(ctx, id);
+            assert!(take_steps(ctx).is_some_and(|s| s.now && s.source == id));
+        });
+        run(1.5, &|ctx| assert!(take_steps(ctx).is_some_and(|s| !s.now)));
+        run(1.0 + STEP_PAUSE + 0.1, &|ctx| assert_eq!(take_steps(ctx), None));
+        run(3.0, &|ctx| {
+            mark_stepped(ctx, id);
+            end_steps(ctx);
+            assert_eq!(take_steps(ctx), None);
+        });
+    }
 
     /// One frame with a slider row; returns the slider's screen rect (via AccessKit).
     fn frame(ctx: &egui::Context, value: &mut f32, events: Vec<egui::Event>) -> Option<egui::Rect> {

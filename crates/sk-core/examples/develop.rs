@@ -25,7 +25,7 @@ fn main() -> anyhow::Result<()> {
 
     let recipe = export::ExportRecipe {
         output_dir: args.get(2).map(std::path::PathBuf::from).unwrap_or("Output".into()),
-        long_edge: std::env::var("SK_EDGE").ok().and_then(|v| v.parse().ok()).map(|v: u32| (v > 0).then_some(v)).unwrap_or(Some(1200)),
+        size: std::env::var("SK_EDGE").ok().and_then(|v| v.parse().ok()).map(|v: u32| (v > 0).then_some(v)).unwrap_or(Some(1200)),
         suffix: std::env::var("SK_SUFFIX").unwrap_or_default(),
         ..Default::default()
     };

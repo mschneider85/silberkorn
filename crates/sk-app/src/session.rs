@@ -10,6 +10,7 @@ use sk_core::session::{self, Session, SessionFolder};
 use sk_core::variant;
 
 use crate::app::App;
+use crate::dialog::{self, Dialog, Tone};
 use crate::theme::{self, icon};
 use crate::widgets::section;
 use crate::workers::IndexJob;
@@ -54,6 +55,7 @@ fn default_location(near: &Path) -> PathBuf {
 pub enum PendingAction {
     MoveTo(PathBuf),
     MoveToDialog,
+    ToSelects,
     NewVariant { clone: bool },
     DeleteVariant,
     Trash,
@@ -225,6 +227,8 @@ impl App {
                 self.forget_prepared(p);
                 self.focus_maps.remove(p);
                 self.focus_pending.remove(p);
+                self.thumb_focus.remove(p);
+                self.thumb_focus_requested.remove(p);
                 self.compare_requested.remove(p);
             }
         }
@@ -324,6 +328,7 @@ impl App {
             Some(PendingAction::MoveToDialog) => self.move_to_folder_dialog(),
             Some(PendingAction::NewVariant { clone }) => self.new_variant(clone),
             Some(PendingAction::DeleteVariant) => self.request_delete_variant(),
+            Some(PendingAction::ToSelects) => self.move_to_session_folder(SessionFolder::Selects),
             Some(PendingAction::Trash) => self.trash_selection(),
             Some(PendingAction::Stack(a)) => self.run_stack_action(a),
             None => {}
@@ -332,15 +337,15 @@ impl App {
 
     // ---------------------------------------------------------------- menus
 
-    /// "Move to" entries for the image menu and the thumbnail context menu (they act on the selection).
+    /// "Move to" and trash entries for the image menu and the thumbnail context menu (they act
+    /// on the selection). They look like the commands but run after the browser is drawn.
     pub fn move_menu(&mut self, ui: &mut Ui) {
         let n = self.selected_paths().len();
         ui.add_enabled_ui(n > 0, |ui| {
+            if self.session.is_some() && self.command_button(ui, "to-selects") {
+                self.pending = Some(PendingAction::ToSelects);
+            }
             if let Some(s) = &self.session {
-                let selects = s.folder(SessionFolder::Selects);
-                if ui.add(Button::new(format!("{}  Nach Auswahl verschieben", icon::CHECK_CIRCLE)).shortcut_text("Strg+J")).clicked() {
-                    self.pending = Some(PendingAction::MoveTo(selects));
-                }
                 ui.menu_button(format!("{}  Verschieben nach", icon::ARROW_BEND_UP_RIGHT), |ui| {
                     for f in [SessionFolder::Capture, SessionFolder::Selects] {
                         if ui.add_enabled(self.folder != s.folder(f), Button::new(format!("{}  {}", folder_icon(f), f.label()))).clicked() {
@@ -360,21 +365,21 @@ impl App {
                         self.pending = Some(PendingAction::MoveToDialog);
                     }
                 });
-                if ui.add(Button::new(format!("{}  In Papierkorb verschieben", icon::TRASH)).shortcut_text("Strg+Entf")).clicked() {
-                    self.pending = Some(PendingAction::Trash);
-                }
             } else if ui.button(format!("{}  Verschieben nach …", icon::ARROW_BEND_UP_RIGHT)).clicked() {
                 self.pending = Some(PendingAction::MoveToDialog);
+            }
+            if self.command_button(ui, "trash") {
+                self.pending = Some(PendingAction::Trash);
             }
         });
     }
 
     /// Session entries of the "Datei" menu.
     pub fn session_file_menu(&mut self, ui: &mut Ui) {
-        if ui.add(Button::new(format!("{}  Neue Session …", icon::FOLDER_STAR)).shortcut_text("Strg+N")).clicked() {
+        if ui.add(Button::new(format!("{}  Neue Session …", icon::FOLDER_STAR)).shortcut_text(crate::commands::shortcut_of("new-session"))).clicked() {
             self.session_ui.start_new(&self.folder);
         }
-        if ui.add(Button::new(format!("{}  Session öffnen …", icon::FOLDER_OPEN)).shortcut_text("Strg+Umschalt+O")).clicked() {
+        if ui.add(Button::new(format!("{}  Session öffnen …", icon::FOLDER_OPEN)).shortcut_text(crate::commands::shortcut_of("open-session"))).clicked() {
             self.open_session_dialog();
         }
         let recent: Vec<PathBuf> = self.recent_sessions.iter().filter(|p| Some(*p) != self.session.as_ref().map(|s| &s.file)).cloned().collect();
@@ -442,6 +447,7 @@ impl App {
                     }
                 });
             }
+            self.hot_folder_ui(ui);
             ui.horizontal(|ui| {
                 if ui.button(format!("{}  Importieren …", icon::FOLDER_PLUS)).on_hover_text("Bilder in den Ordner „Aufnahmen“ kopieren").clicked() {
                     self.import_folder_dialog();
@@ -503,10 +509,7 @@ impl App {
         if self.session_ui.creating {
             let mut create = false;
             let mut cancel = false;
-            let modal = egui::Modal::new(egui::Id::new("new_session")).show(ctx, |ui| {
-                ui.set_width(440.0);
-                ui.label(RichText::new(format!("{}  Neue Session", icon::FOLDER_STAR)).size(17.0).strong().color(Color32::WHITE));
-                ui.add_space(10.0);
+            let modal = Dialog::new("new_session", icon::FOLDER_STAR, "Neue Session").subtitle("Ein Ordner für ein Shooting, mit festen Unterordnern").width(470.0).show(ctx, |ui| {
                 egui::Grid::new("new_session_grid").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
                     ui.label("Name");
                     let resp = ui.add(egui::TextEdit::singleline(&mut self.session_ui.name).hint_text("z. B. Hochzeit Müller").desired_width(320.0));
@@ -533,19 +536,17 @@ impl App {
                     ui.add_space(6.0);
                     let root = self.session_ui.location.join(name);
                     let folders = SessionFolder::ALL.map(|f| f.dir_name()).join(", ");
-                    ui.label(RichText::new(format!("Wird angelegt: {}\nmit den Ordnern {folders}", root.display())).small().color(theme::TEXT_DIM));
+                    dialog::note(ui, format!("Wird angelegt: {}\nmit den Ordnern {folders}", root.display()));
                 }
                 if let Some(e) = &self.session_ui.error {
                     ui.add_space(6.0);
-                    ui.label(RichText::new(e).color(Color32::from_rgb(230, 110, 100)));
+                    ui.label(RichText::new(e).color(theme::DANGER));
                 }
-                ui.add_space(12.0);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let ok = Button::new(RichText::new("Anlegen").color(Color32::WHITE)).fill(theme::ACCENT).min_size(vec2(90.0, 26.0));
-                    if ui.add_enabled(!name.is_empty(), ok).clicked() {
+                dialog::footer(ui, |ui| {
+                    if ui.add_enabled(!name.is_empty(), dialog::primary("Anlegen")).clicked() {
                         create = true;
                     }
-                    if ui.add(Button::new("Abbrechen").min_size(vec2(90.0, 26.0))).clicked() {
+                    if ui.add(dialog::secondary("Abbrechen")).clicked() {
                         cancel = true;
                     }
                 });
@@ -565,22 +566,17 @@ impl App {
         if let Some(n) = self.session_ui.confirm_empty_trash {
             let mut confirmed = false;
             let mut cancel = false;
-            let modal = egui::Modal::new(egui::Id::new("empty_trash")).show(ctx, |ui| {
-                ui.set_width(360.0);
-                ui.label(RichText::new(format!("{}  Papierkorb leeren", icon::TRASH)).size(17.0).strong().color(Color32::WHITE));
-                ui.add_space(8.0);
+            let modal = Dialog::new("empty_trash", icon::TRASH, "Papierkorb leeren").subtitle("Lässt sich nicht rückgängig machen").tone(Tone::Danger).width(400.0).show(ctx, |ui| {
                 ui.label(match n {
                     0 => "Der Papierkorb ist leer.".to_string(),
                     1 => "1 Bild wird endgültig gelöscht.".to_string(),
                     n => format!("{n} Bilder werden endgültig gelöscht."),
                 });
-                ui.add_space(12.0);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let del = Button::new(RichText::new("Löschen").color(Color32::WHITE)).fill(Color32::from_rgb(180, 60, 50)).min_size(vec2(90.0, 26.0));
-                    if ui.add_enabled(n > 0, del).clicked() {
+                dialog::footer(ui, |ui| {
+                    if ui.add_enabled(n > 0, dialog::danger("Löschen")).clicked() {
                         confirmed = true;
                     }
-                    if ui.add(Button::new("Abbrechen").min_size(vec2(90.0, 26.0))).clicked() {
+                    if ui.add(dialog::secondary("Abbrechen")).clicked() {
                         cancel = true;
                     }
                 });

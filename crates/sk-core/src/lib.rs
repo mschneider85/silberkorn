@@ -44,7 +44,6 @@ pub mod stack;
 pub mod styles;
 pub mod tools;
 pub mod upright;
-pub mod upscale;
 pub mod variant;
 pub mod watermark;
 pub mod web_formats;

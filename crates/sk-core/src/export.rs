@@ -14,7 +14,6 @@ use crate::params::Adjustments;
 use crate::pipeline::Processor;
 use crate::naming::NameFields;
 use crate::raw::{self, CaptureInfo};
-use crate::upscale::Upscale;
 use crate::watermark::Watermark;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -69,6 +68,61 @@ impl ExportFormat {
     }
 }
 
+/// What the recipe's size is measured on. The image is never enlarged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Resize {
+    #[default]
+    LongEdge,
+    ShortEdge,
+    Width,
+    Height,
+    Percent,
+}
+
+impl Resize {
+    pub const ALL: [Resize; 5] = [Resize::LongEdge, Resize::ShortEdge, Resize::Width, Resize::Height, Resize::Percent];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Resize::LongEdge => "Lange Kante",
+            Resize::ShortEdge => "Kurze Kante",
+            Resize::Width => "Breite",
+            Resize::Height => "Höhe",
+            Resize::Percent => "Prozent",
+        }
+    }
+}
+
+/// Unsharp mask after resizing: resizing softens the picture, and print needs more than a screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OutputSharpening {
+    #[default]
+    Off,
+    Screen,
+    Print,
+}
+
+impl OutputSharpening {
+    pub const ALL: [OutputSharpening; 3] = [OutputSharpening::Off, OutputSharpening::Screen, OutputSharpening::Print];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            OutputSharpening::Off => "Aus",
+            OutputSharpening::Screen => "Für Bildschirm",
+            OutputSharpening::Print => "Für Druck",
+        }
+    }
+
+    /// Amount and radius (output pixels).
+    fn strength(self) -> Option<(f32, f32)> {
+        match self {
+            OutputSharpening::Off => None,
+            OutputSharpening::Screen => Some((0.6, 0.6)),
+            OutputSharpening::Print => Some((1.2, 1.0)),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ExportRecipe {
@@ -78,10 +132,14 @@ pub struct ExportRecipe {
     pub format: ExportFormat,
     /// Quality 1..100 (JPEG, WebP, AVIF)
     pub quality: u8,
-    /// Resize so that the long edge is at most this many pixels (None = original size).
-    pub long_edge: Option<u32>,
-    /// Enlarge with a neural network first (then `long_edge` may reduce it again).
-    pub upscale: Option<Upscale>,
+    /// Resizing (see `resize`): the target in pixels, or in percent (None = original size).
+    /// Recipes from before the other modes have it as `long_edge`.
+    #[serde(alias = "long_edge")]
+    pub size: Option<u32>,
+    /// What `size` is measured on.
+    pub resize: Resize,
+    /// Sharpening after resizing, for the medium.
+    pub output_sharpening: OutputSharpening,
     /// Output folder; relative paths are resolved against the image's folder.
     pub output_dir: PathBuf,
     /// File name with placeholders (see `naming`); empty: the image's name.
@@ -103,8 +161,9 @@ impl Default for ExportRecipe {
             enabled: true,
             format: ExportFormat::Jpeg,
             quality: 90,
-            long_edge: None,
-            upscale: None,
+            size: None,
+            resize: Resize::LongEdge,
+            output_sharpening: OutputSharpening::Off,
             output_dir: PathBuf::from("Output"),
             name_template: String::new(),
             suffix: String::new(),
@@ -118,6 +177,23 @@ impl Default for ExportRecipe {
 }
 
 impl ExportRecipe {
+    /// The size of an output of `w` x `h` after resizing (never larger).
+    pub fn output_size(&self, w: u32, h: u32) -> (u32, u32) {
+        let Some(v) = self.size.filter(|v| *v > 0) else { return (w, h) };
+        let (v, fw, fh) = (v as f64, w as f64, h as f64);
+        let k = match self.resize {
+            Resize::LongEdge => v / fw.max(fh),
+            Resize::ShortEdge => v / fw.min(fh),
+            Resize::Width => v / fw,
+            Resize::Height => v / fh,
+            Resize::Percent => v / 100.0,
+        };
+        if k >= 1.0 {
+            return (w, h);
+        }
+        (((fw * k).round() as u32).max(1), ((fh * k).round() as u32).max(1))
+    }
+
     pub fn output_path(&self, f: &NameFields) -> PathBuf {
         let image = f.image;
         let dir = if self.output_dir.is_absolute() {
@@ -136,15 +212,6 @@ impl ExportRecipe {
         dir.join(format!("{stem}{variant}{}.{}", self.suffix, self.format.extension()))
     }
 
-    /// The enlargement for a processed image of `width` x `height`: none if `long_edge` reduces
-    /// the image to its size or below anyway.
-    pub fn upscale_for(&self, width: usize, height: usize) -> Option<Upscale> {
-        let u = self.upscale?;
-        match self.long_edge {
-            Some(edge) if edge > 0 && edge as usize <= width.max(height) => None,
-            _ => Some(u),
-        }
-    }
 }
 
 /// Develops `image` at full resolution and writes it according to `recipe`.
@@ -155,13 +222,12 @@ pub fn export(image: &Path, adj: &Adjustments, recipe: &ExportRecipe) -> Result<
 /// Develops `image` once and writes one file per recipe. `counter` and `session` are for
 /// recipes' name templates.
 pub fn export_many(image: &Path, adj: &Adjustments, recipes: &[ExportRecipe], counter: u32, session: &str) -> Vec<Result<PathBuf>> {
-    export_many_with(image, adj, recipes, counter, session, &mut HashSet::new(), &|_| {})
+    export_many_with(image, adj, recipes, counter, session, &mut HashSet::new())
 }
 
-/// [`export_many`] with progress 0..1 of this image (reported while enlarging, which takes long).
-/// `written` holds the files written so far in this batch: an output whose name is among them
-/// gets `-2`, `-3` … instead of replacing it (same file names from two folders, a name template
-/// that gives a burst the same name).
+/// [`export_many`], where `written` holds the files written so far in this batch: an output whose
+/// name is among them gets `-2`, `-3` … instead of replacing it (same file names from two folders,
+/// a name template that gives a burst the same name).
 pub fn export_many_with(
     image: &Path,
     adj: &Adjustments,
@@ -169,7 +235,6 @@ pub fn export_many_with(
     counter: u32,
     session: &str,
     written: &mut HashSet<PathBuf>,
-    progress: &dyn Fn(f32),
 ) -> Vec<Result<PathBuf>> {
     let loaded = raw::load_full(image).and_then(|(meta, linear)| {
         // Never silently without the denoising the image shows.
@@ -190,12 +255,9 @@ pub fn export_many_with(
         }
     };
     let processor = Processor::new(&meta, adj);
-    // Recipes sharing a color space share the processing, and the enlargement if they share that.
+    // Recipes sharing a color space share the processing.
     let mut cache: Vec<(OutputSpace, crate::image::LinearImage)> = Vec::new();
-    let mut enlarged: Vec<((OutputSpace, Upscale), crate::image::LinearImage)> = Vec::new();
-    let upscaling = recipes.iter().filter(|r| r.upscale.is_some()).count().max(1) as f32;
-    let mut upscaled = 0.0;
-    let results = recipes
+    recipes
         .iter()
         .map(|recipe| {
             if !cache.iter().any(|(s, _)| *s == recipe.output_space) {
@@ -203,21 +265,9 @@ pub fn export_many_with(
             }
             let out = &cache.iter().find(|(s, _)| *s == recipe.output_space).unwrap().1;
             let fields = NameFields { image, capture: Some(&meta.info), counter, session };
-            let Some(u) = recipe.upscale_for(out.width, out.height) else {
-                return write_output(&fields, out, recipe, written);
-            };
-            let key = (recipe.output_space, u);
-            if !enlarged.iter().any(|(k, _)| *k == key) {
-                let base = upscaled;
-                let big = crate::upscale::upscale(out, u, &|p| progress((base + p) / upscaling))?;
-                upscaled += 1.0;
-                enlarged.push((key, big));
-            }
-            write_output(&fields, &enlarged.iter().find(|(k, _)| *k == key).unwrap().1, recipe, written)
+            write_output(&fields, out, recipe, written)
         })
-        .collect();
-    progress(1.0);
-    results
+        .collect()
 }
 
 fn write_output(f: &NameFields, out: &crate::image::LinearImage, recipe: &ExportRecipe, written: &mut HashSet<PathBuf>) -> Result<PathBuf> {
@@ -247,17 +297,30 @@ fn resized(out: &crate::image::LinearImage, recipe: &ExportRecipe) -> Result<Ima
     let mut buf: ImageBuffer<Rgb<f32>, Vec<f32>> =
         ImageBuffer::from_raw(out.width as u32, out.height as u32, out.data.iter().flatten().copied().collect())
             .context("Puffergröße ungültig")?;
-    if let Some(edge) = recipe.long_edge {
-        let (w, h) = buf.dimensions();
-        let long = w.max(h);
-        if edge > 0 && edge < long {
-            let scale = edge as f64 / long as f64;
-            let (nw, nh) = (((w as f64 * scale).round() as u32).max(1), ((h as f64 * scale).round() as u32).max(1));
-            buf = image::imageops::resize(&buf, nw, nh, FilterType::Lanczos3);
-        }
+    let (w, h) = buf.dimensions();
+    let (nw, nh) = recipe.output_size(w, h);
+    if (nw, nh) != (w, h) {
+        buf = image::imageops::resize(&buf, nw, nh, FilterType::Lanczos3);
+    }
+    if let Some((amount, radius)) = recipe.output_sharpening.strength() {
+        sharpen(&mut buf, amount, radius);
     }
     recipe.watermark.apply(&mut buf, recipe.output_space)?;
     Ok(buf)
+}
+
+/// Unsharp mask on the luminance of output-encoded RGB (colors keep their place: no colored halos).
+fn sharpen(buf: &mut ImageBuffer<Rgb<f32>, Vec<f32>>, amount: f32, radius: f32) {
+    let (w, h) = (buf.width() as usize, buf.height() as usize);
+    let luma = |p: &[f32]| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
+    let plane = crate::detail::Plane::new(w, h, buf.as_raw().par_chunks(3).map(luma).collect());
+    let blurred = crate::detail::gaussian_blur(&plane, radius);
+    buf.as_mut().par_chunks_mut(3).enumerate().for_each(|(i, p)| {
+        let d = (plane.data[i] - blurred.data[i]) * amount;
+        for v in p.iter_mut() {
+            *v = (*v + d).clamp(0.0, 1.0);
+        }
+    });
 }
 
 fn to_u8(v: &f32) -> u8 {
@@ -402,12 +465,12 @@ mod tests {
         }
         let dir = std::env::temp_dir().join(format!("sk-export-{}", std::process::id()));
         let recipes = vec![
-            ExportRecipe { output_dir: dir.clone(), long_edge: Some(400), ..Default::default() },
+            ExportRecipe { output_dir: dir.clone(), size: Some(400), ..Default::default() },
             ExportRecipe {
                 name: "TIFF".into(),
                 format: ExportFormat::Tiff16,
                 output_space: OutputSpace::AdobeRgb,
-                long_edge: Some(300),
+                size: Some(300),
                 output_dir: dir.clone(),
                 suffix: "_ar".into(),
                 ..Default::default()
@@ -442,48 +505,31 @@ mod tests {
     }
 
     #[test]
-    fn export_enlarges_and_reports_progress() {
-        let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/_DSC0010.ARW");
-        if !sample.exists() {
-            return;
-        }
-        crate::upscale::register_stand_in();
-        let dir = std::env::temp_dir().join(format!("sk-export-up-{}", std::process::id()));
-        // A small crop keeps the enlarged image small.
-        let mut adj = Adjustments::default();
-        adj.geometry.crop = crate::params::CropRect { x: 0.4, y: 0.4, w: 0.1, h: 0.1 };
-        let plain = ExportRecipe { output_dir: dir.clone(), format: ExportFormat::Png, ..Default::default() };
-        let up = |factor, long_edge, suffix: &str| ExportRecipe {
-            upscale: Some(Upscale { factor }),
-            long_edge,
-            suffix: suffix.into(),
-            ..plain.clone()
-        };
-        let recipes = [plain.clone(), up(2, None, "_2x"), up(4, Some(1000), "_4x_1000")];
-        let steps = std::sync::Mutex::new(Vec::new());
-        let res = export_many_with(&sample, &adj, &recipes, 1, "", &mut HashSet::new(), &|p| steps.lock().unwrap().push(p));
-        let size = |r: &Result<PathBuf>| image::image_dimensions(r.as_ref().unwrap()).unwrap();
-        let (w, h) = size(&res[0]);
-        assert_eq!(size(&res[1]), (2 * w, 2 * h));
-        // Enlarged four times, then reduced to the long edge.
-        assert_eq!(size(&res[2]).0.max(size(&res[2]).1), 1000);
-        let steps = steps.into_inner().unwrap();
-        assert!(steps.windows(2).all(|s| s[0] <= s[1]) && steps.last() == Some(&1.0), "{steps:?}");
-        assert!(steps.contains(&0.25), "{steps:?}");
-        std::fs::remove_dir_all(dir).ok();
+    fn resizing_by_each_measure_and_never_larger() {
+        let r = |resize, size| ExportRecipe { resize, size: Some(size), ..Default::default() };
+        assert_eq!(r(Resize::LongEdge, 1000).output_size(4000, 3000), (1000, 750));
+        assert_eq!(r(Resize::ShortEdge, 1000).output_size(4000, 3000), (1333, 1000));
+        assert_eq!(r(Resize::Width, 2000).output_size(3000, 4000), (2000, 2667));
+        assert_eq!(r(Resize::Height, 2000).output_size(3000, 4000), (1500, 2000));
+        assert_eq!(r(Resize::Percent, 25).output_size(4000, 3000), (1000, 750));
+        assert_eq!(r(Resize::Width, 8000).output_size(4000, 3000), (4000, 3000));
+        assert_eq!(ExportRecipe::default().output_size(4000, 3000), (4000, 3000));
     }
 
     #[test]
-    fn upscale_only_where_the_long_edge_leaves_room() {
-        let u = Some(Upscale::default());
-        assert_eq!(ExportRecipe { upscale: u, ..Default::default() }.upscale_for(400, 200), u);
-        // Reduced to the image's size or below anyway: nothing to enlarge.
-        assert_eq!(ExportRecipe { upscale: u, long_edge: Some(400), ..Default::default() }.upscale_for(400, 200), None);
-        assert_eq!(ExportRecipe { upscale: u, long_edge: Some(600), ..Default::default() }.upscale_for(400, 200), u);
-        assert_eq!(ExportRecipe::default().upscale_for(400, 200), None);
-        // Saved recipes from before keep working.
-        let old: ExportRecipe = serde_json::from_str(r#"{"name":"Web","long_edge":2048}"#).unwrap();
-        assert_eq!((old.upscale, old.long_edge), (None, Some(2048)));
+    fn output_sharpening_raises_edge_contrast_without_color() {
+        let mut buf: ImageBuffer<Rgb<f32>, Vec<f32>> = ImageBuffer::from_fn(40, 8, |x, _| if x < 20 { Rgb([0.3, 0.3, 0.3]) } else { Rgb([0.6, 0.6, 0.6]) });
+        sharpen(&mut buf, 1.2, 1.0);
+        let (dark, bright) = (buf.get_pixel(19, 4).0, buf.get_pixel(20, 4).0);
+        assert!(dark[0] < 0.3 && bright[0] > 0.6, "{dark:?} {bright:?}");
+        assert!(dark.iter().all(|v| (v - dark[0]).abs() < 1e-6), "neutral bleibt neutral");
+        assert!((buf.get_pixel(2, 4).0[0] - 0.3).abs() < 1e-4, "Fläche bleibt");
+    }
+
+    #[test]
+    fn saved_recipes_from_before_keep_working() {
+        let old: ExportRecipe = serde_json::from_str(r#"{"name":"Web","long_edge":2048,"upscale":{"factor":4}}"#).unwrap();
+        assert_eq!((old.size, old.resize), (Some(2048), Resize::LongEdge));
     }
 
     #[test]

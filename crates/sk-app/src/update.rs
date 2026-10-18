@@ -6,10 +6,11 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-use egui::{Button, Color32, RichText, vec2};
+use egui::{Button, RichText};
 use sk_core::update::{self, Release};
 
 use crate::app::App;
+use crate::dialog::{self, Dialog, Tone};
 use crate::theme::{self, icon};
 
 /// Pause between automatic checks.
@@ -176,86 +177,82 @@ impl App {
         let current = update::current_version();
         let mut auto = !self.updates.auto_off;
         let (mut close, mut install, mut skip, mut restart) = (false, false, false, false);
-        let modal = egui::Modal::new(egui::Id::new("update")).show(ctx, |ui| {
-            ui.set_width(460.0);
-            ui.label(RichText::new(format!("{}  Updates", icon::ARROW_CIRCLE_UP)).size(17.0).strong().color(Color32::WHITE));
-            ui.add_space(6.0);
-            let dim = |t: String| RichText::new(t).color(Color32::from_gray(170));
+        let modal = Dialog::new("update", icon::ARROW_CIRCLE_UP, "Updates").subtitle(format!("Installiert ist Version {current}")).width(480.0).show(ctx, |ui| {
             if self.updates.checking.is_some() {
-                ui.horizontal(|ui| {
+                dialog::card(ui, "Suche nach einer neuen Version …", Some((Tone::Accent, "Prüft")), |ui| {
                     ui.spinner();
-                    ui.label("Suche nach einer neuen Version …");
                 });
             } else if let Some(r) = &self.updates.available {
-                if self.updates.setup.is_some() {
-                    ui.label(format!("Silberkorn {} ist geladen und wird beim Neustart installiert – sonst beim Beenden.", r.version));
-                } else {
-                    ui.label(RichText::new(format!("Silberkorn {} ist verfügbar", r.version)).strong());
-                    ui.label(dim(format!("Installiert ist Version {current}.")));
-                }
-                if !r.notes.is_empty() {
-                    ui.add_space(6.0);
-                    egui::Frame::new().fill(theme::BROWSER).inner_margin(8.0).corner_radius(4).show(ui, |ui| {
-                        egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                            ui.set_width(ui.available_width());
-                            ui.label(&r.notes);
+                let ready = self.updates.setup.is_some();
+                let status = if ready { (Tone::Good, "Geladen") } else { (Tone::Accent, "Neu") };
+                dialog::card(ui, &format!("Silberkorn {}", r.version), Some(status), |ui| {
+                    if ready {
+                        dialog::note(ui, "Wird beim Neustart installiert – sonst beim Beenden.");
+                    }
+                    if !r.notes.is_empty() {
+                        dialog::well(ui, |ui| {
+                            egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                                ui.set_width(ui.available_width());
+                                ui.label(&r.notes);
+                            });
                         });
-                    });
-                }
+                    }
+                    if let Some((p, _)) = &installing {
+                        ui.add(egui::ProgressBar::new(*p).desired_height(8.0).text(format!("Wird geladen … {:.0} %", p * 100.0)));
+                        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                    }
+                    if let Some(Err(e)) = &self.updates.result {
+                        ui.label(RichText::new(e).size(12.0).color(theme::DANGER));
+                    }
+                });
             } else {
                 match &self.updates.result {
-                    Some(Ok(())) => {
-                        ui.label(format!("{}  Silberkorn {current} ist aktuell.", icon::CHECK));
-                    }
-                    Some(Err(e)) => {
-                        ui.label(dim(format!("Keine Auskunft: {e}")));
-                    }
+                    Some(Ok(())) => dialog::card(ui, &format!("Silberkorn {current}"), Some((Tone::Good, "Aktuell")), |ui| {
+                        dialog::note(ui, "Es gibt keine neuere Version.");
+                    }),
+                    Some(Err(e)) => dialog::card(ui, "Keine Auskunft", Some((Tone::Warn, "Fehler")), |ui| {
+                        dialog::note(ui, e.to_string());
+                    }),
                     None => {}
                 }
             }
-            if let (Some(Err(e)), Some(_)) = (&self.updates.result, &self.updates.available) {
-                ui.add_space(4.0);
-                ui.label(RichText::new(e).color(theme::DANGER));
-            }
-            if let Some((p, _)) = &installing {
-                ui.add_space(6.0);
-                ui.add(egui::ProgressBar::new(*p).text(format!("Wird geladen … {:.0} %", p * 100.0)));
-                ctx.request_repaint_after(std::time::Duration::from_millis(200));
-            }
-            ui.add_space(10.0);
+            ui.add_space(4.0);
             ui.checkbox(&mut auto, "Beim Start nach Updates suchen (höchstens einmal am Tag)");
-            ui.add_space(10.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let size = vec2(90.0, 26.0);
+            dialog::footer(ui, |ui| {
                 let release = self.updates.available.as_ref();
                 if self.updates.setup.is_some() {
-                    if ui.add(Button::new("Jetzt neu starten").min_size(size)).clicked() {
+                    if ui.add(dialog::primary("Jetzt neu starten")).clicked() {
                         restart = true;
                     }
-                    if ui.add(Button::new("Beim Beenden").min_size(size)).clicked() {
+                    if ui.add(dialog::secondary("Beim Beenden")).clicked() {
                         close = true;
                     }
                     return;
                 }
                 if let Some((_, cancel)) = &installing {
-                    if ui.add(Button::new("Abbrechen").min_size(size)).clicked() {
+                    if ui.add(dialog::secondary("Abbrechen")).clicked() {
                         cancel.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
                     return;
                 }
-                if ui.add(Button::new("Schließen").min_size(size)).clicked() {
-                    close = true;
-                }
-                let Some(r) = release else { return };
+                let Some(r) = release else {
+                    if ui.add(dialog::primary("Schließen")).clicked() {
+                        close = true;
+                    }
+                    return;
+                };
                 if cfg!(windows) && r.asset.is_some() {
-                    if ui.add(Button::new(format!("{}  Jetzt aktualisieren", icon::DOWNLOAD_SIMPLE)).min_size(size)).clicked() {
+                    if ui.add(dialog::primary(format!("{}  Jetzt aktualisieren", icon::DOWNLOAD_SIMPLE))).clicked() {
                         install = true;
                     }
-                } else if ui.add(Button::new("Release-Seite öffnen").min_size(size)).clicked() {
+                } else if ui.add(dialog::primary("Release-Seite öffnen")).clicked() {
                     ctx.open_url(egui::OpenUrl::new_tab(&r.page));
                 }
+                if ui.add(dialog::secondary("Schließen")).clicked() {
+                    close = true;
+                }
                 if self.updates.skipped.as_deref() != Some(&r.version)
-                    && ui.add(Button::new("Überspringen").min_size(size)).on_hover_text("An diese Version nicht mehr erinnern").clicked()
+                    && ui.add(dialog::secondary("Überspringen")).on_hover_text("An diese Version nicht mehr erinnern").clicked()
                 {
                     skip = true;
                 }

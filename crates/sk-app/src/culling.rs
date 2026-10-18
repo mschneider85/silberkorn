@@ -342,30 +342,28 @@ impl App {
             return;
         };
         let (mut confirmed, mut cancel) = (false, false);
-        let modal = egui::Modal::new(egui::Id::new("merge_persons")).show(ctx, |ui| {
-            ui.set_width(380.0);
-            ui.label(RichText::new(format!("{}  Personen zusammenführen", icon::USERS)).size(17.0).strong().color(Color32::WHITE));
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                person_tile(ui, &b, self.library_ui.faces.get(&b), false);
-                ui.add_space(6.0);
-                ui.label(RichText::new(icon::ARROW_RIGHT).size(20.0).color(crate::theme::TEXT_DIM));
-                ui.add_space(6.0);
-                person_tile(ui, &a, self.library_ui.faces.get(&a), true);
+        let dialog = crate::dialog::Dialog::new("merge_persons", icon::USERS, "Personen zusammenführen").subtitle("Lässt sich nicht rückgängig machen").width(420.0);
+        let modal = dialog.show(ctx, |ui| {
+            crate::dialog::well(ui, |ui| {
+                ui.horizontal(|ui| {
+                    person_tile(ui, &b, self.library_ui.faces.get(&b), false);
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(icon::ARROW_RIGHT).size(20.0).color(crate::theme::TEXT_DIM));
+                    ui.add_space(6.0);
+                    person_tile(ui, &a, self.library_ui.faces.get(&a), true);
+                });
             });
-            ui.add_space(8.0);
+            ui.add_space(4.0);
             let kept = a.name.clone().or(b.name.clone()).unwrap_or_else(|| "Unbenannt".into());
             ui.label(format!(
-                "Beide Gesichter gehören dann zu einer Person „{kept}“ ({}). Das lässt sich nicht rückgängig machen.",
+                "Beide Gesichter gehören dann zu einer Person „{kept}“ ({}).",
                 crate::widgets::image_count(a.count + b.count)
             ));
-            ui.add_space(12.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let ok = egui::Button::new(RichText::new("Zusammenführen").color(Color32::WHITE)).fill(crate::theme::ACCENT).min_size(egui::vec2(120.0, 26.0));
-                if ui.add(ok).clicked() {
+            crate::dialog::footer(ui, |ui| {
+                if ui.add(crate::dialog::primary("Zusammenführen")).clicked() {
                     confirmed = true;
                 }
-                if ui.add(egui::Button::new("Abbrechen").min_size(egui::vec2(90.0, 26.0))).clicked() {
+                if ui.add(crate::dialog::secondary("Abbrechen")).clicked() {
                     cancel = true;
                 }
             });

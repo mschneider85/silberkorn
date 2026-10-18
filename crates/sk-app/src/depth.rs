@@ -12,7 +12,7 @@ use sk_core::pipeline::{Processor, RenderOptions};
 use crate::ai_models::{self, AiFeature};
 use crate::app::App;
 use crate::theme::icon;
-use crate::widgets::{RAIL_KELVIN, SliderOpts, slider_row, slider_row_with};
+use crate::widgets::{RAIL_KELVIN, RAIL_TONE, SliderOpts, slider_row, slider_row_with};
 
 const JOB_LABEL: &str = "Tiefenkarte";
 /// Long edge of depth masks (like the other masks from image content).
@@ -282,8 +282,8 @@ impl App {
             slider_row(ui, "Stärke", &mut at.amount, 0.0..=100.0, 0.0, 0);
             ui.add_enabled_ui(!at.is_off(), |ui| {
                 slider_row(ui, "Reichweite", &mut at.reach, 0.02..=1.0, d.reach, 2);
-                slider_row(ui, "Helligkeit", &mut at.brightness, -100.0..=100.0, 0.0, 0);
-                slider_row(ui, "Wärme", &mut at.warmth, -100.0..=100.0, 0.0, 0);
+                slider_row_with(ui, "Helligkeit", &mut at.brightness, -100.0..=100.0, 0.0, 0, SliderOpts { rail: Some(RAIL_TONE), ..Default::default() });
+                slider_row_with(ui, "Wärme", &mut at.warmth, -100.0..=100.0, 0.0, 0, SliderOpts { rail: Some(RAIL_KELVIN), ..Default::default() });
             });
             depth_status(ui, &state, !at.is_off());
         });
@@ -348,7 +348,7 @@ fn relight_card(ui: &mut Ui, symbol: &str, title: &str, color: Color32, ev: &mut
     let resp = frame.show(ui, |ui| {
         ui.label(RichText::new(format!("{symbol}  {title}")).size(12.5).strong().color(if active { color } else { color.gamma_multiply(0.8) }));
         ui.add_space(2.0);
-        slider_row(ui, "Belichtung", ev, -2.0..=2.0, 0.0, 2);
+        slider_row_with(ui, "Belichtung", ev, -2.0..=2.0, 0.0, 2, SliderOpts { rail: Some(RAIL_TONE), ..Default::default() });
         let opts = SliderOpts { rail: Some(RAIL_KELVIN), ..Default::default() };
         slider_row_with(ui, "Wärme", warmth, -100.0..=100.0, 0.0, 0, opts);
     });

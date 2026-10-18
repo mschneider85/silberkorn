@@ -1,7 +1,7 @@
 //! The AI functions and the models they need. All models (and on Windows the AI acceleration)
 //! are fetched quietly at startup, without asking; the start screen shows the progress, then the
 //! status bar. A function used before its model is there downloads it first and then carries on.
-//! Model names and licenses appear only in the dialog for the graphics card and the AI models.
+//! Model names and licenses appear in the licenses dialog (see `licenses`).
 
 use sk_ai::models::{self, ModelInfo};
 
@@ -14,13 +14,11 @@ pub enum AiFeature {
     Object,
     Inpaint,
     Depth,
-    Upscale2,
-    Upscale4,
     Faces,
 }
 
 impl AiFeature {
-    pub const ALL: [AiFeature; 8] = [Self::Denoise, Self::Subject, Self::Object, Self::Inpaint, Self::Depth, Self::Upscale2, Self::Upscale4, Self::Faces];
+    pub const ALL: [AiFeature; 6] = [Self::Denoise, Self::Subject, Self::Object, Self::Inpaint, Self::Depth, Self::Faces];
 
     /// What the user uses it for.
     pub fn label(self) -> &'static str {
@@ -30,35 +28,14 @@ impl AiFeature {
             Self::Object => "Objekt auswählen",
             Self::Inpaint => "Entfernen",
             Self::Depth => "Tiefenkarte",
-            Self::Upscale2 => "KI-Vergrößern 2×",
-            Self::Upscale4 => "KI-Vergrößern 4×",
             Self::Faces => "Gesichter und Augen",
         }
-    }
-
-    /// Model names and license, for the dialog only.
-    pub fn credits(self) -> (&'static str, &'static str) {
-        match self {
-            Self::Denoise => ("RawNIND", "GPL-3.0"),
-            Self::Subject => ("U²-Net", models::SUBJECT.license),
-            Self::Object => ("MobileSAM", models::OBJECT_ENCODER.license),
-            Self::Inpaint => ("MI-GAN", models::INPAINT.license),
-            Self::Depth => ("Depth Anything V2", models::DEPTH.license),
-            Self::Upscale2 | Self::Upscale4 => ("RealPLKSR", models::UPSCALE_X2.license),
-            Self::Faces => ("YuNet, SFace", "MIT, Apache-2.0"),
-        }
-    }
-
-    pub fn for_upscale(u: sk_core::upscale::Upscale) -> Self {
-        if u.factor == 4 { Self::Upscale4 } else { Self::Upscale2 }
     }
 
     fn files(self) -> &'static [&'static ModelInfo] {
         match self {
             Self::Inpaint => &[&models::INPAINT],
             Self::Depth => &[&models::DEPTH],
-            Self::Upscale2 => &[&models::UPSCALE_X2],
-            Self::Upscale4 => &[&models::UPSCALE_X4],
             Self::Faces => &sk_ai::faces::NEEDED,
             Self::Denoise | Self::Subject | Self::Object => &[],
         }
@@ -184,13 +161,6 @@ impl App {
         self.status = status;
     }
 
-    /// Downloads every model that is missing (to work offline later).
-    pub fn download_all_ai(&mut self) {
-        for f in AiFeature::ALL {
-            self.ensure_ai(f);
-        }
-    }
-
     /// Progress of the downloads started at startup (by size), while any runs.
     pub fn ai_preload_progress(&self) -> Option<f32> {
         let mut parts: Vec<(f32, f32)> =
@@ -199,11 +169,6 @@ impl App {
         parts.extend(gpu);
         let total: f32 = parts.iter().map(|(mb, _)| mb).sum();
         (total > 0.0).then(|| parts.iter().map(|(mb, p)| mb * p).sum::<f32>() / total)
-    }
-
-    /// Total size of the models still missing, in MB.
-    pub fn missing_ai_mb(&self) -> u64 {
-        AiFeature::ALL.iter().filter(|f| !f.available()).map(|f| f.download_mb()).sum()
     }
 
     /// A model download finished (`true` if the job was one): runs what waited for it.

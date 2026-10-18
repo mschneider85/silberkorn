@@ -419,6 +419,8 @@ impl Processor {
     }
 
     pub fn with_options(meta: &RawMeta, adj: &Adjustments, opts: RenderOptions) -> Self {
+        let visible = adj.visible();
+        let adj: &Adjustments = &visible;
         let wb = match adj.white_balance.mode {
             WbMode::AsShot => meta.as_shot_wb,
             WbMode::Custom => meta.color.wb_for_temp_tint(adj.white_balance.kelvin, adj.white_balance.tint),
@@ -741,9 +743,23 @@ impl Processor {
         apply_retouch(&mut img, src, geo, region, &self.adj.retouch);
         img.data.par_iter_mut().for_each(|p| *p = self.to_working(*p));
         timer.lap("  to working");
+        self.defringe(&mut img, scale);
+        timer.lap("  defringe");
         self.noise_reduction(&mut img, scale);
         timer.lap("  noise reduction");
         img
+    }
+
+    /// Takes the color out of purple and green fringes (longitudinal chromatic aberration):
+    /// pixels of those hues next to strong contrast.
+    fn defringe(&self, img: &mut LinearImage, scale: f32) {
+        let Some(amounts) = defringe_amounts(&self.adj.lens) else { return };
+        let (w, h) = (img.width, img.height);
+        let s = Plane::new(w, h, img.data.par_iter().map(|p| dot(*p, LUMA).max(0.0).sqrt()).collect());
+        let sq = s.map(|v| v * v);
+        let sigma = defringe_sigma(scale);
+        let (mean, mean_sq) = rayon::join(|| gaussian_blur(&s, sigma), || gaussian_blur(&sq, sigma));
+        img.data.par_iter_mut().enumerate().for_each(|(i, p)| *p = defringe_pixel(*p, mean.data[i], mean_sq.data[i], amounts));
     }
 
     fn noise_reduction(&self, img: &mut LinearImage, scale: f32) {
@@ -828,6 +844,9 @@ impl Processor {
         }
         if d.nr_luma > 0.0 || d.nr_color > 0.0 {
             margin = margin.max(20.0 * scale + 4.0);
+        }
+        if defringe_amounts(&self.adj.lens).is_some() {
+            margin = margin.max(defringe_sigma(scale) * 3.0 + 4.0);
         }
         if dehaze_active {
             margin = margin.max(long_edge / 64.0);
@@ -1329,6 +1348,39 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Purple and green amounts of the defringing (0..1), `None` when it is off.
+fn defringe_amounts(l: &crate::params::LensCorrection) -> Option<[f32; 2]> {
+    (l.defringe_purple > 0.0 || l.defringe_green > 0.0).then(|| [l.defringe_purple, l.defringe_green].map(|v| v.clamp(0.0, 100.0) / 100.0))
+}
+
+/// Size (in pixels of a rendering at `scale`) of the neighbourhood in which defringing looks for
+/// contrast: fringes reach a few sensor pixels beyond an edge.
+fn defringe_sigma(scale: f32) -> f32 {
+    (3.0 * scale).max(0.8)
+}
+
+/// Weight 1 for hues (degrees) inside `lo..hi`, falling to 0 over `soft` degrees outside.
+fn hue_band(hue: f32, lo: f32, hi: f32, soft: f32) -> f32 {
+    let d = if hue < lo { lo - hue } else { (hue - hi).max(0.0) };
+    1.0 - smoothstep(0.0, soft, d)
+}
+
+/// One pixel of the defringing (also `defringe.wgsl`): `mean` and `mean_sq` are the blurred
+/// perceptual luminance and its square, which give the local contrast.
+#[inline]
+fn defringe_pixel(p: [f32; 3], mean: f32, mean_sq: f32, [purple, green]: [f32; 2]) -> [f32; 3] {
+    let y = dot(p, LUMA).max(0.0);
+    let (cr, cb) = (p[0] - y, p[2] - y);
+    if cr == 0.0 && cb == 0.0 {
+        return p;
+    }
+    let edge = smoothstep(0.008, 0.035, (mean_sq - mean * mean).max(0.0).sqrt());
+    // Hue in the color difference plane: magenta at 45°, blue at 95°, cyan at 160°, green at 225°.
+    let hue = cb.atan2(cr).to_degrees().rem_euclid(360.0);
+    let k = (edge * (purple * hue_band(hue, 20.0, 125.0, 20.0) + green * hue_band(hue, 195.0, 250.0, 20.0))).min(1.0);
+    p.map(|v| v + (y - v) * k)
+}
+
 fn histogram_rgba(rgba: &[u8]) -> Histogram {
     let init = || Histogram { r: vec![0; 256], g: vec![0; 256], b: vec![0; 256], luma: vec![0; 256] };
     rgba.par_chunks(4 * 4096)
@@ -1662,6 +1714,21 @@ mod tests {
         let r = Processor::new(&meta(), &adj).render(&src, None, None);
         assert_eq!((r.width, r.height), (24, 32));
         assert_eq!(r.histogram.luma.iter().sum::<u32>(), 24 * 32);
+    }
+
+    #[test]
+    fn hidden_tools_are_left_out_of_the_rendering() {
+        let src = LinearImage::new(64, 48, vec![[0.1; 3]; 64 * 48]);
+        let mut adj = Adjustments {
+            exposure: 1.0,
+            geometry: crate::params::Geometry { crop: CropRect { x: 0.0, y: 0.0, w: 0.5, h: 0.5 }, ..Default::default() },
+            ..plain()
+        };
+        adj.hidden = vec![crate::tools::Tool::Crop, crate::tools::Tool::Exposure];
+        let r = Processor::new(&meta(), &adj).render(&src, None, None);
+        let plain_r = Processor::new(&meta(), &plain()).render(&src, None, None);
+        assert_eq!((r.width, r.height), (64, 48));
+        assert_eq!(r.rgba, plain_r.rgba);
     }
 
     /// Source and adjustments with every neighborhood operation and a painted layer.
@@ -2227,6 +2294,46 @@ mod tests {
         let at = |x: usize| -> f32 { (0..h).map(|y| r.rgba[(y * w + x) * 4 + 1] as f32).sum::<f32>() / h as f32 };
         let (near, far) = (at(1103), at(1600));
         assert!((near - far).abs() < 5.0, "neben dem Objekt {near}, weiter weg {far}");
+    }
+
+    #[test]
+    fn defringe_takes_out_purple_and_green_only_at_edges() {
+        // Dark left half, bright right half; a purple and a green fringe next to the edge, and
+        // wide areas of the same colors far from it.
+        let (w, h) = (200, 8);
+        let (purple, green) = ([0.3, 0.08, 0.35], [0.05, 0.25, 0.06]);
+        let src = LinearImage::new(
+            w,
+            h,
+            (0..w * h)
+                .map(|i| match i % w {
+                    98 => purple,
+                    102 => green,
+                    10..40 => purple,
+                    160..195 => green,
+                    x if x < 100 => [0.01; 3],
+                    _ => [0.8; 3],
+                })
+                .collect(),
+        );
+        let chroma = |p: [f32; 3]| p.iter().fold(0.0f32, |m, v| m.max(*v)) - p.iter().fold(1.0f32, |m, v| m.min(*v));
+        let mut adj = plain();
+        adj.lens.defringe_purple = 100.0;
+        adj.lens.defringe_green = 100.0;
+        let mut img = src.clone();
+        Processor::new(&meta(), &adj).defringe(&mut img, 1.0);
+        let at = |x: usize| img.data[4 * w + x];
+        assert!(chroma(at(98)) < 0.1 * chroma(purple), "lila am Rand {:?}", at(98));
+        assert!(chroma(at(102)) < 0.1 * chroma(green), "grün am Rand {:?}", at(102));
+        assert!(chroma(at(25)) > 0.9 * chroma(purple), "lila in der Fläche {:?}", at(25));
+        assert!(chroma(at(177)) > 0.9 * chroma(green), "grün in der Fläche {:?}", at(177));
+        // Luminance stays, and red is no fringe color.
+        assert!((dot(at(98), LUMA) - dot(purple, LUMA)).abs() < 1e-4);
+        assert_eq!(defringe_pixel([0.4, 0.05, 0.05], 0.3, 0.3, [1.0, 1.0]), [0.4, 0.05, 0.05]);
+        adj.lens.defringe_green = 0.0;
+        let mut img = src.clone();
+        Processor::new(&meta(), &adj).defringe(&mut img, 1.0);
+        assert_eq!(img.data[4 * w + 102], green, "grün bleibt");
     }
 
     #[test]

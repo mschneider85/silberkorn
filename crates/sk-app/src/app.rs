@@ -316,6 +316,10 @@ struct Settings {
     update_last_check: Option<u64>,
     /// Version the user skipped.
     update_skipped: Option<String>,
+    /// Watch the open folder for new pictures (see `hot_folder`).
+    watch_folder: bool,
+    /// While watching, new pictures are not opened.
+    watch_no_open: bool,
 }
 
 /// Thumbnail textures kept at most (see `App::trim_thumbs`).
@@ -451,6 +455,7 @@ pub struct App {
     pub color_band: usize,
     /// Color editor view: all colors for one property, or one color with all properties.
     pub color_view: crate::develop_tools::ColorView,
+    pub balance_view: crate::develop_tools::BalanceView,
     /// The selected color range of one's own in the color editor.
     pub color_zone: usize,
     /// What the color pipette (`picking_skin`) picks: the skin tone or a color range.
@@ -517,6 +522,11 @@ pub struct App {
     pub(crate) edited_at: Instant,
     /// Incremented on every change that affects the rendering.
     pub edit_version: u64,
+    /// While key or wheel steps run (see `widgets::take_steps`): the adjustments after the
+    /// last step and the control that made it. A change from anything else ends the steps.
+    step_base: Option<(Adjustments, egui::Id)>,
+    /// `edit` ended the running steps: the change after them is committed right away.
+    steps_ended: bool,
     pub pointer_down: bool,
     pub clip_warning: bool,
     pub show_before: bool,
@@ -577,6 +587,9 @@ pub struct App {
     pub(crate) focus_maps: HashMap<PathBuf, crate::focus::FocusMap>,
     /// Images whose focus mask is being computed.
     pub(crate) focus_pending: HashSet<PathBuf>,
+    /// Focus masks of the thumbnails, and the thumbnails they were requested for.
+    pub(crate) thumb_focus: HashMap<PathBuf, crate::focus::FocusMap>,
+    pub(crate) thumb_focus_requested: HashSet<PathBuf>,
     /// Generation for which a rendering was requested to compute the focus mask.
     pub(crate) focus_render_for: Option<(u64, u64)>,
     /// Variant waiting for confirmation of its deletion.
@@ -595,9 +608,6 @@ pub struct App {
     pub recipes: Vec<ExportRecipe>,
     pub selected_recipe: usize,
     pub export_progress: Option<(usize, usize)>,
-    /// Progress within the image being exported (while enlarging), and its number of outputs.
-    pub export_step: Option<f32>,
-    pub export_recipes: usize,
     /// Cancels the running export.
     pub export_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// Closing was requested while work was running; the user is asked first.
@@ -607,6 +617,7 @@ pub struct App {
 
     pub status: String,
     pub updates: crate::update::Updates,
+    pub hot_folder: crate::hot_folder::HotFolder,
     pub show_filmstrip: bool,
     /// Thumbnail size (long edge) in the grid.
     pub grid_thumb: f32,
@@ -659,12 +670,15 @@ pub struct App {
     /// (generation, edit version, recipe key) of the last proof request.
     proof_requested: Option<(u64, u64, u64)>,
     pub show_shortcuts: bool,
+    pub show_licenses: bool,
     pub shortcut_editor: crate::shortcut_editor::ShortcutEditor,
     /// Start screen (also the "about" dialog).
     pub splash: Option<crate::splash::Splash>,
     pub(crate) window_title: String,
     /// Zoom of the viewer relative to the full sensor resolution, for the status bar.
     pub zoom_pct: Option<f32>,
+    /// The same when fitted to the viewer: where the zoom slider starts.
+    pub(crate) zoom_fit_pct: Option<f32>,
     /// Physical pixels per UI point (Windows display scaling), for true 100 % viewing.
     pub(crate) pixels_per_point: f32,
     /// Largest texture side the GPU takes: a view rendering must fit into one texture.
@@ -733,7 +747,6 @@ impl App {
         }
         sk_ai::runtime::set_gpu_enabled(settings.ai_gpu.unwrap_or(true));
         sk_ai::denoise::register();
-        sk_ai::upscale::register();
         sk_ai::depth::register();
         sk_core::gpu::set_enabled(settings.develop_gpu.unwrap_or(true));
         // Sets up the graphics card and compiles the shaders while the window opens.
@@ -833,6 +846,7 @@ impl App {
             levels_hist: Default::default(),
             color_band: 0,
             color_view: Default::default(),
+            balance_view: Default::default(),
             color_zone: 0,
             color_pick: Default::default(),
             picking_wb: false,
@@ -874,6 +888,8 @@ impl App {
             tiles: Tiles::default(),
             tiles_requested: None,
             edited_at: Instant::now(),
+            step_base: None,
+            steps_ended: false,
             edit_version: 0,
             pointer_down: false,
             clip_warning: false,
@@ -899,11 +915,13 @@ impl App {
             proof: None,
             proof_requested: None,
             show_shortcuts: false,
+            show_licenses: false,
             shortcut_editor: Default::default(),
             // Debug screenshots should show the app, not the start screen.
             splash: std::env::var_os("SILBERKORN_SCREENSHOT").is_none().then(crate::splash::Splash::startup),
             window_title: "Silberkorn".into(),
             zoom_pct: None,
+            zoom_fit_pct: None,
             pixels_per_point: 1.0,
             // egui's assumption until the viewer is first shown.
             max_texture_side: 2048,
@@ -945,6 +963,8 @@ impl App {
             focus_sensitivity: settings.focus_sensitivity.unwrap_or(50.0).clamp(0.0, 100.0),
             focus_maps: HashMap::new(),
             focus_pending: HashSet::new(),
+            thumb_focus: HashMap::new(),
+            thumb_focus_requested: HashSet::new(),
             focus_render_for: None,
             recipes: if !settings.recipes.is_empty() {
                 settings.recipes
@@ -953,13 +973,12 @@ impl App {
             },
             selected_recipe: 0,
             export_progress: None,
-            export_step: None,
-            export_recipes: 1,
             export_cancel: None,
             quit_asked: false,
             quit_confirmed: false,
             export_log: Vec::new(),
             updates: crate::update::Updates::new(settings.update_check_off, settings.update_last_check, settings.update_skipped.clone()),
+            hot_folder: crate::hot_folder::HotFolder::new(settings.watch_folder, !settings.watch_no_open),
             status,
             screenshot: std::env::var_os("SILBERKORN_SCREENSHOT").map(|p| (PathBuf::from(p), None)),
             viewer_window: crate::viewer_window::ViewerWindow {
@@ -1003,6 +1022,7 @@ impl App {
         app.grid_view = std::env::var_os("SILBERKORN_GRID").is_some() || app.viewer_window.open;
         match std::env::var("SILBERKORN_DIALOG").as_deref() {
             Ok("shortcuts") => app.show_shortcuts = true,
+            Ok("licenses") => app.show_licenses = true,
             Ok("about") => app.splash = Some(crate::splash::Splash::about()),
             Ok("gpu") => app.show_gpu_dialog = true,
             Ok("update") => app.update_dialog_open(),
@@ -1055,6 +1075,8 @@ impl App {
             update_check_off: self.updates.auto_off,
             update_last_check: self.updates.last_check,
             update_skipped: self.updates.skipped.clone(),
+            watch_folder: self.hot_folder.on,
+            watch_no_open: !self.hot_folder.open_new,
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -1565,7 +1587,9 @@ impl App {
         }
     }
 
-    pub fn step(&mut self, delta: isize) {
+    /// `delta` images further. With `extend` (Shift), the images passed are added to the
+    /// selection instead of replacing it.
+    pub fn step(&mut self, delta: isize, extend: bool) {
         if self.visible.is_empty() {
             return;
         }
@@ -1575,12 +1599,18 @@ impl App {
         let path = self.entries[self.visible[next]].path.clone();
         self.step_dir = delta.signum();
         self.scroll_to_primary = true;
-        self.select_path(&path, Modifiers::NONE);
+        if extend {
+            let passed: Vec<PathBuf> = self.visible[pos.min(next)..=pos.max(next)].iter().map(|&i| self.entries[i].path.clone()).collect();
+            self.selection.extend(passed);
+            self.make_primary(&path);
+        } else {
+            self.select_path(&path, Modifiers::NONE);
+        }
     }
 
     /// One row up or down in the grid. Above the first row nothing happens; below the last full
     /// column the last image of the next row is taken, as in file managers.
-    pub fn step_row(&mut self, dir: isize) {
+    pub fn step_row(&mut self, dir: isize, extend: bool) {
         if self.visible.is_empty() {
             return;
         }
@@ -1591,7 +1621,7 @@ impl App {
         let target = pos + dir * cols;
         let target = if target > last && last / cols > pos / cols { last } else { target };
         if (0..=last).contains(&target) && target != pos {
-            self.step(target - pos);
+            self.step(target - pos, extend);
         }
     }
 
@@ -1605,6 +1635,7 @@ impl App {
 
     /// Pushes finished edits to the undo stack and writes the sidecar.
     pub fn commit_and_save(&mut self) {
+        self.step_base = None;
         let Some(cur) = self.current.as_mut() else { return };
         // New and pasted layers.
         cur.adjustments.assign_layer_ids();
@@ -1719,9 +1750,27 @@ impl App {
     }
 
     pub fn edit(&mut self, f: impl FnOnce(&mut Adjustments)) {
+        // Running key or wheel steps are an undo step of their own, not part of this change.
+        if let Some((base, _)) = self.step_base.take() {
+            self.end_steps_at(base);
+            self.steps_ended = true;
+        }
         if let Some(cur) = self.current.as_mut() {
             f(&mut cur.adjustments);
             self.request_render();
+        }
+    }
+
+    /// The key or wheel steps up to `base` become an undo step of their own.
+    fn end_steps_at(&mut self, base: Adjustments) {
+        let Some(cur) = self.current.as_mut() else { return };
+        if base != cur.committed {
+            self.undo.push(std::mem::replace(&mut cur.committed, base));
+            if self.undo.len() > UNDO_LIMIT {
+                self.undo.remove(0);
+            }
+            self.redo.clear();
+            self.sidecar_dirty = true;
         }
     }
 
@@ -1749,11 +1798,10 @@ impl App {
         }
     }
 
-    /// Export progress 0..1 (outputs done, plus the part of the image being enlarged).
+    /// Export progress 0..1.
     pub fn export_fraction(&self) -> Option<f32> {
         let (done, total) = self.export_progress?;
-        let step = self.export_step.unwrap_or(0.0) * self.export_recipes as f32;
-        Some(((done as f32 + step) / total.max(1) as f32).min(1.0))
+        Some((done as f32 / total.max(1) as f32).min(1.0))
     }
 
     pub fn export_selection(&mut self) {
@@ -1794,21 +1842,7 @@ impl App {
             self.export_progress = None;
             return;
         }
-        if let Some(f) = recipes.iter().filter_map(|r| r.upscale).map(crate::ai_models::AiFeature::for_upscale).find(|f| !f.available()) {
-            // Exports once the model is there, if the selection is still the same.
-            self.export_progress = None;
-            let selection = self.selected_paths();
-            self.with_ai(f, move |app| {
-                if app.selected_paths() == selection {
-                    app.export_selection();
-                }
-            });
-            self.status = format!("{}: KI-Modell wird geladen ({} MB, einmalig), danach wird exportiert …", f.label(), f.download_mb());
-            return;
-        }
         let session = self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
-        self.export_recipes = recipes.len();
-        self.export_step = None;
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.export_cancel = Some(cancel.clone());
         self.workers.export(ExportJob { items, recipes, session, cancel });
@@ -1914,6 +1948,7 @@ impl App {
         }
         self.load_full_when_due(ctx);
         self.pump_denoise();
+        self.pump_hot_folder(ctx);
         self.pump_depth();
         self.poll_spot_search();
         // The rendered preview must fit into a single GPU texture.
@@ -2081,7 +2116,6 @@ impl App {
                         },
                     }
                 }
-                Event::ExportStep(p) => self.export_step = (p < 1.0).then_some(p),
                 Event::ExportProgress { done, total, last } => {
                     self.export_progress = (done < total).then_some((done, total));
                     match last {
@@ -2095,7 +2129,6 @@ impl App {
                 }
                 Event::ExportCancelled { done, total } => {
                     self.export_progress = None;
-                    self.export_step = None;
                     self.export_cancel = None;
                     self.status = format!("Export abgebrochen ({done} von {total} fertig)");
                 }
@@ -2160,6 +2193,12 @@ impl App {
                 Event::LookSimilarity { path, refs, values } => self.look_similarity = Some(crate::look::LookSimilarity { path, refs, values }),
                 Event::AutoAdjusted { path, opts, result } => self.auto_adjusted(path, opts, result),
                 Event::Focus { path, version, size, sharpness } => self.focus_received(path, version, size, sharpness),
+                Event::ThumbFocus { path, size, sharpness } => {
+                    // Not requested (any more): the thumbnail changed meanwhile.
+                    if self.thumb_focus_requested.contains(&path) {
+                        self.thumb_focus.insert(path, crate::focus::FocusMap::new(size, sharpness));
+                    }
+                }
                 Event::IndexProgress { done, total } => {
                     self.index_progress = (done < total).then_some((done, total));
                 }
@@ -2189,6 +2228,9 @@ impl App {
     }
 
     pub(crate) fn set_thumb(&mut self, ctx: &egui::Context, path: PathBuf, image: egui::ColorImage) {
+        // A new thumbnail shows a changed image: its focus mask is made again.
+        self.thumb_focus.remove(&path);
+        self.thumb_focus_requested.remove(&path);
         match self.thumbs.get_mut(&path) {
             Some(t) => t.set(image, TextureOptions::LINEAR),
             // Previews made in the background announce every image: only those the browser has
@@ -2214,6 +2256,8 @@ impl App {
             self.thumbs.remove(&p);
             self.thumb_seen.remove(&p);
             self.thumb_requested.remove(&p);
+            self.thumb_focus.remove(&p);
+            self.thumb_focus_requested.remove(&p);
         }
     }
 
@@ -2223,6 +2267,8 @@ impl App {
         self.thumbs.retain(|p, _| listed.contains(p));
         self.thumb_seen.retain(|p, _| listed.contains(p));
         self.thumb_requested.retain(|p| listed.contains(p));
+        self.thumb_focus.retain(|p, _| listed.contains(p));
+        self.thumb_focus_requested.retain(|p| listed.contains(p));
     }
 
     pub(crate) fn send_render(&mut self) {
@@ -2355,8 +2401,9 @@ impl App {
         // While a menu, a dialog or the palette is open the keyboard belongs to it, as in native
         // applications (Ctrl+Entf must not trash the selection behind the rename dialog).
         // A focused slider or button keeps only the keys it uses itself (arrows, space); only a
-        // text field takes them all.
-        if self.palette.open || ctx.text_edit_focused() || egui::Popup::is_any_open(ctx) || ctx.memory(|m| m.top_modal_layer()).is_some() {
+        // text field takes them all. The shortcut editor and the copy dialog are windows, not
+        // modals, but block the keys just the same.
+        if self.palette.open || self.show_shortcuts || self.copy_dialog.tools.is_some() || ctx.text_edit_focused() || egui::Popup::is_any_open(ctx) || ctx.memory(|m| m.top_modal_layer()).is_some() {
             return;
         }
         // Ctrl+1 … Ctrl+0: the tool tabs in rail order.
@@ -2376,7 +2423,7 @@ impl App {
             if !tool_active && self.fullscreen {
                 self.toggle_fullscreen(ctx);
             }
-            self.end_viewer_tools();
+            self.cancel_viewer_tools();
         }
     }
 
@@ -2400,27 +2447,27 @@ impl App {
             self.quit_asked = false;
             return;
         }
-        let modal = egui::Modal::new(egui::Id::new("quit")).show(ctx, |ui| {
-            ui.set_width(380.0);
-            ui.label(egui::RichText::new("Silberkorn beenden?").size(16.0).strong());
-            ui.add_space(6.0);
-            ui.label("Noch nicht fertig:");
-            for b in &busy {
-                ui.label(format!("  •  {b}"));
-            }
-            ui.add_space(4.0);
-            ui.label("Beim Beenden wird abgebrochen; bereits fertige Dateien bleiben erhalten.");
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if ui.button("Abbrechen und beenden").clicked() {
-                    return Some(true);
+        let dialog = crate::dialog::Dialog::new("quit", crate::theme::icon::SIGN_OUT, "Silberkorn beenden?")
+            .subtitle("Bereits fertige Dateien bleiben erhalten")
+            .tone(crate::dialog::Tone::Warn)
+            .width(420.0);
+        let modal = dialog.show(ctx, |ui| {
+            crate::dialog::card(ui, "Noch nicht fertig", None, |ui| {
+                for b in &busy {
+                    ui.label(format!("•  {b}"));
                 }
-                if ui.button("Weiterarbeiten").clicked() {
-                    return Some(false);
+            });
+            crate::dialog::note(ui, "Beim Beenden wird es abgebrochen.");
+            let mut choice = None;
+            crate::dialog::footer(ui, |ui| {
+                if ui.add(crate::dialog::primary("Weiterarbeiten")).clicked() {
+                    choice = Some(false);
                 }
-                None
-            })
-            .inner
+                if ui.add(crate::dialog::secondary("Abbrechen und beenden")).clicked() {
+                    choice = Some(true);
+                }
+            });
+            choice
         });
         match modal.inner {
             Some(true) => {
@@ -2440,7 +2487,7 @@ impl App {
     }
 
     /// End of every frame (also in full screen): pending actions, saving and rendering.
-    fn finish_frame(&mut self, ctx: &egui::Context) {
+    pub(crate) fn finish_frame(&mut self, ctx: &egui::Context) {
         self.splash_ui(ctx);
         hover_cursor(ctx);
         self.run_pending();
@@ -2449,9 +2496,33 @@ impl App {
             self.request_render();
         }
 
-        // Commit edits once the user lets go of the mouse (one undo step per gesture).
+        // Commit edits once the user lets go of the mouse (one undo step per gesture). Arrow keys
+        // and wheel notches change a value step by step: the steps of one control are one gesture
+        // until they pause. Any other change (another control, a button, an action) ends them
+        // first, as an undo step of their own.
         if !ctx.input(|i| i.pointer.any_down()) && !self.viewer_pointer_down {
-            self.commit_and_save();
+            let pending = crate::widgets::take_steps(ctx);
+            let mut other = std::mem::take(&mut self.steps_ended);
+            if let Some((base, source)) = self.step_base.take() {
+                let changed = self.current.as_ref().is_some_and(|c| c.adjustments != base);
+                if changed && !pending.is_some_and(|p| p.now && p.source == source) {
+                    self.end_steps_at(base);
+                    // Steps of another control start new steps; anything else is committed.
+                    other |= !pending.is_some_and(|p| p.now);
+                }
+            }
+            match pending {
+                Some(p) if !other => {
+                    self.step_base = self.current.as_ref().map(|c| (c.adjustments.clone(), p.source));
+                    ctx.request_repaint_after(Duration::from_secs_f64(p.left));
+                }
+                _ => {
+                    if other {
+                        crate::widgets::end_steps(ctx);
+                    }
+                    self.commit_and_save();
+                }
+            }
         }
         self.sync_softproof();
         self.send_render();

@@ -230,12 +230,12 @@ impl App {
         let range = *DPI_RANGE.start()..=max_dpi;
         let area = CARD_MM * max_dpi / 25.4 / ppp + Vec2::splat(2.0 * CAL_PAD);
         px_per_mm = px_per_mm.clamp(*range.start() / 25.4, max_dpi / 25.4);
-        let modal = egui::Modal::new(egui::Id::new("print-calibration")).show(ctx, |ui| {
-            ui.set_width(area.x.max(460.0));
-            ui.label(RichText::new("Bildschirm kalibrieren").size(17.0).strong().color(Color32::WHITE));
-            ui.add_space(6.0);
+        let dialog = crate::dialog::Dialog::new("print-calibration", crate::theme::icon::RULER, "Bildschirm kalibrieren")
+            .subtitle("Damit 100 % in der Druckvorschau echte Zentimeter sind")
+            .width(area.x.max(460.0));
+        let modal = dialog.show(ctx, |ui| {
             ui.label("Halte eine Scheckkarte (EC- oder Kreditkarte) an den Bildschirm und ändere die Größe, bis das Rechteck genau so groß ist wie die Karte.");
-            ui.add_space(10.0);
+            ui.add_space(6.0);
             let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), area.y), egui::Sense::hover());
             let painter = ui.painter_at(rect);
             painter.rect_filled(rect, 6.0, theme::VIEWER);
@@ -251,13 +251,12 @@ impl App {
             let opts = widgets::SliderOpts { suffix: " dpi", ..Default::default() };
             widgets::slider_row_with(ui, "Auflösung", &mut dpi, range.clone(), (96.0 * ppp).clamp(*range.start(), *range.end()), 1, opts);
             px_per_mm = dpi.clamp(*range.start(), *range.end()) / 25.4;
-            ui.label(RichText::new("Fein: Umschalt beim Ziehen halten, oder den Wert eintippen.").small().color(theme::TEXT_FAINT));
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui.button("Übernehmen").clicked() {
+            crate::dialog::note(ui, "Fein: Umschalt beim Ziehen halten, oder den Wert eintippen.");
+            crate::dialog::footer(ui, |ui| {
+                if ui.add(crate::dialog::primary("Übernehmen")).clicked() {
                     save = true;
                 }
-                if ui.button("Abbrechen").clicked() {
+                if ui.add(crate::dialog::secondary("Abbrechen")).clicked() {
                     cancel = true;
                 }
             });

@@ -85,7 +85,7 @@ SK_ADJ='{"exposure":0.5,"shadows":40}' cargo run --release -p sk-core --example 
 | Crate | Inhalt |
 |---|---|
 | `sk-core` | RAW-Dekodierung (rawler), Farbmathematik, Entwicklungs-Pipeline, Sidecars, Export |
-| `sk-ai`   | Neuronale Netze (tract/ONNX Runtime): Masken aus Bildinhalt, Tiefenkarte, Entrauschen, Entfernen, Vergrößern, Gesichter |
+| `sk-ai`   | Neuronale Netze (tract/ONNX Runtime): Masken aus Bildinhalt, Tiefenkarte, Entrauschen, Entfernen, Gesichter |
 | `sk-app`  | egui/wgpu-Oberfläche, Hintergrund-Worker |
 
 Bereiche für Spezialfunktionen starten zugeklappt und bleiben offen, sobald man sie einmal öffnet:
@@ -115,8 +115,8 @@ zurück. Der Prozessor-Pfad bleibt die Referenz: `pipeline::gpu`-Tests vergleich
 werden beim Resampling auf dem Prozessor angewendet, der Softproof (Little CMS) ebenfalls.
 Antwortet die Grafikkarte nicht (Zeitlimit 60 s), geht sie verloren oder liefert sie ein
 unvollständiges Bild, wird sie bis zum Neustart nicht mehr verwendet und der Prozessor übernimmt;
-der Dialog „Grafikkarte und KI-Modelle …“ nennt den Grund. Puffer werden zwischen Berechnungen wiederverwendet.
-Abschalten im Dialog „Grafikkarte und KI-Modelle …“ oder mit `SILBERKORN_GPU=0`; `SILBERKORN_GPU=software` erlaubt
+der Dialog „Grafikkarte …“ nennt den Grund. Puffer werden zwischen Berechnungen wiederverwendet.
+Abschalten im Dialog „Grafikkarte …“ oder mit `SILBERKORN_GPU=0`; `SILBERKORN_GPU=software` erlaubt
 Software-Adapter (unter WSL zusätzlich `GALLIUM_DRIVER=llvmpipe`) für die App selbst; die
 Vergleichstests holen sich ohne Grafikkarte von sich aus einen Software-Adapter.
 `cargo run --release -p sk-core --example gpu_info` zeigt die gefundenen Adapter.
@@ -211,21 +211,19 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
 
 Die neuronalen Netze werden nicht mitgeliefert, sondern nach `~/.local/share/silberkorn/models/`
 geladen (`SILBERKORN_MODELS=<ordner>` überschreibt den Ort), und zwar alle still beim Programmstart, ohne
-Nachfrage (zusammen etwa 400 MB, unter Windows samt KI-Beschleunigung). Der Startbildschirm zeigt den
+Nachfrage (zusammen etwa 310 MB, unter Windows samt KI-Beschleunigung). Der Startbildschirm zeigt den
 Fortschritt, danach läuft der Download in der Statusleiste weiter; man kann sofort arbeiten. Wird eine
 Funktion benutzt, bevor ihr Modell da ist (oder fehlte beim Start das Internet), sieht man den Fortschritt
-am Werkzeug, danach läuft die Funktion von selbst weiter (ein Export mit KI-Vergrößern startet nach dem
-Download). Modellnamen und Lizenzen stehen nur im Dialog Bearbeiten → „Grafikkarte und KI-Modelle …“; dort
-lässt sich ein fehlgeschlagener Download auch von Hand wiederholen, etwa um alles für die Arbeit
-ohne Internet zu holen. Jede Datei wird gegen Größe und SHA-256 geprüft (Hugging-Face-Links auf einen festen Stand
+am Werkzeug, danach läuft die Funktion von selbst weiter; ein fehlgeschlagener Download wird beim
+nächsten Gebrauch wiederholt. Modellnamen und Lizenzen stehen unter Hilfe → „Lizenzen …“. Jede Datei wird gegen Größe und SHA-256 geprüft (Hugging-Face-Links auf einen festen Stand
 festgelegt); ein abgebrochener Download wird beim nächsten Versuch fortgesetzt.
 
 **Kennzeichnung:** KI-Funktionen tragen ein gelbes Funken-Symbol hinter ihrem Namen, in den
 Werkzeugbereichen (Objektivunschärfe, Neu ausleuchten, Atmosphäre, Entfernen, Gesichter & Sichtung),
-an Werkzeugen und Knöpfen (Objekt, Motiv, Himmel, Tiefe, KI-Entrauschen, KI-Vergrößern), in den Menüs
+an Werkzeugen und Knöpfen (Objekt, Motiv, Himmel, Tiefe, KI-Entrauschen), in den Menüs
 und in der Befehlspalette.
 
-**KI-Beschleunigung** (Bearbeiten → „Grafikkarte und KI-Modelle …“, Abschnitt „KI-Berechnung“, Windows): Die Netze rechnen dann über
+**KI-Beschleunigung** (Bearbeiten → „Grafikkarte …“, Abschnitt „KI-Berechnung“, Windows): Die Netze rechnen dann über
 ONNX Runtime mit DirectML auf der Grafikkarte (jede DirectX-12-Karte). ONNX Runtime wird nicht
 gelinkt, sondern zur Laufzeit geladen: Beim ersten Start lädt Silberkorn `onnxruntime.dll` (1.24.4) und
 `DirectML.dll` (1.15.4) aus Microsofts NuGet-Paketen nach `%LOCALAPPDATA%\silberkorn\gpu`, und zwar
@@ -241,8 +239,8 @@ erscheint zusätzlich oben im Bild.
 
 - **KI-Entrauschen** (Tab „Details“, Abschnitt „Rauschen“; das Übertragen-Symbol im Kopf des Abschnitts gilt für die Auswahl): RawNIND (UtNet2, Benoit
   Brummer, UCLouvain) in der Fassung von darktable (darktable-ai 5.6.0). Die Gewichte stehen unter
-  **GPL-3.0**; sie werden nicht mitgeliefert, sondern erst geladen, nachdem man den Lizenzhinweis
-  bestätigt hat (etwa 57 MB, per Teil-Download nur die beiden ONNX-Dateien aus dem Archiv).
+  **GPL-3.0**; sie werden nicht mitgeliefert, sondern wie die anderen Modelle beim Start geladen (etwa 57 MB,
+  per Teil-Download nur die beiden ONNX-Dateien aus dem Archiv).
   Bei Bayer-Sensoren bekommt das Netz das Mosaik selbst (R, G, G, B, schwarzwertbereinigt, nicht
   weißabgeglichen) und liefert sauberes Kamera-RGB in voller Auflösung, ersetzt also auch das
   Demosaicing; X-Trans und andere Sensoren laufen demosaict durch ein zweites Netz für lineares
@@ -389,8 +387,8 @@ bleiben unberührt. Die Bereiche rechnen auf Grafikkarte und Prozessor gleich.
 
   Ausprobieren ohne App: `cargo run --release -p sk-ai --example look -- aus.png bild.ARW referenz.jpg …`
   (mit `SK_LOOK_DEBUG=1` werden die Teile der Ähnlichkeit ausgegeben).
-- **Fokusmaske** (K oder Ansicht → „Fokusmaske“): Scharfe Bereiche werden grün markiert, auch in der
-  Vergleichsansicht, um schnell das schärfste Bild einer Serie zu finden. Gemessen wird die Energie der
+- **Schärfemaske** (K oder Ansicht → „Schärfemaske“): Scharfe Bereiche werden grün markiert, auch in der
+  Vergleichsansicht und auf den Vorschaubildern, um schnell das schärfste Bild einer Serie zu finden. Gemessen wird die Energie der
   feinsten Details, die bei Unschärfe zuerst verschwinden; hineingezoomt in voller Auflösung. Die Empfindlichkeit lässt sich im Menü
   „Ansicht“ einstellen.
 - **Hauttöne** (Tab „Farbe“): Mit der Pipette einen Hautton aufnehmen. „Gleichmäßigkeit“ zieht
@@ -502,8 +500,9 @@ die Korrektur ab, etwa damit ein Gebäude oben noch leicht zuläuft. Solange man
 liegt ein Raster über dem Bild.
 
 **Linien:** „Vertikal“, „Horizontal“ oder „Beides“ legt zwei bzw. vier Linien ins Bild. Ihre Enden
-(oder die ganze Linie) auf Kanten ziehen, die senkrecht bzw. waagerecht sein sollen; **Anwenden** (Enter)
-berechnet Drehung und Trapezkorrektur so, dass die Linien genau ausgerichtet sind, Esc bricht ab. Eine
+(oder die ganze Linie) auf Kanten ziehen, die senkrecht bzw. waagerecht sein sollen; **Übernehmen** (Enter)
+berechnet Drehung und Trapezkorrektur so, dass die Linien genau ausgerichtet sind, Esc bricht ab. Wer
+verschobene Linien liegen lässt und ein anderes Werkzeug wählt, übernimmt sie ebenfalls. Eine
 gezogene Linie je Richtung dreht nur, zwei korrigieren auch die Perspektive.
 
 **Automatisch:** Silberkorn sucht gerade Kanten im Bild (Linienerkennung nach dem
@@ -566,17 +565,15 @@ quadratischen Feldern, Diagonalen.
 - **Wasserzeichen:** Text (weiß oder schwarz) oder Logo (PNG mit Transparenz), in neun Positionen,
   Größe und Randabstand in % der kurzen Bildkante, Deckkraft einstellbar. Die Ausgabevorschau (P)
   zeigt es so, wie es geschrieben wird.
+- **Größe:** Originalgröße oder lange Kante, kurze Kante, Breite, Höhe (in Pixeln) bzw. Prozent;
+  vergrößert wird nie. Alte Rezepte mit „lange Kante“ bleiben gültig.
+- **Ausgabeschärfung:** Aus, „Für Bildschirm“ (dezent) oder „Für Druck“ (kräftiger): eine
+  Unschärfemaske auf der Helligkeit nach dem Verkleinern, das Bilder weicher macht; unabhängig vom
+  Schärfen in der Entwicklung. Die Ausgabevorschau zeigt sie.
 - **Formate:** JPEG, TIFF (8/16 Bit), PNG, WebP (verlustbehaftet, libwebp) und AVIF (10 Bit,
   4:4:4, rav1e). AVIF kennzeichnet den Farbraum ohne ICC-Profil und gibt es deshalb nur in sRGB
   und Display P3; ein 24-MP-Bild braucht rund 12 s. Die Ausgabevorschau zeigt bei WebP die
   komprimierten Pixel, bei AVIF die Pixel vor der Kompression (mit der echten Dateigröße).
-- **KI-Vergrößern** (wie „Super Resolution“): verdoppelt oder vervierfacht die Kantenlänge des
-  fertig entwickelten Bildes mit einem neuronalen Netz, bevor es gespeichert wird; eine lange
-  Kante verkleinert danach wieder (so lassen sich z. B. genau 8000 px erreichen). Das Netz ist
-  RealPLKSR (MIT, ~30 MB je Faktor, in der Fassung von darktable-ai); es erfindet keine Details
-  und wird erst bei Bedarf im Rezept geladen. Höchstens 250 MP Ergebnis. Auf dem Prozessor
-  langsam (eine 512er-Kachel etwa 1,5 min, ein 24-MP-Bild eine halbe Stunde und mehr), mit
-  Grafikkarte (Windows) deutlich schneller. Die Ausgabevorschau zeigt das Bild ohne Vergrößerung.
 - **Metadaten:** JPEG, PNG, WebP und AVIF erhalten EXIF mit Kamera, Objektiv, Belichtung und
   Aufnahmedatum (abschaltbar) sowie Fotograf und Copyright. GPS-Daten werden nie übernommen.
   TIFF-Dateien erhalten keine Metadaten.
@@ -624,6 +621,13 @@ Die Formate der Hersteller sind nicht dokumentiert; Silberkorn folgt dem Reverse
 darktable und ExifTool (eigene Umsetzung). Alle Modelle werden in eine gemeinsame Form gebracht
 (gerade Polynome im Radius je Farbkanal) und laufen über dieselbe Geometrie wie lensfun-Profile;
 Kameradaten und lensfun-Profil schließen sich gegenseitig aus.
+
+**Farbsaum Lila/Grün** (Defringe) behandelt die longitudinale chromatische Aberration: lila und grüne
+Säume an kontrastreichen Kanten, die auch in der Bildmitte auftreten und von keinem Profil erfasst
+werden (typisch bei offener Blende, Makros und Gegenlicht). Wo die Helligkeit in der Umgebung stark
+schwankt (Standardabweichung der wahrnehmungsgleichen Helligkeit in rund 3 Sensorpixeln), werden
+Pixel mit lila bis blauem bzw. grünem Farbton zur Helligkeit hin entfärbt; Flächen gleicher Farbe
+bleiben unberührt. Der Grünregler trifft auch Blattränder, deshalb sparsam einsetzen.
 
 ### Objektivprofile
 
@@ -711,6 +715,13 @@ Hochzeit Müller/
 - **Exportieren** schreibt relative Ausgabeordner in den Session-Ordner, das Standardrezept
   also nach `Output/`.
 - **Papierkorb leeren** löscht die Bilder darin endgültig (mit Rückfrage).
+- **Ordner überwachen** (in der Session-Spalte, für Ordner ohne Session unter „Ordner“, auch im Menü
+  „Datei“): Neue Bilder im angezeigten Ordner, etwa aus der Kamerasoftware in „Aufnahmen“,
+  erscheinen von selbst in der Übersicht; mit **Neue Aufnahme gleich öffnen** wird die neueste
+  geöffnet. Gesehen wird einmal pro Sekunde, und nur, wenn sich im Ordner etwas geändert hat; eine
+  Datei gilt als fertig, wenn ihre Größe zwischen zwei Blicken gleich bleibt, und die Übersicht wird
+  erst aktualisiert, wenn keine Datei mehr wächst. Die Statusleiste zeigt „Überwacht: <Ordner>“.
+  Einstellungen des aktuellen Bildes werden nicht übertragen.
 - **Session schließen** kehrt zum Katalog und zum zuvor geöffneten Ordner zurück.
 - **Portabel:** Die Session-Datenbank speichert Pfade relativ zum Session-Ordner. Eine Session
   lässt sich daher als Ganzes verschieben, umbenennen oder auf einen anderen Rechner kopieren
@@ -816,14 +827,14 @@ die Leertaste und die Tasten der Schnellbearbeitung.
 | Strg+D | Auswahl exportieren |
 | Strg+N / Strg+Umschalt+O | neue Session / Session öffnen |
 | Strg+J / Strg+Entf | nach „Auswahl“ / in den Papierkorb verschieben (Session) |
-| Strg+A | alle auswählen · Strg/Umschalt+Klick: Mehrfachauswahl |
+| Strg+A | alle auswählen · Strg/Umschalt+Klick, Umschalt+Pfeiltaste: Mehrfachauswahl |
 | Strg+[ / Strg+] | drehen |
 | Y | Vorher/Nachher |
 | E | Belichtungswarnung |
 | Umschalt+P | Softproof |
 | W | Weißabgleich-Pipette |
 | Z / Doppelklick | Einpassen ↔ 100 % · Mausrad: zoomen · Ziehen: verschieben |
-| C / Enter / Esc | Zuschnitt-Werkzeug / übernehmen / beenden |
+| C / Enter / Esc | Zuschnitt-Werkzeug / übernehmen / abbrechen |
 | B / N / L / R | Pinsel / Radierer / linearer / radialer Verlauf |
 | H / S | Reparieren / Klonen · Entf: Punkt löschen |
 | X | Entfernen (KI-Funktion) |
@@ -836,7 +847,7 @@ die Leertaste und die Tasten der Schnellbearbeitung.
 | Umschalt+F11 | Bild in eigenem Fenster (Zweitmonitor) |
 | Maustaste halten | Lupe (100 %) im eingepassten Bild |
 | Umschalt+Enter | Referenzbild festlegen / entfernen |
-| K | Fokusmaske |
+| K | Schärfemaske |
 | F2 / F3 | neue Variante / Variante klonen |
 | Strg+G / Strg+Umschalt+G | Stapel bilden / auflösen |
 | Umschalt+G | Stapel auf-/zuklappen |
@@ -845,7 +856,8 @@ die Leertaste und die Tasten der Schnellbearbeitung.
 
 Doppelklick auf einen Reglernamen setzt den Regler zurück. Nach einem Klick auf einen Regler ändern
 ihn die Pfeiltasten und das Mausrad (Umschalt: grob, Alt: fein); ohne diesen Klick scrollt das
-Mausrad nur das Panel.
+Mausrad nur das Panel. Ein Zug am Regler ist ein Rückgängig-Schritt, ebenso mehrere Pfeiltasten-
+oder Mausrad-Schritte kurz hintereinander (auch bei der Schnellbearbeitung).
 
 ## Tests
 
@@ -881,7 +893,7 @@ Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verklei
 - **Phase 4 (fertig):** Ebenen und Masken (Pinsel, Radierer, linearer/radialer Verlauf, Deckkraft), Reparieren/Klonen
 - **Phase 5 (fertig):** Luma Range, Farbbereichsmasken, Style Brushes, KI-Motivmaske (ONNX), Himmelmaske, Magic Brush, Dunst entfernen, Speed Edit, Vergleichsansicht, mehrere Ausgaberezepte
 - **Phase 6 (fertig):** Mehrfachansicht mit Referenzbild und synchronem Zoom, Look angleichen (Referenzbild oder Bilddatei), Hauttöne vereinheitlichen
-- **Phase 7 (fertig):** Varianten (virtuelle Kopien), Fokusmaske
+- **Phase 7 (fertig):** Varianten (virtuelle Kopien), Schärfemaske
 - **Phase 8 (fertig):** Vorher/Nachher nebeneinander, Wasserzeichen (Text/Logo), EXIF und Copyright im Export, Hilfslinien
 - **Phase 9 (fertig):** automatisches Geraderichten (Drehung, vertikaler/horizontaler Keystone)
 - **Phase 10 (fertig):** Lupe, Verlauf und Schnappschüsse, Umbenennen mit Platzhaltern (auch im Ausgaberezept)

@@ -157,6 +157,7 @@ pub fn changes(before: &Adjustments, after: &Adjustments) -> Vec<(&'static str, 
     let (l, m) = (&a.lens_blur, &b.lens_blur);
     push(l.amount == m.amount && l != m, "Objektivunschärfe", None);
     push(a.relight != b.relight, "Neu ausleuchten", None);
+    push(a.hidden != b.hidden, "Ein-/Ausblenden", None);
     let (l, m) = (&a.atmosphere, &b.atmosphere);
     push(l.amount == m.amount && l != m, "Atmosphäre", None);
     changes

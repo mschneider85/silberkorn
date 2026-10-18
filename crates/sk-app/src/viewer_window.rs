@@ -72,18 +72,20 @@ impl App {
             if class != ViewportClass::EmbeddedWindow {
                 self.track_viewer_window(&vctx);
             }
-            // F11 and Esc concern this window's full screen; the other keys work as in the main window.
+            // The full screen keys (F11) and Esc concern this window's full screen; the other keys
+            // work as in the main window. The keys come from the commands, so a changed binding
+            // works here too.
+            let command = pressed(&vctx, &["viewer-window", "fullscreen"]);
+            if command == Some("viewer-window") {
+                self.toggle_viewer_window();
+                return;
+            }
             let fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
-            let toggle = vctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F11))
-                || (fullscreen && vctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)));
+            let toggle = command == Some("fullscreen") || (fullscreen && vctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)));
             if toggle {
                 vctx.send_viewport_cmd(ViewportCommand::Fullscreen(!fullscreen));
                 self.viewer_window.fullscreen = !fullscreen;
                 self.save_settings();
-            }
-            if vctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, Key::F11)) {
-                self.toggle_viewer_window();
-                return;
             }
             self.shortcuts(&vctx);
             egui::CentralPanel::no_frame().show(ui, |ui| {
@@ -131,4 +133,13 @@ impl App {
             self.viewer_window_moved = Some(std::time::Instant::now());
         }
     }
+}
+
+/// Which of the commands had a shortcut pressed (it is consumed). Shortcuts with more modifiers
+/// first, as in `command_shortcuts` (Shift+F11 would also match F11).
+fn pressed(ctx: &egui::Context, ids: &[&'static str]) -> Option<&'static str> {
+    let mut keys: Vec<(&'static str, (Modifiers, Key))> =
+        ids.iter().filter_map(|id| crate::commands::get(id)).flat_map(|c| c.bindings().into_iter().map(move |k| (c.id, k))).collect();
+    keys.sort_by_key(|(_, (m, _))| std::cmp::Reverse(m.command as u8 + m.ctrl as u8 + m.shift as u8 + m.alt as u8));
+    keys.into_iter().find(|(_, (m, k))| ctx.input_mut(|i| i.consume_key(*m, *k))).map(|(id, _)| id)
 }

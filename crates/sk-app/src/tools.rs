@@ -1,12 +1,11 @@
 //! Tool tabs: Library, Exposure, Color, Effects, Metadata, Output.
 
-use sk_core::export::ExportFormat;
+use sk_core::export::{ExportFormat, OutputSharpening, Resize};
 use sk_core::watermark::{Anchor, WatermarkKind};
 use sk_core::params::{BaseCurve, Curve, Levels, WbMode, WhiteBalance};
 use sk_core::sidecar::ColorLabel;
 use egui::{Color32, RichText, Ui};
 
-use crate::ai_models::AiFeature;
 use crate::app::{App, CurveChannel, Tab};
 use crate::layer_target::Target;
 use crate::widgets::{self, section, slider_row};
@@ -17,10 +16,31 @@ impl App {
         let others = if self.current.is_some() { self.selected_paths().len().saturating_sub(1) } else { 0 };
         widgets::set_copy_targets(ui.ctx(), others);
         widgets::set_edit_layer(ui.ctx(), self.on_layer());
+        widgets::set_tool_states(ui.ctx(), self.tool_states());
         self.tool_tabs(ui);
         if let Some(tool) = widgets::take_copy_clicked(ui.ctx()) {
             self.transfer_tool(tool);
         }
+        if let Some(tool) = widgets::take_eye_clicked(ui.ctx()) {
+            self.edit(|a| a.toggle_hidden(tool));
+        }
+    }
+
+    /// The switched-off and the changed tools of the current image, for the eyes in the headers.
+    fn tool_states(&self) -> widgets::ToolStates {
+        use sk_core::tools::Tool;
+        let Some(cur) = &self.current else { return Default::default() };
+        let a = &cur.adjustments;
+        let edited = Tool::ALL
+            .into_iter()
+            .filter(|t| match t {
+                // Without copying layers and spots each frame.
+                Tool::Layers => !a.layers.is_empty(),
+                Tool::Retouch => !a.retouch.is_empty() || !a.removals.is_empty(),
+                t => !t.is_default(a),
+            })
+            .collect();
+        widgets::ToolStates { hidden: a.hidden.clone(), edited }
     }
 
     fn tool_tabs(&mut self, ui: &mut Ui) {
@@ -75,9 +95,10 @@ impl App {
 
         let mut reset_exposure = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Exposure, Some(&mut || reset_exposure = true), |ui| {
-            changed |= slider_row(ui, "Belichtung", t.pick(&mut adj.exposure, |l| &mut l.exposure), -4.0..=4.0, 0.0, 2);
+            let tone = widgets::SliderOpts { rail: Some(widgets::RAIL_TONE), ..Default::default() };
+            changed |= widgets::slider_row_with(ui, "Belichtung", t.pick(&mut adj.exposure, |l| &mut l.exposure), -4.0..=4.0, 0.0, 2, tone);
             changed |= slider_row(ui, "Kontrast", t.pick(&mut adj.contrast, |l| &mut l.contrast), -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Helligkeit", t.pick(&mut adj.brightness, |l| &mut l.brightness), -100.0..=100.0, 0.0, 0);
+            changed |= widgets::slider_row_with(ui, "Helligkeit", t.pick(&mut adj.brightness, |l| &mut l.brightness), -100.0..=100.0, 0.0, 0, tone);
         });
         if reset_exposure {
             match t.layer_mut() {
@@ -89,10 +110,11 @@ impl App {
 
         let mut reset_hdr = false;
         widgets::tool_section(ui, sk_core::tools::Tool::HighlightsShadows, Some(&mut || reset_hdr = true), |ui| {
-            changed |= slider_row(ui, "Lichter", t.pick(&mut adj.highlights, |l| &mut l.highlights), -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Tiefen", t.pick(&mut adj.shadows, |l| &mut l.shadows), -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Weiß", t.pick(&mut adj.whites, |l| &mut l.whites), -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Schwarz", t.pick(&mut adj.blacks, |l| &mut l.blacks), -100.0..=100.0, 0.0, 0);
+            let tone = widgets::SliderOpts { rail: Some(widgets::RAIL_TONE), ..Default::default() };
+            changed |= widgets::slider_row_with(ui, "Lichter", t.pick(&mut adj.highlights, |l| &mut l.highlights), -100.0..=100.0, 0.0, 0, tone);
+            changed |= widgets::slider_row_with(ui, "Tiefen", t.pick(&mut adj.shadows, |l| &mut l.shadows), -100.0..=100.0, 0.0, 0, tone);
+            changed |= widgets::slider_row_with(ui, "Weiß", t.pick(&mut adj.whites, |l| &mut l.whites), -100.0..=100.0, 0.0, 0, tone);
+            changed |= widgets::slider_row_with(ui, "Schwarz", t.pick(&mut adj.blacks, |l| &mut l.blacks), -100.0..=100.0, 0.0, 0, tone);
         });
         if reset_hdr {
             match t.layer_mut() {
@@ -297,7 +319,7 @@ impl App {
         widgets::tool_section(ui, sk_core::tools::Tool::Color, Some(&mut || reset_color = true), |ui| {
             let rail = widgets::SliderOpts { rail: Some(widgets::RAIL_SATURATION), ..Default::default() };
             changed |= widgets::slider_row_with(ui, "Sättigung", t.pick(&mut adj.saturation, |l| &mut l.saturation), -100.0..=100.0, 0.0, 0, rail);
-            changed |= slider_row(ui, "Dynamik", t.pick(&mut adj.vibrance, |l| &mut l.vibrance), -100.0..=100.0, 0.0, 0);
+            changed |= widgets::slider_row_with(ui, "Dynamik", t.pick(&mut adj.vibrance, |l| &mut l.vibrance), -100.0..=100.0, 0.0, 0, rail);
         });
         if reset_color {
             match t.layer_mut() {
@@ -442,9 +464,6 @@ impl App {
             self.selected_recipe = self.selected_recipe.min(self.recipes.len() - 1);
         }
         self.selected_recipe = self.selected_recipe.min(self.recipes.len().saturating_sub(1));
-        let upscale_feature = self.recipes.get(self.selected_recipe).and_then(|r| r.upscale).map(AiFeature::for_upscale);
-        let upscale_download = upscale_feature.and_then(|f| self.ai_download_progress(f));
-        let (mut download, mut show_gpu) = (None, false);
         let Some(r) = self.recipes.get_mut(self.selected_recipe) else { return };
         section(ui, "Rezept bearbeiten", None, |ui| {
             widgets::field(ui, "Name", |ui| ui.text_edit_singleline(&mut r.name));
@@ -468,45 +487,36 @@ impl App {
                     r.quality = q.round() as _;
                 }
             }
-            let mut resize = r.long_edge.is_some();
-            ui.checkbox(&mut resize, "Skalieren (lange Kante)");
-            // Options without effect are shown, but disabled.
-            let mut edge = r.long_edge.unwrap_or(2048);
-            ui.add_enabled(resize, egui::DragValue::new(&mut edge).range(64..=20000).suffix(" px"));
-            r.long_edge = resize.then_some(edge);
-            let mut upscale = r.upscale.is_some();
-            ui.checkbox(&mut upscale, widgets::ai_text(ui, "KI-Vergrößern")).on_hover_text(
-                "Vergrößert das fertige Bild vor dem Speichern mit KI; eine lange Kante verkleinert es danach wieder.",
-            );
-            let mut factor = r.upscale.unwrap_or_default().factor;
-            ui.add_enabled_ui(upscale, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut factor, 2, "2×").on_hover_text("Doppelte Kantenlänge, vierfache Pixelzahl");
-                    ui.selectable_value(&mut factor, 4, "4×").on_hover_text("Vierfache Kantenlänge, sechzehnfache Pixelzahl");
-                });
+            let size_label = if r.size.is_some() { r.resize.label() } else { "Originalgröße" };
+            let mut resize = r.size.map(|_| r.resize);
+            widgets::combo_field(ui, "Größe", size_label, |ui| {
+                ui.selectable_value(&mut resize, None, "Originalgröße");
+                for m in Resize::ALL {
+                    ui.selectable_value(&mut resize, Some(m), m.label());
+                }
             });
-            if !upscale {
-                r.upscale = None;
+            if let Some(m) = resize {
+                let percent = m == Resize::Percent;
+                // The value is kept in its unit when switching between the pixel modes.
+                let mut v = match r.size {
+                    Some(v) if (r.resize == Resize::Percent) == percent => v,
+                    _ if percent => 50,
+                    _ => 2048,
+                };
+                widgets::field(ui, "", |ui| {
+                    let drag = if percent { egui::DragValue::new(&mut v).range(1..=100).suffix(" %") } else { egui::DragValue::new(&mut v).range(16..=20000).suffix(" px") };
+                    ui.add(drag).on_hover_text("Nie größer als das entwickelte Bild")
+                });
+                r.resize = m;
+                r.size = Some(v);
             } else {
-                let u = r.upscale.get_or_insert_with(Default::default);
-                u.factor = factor;
-                let f = AiFeature::for_upscale(*u);
-                if let Some(p) = upscale_download.filter(|_| upscale_feature == Some(f)) {
-                    crate::ai_models::download_progress(ui, f, p);
-                } else if !f.available() {
-                    download = Some(f);
-                }
-                if !(sk_ai::runtime::gpu_enabled() && sk_ai::runtime::gpu_installed()) {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(
-                            RichText::new("Auf dem Prozessor dauert das lange: bei 24 MP eine halbe Stunde und mehr.").small().color(crate::theme::TEXT_FAINT),
-                        );
-                        if sk_ai::runtime::gpu_supported() && ui.small_button(crate::gpu::DIALOG_TITLE).clicked() {
-                            show_gpu = true;
-                        }
-                    });
-                }
+                r.size = None;
             }
+            widgets::combo_field(ui, "Ausgabeschärfung", r.output_sharpening.label(), |ui| {
+                for s in OutputSharpening::ALL {
+                    ui.selectable_value(&mut r.output_sharpening, s, s.label());
+                }
+            });
             widgets::field(ui, "Ordner", |ui| {
                 let mut dir = r.output_dir.to_string_lossy().to_string();
                 if ui.text_edit_singleline(&mut dir).changed() {
@@ -590,22 +600,11 @@ impl App {
                 self.export_selection();
             }
             if let (Some((done, total)), Some(f)) = (self.export_progress, self.export_fraction()) {
-                let text = match self.export_step {
-                    Some(p) => format!("{done} / {total} · KI-Vergrößern {:.0} %", p * 100.0),
-                    None => format!("{done} / {total}"),
-                };
-                ui.add(egui::ProgressBar::new(f).text(text));
+                ui.add(egui::ProgressBar::new(f).text(format!("{done} / {total}")));
             }
             for msg in self.export_log.iter().rev().take(8) {
                 ui.label(RichText::new(msg).small());
             }
         });
-        // Chosen in the recipe: the model loads right away (the export would wait for it).
-        if let Some(f) = download {
-            self.ensure_ai(f);
-        }
-        if show_gpu {
-            self.show_gpu_dialog = true;
-        }
     }
 }

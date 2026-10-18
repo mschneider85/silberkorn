@@ -149,12 +149,8 @@ impl App {
             if ui.selectable_label(zoomed, "100 %").on_hover_text(crate::commands::hint("100 %", "zoom-100")).clicked() && !zoomed {
                 self.toggle_zoom_100();
             }
-            if let Some(pct) = self.zoom_pct {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(format!("{pct:.0} %")).size(12.0).color(theme::TEXT_DIM));
-                });
-            }
         });
+        self.zoom_control(ui);
     }
 
     /// Everything that differs from an unedited image; a click opens the tool.

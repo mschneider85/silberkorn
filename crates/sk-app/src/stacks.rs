@@ -4,11 +4,13 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-use egui::{Button, Color32, RichText, Ui, vec2};
+use egui::{Button, Ui};
 use sk_core::sidecar::Stack;
 use sk_core::{stack, variant};
 
 use crate::app::App;
+use crate::dialog::{self, Dialog};
+use crate::commands::shortcut_of;
 use crate::session::PendingAction;
 use crate::theme::icon;
 
@@ -269,23 +271,23 @@ impl App {
     pub fn stack_menu(&mut self, ui: &mut Ui) {
         let n_files = variant::files_of(&self.selected_paths()).len();
         let in_stack = !self.selected_stack_ids().is_empty();
-        let mut act = |ui: &mut Ui, ic: &str, text: &str, shortcut: &str, enabled: bool, a: StackAction| {
+        let mut act = |ui: &mut Ui, ic: &str, text: &str, shortcut: String, enabled: bool, a: StackAction| {
             if ui.add_enabled(enabled, Button::new(format!("{ic}  {text}")).shortcut_text(shortcut)).clicked() {
                 self.pending = Some(PendingAction::Stack(a));
             }
         };
         ui.menu_button(format!("{}  Stapel", icon::STACK_SIMPLE), |ui| {
-            act(ui, icon::STACK_PLUS, "Stapel bilden", "Strg+G", n_files >= 2, StackAction::Create);
-            act(ui, icon::STACK_MINUS, "Stapel auflösen", "Strg+Umschalt+G", in_stack, StackAction::Dissolve);
-            act(ui, icon::ARROW_SQUARE_OUT, "Aus Stapel entfernen", "", in_stack, StackAction::RemoveFromStack);
-            act(ui, icon::ARROW_LINE_UP, "Als oberstes Bild", "", in_stack, StackAction::MakeTop);
-            act(ui, icon::SCAN, "Schärfstes Bild nach oben", "", in_stack, StackAction::SharpestTop);
+            act(ui, icon::STACK_PLUS, "Stapel bilden", shortcut_of("stack-create"), n_files >= 2, StackAction::Create);
+            act(ui, icon::STACK_MINUS, "Stapel auflösen", shortcut_of("stack-dissolve"), in_stack, StackAction::Dissolve);
+            act(ui, icon::ARROW_SQUARE_OUT, "Aus Stapel entfernen", String::new(), in_stack, StackAction::RemoveFromStack);
+            act(ui, icon::ARROW_LINE_UP, "Als oberstes Bild", String::new(), in_stack, StackAction::MakeTop);
+            act(ui, icon::SCAN, "Schärfstes Bild nach oben", String::new(), in_stack, StackAction::SharpestTop);
             ui.separator();
-            act(ui, icon::ARROWS_OUT_SIMPLE, "Stapel auf-/zuklappen", "Umschalt+G", in_stack, StackAction::Toggle);
-            act(ui, icon::ARROWS_OUT, "Alle Stapel aufklappen", "", true, StackAction::ExpandAll);
-            act(ui, icon::ARROWS_IN, "Alle Stapel zuklappen", "", true, StackAction::CollapseAll);
+            act(ui, icon::ARROWS_OUT_SIMPLE, "Stapel auf-/zuklappen", shortcut_of("stack-toggle"), in_stack, StackAction::Toggle);
+            act(ui, icon::ARROWS_OUT, "Alle Stapel aufklappen", String::new(), true, StackAction::ExpandAll);
+            act(ui, icon::ARROWS_IN, "Alle Stapel zuklappen", String::new(), true, StackAction::CollapseAll);
             ui.separator();
-            act(ui, icon::CLOCK, "Automatisch nach Aufnahmezeit …", "", true, StackAction::AutoDialog);
+            act(ui, icon::CLOCK, "Automatisch nach Aufnahmezeit …", String::new(), true, StackAction::AutoDialog);
         });
     }
 
@@ -293,23 +295,20 @@ impl App {
         let Some(dialog) = &mut self.auto_stack else { return };
         let (mut run, mut cancel) = (false, false);
         let selected = self.selection.len() >= 2;
-        let modal = egui::Modal::new(egui::Id::new("auto_stack")).show(ctx, |ui| {
-            ui.set_width(400.0);
-            ui.label(RichText::new(format!("{}  Automatisch stapeln", icon::STACK_SIMPLE)).size(17.0).strong().color(Color32::WHITE));
-            ui.add_space(8.0);
+        let modal = Dialog::new("auto_stack", icon::STACK_SIMPLE, "Automatisch stapeln").subtitle("Serien nach Aufnahmezeit zusammenfassen").width(440.0).show(ctx, |ui| {
             let scope = if selected { "Die ausgewählten Bilder" } else { "Alle Bilder dieser Ansicht" };
             ui.label(format!("{scope} werden nach Aufnahmezeit gestapelt. Bilder, die schon in einem Stapel sind, bleiben dort."));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label("Neuer Stapel nach einer Pause von mehr als");
-                ui.add(egui::DragValue::new(&mut dialog.seconds).range(0.0..=3600.0).speed(0.2).max_decimals(0).suffix(" s"));
+            dialog::card(ui, "Trennen", None, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Neuer Stapel nach einer Pause von mehr als");
+                    ui.add(egui::DragValue::new(&mut dialog.seconds).range(0.0..=3600.0).speed(0.2).max_decimals(0).suffix(" s"));
+                });
             });
-            ui.add_space(12.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(Button::new("Stapeln").min_size(vec2(90.0, 26.0))).clicked() {
+            dialog::footer(ui, |ui| {
+                if ui.add(dialog::primary("Stapeln")).clicked() {
                     run = true;
                 }
-                if ui.add(Button::new("Abbrechen").min_size(vec2(90.0, 26.0))).clicked() {
+                if ui.add(dialog::secondary("Abbrechen")).clicked() {
                     cancel = true;
                 }
             });

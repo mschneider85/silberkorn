@@ -8,6 +8,11 @@ use crate::app::App;
 use crate::workers::TILE;
 use crate::{theme, widgets};
 
+/// Range of the zoom field in percent of the full resolution (the slider: fitted to 400 %).
+const ZOOM_PCT: (f32, f32) = (2.0, 1600.0);
+/// Upper end of the zoom slider in percent.
+const ZOOM_SLIDER_MAX: f32 = 400.0;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SpeedParam {
     Exposure,
@@ -91,7 +96,7 @@ impl App {
                     Some((ic, title, hint)) => {
                         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Center)));
                         child.add_space((rect.height() / 2.0 - 90.0).max(0.0));
-                        widgets::empty_state(&mut child, ic, &title, hint);
+                        widgets::empty_state(&mut child, ic, &title, &hint);
                     }
                     None => self.welcome(ui, rect),
                 }
@@ -149,6 +154,7 @@ impl App {
             });
             if notches != 0.0 {
                 self.speed_edit(param, notches);
+                widgets::mark_stepped(ui.ctx(), egui::Id::new("speed_edit").with(param as u8));
                 // egui smooths scrolling over several frames; ignore the remainder for zooming.
                 self.zoom_blocked_until = ui.input(|i| i.time) + 0.5;
             }
@@ -413,12 +419,13 @@ impl App {
         // File name and zoom are shown in the status bar; the viewer only marks active modes.
         let full_w = self.full_output_width().unwrap_or(size.x);
         self.zoom_pct = Some(scale * ppp * size.x / full_w.max(1.0) * 100.0);
+        self.zoom_fit_pct = Some(fit * ppp * size.x / full_w.max(1.0) * 100.0);
         let mode = if let Some(msg) = &self.speed_message {
             Some(msg.trim().to_string())
         } else if self.crop_tool.is_some() {
-            Some("Zuschneiden – Enter übernimmt, Esc beendet".into())
+            Some("Zuschneiden – Enter übernimmt, Esc bricht ab".into())
         } else if self.keystone_guides_active() {
-            Some("Trapezkorrektur – Linien an Kanten legen, Enter wendet an, Esc bricht ab".into())
+            Some("Trapezkorrektur – Linien an Kanten legen, Enter übernimmt, Esc bricht ab".into())
         } else if self.straighten_tool.is_some() {
             Some("Geraderichten – Linie entlang des Horizonts ziehen".into())
         } else if self.picking_wb {
@@ -462,9 +469,7 @@ impl App {
                     // The recipe's name only if it says more than the format.
                     let name = if r.name.is_empty() || r.name.eq_ignore_ascii_case(r.format.label()) { String::new() } else { format!("{}  ·  ", r.name) };
                     let warn = if self.softproof.settings.gamut_warning && r.output_space != sk_core::color::OutputSpace::ProPhoto { "  ·  beschnitten: magenta" } else { "" };
-                    // Enlarging takes far too long for a proof: it shows the image without.
-                    let up = if r.upscale_for(p.width, p.height).is_some() { "  ·  ohne KI-Vergrößern" } else { "" };
-                    format!("PROOF  ·  {name}{format}  ·  {} × {} px  ·  {}  ·  {}{up}{warn}", p.width, p.height, r.output_space.label(), file_size(p.file_size))
+                    format!("PROOF  ·  {name}{format}  ·  {} × {} px  ·  {}  ·  {}{warn}", p.width, p.height, r.output_space.label(), file_size(p.file_size))
                 }
                 (_, Some(r)) => format!("PROOF  ·  {}  ·  wird berechnet …", r.name),
                 (_, None) => "PROOF  ·  kein Ausgabe-Rezept".into(),
@@ -507,9 +512,12 @@ impl App {
         let aspect = img_rect.width() / img_rect.height();
         let max = vec2(200.0, 140.0);
         let size = if aspect > max.x / max.y { vec2(max.x, max.x / aspect) } else { vec2(max.y * aspect, max.y) };
-        let nav = Rect::from_min_size(viewport.right_bottom() - size - vec2(16.0, 16.0), size);
+        // Below the image, the zoom control.
+        const ROW: f32 = 26.0;
+        let nav = Rect::from_min_size(viewport.right_bottom() - size - vec2(16.0, 16.0 + ROW), size);
+        let row = Rect::from_min_size(nav.left_bottom() + vec2(0.0, 4.0), vec2(size.x, ROW - 4.0));
         let painter = ui.painter_at(viewport);
-        painter.rect_filled(nav.expand(4.0), 5.0, Color32::from_black_alpha(200));
+        painter.rect_filled(nav.union(row).expand(4.0), 5.0, Color32::from_black_alpha(200));
         painter.image(texture, nav, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
 
         // The visible part, everything else dimmed.
@@ -542,6 +550,51 @@ impl App {
             self.pan += viewport.center() - target;
             ui.ctx().request_repaint();
         }
+        let mut row_ui = ui.new_child(egui::UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        self.zoom_control(&mut row_ui);
+    }
+
+    /// Zoom slider from fitted to 400 % (logarithmic; double-click: 100 %) and the zoom in
+    /// percent, which can be typed in.
+    pub(crate) fn zoom_control(&mut self, ui: &mut Ui) {
+        let Some(pct) = self.zoom_pct else { return };
+        let mut wanted = None;
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let field_w = 62.0;
+            let (lo, hi) = ZOOM_PCT;
+            let fit = self.zoom_fit_pct.unwrap_or(lo).clamp(lo, ZOOM_SLIDER_MAX - 1.0);
+            let mut log = pct.clamp(fit, ZOOM_SLIDER_MAX).log2();
+            let slider_w = (ui.available_width() - field_w - 6.0).max(40.0);
+            let range = fit.log2()..=ZOOM_SLIDER_MAX.log2();
+            if widgets::compact_slider(ui, "Zoom", &mut log, range, 100f32.log2().clamp(fit.log2(), ZOOM_SLIDER_MAX.log2()), slider_w) {
+                // At its left end: fitted again (the view follows the window size then).
+                wanted = Some(if log <= fit.log2() + 0.01 { 0.0 } else { log.exp2() });
+            }
+            let mut typed = pct;
+            let drag = egui::DragValue::new(&mut typed).range(lo..=hi).suffix(" %").fixed_decimals(0).speed(0.5).update_while_editing(false);
+            if ui.add_sized(vec2(field_w, 20.0), drag).on_hover_text("Zoomstufe: ziehen, oder klicken und eine Zahl eingeben").changed() {
+                wanted = Some(typed);
+            }
+        });
+        match wanted {
+            Some(p) if p <= 0.0 => self.zoom_fit(),
+            Some(p) => self.set_zoom_pct(p),
+            None => return,
+        }
+        ui.ctx().request_repaint();
+    }
+
+    /// Zooms to `pct` of the full resolution; the spot in the middle of the view stays there.
+    pub fn set_zoom_pct(&mut self, pct: f32) {
+        let (Some(full_w), Some(size)) = (self.full_output_width(), self.image_size()) else { return };
+        let (lo, hi) = ZOOM_PCT;
+        // As far as the mouse wheel goes.
+        let new = (pct.clamp(lo, hi) / 100.0 * full_w / size.x / self.pixels_per_point).min(16.0);
+        let old = self.zoom.or_else(|| self.view_geometry.map(|(_, r)| r.width() / size.x)).unwrap_or(new);
+        self.pan *= new / old.max(f32::EPSILON);
+        self.zoom = Some(new);
+        self.print.zoom = false;
     }
 
     /// Changes a value by one step: on the active layer, or on the background.
@@ -844,11 +897,16 @@ impl App {
             let r = Rect::from_center_size(img_area.center(), s * k);
             painter.rect_filled(r.translate(vec2(0.0, 2.0)).expand(1.0), 2.0, Color32::from_black_alpha(70));
             painter.image(t.id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+            let path = entry.path.clone();
+            if let Some(mask) = self.thumb_focus_overlay(ui.ctx(), &path, s.x / s.y) {
+                painter.image(mask, r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+            }
         } else {
             // Not loaded yet: a quiet placeholder of the usual 3:2 shape.
             let k = (img_area.width() / 3.0).min(img_area.height() / 2.0);
             painter.rect_filled(Rect::from_center_size(img_area.center(), vec2(3.0 * k, 2.0 * k)), 2.0, Color32::from_rgb(42, 42, 46));
         }
+        let entry = &self.entries[idx];
         let name_font = egui::FontId::proportional(11.5);
         let mut job = egui::text::LayoutJob::simple_singleline(entry.name.clone(), name_font, if is_primary { Color32::WHITE } else { theme::TEXT_DIM });
         job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 12.0);
@@ -941,16 +999,24 @@ impl App {
     }
 
     /// Icon, title and hint for an empty folder of the open session (`None` outside a session).
-    pub(crate) fn empty_session_folder(&self) -> Option<(&'static str, String, &'static str)> {
+    pub(crate) fn empty_session_folder(&self) -> Option<(&'static str, String, String)> {
         use sk_core::session::SessionFolder;
         let s = self.session.as_ref()?;
         let folder = SessionFolder::ALL.into_iter().find(|f| matches!(&self.scope, sk_core::catalog::Scope::Folder { path, .. } if *path == s.folder(*f)));
+        // "mit Strg+J" only while the command has a shortcut (it may have been removed).
+        let with = |id: &str| match crate::commands::shortcut_of(id) {
+            k if k.is_empty() => String::new(),
+            k => format!(" mit {k}"),
+        };
         Some(match folder {
-            Some(SessionFolder::Trash) => (theme::icon::TRASH, "Der Papierkorb ist leer".into(), "Mit Strg+Entf verschobene Bilder liegen hier, bis er geleert wird"),
-            Some(SessionFolder::Capture) => (crate::session::folder_icon(SessionFolder::Capture), "Noch keine Aufnahmen".into(), "Bilder importieren oder den Aufnahmeordner der Kamera hierher legen"),
-            Some(SessionFolder::Selects) => (crate::session::folder_icon(SessionFolder::Selects), "Noch keine Auswahl".into(), "Gute Bilder mit Strg+J hierher verschieben"),
-            Some(f) => (crate::session::folder_icon(f), format!("„{}“ ist leer", f.label()), "Exportierte Bilder landen hier"),
-            None => (theme::icon::IMAGES, "Keine Bilder in dieser Ansicht".into(), "Einen anderen Ordner der Session wählen"),
+            Some(SessionFolder::Trash) => (theme::icon::TRASH, "Der Papierkorb ist leer".into(), match crate::commands::shortcut_of("trash") {
+                k if k.is_empty() => "Gelöschte Bilder liegen hier, bis er geleert wird".into(),
+                k => format!("Mit {k} verschobene Bilder liegen hier, bis er geleert wird"),
+            }),
+            Some(SessionFolder::Capture) => (crate::session::folder_icon(SessionFolder::Capture), "Noch keine Aufnahmen".into(), "Bilder importieren oder den Aufnahmeordner der Kamera hierher legen".into()),
+            Some(SessionFolder::Selects) => (crate::session::folder_icon(SessionFolder::Selects), "Noch keine Auswahl".into(), format!("Gute Bilder{} hierher verschieben", with("to-selects"))),
+            Some(f) => (crate::session::folder_icon(f), format!("„{}“ ist leer", f.label()), "Exportierte Bilder landen hier".into()),
+            None => (theme::icon::IMAGES, "Keine Bilder in dieser Ansicht".into(), "Einen anderen Ordner der Session wählen".into()),
         })
     }
 
@@ -969,20 +1035,24 @@ impl App {
             let b = egui::Button::new(egui::RichText::new(text).size(14.0).color(Color32::WHITE)).min_size(vec2(220.0, 36.0)).corner_radius(8);
             if primary { b.fill(theme::ACCENT) } else { b }
         };
-        if ui.add(big(format!("{}  Ordner öffnen …", theme::icon::FOLDER_OPEN), true)).on_hover_text("Strg+O").clicked() {
+        if ui.add(big(format!("{}  Ordner öffnen …", theme::icon::FOLDER_OPEN), true)).on_hover_text(crate::commands::shortcut_of("open-folder")).clicked() {
             self.open_folder_dialog();
         }
         ui.add_space(4.0);
-        if ui.add(big(format!("{}  Neue Session …", theme::icon::FOLDER_STAR), false)).on_hover_text("Strg+N").clicked() {
+        if ui.add(big(format!("{}  Neue Session …", theme::icon::FOLDER_STAR), false)).on_hover_text(crate::commands::shortcut_of("new-session")).clicked() {
             let folder = self.folder.clone();
             self.session_ui.start_new(&folder);
         }
         ui.add_space(4.0);
-        if ui.add(big(format!("{}  Session öffnen …", theme::icon::FOLDER_OPEN), false)).on_hover_text("Strg+Umschalt+O").clicked() {
+        if ui.add(big(format!("{}  Session öffnen …", theme::icon::FOLDER_OPEN), false)).on_hover_text(crate::commands::shortcut_of("open-session")).clicked() {
             self.open_session_dialog();
         }
         ui.add_space(18.0);
-        ui.label(egui::RichText::new("Tipp: Strg+K findet jede Funktion, F1 zeigt alle Tastenkürzel.").small().color(theme::TEXT_FAINT));
+        let tip = match crate::commands::shortcut_of("shortcuts") {
+            k if k.is_empty() => "Tipp: Strg+K findet jede Funktion, auch die Tastenkürzel.".to_string(),
+            k => format!("Tipp: Strg+K findet jede Funktion, {k} zeigt alle Tastenkürzel."),
+        };
+        ui.label(egui::RichText::new(tip).small().color(theme::TEXT_FAINT));
     }
 
     pub fn filmstrip(&mut self, ui: &mut Ui) {

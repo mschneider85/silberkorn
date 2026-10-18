@@ -264,4 +264,31 @@ mod tests {
         let out = apply(&[Tool::HighlightsShadows], &from, &target);
         assert_eq!((out.exposure, out.contrast, out.highlights, out.rotation), (-1.0, 0.0, 50.0, 2));
     }
+
+    #[test]
+    fn hidden_tools_take_no_effect_but_keep_their_settings() {
+        let mut a = Adjustments { exposure: 1.0, contrast: 20.0, highlights: -40.0, ..Default::default() };
+        a.geometry.crop = CropRect { x: 0.1, y: 0.1, w: 0.5, h: 0.5 };
+        assert!(matches!(a.visible(), std::borrow::Cow::Borrowed(_)));
+        a.toggle_hidden(Tool::Exposure);
+        a.toggle_hidden(Tool::Crop);
+        let v = a.visible();
+        assert_eq!((v.exposure, v.contrast, v.highlights), (0.0, 0.0, -40.0));
+        assert_eq!(v.geometry.crop, CropRect::default());
+        assert!(v.hidden.is_empty());
+        assert_eq!((a.exposure, a.geometry.crop.w), (1.0, 0.5));
+        // Switched on again: as before.
+        a.toggle_hidden(Tool::Exposure);
+        assert_eq!(a.hidden, vec![Tool::Crop]);
+        assert_eq!(a.visible().exposure, 1.0);
+    }
+
+    #[test]
+    fn hidden_tools_are_saved_only_when_there_are_some() {
+        let mut a = Adjustments::default();
+        assert!(!serde_json::to_string(&a).unwrap().contains("hidden"));
+        a.toggle_hidden(Tool::Vignette);
+        let back: Adjustments = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+        assert_eq!(back.hidden, vec![Tool::Vignette]);
+    }
 }

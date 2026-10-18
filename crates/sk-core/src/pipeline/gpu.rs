@@ -30,6 +30,7 @@ const IMG_PLANES: Kernel = kernel!("img_planes");
 const DOWNSAMPLE: Kernel = kernel!("downsample");
 const UPSAMPLE_APPLY: Kernel = kernel!("upsample_apply");
 const NR_COMBINE: Kernel = kernel!("nr_combine");
+const DEFRINGE: Kernel = kernel!("defringe");
 const DARK_POOL: Kernel = kernel!("dark_pool");
 const DEVELOP: Kernel = kernel!("develop");
 const SHARPEN: Kernel = kernel!("sharpen");
@@ -39,8 +40,8 @@ const DISPLAY: Kernel = kernel!("display");
 const OUTPUT: Kernel = kernel!("output");
 const MEDIAN: Kernel = kernel!("median");
 
-const ALL: [Kernel; 16] =
-    [RESAMPLE, BOX_H, BOX_V, PLANE_OP, IMG_PLANES, DOWNSAMPLE, UPSAMPLE_APPLY, NR_COMBINE, DARK_POOL, DEVELOP, SHARPEN, GLOW, FINISH, DISPLAY, OUTPUT, MEDIAN];
+const ALL: [Kernel; 17] =
+    [RESAMPLE, BOX_H, BOX_V, PLANE_OP, IMG_PLANES, DOWNSAMPLE, UPSAMPLE_APPLY, NR_COMBINE, DEFRINGE, DARK_POOL, DEVELOP, SHARPEN, GLOW, FINISH, DISPLAY, OUTPUT, MEDIAN];
 
 /// Sets up the graphics card and compiles all kernels (takes a moment; call it early in
 /// the background so that the first rendering does not wait for it).
@@ -625,8 +626,28 @@ impl Processor {
         };
         let a = ops.args(&args);
         ops.enc.run_2d(RESAMPLE, &[&a, &input, &out], ext.w, ext.h);
+        self.defringe_gpu(ops, &out, ext.w, ext.h, plan.scale);
         self.noise_reduction_gpu(ops, &out, ext.w, ext.h, plan.scale);
         out
+    }
+
+    fn defringe_gpu(&self, ops: &mut Ops, img: &Buffer, w: usize, h: usize, scale: f32) {
+        #[repr(C)]
+        #[derive(Clone, Copy, Pod, Zeroable)]
+        struct Args {
+            n: u32,
+            purple: f32,
+            green: f32,
+        }
+        let Some([purple, green]) = defringe_amounts(&self.adj.lens) else { return };
+        let n = w * h;
+        let s = ops.img_planes(IMG_SQRT_LUMA, img, n).0;
+        let sq = ops.op(OP_SQUARE, 0.0, &s, &s, &s, n);
+        let sigma = defringe_sigma(scale);
+        let mean = ops.gaussian(&s, w, h, sigma);
+        let mean_sq = ops.gaussian(&sq, w, h, sigma);
+        let a = ops.args(&Args { n: n as u32, purple, green });
+        ops.enc.run_1d(DEFRINGE, &[&a, img, &mean, &mean_sq], n);
     }
 
     fn noise_reduction_gpu(&self, ops: &mut Ops, img: &Buffer, w: usize, h: usize, scale: f32) {
@@ -1591,7 +1612,7 @@ mod tests {
                         crop: CropRect { x: 0.1, y: 0.05, w: 0.8, h: 0.85 },
                         ..Default::default()
                     },
-                    lens: LensCorrection { distortion: 30.0, fisheye: 150.0, ca_red: 40.0, ca_blue: -30.0, vignetting: 40.0, ..Default::default() },
+                    lens: LensCorrection { distortion: 30.0, fisheye: 150.0, ca_red: 40.0, ca_blue: -30.0, defringe_purple: 80.0, defringe_green: 60.0, vignetting: 40.0, ..Default::default() },
                     ..plain.clone()
                 },
                 Default::default(),

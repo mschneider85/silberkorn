@@ -2,12 +2,13 @@
 
 use std::path::PathBuf;
 
-use egui::{Button, Color32, RichText, Ui, vec2};
+use egui::{Button, Ui};
 use sk_core::catalog::Scope;
 use sk_core::sidecar::{self, Sidecar};
 use sk_core::{cache, variant};
 
 use crate::app::App;
+use crate::dialog::{self, Dialog, Tone};
 use crate::session::PendingAction;
 use crate::theme::icon;
 
@@ -114,10 +115,10 @@ impl App {
     pub fn variant_menu(&mut self, ui: &mut Ui) {
         let current = self.current_path();
         let has = current.is_some();
-        if ui.add_enabled(has, Button::new(format!("{}  Neue Variante", icon::COPY_SIMPLE)).shortcut_text("F2")).clicked() {
+        if ui.add_enabled(has, Button::new(format!("{}  Neue Variante", icon::COPY_SIMPLE)).shortcut_text(crate::commands::shortcut_of("new-variant"))).clicked() {
             self.pending = Some(PendingAction::NewVariant { clone: false });
         }
-        if ui.add_enabled(has, Button::new(format!("{}  Variante klonen", icon::COPY)).shortcut_text("F3")).clicked() {
+        if ui.add_enabled(has, Button::new(format!("{}  Variante klonen", icon::COPY)).shortcut_text(crate::commands::shortcut_of("clone-variant"))).clicked() {
             self.pending = Some(PendingAction::NewVariant { clone: true });
         }
         let deletable = current.as_ref().is_some_and(|p| variant::number(p) > 1);
@@ -132,23 +133,18 @@ impl App {
     pub(crate) fn variant_dialogs(&mut self, ctx: &egui::Context) {
         let Some(paths) = self.confirm_delete_variant.clone() else { return };
         let (mut confirmed, mut cancel) = (false, false);
-        let modal = egui::Modal::new(egui::Id::new("delete_variant")).show(ctx, |ui| {
-            ui.set_width(380.0);
-            let title = if paths.len() == 1 { "Variante löschen".to_string() } else { format!("{} Varianten löschen", paths.len()) };
-            ui.label(RichText::new(format!("{}  {title}", icon::X_SQUARE)).size(17.0).strong().color(Color32::WHITE));
-            ui.add_space(8.0);
+        let title = if paths.len() == 1 { "Variante löschen".to_string() } else { format!("{} Varianten löschen", paths.len()) };
+        let modal = Dialog::new("delete_variant", icon::X_SQUARE, title).subtitle("Die RAW-Dateien bleiben erhalten").tone(Tone::Danger).width(420.0).show(ctx, |ui| {
             let what = match paths.as_slice() {
                 [p] => format!("„{}“ wird", variant::display_name(p)),
                 _ => format!("{} Varianten werden", paths.len()),
             };
             ui.label(format!("{what} mit allen Einstellungen gelöscht. Die RAW-Dateien und ihre anderen Varianten bleiben erhalten."));
-            ui.add_space(12.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let del = Button::new(RichText::new("Löschen").color(Color32::WHITE)).fill(Color32::from_rgb(180, 60, 50)).min_size(vec2(90.0, 26.0));
-                if ui.add(del).clicked() {
+            dialog::footer(ui, |ui| {
+                if ui.add(dialog::danger("Löschen")).clicked() {
                     confirmed = true;
                 }
-                if ui.add(Button::new("Abbrechen").min_size(vec2(90.0, 26.0))).clicked() {
+                if ui.add(dialog::secondary("Abbrechen")).clicked() {
                     cancel = true;
                 }
             });

@@ -4,11 +4,12 @@
 
 use std::collections::BTreeSet;
 
-use egui::{Color32, RichText, vec2};
+use egui::{Color32, RichText};
 use sk_core::params::Adjustments;
 use sk_core::tools::{self, Tool};
 
 use crate::app::App;
+use crate::dialog::{self, Dialog};
 use crate::theme::{self, icon};
 use crate::widgets::image_count;
 
@@ -124,15 +125,9 @@ impl App {
         let Some(chosen) = self.copy_dialog.tools.as_mut() else { return };
         let adj = &cur.adjustments;
         let source = sk_core::variant::display_name(&cur.meta.path);
-        let (mut open, mut copy, mut apply) = (true, false, false);
-        egui::Window::new(format!("{}  Anpassungen kopieren", icon::COPY))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, vec2(0.0, 0.0))
-            .show(ctx, |ui| {
-                ui.label(RichText::new(format!("Von {source}")).color(theme::TEXT_DIM));
-                ui.add_space(6.0);
+        let (mut close, mut copy, mut apply) = (false, false, false);
+        let modal = Dialog::new("copy_adjustments", icon::COPY, "Anpassungen kopieren").subtitle(format!("Von {source}")).width(520.0).show(ctx, |ui| {
+            dialog::card(ui, "Werkzeuge", None, |ui| {
                 tool_checkboxes(ui, adj, chosen);
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Wählen:").color(theme::TEXT_DIM));
@@ -146,15 +141,17 @@ impl App {
                         chosen.clear();
                     }
                 });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    copy = ui.add_enabled(!chosen.is_empty(), egui::Button::new("Kopieren")).on_hover_text("Mit Strg+Umschalt+V auf die Auswahl anwenden").clicked();
-                    apply = ui
-                        .add_enabled(!chosen.is_empty() && !others.is_empty(), egui::Button::new(if others.is_empty() { "Auf Auswahl anwenden".to_string() } else { format!("Auf {} anwenden", image_count(others.len())) }))
-                        .on_disabled_hover_text("Weitere Bilder auswählen, um sie gleich zu übernehmen")
-                        .clicked();
-                });
             });
+            dialog::footer(ui, |ui| {
+                copy = ui.add_enabled(!chosen.is_empty(), dialog::primary("Kopieren")).on_hover_text("Mit Strg+Umschalt+V auf die Auswahl anwenden").clicked();
+                let to = if others.is_empty() { "Auf Auswahl anwenden".to_string() } else { format!("Auf {} anwenden", image_count(others.len())) };
+                apply = ui
+                    .add_enabled(!chosen.is_empty() && !others.is_empty(), dialog::secondary(to))
+                    .on_disabled_hover_text("Weitere Bilder auswählen, um sie gleich zu übernehmen")
+                    .clicked();
+                close = ui.add(dialog::secondary("Abbrechen")).clicked();
+            });
+        });
         if copy || apply {
             let tools: Vec<Tool> = chosen.iter().copied().collect();
             let from = adj.clone();
@@ -166,7 +163,7 @@ impl App {
             }
             self.clipboard = Some(Clipboard { adjustments: from, tools });
         }
-        if !open || ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        if close || modal.should_close() {
             self.copy_dialog.tools = None;
         }
     }

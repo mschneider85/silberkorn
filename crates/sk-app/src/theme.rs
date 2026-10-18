@@ -39,6 +39,8 @@ pub fn install(ctx: &egui::Context) {
     fonts.families.entry(FontFamily::Monospace).or_default().push("phosphor".into());
     ctx.set_fonts(fonts);
 
+    // Always dark: otherwise egui follows a light system theme and ignores the visuals below.
+    ctx.set_theme(egui::Theme::Dark);
     let mut v = egui::Visuals::dark();
     v.panel_fill = PANEL;
     v.window_fill = Color32::from_rgb(40, 40, 44);

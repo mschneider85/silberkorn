@@ -65,6 +65,12 @@ fn on_layer(a: &App) -> bool {
     a.on_layer()
 }
 
+/// Shift held: the arrow keys extend the selection (Shift+arrow reaches the unshifted command,
+/// see `command_shortcuts`).
+fn shift(ctx: &egui::Context) -> bool {
+    ctx.input(|i| i.modifiers.shift)
+}
+
 fn tool(a: &mut App, t: LocalTool) {
     a.tab = t.tab();
     if a.local_tool != Some(t) {
@@ -101,7 +107,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("paste-adjustments", icon::CLIPBOARD_TEXT, "Anpassungen auf Auswahl anwenden", "Bearbeiten", [CTRL_SHIFT => Key::V], "paste einfügen", |a| a.clipboard.is_some() && !a.on_layer(), |a, _| a.paste_adjustments()),
     cmd!("reset", icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", "Bearbeiten", [], "reset", has_image, |a, _| a.reset_adjustments()),
     cmd!("select-all", icon::CHECK_SQUARE, "Alle auswählen", "Bearbeiten", [CTRL => Key::A], "select all", has_images, |a, _| a.select_all()),
-    cmd!("gpu", icon::LIGHTNING, "Grafikkarte und KI-Modelle …", "Bearbeiten", [], "gpu grafikkarte ki modelle download laden zwischenspeicher", always, |a, _| a.show_gpu_dialog = true),
+    cmd!("gpu", icon::LIGHTNING, "Grafikkarte …", "Bearbeiten", [], "gpu grafikkarte ki beschleunigung directml zwischenspeicher", always, |a, _| a.show_gpu_dialog = true),
     // Foto und Entwickeln
     cmd!("rotate-left", icon::ARROW_COUNTER_CLOCKWISE, "Links drehen", "Entwickeln", [CTRL => Key::OpenBracket], "rotate", image_tool, |a, _| a.rotate(3)),
     cmd!("rotate-right", icon::ARROW_CLOCKWISE, "Rechts drehen", "Entwickeln", [CTRL => Key::CloseBracket], "rotate", image_tool, |a, _| a.rotate(1)),
@@ -159,10 +165,10 @@ pub const COMMANDS: &[Command] = &[
         a.add_current_as_look_ref();
         a.tab = Tab::Color;
     }),
-    cmd!("previous", icon::CARET_LEFT, "Vorheriges Bild", "Foto", [NONE => Key::ArrowLeft], "zurück previous", has_images, |a, _| a.step(-1)),
-    cmd!("next", icon::CARET_RIGHT, "Nächstes Bild", "Foto", [NONE => Key::ArrowRight], "weiter next", has_images, |a, _| a.step(1)),
-    cmd!("row-up", icon::CARET_UP, "Bild darüber", "Foto", [NONE => Key::ArrowUp], "raster zeile hoch up", in_grid, |a, _| a.step_row(-1)),
-    cmd!("row-down", icon::CARET_DOWN, "Bild darunter", "Foto", [NONE => Key::ArrowDown], "raster zeile runter down", in_grid, |a, _| a.step_row(1)),
+    cmd!("previous", icon::CARET_LEFT, "Vorheriges Bild", "Foto", [NONE => Key::ArrowLeft], "zurück previous", has_images, |a, ctx| a.step(-1, shift(ctx))),
+    cmd!("next", icon::CARET_RIGHT, "Nächstes Bild", "Foto", [NONE => Key::ArrowRight], "weiter next", has_images, |a, ctx| a.step(1, shift(ctx))),
+    cmd!("row-up", icon::CARET_UP, "Bild darüber", "Foto", [NONE => Key::ArrowUp], "raster zeile hoch up", in_grid, |a, ctx| a.step_row(-1, shift(ctx))),
+    cmd!("row-down", icon::CARET_DOWN, "Bild darunter", "Foto", [NONE => Key::ArrowDown], "raster zeile runter down", in_grid, |a, ctx| a.step_row(1, shift(ctx))),
     cmd!("to-selects", icon::FOLDER_SIMPLE_STAR, "Nach „Auswahl“ verschieben", "Foto", [CTRL => Key::J], "selects session", in_session, |a, _| a.move_to_session_folder(sk_core::session::SessionFolder::Selects)),
     cmd!("trash", icon::TRASH, "In den Papierkorb", "Foto", [CTRL => Key::Delete, CTRL => Key::Backspace], "löschen delete", has_selection, |a, _| a.trash_selection()),
     // Ebenen und Retusche
@@ -214,7 +220,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("side-by-side", icon::COLUMNS, "Vorher | Nachher nebeneinander", "Ansicht", [SHIFT => Key::U], "side by side", has_image, |a, _| a.toggle_side_by_side()),
     cmd!("multi-view", icon::SQUARES_FOUR, "Auswahl nebeneinander vergleichen", "Ansicht", [], "compare mehrere", always, |a, _| a.multi_view = !a.multi_view),
     cmd!("clip-warning", icon::WARNING, "Belichtungswarnung", "Ansicht", [NONE => Key::E], "clipping überbelichtet", has_image, |a, _| a.toggle_clip_warning()),
-    cmd!("focus-mask", icon::CROSSHAIR, "Fokusmaske", "Ansicht", [NONE => Key::K], "schärfe focus peaking", has_image, |a, _| a.toggle_focus_mask()),
+    cmd!("focus-mask", icon::CROSSHAIR, "Schärfemaske", "Ansicht", [NONE => Key::K], "fokusmaske fokus focus peaking", has_image, |a, _| a.toggle_focus_mask()),
     cmd!("proof", icon::FILE_MAGNIFYING_GLASS, "Ausgabevorschau", "Ansicht", [NONE => Key::P], "vorschau export proof rezept", has_image, |a, _| a.toggle_proof()),
     cmd!("softproof", icon::PRINTER, "Softproof", "Ansicht", [SHIFT => Key::P], "drucker profil gamut", has_image, |a, _| a.toggle_softproof()),
     cmd!("print-preview", icon::PRINTER, "Druckvorschau", "Ansicht", [CTRL => Key::P], "drucken papier", has_image, |a, _| a.toggle_print_preview()),
@@ -228,8 +234,14 @@ pub const COMMANDS: &[Command] = &[
     // Hilfe
     cmd!("shortcuts", icon::KEYBOARD, "Tastenkürzel", "Hilfe", [NONE => Key::F1], "shortcuts hilfe", always, |a, _| a.show_shortcuts = !a.show_shortcuts),
     cmd!("update", icon::ARROW_CIRCLE_UP, "Nach Updates suchen …", "Hilfe", [], "update aktualisieren version release neu", always, |a, _| a.update_dialog_open()),
+    cmd!("licenses", icon::SCALES, "Lizenzen …", "Hilfe", [], "lizenzen licenses modelle lensfun urheber", always, |a, _| a.show_licenses = true),
     cmd!("about", icon::INFO, "Über Silberkorn", "Hilfe", [], "about version", always, |a, _| a.splash = Some(crate::splash::Splash::about())),
 ];
+
+/// The shortcut of a command, as shown in menus (empty without one).
+pub fn shortcut_of(id: &str) -> String {
+    get(id).map(|c| c.shortcut()).unwrap_or_default()
+}
 
 pub fn get(id: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|c| c.id == id)
@@ -494,13 +506,25 @@ impl App {
 
     /// Like [`Self::command_item`] with a label of its own (e.g. with a count).
     pub(crate) fn command_item_labeled(&mut self, ui: &mut egui::Ui, id: &str, label: &str) {
-        let Some(c) = get(id) else { return };
+        if self.command_button_labeled(ui, id, label)
+            && let Some(c) = get(id)
+        {
+            (c.run)(self, ui.ctx());
+        }
+    }
+
+    /// The menu entry of a command without running it: true when clicked. For menus drawn
+    /// while the command can't run yet (see `PendingAction`).
+    pub(crate) fn command_button(&self, ui: &mut egui::Ui, id: &str) -> bool {
+        get(id).is_some_and(|c| self.command_button_labeled(ui, id, c.label))
+    }
+
+    fn command_button_labeled(&self, ui: &mut egui::Ui, id: &str, label: &str) -> bool {
+        let Some(c) = get(id) else { return false };
         let text = format!("{}  {label}", c.icon);
         let text = if is_ai(id) { crate::widgets::ai_text(ui, &text) } else { text.into() };
         let button = egui::Button::new(text).shortcut_text(c.shortcut());
-        if ui.add_enabled((c.enabled)(self), button).clicked() {
-            (c.run)(self, ui.ctx());
-        }
+        ui.add_enabled((c.enabled)(self), button).clicked()
     }
 }
 

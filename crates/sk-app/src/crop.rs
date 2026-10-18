@@ -24,6 +24,8 @@ enum Side {
 #[derive(Clone, Debug, Default)]
 pub struct CropTool {
     drag: Option<(Handle, CropRect, Pos2)>,
+    /// Crop and aspect ratio when the tool opened, for Esc.
+    start: Option<(CropRect, sk_core::params::AspectRatio, bool)>,
 }
 
 /// Straighten tool: the user draws a line that should become horizontal or vertical. With
@@ -52,6 +54,8 @@ pub struct KeystoneGuides {
     pub(crate) lines: Vec<([[f32; 2]; 2], bool)>,
     /// Line and end being dragged (2: the whole line), and the last pointer position.
     drag: Option<(usize, usize, Pos2)>,
+    /// A line was moved: switching to another tool applies them instead of dropping them.
+    moved: bool,
 }
 
 /// Grabbing distance of a line's end points and of the line itself, in screen points.
@@ -104,7 +108,7 @@ impl App {
         if mode != GuideMode::Vertical {
             lines.extend([0.3, 0.7].map(|y| ([src(0.2, y), src(0.8, y)], false)));
         }
-        self.straighten_tool = Some(StraightenTool { line: None, guides: Some(KeystoneGuides { mode, lines, drag: None }) });
+        self.straighten_tool = Some(StraightenTool { line: None, guides: Some(KeystoneGuides { mode, lines, drag: None, moved: false }) });
     }
 
     /// The straighten line tool is open (not the keystone lines).
@@ -178,6 +182,7 @@ impl App {
                 e => line[e] = to_source(p),
             }
             guides.drag = Some((i, e, p));
+            guides.moved = true;
         }
         if response.drag_stopped() {
             guides.drag = None;
@@ -206,12 +211,12 @@ impl App {
         // Apply and cancel, at the bottom of the image.
         let size = vec2(110.0, 28.0);
         let at = pos2(img_rect.center().x, img_rect.bottom().min(ui.clip_rect().bottom()) - 44.0);
-        let apply = ui.put(Rect::from_center_size(at - vec2(size.x / 2.0 + 4.0, 0.0), size), egui::Button::new(format!("{}  Anwenden", crate::theme::icon::CHECK)));
+        let apply = ui.put(Rect::from_center_size(at - vec2(size.x / 2.0 + 4.0, 0.0), size), egui::Button::new(format!("{}  Übernehmen", crate::theme::icon::CHECK)));
         let cancel = ui.put(Rect::from_center_size(at + vec2(size.x / 2.0 + 4.0, 0.0), size), egui::Button::new("Abbrechen"));
         if apply.on_hover_text("Enter").clicked() {
             self.apply_keystone_guides();
         } else if cancel.on_hover_text("Esc").clicked() {
-            self.straighten_tool = None;
+            self.cancel_viewer_tools();
         }
     }
 }
@@ -278,12 +283,38 @@ impl App {
         if self.local_tool.take().is_some() {
             self.request_render();
         }
+        // Like the crop, keystone lines the user placed are kept when another tool starts.
+        if self.straighten_tool.as_ref().and_then(|t| t.guides.as_ref()).is_some_and(|g| g.moved) {
+            self.apply_keystone_guides();
+        }
         self.straighten_tool = None;
         self.picking_wb = false;
         self.picking_skin = false;
         self.picking_focus = false;
         self.local_drag = Default::default();
         self.finish_crop_tool();
+    }
+
+    /// Esc: like [`Self::end_viewer_tools`], but without keeping what the open tool changed: the
+    /// crop goes back to how it was when the tool opened, keystone lines are dropped.
+    pub fn cancel_viewer_tools(&mut self) {
+        if self.keystone_guides_active() {
+            self.straighten_tool = None;
+        }
+        if let Some((crop, aspect, portrait)) = self.crop_tool.as_ref().and_then(|t| t.start)
+            && self.current.as_ref().is_some_and(|c| {
+                let g = &c.adjustments.geometry;
+                (g.crop, g.aspect, g.aspect_portrait) != (crop, aspect, portrait)
+            })
+        {
+            self.edit(|a| {
+                a.geometry.crop = crop;
+                a.geometry.aspect = aspect;
+                a.geometry.aspect_portrait = portrait;
+            });
+            self.commit_and_save();
+        }
+        self.end_viewer_tools();
     }
 
     /// The straighten tool (draw a line along the horizon) on or off.
@@ -313,7 +344,11 @@ impl App {
     pub fn start_crop_tool(&mut self) {
         if self.crop_tool.is_none() {
             self.end_viewer_tools();
-            self.crop_tool = Some(CropTool::default());
+            let start = self.current.as_ref().map(|c| {
+                let g = &c.adjustments.geometry;
+                (g.crop, g.aspect, g.aspect_portrait)
+            });
+            self.crop_tool = Some(CropTool { start, ..Default::default() });
             self.zoom = None;
             self.request_render();
         }

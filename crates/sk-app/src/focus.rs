@@ -101,6 +101,25 @@ impl App {
         }
     }
 
+    /// Overlay texture of a thumbnail with aspect ratio `aspect`; requests it when missing.
+    pub(crate) fn thumb_focus_overlay(&mut self, ctx: &egui::Context, path: &Path, aspect: f32) -> Option<TextureId> {
+        if !self.focus_mask {
+            return None;
+        }
+        if self.thumb_focus_requested.insert(path.to_path_buf()) {
+            self.workers.thumb_focus(path.to_path_buf(), self.session.as_ref().map(|s| s.root.clone()));
+            return None;
+        }
+        let sensitivity = self.focus_sensitivity;
+        let map = self.thumb_focus.get_mut(path)?;
+        let [w, h] = map.size;
+        // Both are reduced to whole pixels: their aspect ratios differ a little.
+        if ((w as f32 / h.max(1) as f32) - aspect).abs() > 0.02 {
+            return None;
+        }
+        Some(map.overlay(ctx, &format!("focus thumb:{}", path.display()), sensitivity))
+    }
+
     /// Overlay texture of an image whose shown rendering has aspect ratio `aspect`.
     pub(crate) fn focus_overlay(&mut self, ctx: &egui::Context, path: &Path, aspect: f32) -> Option<TextureId> {
         if !self.focus_mask {

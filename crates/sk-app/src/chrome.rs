@@ -9,6 +9,7 @@ use sk_core::params::Adjustments;
 use sk_core::sidecar::ColorLabel;
 
 use crate::app::{App, Tab};
+use crate::commands::shortcut_of as shortcut;
 use crate::library::scope_label;
 use crate::theme::{self, icon};
 use crate::widgets::image_count;
@@ -180,6 +181,11 @@ impl App {
         self.session_file_menu(ui);
         ui.separator();
         self.command_item(ui, "open-folder");
+        let mut watch = self.hot_folder.on;
+        if ui.checkbox(&mut watch, "Ordner überwachen").on_hover_text("Neue Bilder, etwa aus der Kamerasoftware, erscheinen von selbst").changed() {
+            self.hot_folder.on = watch;
+            self.save_settings();
+        }
         let import = if self.session.is_some() { "In Session importieren …" } else { "Ordner in Katalog importieren …" };
         if item(ui, icon::FOLDER_PLUS, import, "", true) {
             self.import_folder_dialog();
@@ -213,20 +219,20 @@ impl App {
             ui.menu_button(format!("{}  Bewertung", icon::STAR), |ui| {
                 for r in 0..=5u8 {
                     let text = if r == 0 { "Keine".to_string() } else { "★".repeat(r as usize) };
-                    if ui.add(Button::new(text).shortcut_text(r.to_string())).clicked() {
+                    if ui.add(Button::new(text).shortcut_text(shortcut(&format!("rating-{r}")))).clicked() {
                         self.set_rating(r);
                     }
                 }
             });
             ui.menu_button(format!("{}  Farb-Label", icon::TAG), |ui| {
-                for (l, key) in [
-                    (ColorLabel::None, ""),
-                    (ColorLabel::Red, "6"),
-                    (ColorLabel::Yellow, "7"),
-                    (ColorLabel::Green, "8"),
-                    (ColorLabel::Blue, "9"),
+                for (l, id) in [
+                    (ColorLabel::None, "label-none"),
+                    (ColorLabel::Red, "label-red"),
+                    (ColorLabel::Yellow, "label-yellow"),
+                    (ColorLabel::Green, "label-green"),
+                    (ColorLabel::Blue, "label-blue"),
                 ] {
-                    if ui.add(Button::new(l.label()).shortcut_text(key)).clicked() {
+                    if ui.add(Button::new(l.label()).shortcut_text(shortcut(id))).clicked() {
                         self.set_color_label(l);
                     }
                 }
@@ -254,7 +260,6 @@ impl App {
         self.stack_menu(ui);
         ui.separator();
         self.move_menu(ui);
-        self.command_item(ui, "trash");
         ui.separator();
         self.command_item(ui, "previous");
         self.command_item(ui, "next");
@@ -329,7 +334,7 @@ impl App {
         if check(ui, self.clip_warning, "Belichtungswarnung", &shortcut("clip-warning")) {
             self.toggle_clip_warning();
         }
-        if check(ui, self.focus_mask, "Fokusmaske", &shortcut("focus-mask")) {
+        if check(ui, self.focus_mask, "Schärfemaske", &shortcut("focus-mask")) {
             self.toggle_focus_mask();
         }
         ui.horizontal(|ui| {
@@ -353,7 +358,7 @@ impl App {
         ui.separator();
         ui.menu_button("Hilfslinien", |ui| {
             for g in crate::guides::Guides::ALL {
-                if check(ui, self.guides == g, g.label(), if g == crate::guides::Guides::Off { "O" } else { "" }) {
+                if check(ui, self.guides == g, g.label(), &if g == crate::guides::Guides::Off { shortcut("guides-next") } else { String::new() }) {
                     self.guides = g;
                     self.save_settings();
                 }
@@ -375,6 +380,7 @@ impl App {
         self.command_item(ui, "shortcuts");
         ui.separator();
         self.command_item(ui, "update");
+        self.command_item(ui, "licenses");
         self.command_item(ui, "about");
     }
 
@@ -492,7 +498,7 @@ impl App {
                 if tool(ui, icon::FILE_MAGNIFYING_GLASS, &crate::commands::hint("Ausgabevorschau: so, wie das Ausgabe-Rezept das Bild schreibt", "proof"), self.proof_view, has).clicked() {
                     self.toggle_proof();
                 }
-                if tool(ui, icon::CROSSHAIR, &crate::commands::hint("Fokusmaske: scharfe Bereiche markieren", "focus-mask"), self.focus_mask, has).clicked() {
+                if tool(ui, icon::CROSSHAIR, &crate::commands::hint("Schärfemaske: scharfe Bereiche markieren", "focus-mask"), self.focus_mask, has).clicked() {
                     self.toggle_focus_mask();
                 }
                 if tool(ui, icon::WARNING, &crate::commands::hint("Belichtungswarnung: ausgefressene und abgesoffene Stellen", "clip-warning"), self.clip_warning, has).clicked() {
@@ -632,6 +638,12 @@ impl App {
                 ui.label(dim(self.status.clone()));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if let Some(folder) = self.watched_folder().filter(|_| self.hot_folder.on) {
+                    let name = folder.file_name().map_or_else(|| folder.display().to_string(), |n| n.to_string_lossy().to_string());
+                    ui.label(RichText::new(format!("{}  Überwacht: {name}", icon::EYE)).size(12.0).color(theme::ACCENT))
+                        .on_hover_text(format!("Neue Bilder in {} erscheinen von selbst", folder.display()));
+                    ui.separator();
+                }
                 if self.grid_view {
                     let (lo, hi) = crate::app::GRID_THUMB;
                     ui.label(RichText::new(icon::IMAGE).size(14.0).color(theme::TEXT_DIM));
@@ -667,6 +679,7 @@ impl App {
     pub fn dialogs(&mut self, ctx: &egui::Context) {
         self.rename_dialog(ctx);
         self.gpu_dialog(ctx);
+        self.licenses_dialog(ctx);
         self.update_dialog(ctx);
         self.copy_dialog(ctx);
         self.shortcut_editor(ctx);
@@ -828,11 +841,6 @@ pub fn resize_edges(ui: &mut Ui) {
 }
 
 /// Menu entry with icon and shortcut; returns true when clicked.
-/// The shortcut of a command, as shown in menus.
-fn shortcut(id: &str) -> String {
-    crate::commands::get(id).map(|c| c.shortcut()).unwrap_or_default()
-}
-
 fn item(ui: &mut Ui, ic: &str, text: &str, shortcut: &str, enabled: bool) -> bool {
     ui.add_enabled(enabled, Button::new(format!("{ic}  {text}")).shortcut_text(shortcut)).clicked()
 }

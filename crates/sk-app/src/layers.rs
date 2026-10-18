@@ -11,7 +11,7 @@ use crate::theme::{self, icon};
 
 use crate::ai_models::AiFeature;
 use crate::app::{App, Tab};
-use crate::widgets::{slider_row, subheading};
+use crate::widgets::{RAIL_LUMA, SliderOpts, hue_rail, slider_row, slider_row_with, subheading};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalTool {
@@ -917,8 +917,9 @@ impl App {
             // Switched off: the range is shown, but disabled.
             let mut r = m.luma_range.unwrap_or_default();
             ui.add_enabled_ui(luma_on, |ui| {
-                *changed |= slider_row(ui, "Von", &mut r.low, 0.0..=1.0, 0.0, 2);
-                *changed |= slider_row(ui, "Bis", &mut r.high, 0.0..=1.0, 1.0, 2);
+                let luma = SliderOpts { rail: Some(RAIL_LUMA), ..Default::default() };
+                *changed |= slider_row_with(ui, "Von", &mut r.low, 0.0..=1.0, 0.0, 2, luma);
+                *changed |= slider_row_with(ui, "Bis", &mut r.high, 0.0..=1.0, 1.0, 2, luma);
                 *changed |= slider_row(ui, "Weichheit", &mut r.falloff, 0.0..=0.5, 0.1, 2);
                 *changed |= ui.checkbox(&mut r.invert, "Bereich umkehren").changed();
             });
@@ -935,7 +936,8 @@ impl App {
                 if ui.selectable_label(tool == Some(LocalTool::ColorPick), LocalTool::ColorPick.label()).clicked() {
                     pick = true;
                 }
-                *changed |= slider_row(ui, "Farbton", &mut c.hue, 0.0..=360.0, 30.0, 0);
+                let rail = hue_rail();
+                *changed |= slider_row_with(ui, "Farbton", &mut c.hue, 0.0..=360.0, 30.0, 0, SliderOpts { suffix: "°", rail: Some(&rail), ..Default::default() });
                 *changed |= slider_row(ui, "Breite", &mut c.width, 2.0..=90.0, 25.0, 0);
                 *changed |= slider_row(ui, "Weichheit", &mut c.falloff, 0.0..=60.0, 15.0, 0);
                 *changed |= slider_row(ui, "Min. Chroma", &mut c.min_chroma, 0.0..=0.2, 0.03, 3);

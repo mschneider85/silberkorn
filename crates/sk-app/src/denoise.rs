@@ -1,12 +1,12 @@
 //! KI-Entrauschen (see `sk_core::ai_denoise` and `sk_ai::denoise`): the amount is an ordinary,
 //! undoable adjustment; the denoised data of each image is computed once in the background
 //! (the image in the viewer first) and kept in a cache. Switching it on downloads the models
-//! (GPL-3.0, credited in the dialog for the AI models) the first time.
+//! (GPL-3.0, credited in the licenses dialog) the first time.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 
-use egui::{Color32, RichText};
+use egui::RichText;
 use sk_core::params::Detail;
 
 use crate::ai_models::AiFeature;
@@ -242,21 +242,24 @@ impl App {
         changed
     }
 
-    /// The cache of denoised data (in the dialog for the graphics card and the AI models).
+    /// The cache of denoised data (in the dialog for the graphics card): how full, and emptying it.
     pub(crate) fn denoise_cache_ui(&mut self, ui: &mut egui::Ui) {
         let used = sk_core::ai_denoise::cache_size();
+        let limit = sk_core::ai_denoise::CACHE_LIMIT;
         let mut clear = false;
-        ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(format!(
-                "Zwischenspeicher KI-Entrauschen: {:.1} GB (höchstens {} GB, die ältesten fallen heraus)",
-                used as f64 / 1e9,
-                sk_core::ai_denoise::CACHE_LIMIT >> 30
-            ))
-            .small()
-            .color(Color32::from_gray(150)));
-            if used > 0 && self.denoise.running.is_none() && ui.small_button("Leeren").clicked() {
-                clear = true;
-            }
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 3.0;
+                ui.label(RichText::new(format!("KI-Entrauschen · {:.1} von {} GB", used as f64 / 1e9, limit >> 30)).size(12.0).color(crate::theme::TEXT));
+                ui.add(egui::ProgressBar::new((used as f64 / limit as f64) as f32).desired_width(260.0).desired_height(4.0));
+                crate::dialog::note(ui, "Die ältesten Ergebnisse fallen heraus, wenn er voll ist.");
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let can = used > 0 && self.denoise.running.is_none();
+                if ui.add_enabled(can, crate::dialog::secondary("Leeren")).clicked() {
+                    clear = true;
+                }
+            });
         });
         if clear {
             match sk_core::ai_denoise::clear_cache() {

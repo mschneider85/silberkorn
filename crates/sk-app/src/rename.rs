@@ -2,11 +2,12 @@
 
 use std::path::PathBuf;
 
-use egui::{Button, Color32, Modifiers, RichText, vec2};
+use egui::{Modifiers, RichText, vec2};
 use sk_core::naming::{self, NameFields};
 use sk_core::{raw, session, variant};
 
 use crate::app::App;
+use crate::dialog::{self, Dialog};
 use crate::theme::icon;
 
 /// The open rename dialog.
@@ -80,51 +81,44 @@ impl App {
         let Some(dialog) = &mut self.rename else { return };
         let session = self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
         let (mut apply, mut cancel) = (false, false);
-        let modal = egui::Modal::new(egui::Id::new("rename")).show(ctx, |ui| {
-            ui.set_width(460.0);
-            let n = dialog.files.len();
-            let title = if n == 1 { "Datei umbenennen".to_string() } else { format!("{n} Dateien umbenennen") };
-            ui.label(RichText::new(format!("{}  {title}", icon::PENCIL_SIMPLE)).size(17.0).strong().color(Color32::WHITE));
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.label("Name");
-                ui.add(egui::TextEdit::singleline(&mut dialog.template).desired_width(330.0));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Zähler ab");
-                ui.add(egui::DragValue::new(&mut dialog.start).range(0..=999_999));
-            });
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                for (token, help) in naming::TOKENS {
-                    if ui.small_button(token).on_hover_text(help).clicked() {
-                        dialog.template.push_str(token);
+        let n = dialog.files.len();
+        let title = if n == 1 { "Datei umbenennen".to_string() } else { format!("{n} Dateien umbenennen") };
+        let modal = Dialog::new("rename", icon::PENCIL_SIMPLE, title).subtitle("Varianten und Einstellungen wandern mit").width(500.0).show(ctx, |ui| {
+            dialog::card(ui, "Neuer Name", None, |ui| {
+                egui::Grid::new("rename_fields").num_columns(2).spacing(vec2(10.0, 8.0)).show(ui, |ui| {
+                    ui.label("Name");
+                    ui.add(egui::TextEdit::singleline(&mut dialog.template).desired_width(340.0));
+                    ui.end_row();
+                    ui.label("Zähler ab");
+                    ui.add(egui::DragValue::new(&mut dialog.start).range(0..=999_999));
+                    ui.end_row();
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    for (token, help) in naming::TOKENS {
+                        if ui.small_button(token).on_hover_text(help).clicked() {
+                            dialog.template.push_str(token);
+                        }
                     }
+                });
+            });
+            dialog::card(ui, "Vorschau", None, |ui| {
+                for (i, (file, info)) in dialog.preview.iter().enumerate() {
+                    let fields = NameFields { image: file, capture: info.as_ref(), counter: dialog.start + i as u32, session: &session };
+                    let ext = file.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+                    let old = file.file_name().unwrap_or_default().to_string_lossy();
+                    ui.label(RichText::new(format!("{old}  {}  {}{ext}", icon::ARROW_RIGHT, naming::expand(&dialog.template, &fields))).monospace().small());
+                }
+                if n > PREVIEW {
+                    dialog::note(ui, format!("… und {} weitere", n - PREVIEW));
                 }
             });
-            ui.add_space(8.0);
-            ui.label(RichText::new("Vorschau").small().color(Color32::from_gray(150)));
-            for (i, (file, info)) in dialog.preview.iter().enumerate() {
-                let fields = NameFields { image: file, capture: info.as_ref(), counter: dialog.start + i as u32, session: &session };
-                let ext = file.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-                let old = file.file_name().unwrap_or_default().to_string_lossy();
-                ui.label(RichText::new(format!("{old}  {}  {}{ext}", icon::ARROW_RIGHT, naming::expand(&dialog.template, &fields))).monospace().small());
-            }
-            if n > PREVIEW {
-                ui.label(RichText::new(format!("… und {} weitere", n - PREVIEW)).small().color(Color32::from_gray(150)));
-            }
-            ui.label(
-                RichText::new("Varianten und Einstellungen wandern mit. Ist ein Name schon vergeben, wird „-2“ usw. angehängt.")
-                    .small()
-                    .color(crate::theme::TEXT_FAINT),
-            );
-            ui.add_space(12.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(Button::new("Umbenennen").min_size(vec2(100.0, 26.0))).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            dialog::note(ui, "Ist ein Name schon vergeben, wird „-2“ usw. angehängt.");
+            dialog::footer(ui, |ui| {
+                if ui.add(dialog::primary("Umbenennen")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     apply = true;
                 }
-                if ui.add(Button::new("Abbrechen").min_size(vec2(90.0, 26.0))).clicked() {
+                if ui.add(dialog::secondary("Abbrechen")).clicked() {
                     cancel = true;
                 }
             });

@@ -328,6 +328,10 @@ pub struct Adjustments {
     /// Haze growing with the distance, by the depth map.
     #[serde(skip_serializing_if = "Atmosphere::is_default")]
     pub atmosphere: Atmosphere,
+    /// Tools switched off: their settings are kept, but the image is made (shown and exported)
+    /// as if they were reset. See [`Adjustments::visible`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<crate::tools::Tool>,
 }
 
 /// Something removed from the image: the strokes that marked it and the generated content
@@ -848,6 +852,9 @@ pub struct LensCorrection {
     /// Lateral chromatic aberration (red/cyan and blue/yellow), -100..100.
     pub ca_red: f32,
     pub ca_blue: f32,
+    /// Removing purple and green fringes along edges (longitudinal chromatic aberration), 0..100.
+    pub defringe_purple: f32,
+    pub defringe_green: f32,
     /// Vignetting correction (brightens corners), -100..100.
     pub vignetting: f32,
     /// Profile coefficients (filled in from the lens profile, applied on top of the sliders).
@@ -856,7 +863,7 @@ pub struct LensCorrection {
 
 impl Default for LensCorrection {
     fn default() -> Self {
-        Self { camera: true, profile: None, distortion: 0.0, fisheye: 0.0, ca_red: 0.0, ca_blue: 0.0, vignetting: 0.0, profile_coeffs: None }
+        Self { camera: true, profile: None, distortion: 0.0, fisheye: 0.0, ca_red: 0.0, ca_blue: 0.0, defringe_purple: 0.0, defringe_green: 0.0, vignetting: 0.0, profile_coeffs: None }
     }
 }
 
@@ -1158,11 +1165,32 @@ impl Default for Adjustments {
             lens_blur: LensBlur::default(),
             relight: Relight::default(),
             atmosphere: Atmosphere::default(),
+            hidden: Vec::new(),
         }
     }
 }
 
 impl Adjustments {
+    /// The settings that take effect: the switched-off tools as on a new image.
+    pub fn visible(&self) -> std::borrow::Cow<'_, Adjustments> {
+        if self.hidden.is_empty() {
+            return std::borrow::Cow::Borrowed(self);
+        }
+        let mut out = crate::tools::apply(&self.hidden, &Adjustments::default(), self);
+        out.hidden.clear();
+        std::borrow::Cow::Owned(out)
+    }
+
+    /// Switches a tool off, or on again.
+    pub fn toggle_hidden(&mut self, tool: crate::tools::Tool) {
+        match self.hidden.iter().position(|t| *t == tool) {
+            Some(i) => {
+                self.hidden.remove(i);
+            }
+            None => self.hidden.push(tool),
+        }
+    }
+
     /// Something uses the depth map (lens blur, relight, atmosphere); not counting depth masks
     /// of layers, which keep their own bitmap.
     pub fn needs_depth(&self) -> bool {

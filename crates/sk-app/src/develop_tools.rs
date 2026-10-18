@@ -7,17 +7,13 @@ use egui::{Color32, RichText, Ui};
 use crate::app::App;
 use crate::layer_target::Target;
 use crate::theme::icon;
-use crate::widgets::{self, slider_row};
+use crate::widgets::{self, band_hsv, hue_rail, slider_row};
 
 /// Approximate display color of a hue band (for swatches).
 fn band_color(hue: f32) -> Color32 {
     band_hsv(hue, 0.75, 0.9)
 }
 
-/// A band hue (Oklab degrees) at the given HSV saturation and value.
-fn band_hsv(hue: f32, s: f32, v: f32) -> Color32 {
-    egui::ecolor::Hsva::new(((hue - 25.0 + 720.0) % 360.0 + 5.0) / 360.0, s, v, 1.0).into()
-}
 
 /// The last auto adjustment of an image: its strength can still be changed,
 /// between the settings before and the full auto result.
@@ -86,11 +82,6 @@ fn zone_strip(ui: &mut Ui, zone: &ColorZone) {
     p.rect_stroke(rect, 2.0, egui::Stroke::new(1.0, Color32::from_gray(70)), egui::StrokeKind::Outside);
 }
 
-/// Colors of the hue circle, for the rail of the center slider.
-fn hue_rail() -> Vec<Color32> {
-    (0..=12).map(|i| band_hsv(i as f32 * 30.0, 0.75, 0.9)).collect()
-}
-
 /// Rail colors of a band slider: the neighbouring hues, grey to color, or dark to light.
 fn band_rail(view: ColorView, hue: f32) -> [Color32; 3] {
     match view {
@@ -138,20 +129,109 @@ fn skin_color(st: &SkinTone) -> Color32 {
 }
 
 /// Hue slider with a colored swatch; returns true when changed.
-fn wheel_ui(ui: &mut Ui, label: &str, wheel: &mut ColorWheel, with_lightness: bool) -> bool {
+/// Color wheels side by side, centered, each `share` of the width.
+fn wheel_row(ui: &mut Ui, share: f32, wheels: &mut [(&str, &mut ColorWheel, bool)]) -> bool {
+    const GAP: f32 = 10.0;
+    let w = (ui.available_width() * share).floor();
+    let n = wheels.len() as f32;
     let mut changed = false;
-    ui.horizontal(|ui| {
-        let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-        let c = egui::ecolor::Hsva::new(wheel.hue / 360.0, (wheel.amount / 100.0).max(0.15), 0.9, 1.0);
-        ui.painter().circle_filled(rect.center(), 6.0, Color32::from(c));
-        ui.label(RichText::new(label).strong());
+    ui.horizontal_top(|ui| {
+        // Two wheels go to the edges (as below the middle one in the three-way view).
+        let gap = if wheels.len() == 2 { (ui.available_width() - 2.0 * w).max(0.0) } else { GAP };
+        ui.spacing_mut().item_spacing.x = gap;
+        ui.add_space(((ui.available_width() - n * w - (n - 1.0) * gap) / 2.0).max(0.0));
+        for (label, wheel, with_lightness) in wheels.iter_mut() {
+            changed |= widgets::color_wheel(ui, label, wheel, *with_lightness, w);
+        }
     });
-    changed |= crate::widgets::slider_row_with(ui, "Farbton", &mut wheel.hue, 0.0..=360.0, 0.0, 0, crate::widgets::SliderOpts { suffix: "°", rail: Some(crate::widgets::RAIL_HUE), ..Default::default() });
-    changed |= slider_row(ui, "Stärke", &mut wheel.amount, 0.0..=100.0, 0.0, 0);
-    if with_lightness {
-        changed |= slider_row(ui, "Helligkeit", &mut wheel.lightness, -100.0..=100.0, 0.0, 0);
-    }
     changed
+}
+
+/// Which wheels the color balance shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BalanceView {
+    Master,
+    /// Shadows, midtones and highlights together.
+    #[default]
+    ThreeWay,
+    Shadows,
+    Midtones,
+    Highlights,
+}
+
+impl BalanceView {
+    const ALL: [BalanceView; 5] = [BalanceView::Master, BalanceView::ThreeWay, BalanceView::Shadows, BalanceView::Midtones, BalanceView::Highlights];
+
+    fn label(self) -> &'static str {
+        match self {
+            BalanceView::Master => "Master",
+            BalanceView::ThreeWay => "Dreiwege",
+            BalanceView::Shadows => "Schatten",
+            BalanceView::Midtones => "Mitteltöne",
+            BalanceView::Highlights => "Lichter",
+        }
+    }
+}
+
+/// The color balance in the chosen view: tabs, then one large wheel or the three tone wheels.
+fn balance_ui(ui: &mut Ui, view: &mut BalanceView, cb: &mut sk_core::params::ColorBalance) -> bool {
+    // Text tabs, centered; a dot marks the tones that are changed.
+    let font = egui::FontId::proportional(12.5);
+    let tabs: Vec<(BalanceView, bool, std::sync::Arc<egui::Galley>)> = BalanceView::ALL
+        .iter()
+        .map(|&v| {
+            let edited = match v {
+                BalanceView::Master => cb.master != ColorWheel::default(),
+                BalanceView::ThreeWay => false,
+                BalanceView::Shadows => cb.shadows != ColorWheel::default(),
+                BalanceView::Midtones => cb.midtones != ColorWheel::default(),
+                BalanceView::Highlights => cb.highlights != ColorWheel::default(),
+            };
+            (v, edited, ui.painter().layout_no_wrap(v.label().into(), font.clone(), Color32::WHITE))
+        })
+        .collect();
+    let gap = 11.0;
+    let width = |t: &(BalanceView, bool, std::sync::Arc<egui::Galley>)| t.2.size().x + if t.1 { 5.0 } else { 0.0 };
+    let total: f32 = tabs.iter().map(width).sum::<f32>() + gap * (tabs.len() - 1) as f32;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        ui.add_space(((ui.available_width() - total) / 2.0).max(0.0));
+        for (v, edited, galley) in tabs {
+            let (rect, resp) = ui.allocate_exact_size(galley.size() + egui::vec2(if edited { 5.0 } else { 0.0 }, 6.0), egui::Sense::click());
+            let color = if *view == v {
+                crate::theme::ACCENT
+            } else if resp.hovered() {
+                Color32::WHITE
+            } else {
+                crate::theme::TEXT_DIM
+            };
+            let p = ui.painter();
+            let text_w = galley.size().x;
+            p.galley_with_override_text_color(rect.min, galley, color);
+            if *view == v {
+                let y = rect.bottom() - 1.0;
+                p.line_segment([egui::pos2(rect.left(), y), egui::pos2(rect.left() + text_w, y)], egui::Stroke::new(1.5, crate::theme::ACCENT));
+            }
+            if edited {
+                p.circle_filled(rect.right_top() + egui::vec2(-1.5, 4.0), 2.0, crate::theme::TEXT);
+            }
+            if resp.clicked() {
+                *view = v;
+            }
+        }
+    });
+    ui.add_space(4.0);
+    match view {
+        BalanceView::Master => wheel_row(ui, 0.62, &mut [("Master", &mut cb.master, false)]),
+        BalanceView::ThreeWay => {
+            let mut changed = wheel_row(ui, 0.47, &mut [("Mitteltöne", &mut cb.midtones, true)]);
+            changed |= wheel_row(ui, 0.47, &mut [("Schatten", &mut cb.shadows, true), ("Lichter", &mut cb.highlights, true)]);
+            changed
+        }
+        BalanceView::Shadows => wheel_row(ui, 0.62, &mut [("Schatten", &mut cb.shadows, true)]),
+        BalanceView::Midtones => wheel_row(ui, 0.62, &mut [("Mitteltöne", &mut cb.midtones, true)]),
+        BalanceView::Highlights => wheel_row(ui, 0.62, &mut [("Lichter", &mut cb.highlights, true)]),
+    }
 }
 
 impl App {
@@ -162,6 +242,7 @@ impl App {
         }
         let mut start_crop = false;
         let mut finish_crop = false;
+        let mut cancel_crop = false;
         let mut apply_aspect = false;
         let mut toggle_straighten = false;
         let mut upright = None;
@@ -236,6 +317,11 @@ impl App {
             ui.label(RichText::new("Fisheye: Bildwinkel über die Diagonale (meist 180°), rechnet in ein normales Weitwinkelbild um").small().color(crate::theme::TEXT_FAINT));
             changed |= slider_row(ui, "CA Rot/Cyan", &mut l.ca_red, -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "CA Blau/Gelb", &mut l.ca_blue, -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Farbsaum Lila", &mut l.defringe_purple, 0.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Farbsaum Grün", &mut l.defringe_green, 0.0..=100.0, 0.0, 0);
+            ui.label(
+                RichText::new("Farbsaum: entfärbt lila und grüne Säume an kontrastreichen Kanten, auch in der Bildmitte").small().color(crate::theme::TEXT_FAINT),
+            );
             changed |= slider_row(ui, "Randabschattung", &mut l.vignetting, -100.0..=100.0, 0.0, 0);
         });
         if reset_lens {
@@ -251,8 +337,11 @@ impl App {
         widgets::tool_section(ui, sk_core::tools::Tool::Crop, Some(&mut || reset_crop = true), |ui| {
             ui.horizontal(|ui| {
                 if crop_active {
-                    if ui.button("\u{E182}  Übernehmen").on_hover_text("Enter").clicked() {
+                    if ui.button(format!("{}  Übernehmen", icon::CHECK)).on_hover_text("Enter").clicked() {
                         finish_crop = true;
+                    }
+                    if ui.button("Abbrechen").on_hover_text("Esc").clicked() {
+                        cancel_crop = true;
                     }
                 } else if ui.button("\u{E1D4}  Zuschneiden").on_hover_text(crate::commands::hint("Zuschneiden", "crop")).clicked() {
                     start_crop = true;
@@ -314,8 +403,9 @@ impl App {
             use sk_core::upright::UprightMode;
             ui.horizontal(|ui| {
                 ui.label("Automatisch");
+                let auto_tip = crate::commands::hint("Drehung und stürzende Linien", "auto-upright");
                 for (mode, label, tip) in [
-                    (UprightMode::Vertical, "Auto", "Drehung und stürzende Linien (Umschalt+A)"),
+                    (UprightMode::Vertical, "Auto", auto_tip.as_str()),
                     (UprightMode::Level, "Nur Drehung", "Horizont und Kanten waagerecht, ohne Perspektivkorrektur"),
                     (UprightMode::Full, "Voll", "Drehung, vertikale und horizontale Perspektive"),
                 ] {
@@ -339,7 +429,7 @@ impl App {
             });
             if guide_mode.is_some() {
                 ui.horizontal(|ui| {
-                    if ui.button(format!("{}  Anwenden", icon::CHECK)).on_hover_text("Enter").clicked() {
+                    if ui.button(format!("{}  Übernehmen", icon::CHECK)).on_hover_text("Enter").clicked() {
                         apply_guides = true;
                     }
                     if ui.button("Abbrechen").on_hover_text("Esc").clicked() {
@@ -370,6 +460,9 @@ impl App {
         }
         if finish_crop {
             self.finish_crop_tool();
+        }
+        if cancel_crop {
+            self.cancel_viewer_tools();
         }
         if apply_aspect {
             self.apply_aspect();
@@ -503,6 +596,7 @@ impl App {
         let band = &mut self.color_band;
         let view = &mut self.color_view;
         let zone_sel = &mut self.color_zone;
+        let balance_view = &mut self.balance_view;
         let picking = |t: ColorPick| self.picking_skin && self.color_pick == t;
         let (picking_skin, picking_new_zone) = (picking(ColorPick::Skin), picking(ColorPick::NewZone));
         let picking_zone = match self.color_pick {
@@ -649,9 +743,12 @@ impl App {
             changed |= slider_row(ui, "Sättigung", &mut st.saturation_uniformity, 0.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Helligkeit", &mut st.lightness_uniformity, 0.0..=100.0, 0.0, 0);
             ui.label(RichText::new("Hautton verändern").strong());
-            changed |= slider_row(ui, "Farbton", &mut st.hue_shift, -30.0..=30.0, 0.0, 1);
-            changed |= slider_row(ui, "Sättigung", &mut st.saturation, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Helligkeit", &mut st.lightness_shift, -100.0..=100.0, 0.0, 0);
+            let rail = |view| band_rail(view, st.hue);
+            let (hue_rail, sat_rail, light_rail) = (rail(ColorView::Hue), rail(ColorView::Saturation), rail(ColorView::Lightness));
+            let opts = |rail| widgets::SliderOpts { rail: Some(rail), ..Default::default() };
+            changed |= widgets::slider_row_with(ui, "Farbton", &mut st.hue_shift, -30.0..=30.0, 0.0, 1, opts(&hue_rail));
+            changed |= widgets::slider_row_with(ui, "Sättigung", &mut st.saturation, -100.0..=100.0, 0.0, 0, opts(&sat_rail));
+            changed |= widgets::slider_row_with(ui, "Helligkeit", &mut st.lightness_shift, -100.0..=100.0, 0.0, 0, opts(&light_rail));
         });
         if reset_skin {
             // The picked target stays.
@@ -666,10 +763,7 @@ impl App {
                 Some(l) => &mut l.color_balance,
                 None => &mut adj.color_balance,
             };
-            changed |= wheel_ui(ui, "Master", &mut cb.master, false);
-            changed |= wheel_ui(ui, "Schatten", &mut cb.shadows, true);
-            changed |= wheel_ui(ui, "Mitteltöne", &mut cb.midtones, true);
-            changed |= wheel_ui(ui, "Lichter", &mut cb.highlights, true);
+            changed |= balance_ui(ui, balance_view, cb);
         });
         if reset_cb {
             match t.layer_mut() {
@@ -686,12 +780,12 @@ impl App {
             changed |= ui.checkbox(&mut bw.enabled, "Schwarzweiß aktivieren").changed();
             ui.add_enabled_ui(bw.enabled, |ui| {
                 ui.label(RichText::new("Farbempfindlichkeit").strong());
-                for (i, (name, _)) in HUE_BANDS.iter().enumerate() {
-                    changed |= slider_row(ui, name, &mut bw.mix[i], -100.0..=100.0, 0.0, 0);
+                for (i, (name, hue)) in HUE_BANDS.iter().enumerate() {
+                    let rail = band_rail(ColorView::Lightness, *hue);
+                    changed |= widgets::slider_row_with(ui, name, &mut bw.mix[i], -100.0..=100.0, 0.0, 0, widgets::SliderOpts { rail: Some(&rail), ..Default::default() });
                 }
                 ui.label(RichText::new("Tonung").strong());
-                changed |= wheel_ui(ui, "Schatten", &mut bw.shadow_tint, false);
-                changed |= wheel_ui(ui, "Lichter", &mut bw.highlight_tint, false);
+                changed |= wheel_row(ui, 0.47, &mut [("Schatten", &mut bw.shadow_tint, false), ("Lichter", &mut bw.highlight_tint, false)]);
             });
         });
         if reset_bw {
@@ -711,8 +805,10 @@ impl App {
         ui.horizontal(|ui| {
             let busy = self.auto_progress.is_some();
             let text = if busy { "Passe an …" } else { "Automatisch anpassen" };
-            let hover = "Weißabgleich, Belichtung, Kontrast und Dynamik in einem Schritt einstellen (Strg+L), \
-                         bei mehreren ausgewählten Bildern für alle.";
+            let hover = format!(
+                "{}, bei mehreren ausgewählten Bildern für alle.",
+                crate::commands::hint("Weißabgleich, Belichtung, Kontrast und Dynamik in einem Schritt einstellen", "auto-adjust")
+            );
             if ui.add_enabled(!busy, egui::Button::new(format!("{}  {text}", icon::MAGIC_WAND))).on_hover_text(hover).clicked() {
                 self.auto_adjust_selection();
             }

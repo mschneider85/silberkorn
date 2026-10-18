@@ -251,7 +251,7 @@ fn edit_copy_apply_style_and_export() {
 
     // Export both images.
     f.app.recipes[0].output_dir = f.dir.join("out");
-    f.app.recipes[0].long_edge = Some(800);
+    f.app.recipes[0].size = Some(800);
     f.app.selection = [a.clone(), b.clone()].into_iter().collect();
     f.app.export_selection();
     f.pump("Export", |app| app.export_progress.is_none() && app.export_log.len() == 2);
@@ -533,12 +533,12 @@ fn phase5_speed_edit_ai_masks_split_and_recipes() {
     // Two recipes -> two files per image.
     let out = f.dir.join("out5");
     f.app.recipes = vec![
-        sk_core::export::ExportRecipe { output_dir: out.clone(), long_edge: Some(300), ..Default::default() },
+        sk_core::export::ExportRecipe { output_dir: out.clone(), size: Some(300), ..Default::default() },
         sk_core::export::ExportRecipe {
             name: "PNG".into(),
             format: sk_core::export::ExportFormat::Png,
             output_dir: out.clone(),
-            long_edge: Some(200),
+            size: Some(200),
             ..Default::default()
         },
     ];
@@ -597,7 +597,7 @@ fn session_workflow() {
 
     // Processing goes to the session's Output folder.
     f.app.recipes[0].output_dir = "Output".into();
-    f.app.recipes[0].long_edge = Some(300);
+    f.app.recipes[0].size = Some(300);
     f.app.selection = [b.clone()].into_iter().collect();
     f.app.export_selection();
     f.pump("Export", |app| app.export_progress.is_none() && app.export_log.len() == 1);
@@ -761,13 +761,13 @@ fn stepping_shows_prefetched_images_instantly() {
     // The neighbour is loaded and rendered in the background ...
     f.pump("Nachbar vorbereitet", |app| app.is_prepared(&b));
     // ... so stepping shows it without loading.
-    f.app.step(1);
+    f.app.step(1, false);
     assert!(f.app.loading.is_none(), "kein Laden nötig");
     assert_eq!(f.app.current_path().as_ref(), Some(&b));
     assert!(f.app.texture.is_some(), "fertig gerendert");
 
     // Going back is instant too: the previous image was kept with its rendering.
-    f.app.step(-1);
+    f.app.step(-1, false);
     assert!(f.app.loading.is_none());
     assert_eq!(f.app.current_path().as_ref(), Some(&a));
     assert!(f.app.texture.is_some());
@@ -937,6 +937,21 @@ fn zoomed_in_drafts_render_the_view_from_the_full_resolution() {
 }
 
 #[test]
+fn zoom_percent_can_be_set_and_keeps_the_middle() {
+    let Some(mut f) = Fixture::new("zoom_pct") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    f.app.zoom = Some(1.0);
+    f.app.pan = egui::vec2(40.0, -20.0);
+    viewer_frame(&mut f, vec![]);
+    f.app.set_zoom_pct(100.0);
+    let k = f.app.zoom.unwrap();
+    assert!((f.app.pan - egui::vec2(40.0, -20.0) * k).length() < 0.01, "{:?}", f.app.pan);
+    viewer_frame(&mut f, vec![]);
+    let pct = f.app.zoom_pct.unwrap();
+    assert!((pct - 100.0).abs() < 0.5, "{pct}");
+}
+
+#[test]
 fn navigator_moves_the_zoomed_view() {
     let Some(mut f) = Fixture::new("navigator") else { return };
     f.pump("Bild geladen", |a| a.texture.is_some());
@@ -944,8 +959,8 @@ fn navigator_moves_the_zoomed_view() {
     let scale = 2.0;
     f.app.zoom = Some(scale);
     viewer_frame(&mut f, vec![]);
-    // Bottom right of the 1200 x 800 viewer, 200 px wide for a 3:2 image.
-    let nav = egui::Rect::from_min_size(egui::pos2(1200.0 - 16.0 - 200.0, 800.0 - 16.0 - 200.0 / (size.x / size.y)), egui::vec2(200.0, 200.0 / (size.x / size.y)));
+    // Bottom right of the 1200 x 800 viewer above the zoom row, 200 px wide for a 3:2 image.
+    let nav = egui::Rect::from_min_size(egui::pos2(1200.0 - 16.0 - 200.0, 800.0 - 16.0 - 26.0 - 200.0 / (size.x / size.y)), egui::vec2(200.0, 200.0 / (size.x / size.y)));
     let target = nav.lerp_inside(egui::vec2(0.1, 0.2));
     viewer_frame(&mut f, vec![egui::Event::PointerMoved(target)]);
     viewer_frame(&mut f, vec![press(target, true)]);
@@ -1025,7 +1040,7 @@ fn style_grid_previews_the_current_image() {
 fn proof_shows_the_image_as_the_recipe_writes_it() {
     let Some(mut f) = Fixture::new("proof") else { return };
     f.pump("Bild geladen", |a| a.texture.is_some());
-    f.app.recipes = vec![sk_core::export::ExportRecipe { long_edge: Some(1200), quality: 70, ..Default::default() }];
+    f.app.recipes = vec![sk_core::export::ExportRecipe { size: Some(1200), quality: 70, ..Default::default() }];
     f.app.selected_recipe = 0;
     f.app.proof_view = true;
     let proof_ready = |f: &mut Fixture, what: &str| {
@@ -1346,7 +1361,7 @@ fn focus_mask_marks_sharp_areas() {
     f.app.toggle_focus_mask();
     // The viewer asks for a rendering whose sharpness then gets analysed.
     f.app.ensure_focus_of_current();
-    f.pump("Fokusmaske berechnet", |app| app.focus_maps.contains_key(&a));
+    f.pump("Schärfemaske berechnet", |app| app.focus_maps.contains_key(&a));
     let map = &f.app.focus_maps[&a];
     let size = f.app.image_size().unwrap();
     assert!(((map.size[0] as f32 / map.size[1] as f32) - size.x / size.y).abs() < 0.01);
@@ -1362,6 +1377,26 @@ fn focus_mask_marks_sharp_areas() {
     assert!(id.is_some());
     // A crop changes the framing: the old mask no longer fits.
     assert!(f.app.focus_overlay(&f.ctx.clone(), &a, size.x / size.y * 0.5).is_none());
+}
+
+#[test]
+fn thumbnails_show_the_focus_mask() {
+    let Some(mut f) = Fixture::new("thumb_focus") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let b = f.photo("_DSC0010.dng");
+    let ctx = f.ctx.clone();
+    // Off: nothing is asked for.
+    assert!(f.app.thumb_focus_overlay(&ctx, &b, 1.5).is_none());
+    assert!(f.app.thumb_focus_requested.is_empty());
+    f.app.toggle_focus_mask();
+    assert!(f.app.thumb_focus_overlay(&ctx, &b, 1.5).is_none());
+    f.pump("Schärfemaske Vorschaubild", |app| app.thumb_focus.contains_key(&b));
+    let [w, h] = f.app.thumb_focus[&b].size;
+    assert!(w.max(h) <= crate::workers::THUMB_EDGE as usize);
+    assert!(f.app.thumb_focus_overlay(&ctx, &b, w as f32 / h as f32).is_some());
+    // A new thumbnail (the image was edited) makes it again.
+    f.app.set_thumb(&ctx, b.clone(), egui::ColorImage::new([4, 4], vec![egui::Color32::BLACK; 16]));
+    assert!(!f.app.thumb_focus.contains_key(&b));
 }
 
 #[test]
@@ -1470,7 +1505,7 @@ fn focus_mask_follows_edits_made_while_it_was_off() {
     let a = f.photo("_DSC0009.dng");
     f.app.toggle_focus_mask();
     f.app.ensure_focus_of_current();
-    f.pump("Fokusmaske", |app| app.focus_map_current(&a));
+    f.pump("Schärfemaske", |app| app.focus_map_current(&a));
     // Off, edited (e.g. rotated), on again: the old mask doesn't fit and isn't shown ...
     f.app.toggle_focus_mask();
     f.app.edit(|adj| adj.exposure = 0.7);
@@ -1479,7 +1514,7 @@ fn focus_mask_follows_edits_made_while_it_was_off() {
     assert!(!f.app.focus_map_current(&a));
     // ... until it is computed again for the shown rendering.
     f.app.ensure_focus_of_current();
-    f.pump("Fokusmaske neu", |app| app.focus_map_current(&a));
+    f.pump("Schärfemaske neu", |app| app.focus_map_current(&a));
     assert_eq!(f.app.focus_maps[&a].version, Some(f.app.texture_version_shown()));
 }
 
@@ -2688,22 +2723,108 @@ fn grid_rows_are_stepped_with_up_and_down() {
     f.app.grid_view = true;
     // Two columns: both images in one row, so there is nothing above or below.
     f.app.grid_cols = 2;
-    f.app.step_row(1);
+    f.app.step_row(1, false);
     assert_eq!(f.app.current_path().as_ref(), Some(&a));
-    f.app.step_row(-1);
+    f.app.step_row(-1, false);
     assert_eq!(f.app.current_path().as_ref(), Some(&a));
     // One column: down is the next image, nothing past the end, up goes back.
     f.app.grid_cols = 1;
-    f.app.step_row(1);
+    f.app.step_row(1, false);
     assert_eq!(f.app.primary_path().as_ref(), Some(&b));
-    f.app.step_row(1);
+    f.app.step_row(1, false);
     assert_eq!(f.app.primary_path().as_ref(), Some(&b));
-    f.app.step_row(-1);
+    f.app.step_row(-1, false);
     assert_eq!(f.app.primary_path().as_ref(), Some(&a));
     // ↑/↓ belong to the grid only; in the single view they stay free.
     assert!((crate::commands::get("row-down").unwrap().enabled)(&f.app));
     f.app.grid_view = false;
     assert!(!(crate::commands::get("row-down").unwrap().enabled)(&f.app));
+}
+
+/// Arrow key and wheel steps of one control are one undo step; another change ends them first.
+#[test]
+fn key_and_wheel_steps_are_one_undo_step_apart_from_other_changes() {
+    let Some(mut f) = Fixture::new("steps-undo") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let undo = f.app.undo.len();
+    let (contrast, saturation) = {
+        let a = &f.app.current.as_ref().unwrap().adjustments;
+        (a.contrast + 20.0, a.saturation)
+    };
+    // One frame at time `t`: `change`, then the end of the frame.
+    let frame = |f: &mut Fixture, t: f64, change: &dyn Fn(&mut App, &egui::Context)| {
+        let input = egui::RawInput { time: Some(t), ..Default::default() };
+        let app = &mut f.app;
+        let mut out = f.ctx.run_ui(input, |ui| {
+            change(app, ui.ctx());
+            app.finish_frame(ui.ctx());
+        });
+        out.textures_delta.clear();
+    };
+    let step = |id: &'static str| {
+        move |a: &mut App, ctx: &egui::Context| {
+            a.current.as_mut().unwrap().adjustments.exposure += 0.1;
+            crate::widgets::mark_stepped(ctx, egui::Id::new(id));
+        }
+    };
+    let nothing = |_: &mut App, _: &egui::Context| {};
+    for t in [10.0, 10.1, 10.2] {
+        frame(&mut f, t, &step("a"));
+    }
+    assert_eq!(f.app.undo.len(), undo, "Schritte laufen noch");
+    // An action: the steps are one undo step, the action another.
+    frame(&mut f, 10.3, &|a: &mut App, _: &egui::Context| a.edit(|adj| adj.contrast = contrast));
+    assert_eq!(f.app.undo.len(), undo + 2);
+    // A change made in a panel (not via `edit`) ends them too.
+    frame(&mut f, 10.4, &step("a"));
+    frame(&mut f, 10.5, &|a: &mut App, _: &egui::Context| a.current.as_mut().unwrap().adjustments.saturation += 10.0);
+    assert_eq!(f.app.undo.len(), undo + 4);
+    // Steps of another control start new steps.
+    frame(&mut f, 10.6, &step("a"));
+    frame(&mut f, 10.7, &step("b"));
+    assert_eq!(f.app.undo.len(), undo + 5);
+    // After the pause they are committed.
+    frame(&mut f, 12.0, &nothing);
+    assert_eq!(f.app.undo.len(), undo + 6);
+    f.app.undo();
+    f.app.undo();
+    f.app.undo();
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.saturation, saturation, "die Sättigung ist ein eigener Schritt");
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.contrast, contrast);
+}
+
+#[test]
+fn shift_with_the_arrow_keys_extends_the_selection() {
+    let Some(mut f) = Fixture::new("shift-step") else { return };
+    let (a, b) = (f.photo("_DSC0009.dng"), f.photo("_DSC0010.dng"));
+    f.pump("Nachbar vorbereitet", |app| app.current.is_some() && app.is_prepared(&b));
+    f.app.step(1, true);
+    assert_eq!(f.app.primary_path().as_ref(), Some(&b));
+    assert_eq!(f.app.selection, std::collections::HashSet::from([a.clone(), b.clone()]));
+    // Without Shift the selection is the one image again.
+    f.app.step(-1, false);
+    assert_eq!(f.app.selection, std::collections::HashSet::from([a]));
+}
+
+#[test]
+fn esc_cancels_the_crop_but_another_tool_keeps_it() {
+    let Some(mut f) = Fixture::new("crop-cancel") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let crop = |a: &App| a.current.as_ref().unwrap().adjustments.geometry.crop;
+    let before = crop(&f.app);
+    let smaller = sk_core::params::CropRect { x: 0.1, y: 0.1, w: 0.5, h: 0.5 };
+    // Esc: back to the crop from before the tool.
+    f.app.start_crop_tool();
+    f.app.current.as_mut().unwrap().adjustments.geometry.crop = smaller;
+    f.app.cancel_viewer_tools();
+    assert!(f.app.crop_tool.is_none());
+    assert_eq!(crop(&f.app), before);
+    // Another tool: the crop stays.
+    f.app.start_crop_tool();
+    f.app.current.as_mut().unwrap().adjustments.geometry.crop = smaller;
+    f.app.toggle_wb_picker();
+    assert!(f.app.crop_tool.is_none() && f.app.picking_wb);
+    assert_eq!(crop(&f.app), smaller);
 }
 
 /// Switching from the grid to the single image shows the filmstrip at the selected image,
@@ -3050,4 +3171,24 @@ fn long_lens_profile_keeps_the_tool_panel_width() {
         window_frame(&mut f, &mut frame, 10.0 + i as f64 * 0.1, vec![]);
     }
     assert_eq!(width(&f), before);
+}
+
+#[test]
+fn watched_folder_shows_new_pictures() {
+    let Some(mut f) = Fixture::new("hot-folder") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.hot_folder.on = true;
+    let photos = f.dir.join("photos");
+    // An empty file (the camera software just started writing) is not opened.
+    std::fs::write(photos.join("_DSC0012.dng"), b"").unwrap();
+    // A new picture: listed and opened.
+    std::fs::copy(f.photo("_DSC0010.dng"), photos.join("_DSC0011.dng")).unwrap();
+    let new = photos.join("_DSC0011.dng");
+    f.pump("Neue Aufnahme geöffnet", |a| a.current_path().is_some_and(|p| p.ends_with("_DSC0011.dng")));
+    assert!(f.app.index_of(&new).is_some() || f.app.index_of(&new.canonicalize().unwrap()).is_some());
+    // Without opening: listed, the open picture stays.
+    f.app.hot_folder.open_new = false;
+    std::fs::copy(f.photo("_DSC0009.dng"), photos.join("_DSC0013.dng")).unwrap();
+    f.pump("Zweite Aufnahme gelistet", |a| a.entries.iter().any(|e| e.path.ends_with("_DSC0013.dng")));
+    assert!(f.app.current_path().is_some_and(|p| p.ends_with("_DSC0011.dng")));
 }

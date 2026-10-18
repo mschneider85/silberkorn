@@ -594,6 +594,9 @@ impl App {
                     open = Some(rec);
                 }
             });
+            if self.session.is_none() {
+                self.hot_folder_ui(ui);
+            }
             egui::ScrollArea::vertical().id_salt("subdirs").max_height(180.0).show(ui, |ui| {
                 for dir in &self.subdirs {
                     let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();

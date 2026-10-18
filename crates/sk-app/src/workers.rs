@@ -57,8 +57,6 @@ pub enum Event {
         focus: Option<Arc<Vec<u8>>>,
     },
     ExportProgress { done: usize, total: usize, last: Result<PathBuf, String> },
-    /// Progress 0..1 within the image being exported (while enlarging).
-    ExportStep(f32),
     /// The export was cancelled after `done` of `total` outputs.
     ExportCancelled { done: usize, total: usize },
     IndexProgress { done: usize, total: usize },
@@ -84,6 +82,8 @@ pub enum Event {
     /// Sharpness map of a displayed image for the focus mask.
     /// `version`: edit version of the rendering of the image being edited (`None` for others).
     Focus { path: PathBuf, version: Option<u64>, size: [usize; 2], sharpness: Arc<Vec<u8>> },
+    /// Sharpness map of an image at thumbnail size, for the focus mask on the thumbnails.
+    ThumbFocus { path: PathBuf, size: [usize; 2], sharpness: Arc<Vec<u8>> },
     /// Progress (0..1) of a generative removal.
     RemovalProgress { generation: u64, progress: f32 },
     /// Result of a generative removal (see `remove.rs`).
@@ -299,6 +299,7 @@ pub struct Workers {
     compare_tx: Sender<(Vec<PathBuf>, Option<PathBuf>)>,
     detail_tx: Sender<Vec<DetailJob>>,
     focus_tx: Sender<(PathBuf, Arc<ColorImage>, Option<u64>)>,
+    thumb_focus_tx: Sender<(PathBuf, Option<PathBuf>)>,
     look_tx: Sender<crate::look_worker::LookRequest>,
     auto_tx: Sender<AutoJob>,
     inpaint_tx: Sender<InpaintJob>,
@@ -976,6 +977,26 @@ impl Workers {
             });
         }
 
+        let (thumb_focus_tx, thumb_focus_rx) = channel::<(PathBuf, Option<PathBuf>)>();
+        {
+            let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
+            crate::guard::spawn("Fokus Vorschaubilder", move || {
+                while let Ok(first) = thumb_focus_rx.recv() {
+                    let mut jobs = vec![first];
+                    for job in thumb_focus_rx.try_iter() {
+                        jobs.retain(|j| j.0 != job.0);
+                        jobs.push(job);
+                    }
+                    for (path, session) in jobs {
+                        if let Some((size, sharpness)) = thumb_sharpness(&path, session.as_deref()) {
+                            let _ = ev_tx.send(Event::ThumbFocus { path, size, sharpness });
+                            ctx.request_repaint();
+                        }
+                    }
+                }
+            });
+        }
+
         let (focus_tx, focus_rx) = channel::<(PathBuf, Arc<ColorImage>, Option<u64>)>();
         {
             let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
@@ -1064,15 +1085,6 @@ impl Workers {
                             ctx.request_repaint();
                             break;
                         }
-                        // Enlarging takes long: cancelling also stops within an image (unwinding
-                        // from its progress report, so no file is left half-written).
-                        let progress = |p: f32| {
-                            if job.cancel.load(Ordering::Relaxed) {
-                                std::panic::resume_unwind(Box::new(()));
-                            }
-                            let _ = ev_tx.send(Event::ExportStep(p));
-                            ctx.request_repaint();
-                        };
                         // An image never opened gets the camera's look it would show (see `camera_look`).
                         let for_new = sk_core::camera_look::for_new();
                         let adj = match sk_core::camera_look::wanted(&adj, for_new) {
@@ -1084,7 +1096,7 @@ impl Workers {
                         };
                         // A bug on one image fails its outputs, not the whole export.
                         let results =
-                            crate::guard::catch(|| export::export_many_with(&path, &adj, &job.recipes, i as u32 + 1, &job.session, &mut written, &progress));
+                            crate::guard::catch(|| export::export_many_with(&path, &adj, &job.recipes, i as u32 + 1, &job.session, &mut written));
                         if results.is_err() && job.cancel.load(Ordering::Relaxed) {
                             let _ = ev_tx.send(Event::ExportCancelled { done, total });
                             ctx.request_repaint();
@@ -1123,6 +1135,7 @@ impl Workers {
             style_tx,
             detail_tx,
             focus_tx,
+            thumb_focus_tx,
             look_tx,
             auto_tx,
             inpaint_tx,
@@ -1177,6 +1190,11 @@ impl Workers {
 
     pub fn focus(&self, path: PathBuf, image: Arc<ColorImage>, version: Option<u64>) {
         let _ = self.focus_tx.send((path, image, version));
+    }
+
+    /// Computes the focus mask of a thumbnail (see [`Event::ThumbFocus`]).
+    pub fn thumb_focus(&self, path: PathBuf, session: Option<PathBuf>) {
+        let _ = self.thumb_focus_tx.send((path, session));
     }
 
     pub fn inpaint(&self, job: InpaintJob) {
@@ -1304,6 +1322,26 @@ fn make_thumbnail(path: &std::path::Path, session: Option<&std::path::Path>) -> 
     let thumb = img.thumbnail(THUMB_EDGE, THUMB_EDGE);
     cache::store(path, &sc.adjustments, session, &thumb);
     Some(to_color_image(&thumb))
+}
+
+/// Sharpness map of an image at thumbnail size: analysed in a preview of the size the focus
+/// mask is tuned for (thumbnails themselves are too small to tell sharp from soft), then reduced.
+fn thumb_sharpness(path: &std::path::Path, session: Option<&std::path::Path>) -> Option<([usize; 2], Arc<Vec<u8>>)> {
+    let edge = sk_core::focus::REFERENCE_EDGE as u32;
+    let img = match quick_preview(path, session) {
+        Some(img) => img,
+        None => {
+            let (meta, preview) = raw::load_preview(path, edge as usize).ok()?;
+            let r = Processor::new(&meta, &sidecar::load(path).adjustments).render(&preview, None, None);
+            ::image::DynamicImage::ImageRgba8(::image::RgbaImage::from_raw(r.width as u32, r.height as u32, r.rgba)?)
+        }
+    };
+    let img = if img.width().max(img.height()) > edge { img.thumbnail(edge, edge) } else { img };
+    let image = to_color_image(&img);
+    let [w, h] = image.size;
+    let sharpness = crate::focus::sharpness_of(&image, w.max(h));
+    let (reduced, size) = sk_core::focus::reduce(&sharpness, w, h, THUMB_EDGE as usize);
+    Some((size, Arc::new(reduced)))
 }
 
 pub fn to_color_image(img: &::image::DynamicImage) -> ColorImage {
