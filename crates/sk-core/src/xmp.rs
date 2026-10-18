@@ -60,11 +60,49 @@ pub fn owned(image: &Path, xmp: &Path) -> bool {
         return true;
     }
     let own = file.extension().and_then(|e| e.to_str()).unwrap_or_default().to_ascii_lowercase();
-    !crate::raw::RAW_EXTENSIONS
-        .iter()
-        .filter(|e| **e != own)
-        .flat_map(|e| [e.to_string(), e.to_ascii_uppercase()])
-        .any(|e| file.with_extension(e).is_file())
+    let stem = file.file_stem().unwrap_or_default().to_string_lossy().to_lowercase();
+    let dir = file.parent().unwrap_or(Path::new("."));
+    raw_files_in(dir).get(&stem).is_none_or(|exts| exts.iter().all(|e| *e == own))
+}
+
+/// Raw files of a folder: lowercase name without extension -> lowercase extensions.
+type RawNames = std::collections::HashMap<String, Vec<String>>;
+
+/// The raw files of `dir`, listed once and kept while the folder doesn't change: [`owned`] runs
+/// on every sidecar load, and testing 40 names each time is slow on network shares.
+fn raw_files_in(dir: &Path) -> std::sync::Arc<RawNames> {
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, SystemTime};
+    static FOLDERS: Mutex<Vec<(PathBuf, SystemTime, Arc<RawNames>)>> = Mutex::new(Vec::new());
+    let modified = std::fs::metadata(dir).and_then(|m| m.modified()).ok();
+    if let Some(m) = modified
+        && let Some((_, _, names)) = FOLDERS.lock().unwrap().iter().find(|(d, t, _)| d == dir && *t == m)
+    {
+        return names.clone();
+    }
+    let started = SystemTime::now();
+    let mut names = RawNames::new();
+    for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let path = entry.path();
+        let Some(ext) = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()) else { continue };
+        if crate::raw::RAW_EXTENSIONS.contains(&ext.as_str()) {
+            names.entry(path.file_stem().unwrap_or_default().to_string_lossy().to_lowercase()).or_default().push(ext);
+        }
+    }
+    let names = Arc::new(names);
+    // Kept only when the folder's time is clearly older than the listing: a file added within
+    // the resolution of that time (up to 2 s) would leave it unchanged.
+    if let Some(m) = modified
+        && started.duration_since(m).is_ok_and(|d| d > Duration::from_secs(2))
+    {
+        let mut folders = FOLDERS.lock().unwrap();
+        folders.retain(|(d, ..)| d != dir);
+        folders.push((dir.to_path_buf(), m, names.clone()));
+        if folders.len() > 32 {
+            folders.remove(0);
+        }
+    }
+    names
 }
 
 /// The existing XMP file of an image.
