@@ -68,7 +68,7 @@ impl App {
         match what {
             Deletion::Style(name) => {
                 if let Err(e) = sk_core::styles::delete_in(&sk_core::styles::styles_dir(), &name) {
-                    self.status = format!("Stil „{name}“ konnte nicht gelöscht werden: {e:#}");
+                    self.report_error(format!("Stil „{name}“ konnte nicht gelöscht werden: {e:#}"));
                 }
                 self.reload_styles();
             }
@@ -76,7 +76,7 @@ impl App {
                 if let Some(c) = &self.catalog
                     && let Err(e) = c.delete_album(id)
                 {
-                    self.status = format!("Album „{name}“ konnte nicht gelöscht werden: {e:#}");
+                    self.report_error(format!("Album „{name}“ konnte nicht gelöscht werden: {e:#}"));
                 }
                 if self.scope == Scope::Album(id) {
                     self.open_scope(Scope::All);

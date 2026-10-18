@@ -211,6 +211,8 @@ pub struct ProofImage {
 pub struct AutoJob {
     pub items: Vec<AutoItem>,
     pub opts: sk_core::auto::AutoOptions,
+    /// Set to stop before the next image (the finished ones stay).
+    pub cancel: Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub struct AutoItem {
@@ -1028,6 +1030,9 @@ impl Workers {
                 let mut models = sk_ai::auto::AutoModels::default();
                 while let Ok(job) = auto_rx.recv() {
                     for item in job.items {
+                        if job.cancel.load(Ordering::Relaxed) {
+                            break;
+                        }
                         activity.touch();
                         let path = item.path;
                         let result = crate::guard::catch(|| {

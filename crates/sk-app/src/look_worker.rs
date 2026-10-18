@@ -35,7 +35,8 @@ pub enum LookRequest {
     /// How similar the open image is to each reference.
     Similarity { path: PathBuf, open: Box<Open>, refs: Vec<LookRef> },
     /// Gives `items` the look of `refs`.
-    Match { refs: Vec<LookRef>, items: Vec<AutoItem>, opts: LookOptions },
+    /// `cancel` stops before the next image (the finished ones stay).
+    Match { refs: Vec<LookRef>, items: Vec<AutoItem>, opts: LookOptions, cancel: Arc<std::sync::atomic::AtomicBool> },
 }
 
 /// What a match gives for one image.
@@ -97,7 +98,7 @@ fn run(rx: &Receiver<LookRequest>, ev_tx: &Sender<Event>, ctx: &egui::Context, a
                         send(Event::LookSimilarity { path, refs, values });
                     }
                 }
-                LookRequest::Match { refs, items, opts } => {
+                LookRequest::Match { refs, items, opts, cancel } => {
                     // The references as they are now (a reference image may have been edited).
                     let mut usable = Vec::new();
                     let mut failed = Vec::new();
@@ -114,6 +115,9 @@ fn run(rx: &Receiver<LookRequest>, ev_tx: &Sender<Event>, ctx: &egui::Context, a
                         }
                     }
                     for item in items {
+                        if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
                         activity.touch();
                         let path = item.path.clone();
                         let result = if usable.is_empty() {

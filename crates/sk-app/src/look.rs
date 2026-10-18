@@ -4,6 +4,7 @@
 //! of the open image can still be changed.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use egui::{Color32, Rect, RichText, Sense, Ui, Vec2};
 use serde::{Deserialize, Serialize};
@@ -169,8 +170,10 @@ impl App {
             })
             .collect();
         self.look_progress = Some((0, items.len()));
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.look_cancel = Some(cancel.clone());
         self.status = if items.len() == 1 { "Gleiche den Look an …".into() } else { format!("Gleiche den Look von {} an …", widgets::image_count(items.len())) };
-        self.workers.look(LookRequest::Match { refs: self.look_refs.clone(), items, opts: self.look_options });
+        self.workers.look(LookRequest::Match { refs: self.look_refs.clone(), items, opts: self.look_options, cancel });
     }
 
     /// A reference has been measured.
@@ -203,7 +206,7 @@ impl App {
             }
             Err(e) => {
                 log::warn!("Look angleichen: {e}");
-                self.status = format!("Look angleichen fehlgeschlagen: {e}");
+                self.report_error(format!("Look angleichen fehlgeschlagen: {e}"));
                 true
             }
         };

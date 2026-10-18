@@ -3343,3 +3343,28 @@ fn delete_key_deletes_the_chosen_layer() {
     f.app.undo();
     assert_eq!(f.app.current.as_ref().unwrap().adjustments.layers.len(), 1);
 }
+
+/// Batch work can be cancelled from the status bar: it ends at once, what was done stays.
+#[test]
+fn batch_work_can_be_cancelled() {
+    let Some(mut f) = Fixture::new("cancel-batch") else { return };
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    f.app.auto_progress = Some((2, 5));
+    f.app.auto_cancel = Some(cancel.clone());
+    let activity = f.app.activities().into_iter().find(|a| a.label == "Automatisch anpassen").unwrap();
+    assert!(activity.cancel.is_some(), "mit ✕ in der Statusleiste");
+    cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    f.app.poll_cancelled();
+    assert!(f.app.auto_progress.is_none());
+    assert!(f.app.status.contains("abgebrochen (2 von 5 fertig)"), "{}", f.app.status);
+}
+
+/// Errors are remembered for the status bar (red, and visible for a while after them).
+#[test]
+fn errors_are_reported_and_remembered() {
+    let Some(mut f) = Fixture::new("report-error") else { return };
+    f.app.report_error("Speichern fehlgeschlagen: kein Platz");
+    assert_eq!(f.app.status, "Speichern fehlgeschlagen: kein Platz");
+    f.app.status = "Nächste Meldung".into();
+    assert_eq!(f.app.last_error.as_ref().map(|e| e.0.as_str()), Some("Speichern fehlgeschlagen: kein Platz"));
+}

@@ -1471,6 +1471,14 @@ pub fn image_count(n: usize) -> String {
     if n == 1 { "1 Bild".to_string() } else { format!("{n} Bilder") }
 }
 
+/// "Abbrechen" next to a progress bar: sets `cancel` (the work stops at its next step).
+pub fn cancel_button(ui: &mut Ui, cancel: &std::sync::Arc<std::sync::atomic::AtomicBool>) {
+    let stopping = cancel.load(std::sync::atomic::Ordering::Relaxed);
+    if ui.add_enabled(!stopping, egui::Button::new(if stopping { "Wird abgebrochen …" } else { "Abbrechen" }).small()).clicked() {
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 /// [`image_count`] after "von": "1 Bild", "3 Bildern".
 pub fn images_dative(n: usize) -> String {
     if n == 1 { "1 Bild".to_string() } else { format!("{n} Bildern") }

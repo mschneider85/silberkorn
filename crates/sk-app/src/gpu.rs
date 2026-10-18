@@ -78,7 +78,7 @@ impl App {
                 } else if !runtime::gpu_installed() {
                     match installing {
                         Some(p) => {
-                            ui.add(egui::ProgressBar::new(p).desired_height(8.0).text(format!("Wird geladen … {:.0} %", p * 100.0)));
+                            ui.add(egui::ProgressBar::new(p).desired_height(8.0).text(format!("Lade … {:.0} %", p * 100.0)));
                             ctx.request_repaint_after(std::time::Duration::from_millis(200));
                         }
                         None => {

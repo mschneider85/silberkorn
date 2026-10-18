@@ -132,7 +132,7 @@ impl App {
                 }
             }
             Err(e) => {
-                self.status = format!("{JOB_LABEL} für {name} fehlgeschlagen: {e}");
+                self.report_error(format!("{JOB_LABEL} für {name} fehlgeschlagen: {e}"));
                 self.depth.mask_for = None;
                 if e != crate::jobs::CANCELLED {
                     self.depth.failed.insert(path, e.clone());
@@ -196,6 +196,7 @@ impl App {
         let mut toggle_pick = false;
         let picking = self.picking_focus;
         let state = self.depth_state(&path);
+        let cancel = self.depth_cancel();
         let help = "Zeichnet Vorder- und Hintergrund weich wie eine offene Blende.\n\nFokus: Pipette oder Regler (0 fern, 1 nah). Schärfebereich: wie viel davor und dahinter scharf bleibt. Lichter: helle Stellen werden zu leuchtenden Scheiben.";
         crate::widgets::tool_section_help(ui, sk_core::tools::Tool::LensBlur, help, Some(&mut || reset = true), |ui| {
             let d = LensBlur::default();
@@ -211,7 +212,7 @@ impl App {
                 crate::widgets::unit_percent_row(ui, "Schärfebereich", &mut lb.range, 0.0..=1.0, d.range, Default::default());
                 slider_row(ui, "Lichter", &mut lb.bokeh, 0.0..=100.0, 0.0, 0);
             });
-            depth_status(ui, &state, !lb.is_off());
+            depth_status(ui, &state, !lb.is_off(), cancel.as_ref());
         });
         if reset {
             lb = LensBlur::default();
@@ -244,6 +245,7 @@ impl App {
         let before = rl;
         let mut reset = false;
         let state = self.depth_state(&path);
+        let cancel = self.depth_cancel();
         let help = "Hellt Vorder- und Hintergrund getrennt auf oder ab und färbt sie wärmer oder kühler, etwa bei Gegenlicht.\n\nGrenze: wo der Vordergrund aufhört (0 fern, 1 nah). Übergang: wie weich er in den Hintergrund übergeht.";
         crate::widgets::tool_section_help(ui, sk_core::tools::Tool::Relight, help, Some(&mut || reset = true), |ui| {
             let d = Relight::default();
@@ -257,7 +259,7 @@ impl App {
                 crate::widgets::unit_percent_row(ui, "Grenze", &mut rl.split, 0.0..=1.0, d.split, Default::default());
                 crate::widgets::unit_percent_row(ui, "Übergang", &mut rl.falloff, 0.02..=1.0, d.falloff, Default::default());
             });
-            depth_status(ui, &state, !rl.is_off());
+            depth_status(ui, &state, !rl.is_off(), cancel.as_ref());
         });
         if reset {
             rl = Relight::default();
@@ -276,6 +278,7 @@ impl App {
         let before = at;
         let mut reset = false;
         let state = self.depth_state(&path);
+        let cancel = self.depth_cancel();
         let help = "Legt Dunst über das Bild, der mit der Entfernung dichter wird.\n\nReichweite: wie weit nach vorn er reicht. Helligkeit und Wärme färben ihn.";
         crate::widgets::tool_section_help(ui, sk_core::tools::Tool::Atmosphere, help, Some(&mut || reset = true), |ui| {
             let d = Atmosphere::default();
@@ -285,7 +288,7 @@ impl App {
                 slider_row_with(ui, "Helligkeit", &mut at.brightness, -100.0..=100.0, 0.0, 0, SliderOpts { rail: Some(RAIL_TONE), ..Default::default() });
                 slider_row_with(ui, "Wärme", &mut at.warmth, -100.0..=100.0, 0.0, 0, SliderOpts { rail: Some(RAIL_KELVIN), ..Default::default() });
             });
-            depth_status(ui, &state, !at.is_off());
+            depth_status(ui, &state, !at.is_off(), cancel.as_ref());
         });
         if reset {
             at = Atmosphere::default();
@@ -357,17 +360,29 @@ fn relight_card(ui: &mut Ui, symbol: &str, title: &str, color: Color32, ev: &mut
     ui.painter().rect_filled(edge, egui::CornerRadius { nw: 6, sw: 6, ne: 0, se: 0 }, color);
 }
 
-fn depth_status(ui: &mut Ui, state: &DepthState, active: bool) {
+impl App {
+    /// The cancel switch of the depth map being computed or its model being downloaded.
+    fn depth_cancel(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicBool>> {
+        self.job_cancel(self.depth.running.as_ref().map(|r| r.0), Some(&AiFeature::Depth.job_label()))
+    }
+}
+
+fn depth_status(ui: &mut Ui, state: &DepthState, active: bool, cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>) {
     let faint = |t: &str| RichText::new(t).small().color(crate::theme::TEXT_FAINT);
     match state {
         DepthState::NoModel => {
             ui.label(faint(&format!("Lädt beim ersten Einschalten ein KI-Modell ({} MB)", AiFeature::Depth.download_mb())));
         }
-        DepthState::Downloading(p) => ai_models::download_progress(ui, AiFeature::Depth, *p),
+        DepthState::Downloading(p) => ai_models::download_progress(ui, AiFeature::Depth, *p, cancel.cloned()),
         _ if !active => {}
         DepthState::Running(p) => {
             ui.add(egui::ProgressBar::new(*p).desired_height(6.0));
-            ui.label(faint("Berechne Tiefenkarte …"));
+            ui.horizontal(|ui| {
+                ui.label(faint("Berechne Tiefenkarte …"));
+                if let Some(c) = cancel {
+                    crate::widgets::cancel_button(ui, c);
+                }
+            });
         }
         DepthState::Waiting => {
             ui.label(faint("Tiefenkarte wird gleich berechnet …"));

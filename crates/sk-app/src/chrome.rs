@@ -632,7 +632,17 @@ impl App {
                 .collect();
                 ui.label(dim(exif.join("  ·  ")));
             }
-            if !self.status.is_empty() {
+            // An error is red, and stays for a while next to the messages that follow it.
+            const ERROR_SECS: f32 = 12.0;
+            let error = self.last_error.as_ref().filter(|(msg, at)| *msg == self.status || at.elapsed().as_secs_f32() < ERROR_SECS).map(|(msg, at)| (msg.clone(), *at));
+            if let Some((msg, at)) = &error {
+                ui.separator();
+                ui.label(RichText::new(format!("{}  {msg}", icon::WARNING)).size(12.0).color(theme::DANGER));
+                if *msg != self.status {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_secs_f32((ERROR_SECS - at.elapsed().as_secs_f32()).max(0.1)));
+                }
+            }
+            if !self.status.is_empty() && error.as_ref().is_none_or(|(msg, _)| *msg != self.status) {
                 ui.separator();
                 ui.label(dim(self.status.clone()));
             }

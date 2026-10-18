@@ -73,7 +73,7 @@ impl App {
     fn save_snapshots(&mut self) {
         let Some(cur) = &self.current else { return };
         if let Err(e) = sidecar::set_snapshots(&cur.meta.path, cur.snapshots.clone()) {
-            self.status = format!("Schnappschuss nicht gespeichert: {e:#}");
+            self.report_error(format!("Schnappschuss nicht gespeichert: {e:#}"));
         }
     }
 

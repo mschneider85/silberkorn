@@ -121,7 +121,7 @@ impl App {
             then(self);
         } else if self.ai_download_progress(f).is_none() {
             // Failed a moment ago (see `RETRY`).
-            self.status = format!("{}: KI-Modell konnte nicht geladen werden – Internetverbindung prüfen", f.label());
+            self.report_error(format!("{}: KI-Modell konnte nicht geladen werden – Internetverbindung prüfen", f.label()));
         } else {
             self.ai_downloads.quiet.retain(|q| *q != f);
             self.ai_downloads.after.push((f, Box::new(then)));
@@ -206,7 +206,7 @@ impl App {
             Err(e) => {
                 self.ai_downloads.failed.insert(f, std::time::Instant::now());
                 if !quiet {
-                    self.status = format!("{}: KI-Modell konnte nicht geladen werden ({e})", f.label());
+                    self.report_error(format!("{}: KI-Modell konnte nicht geladen werden ({e})", f.label()));
                 }
             }
         }
@@ -215,8 +215,13 @@ impl App {
 }
 
 /// Progress of a model download below a tool: what is loaded and how far.
-pub fn download_progress(ui: &mut egui::Ui, f: AiFeature, progress: f32) {
+pub fn download_progress(ui: &mut egui::Ui, f: AiFeature, progress: f32, cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>) {
     ui.add(egui::ProgressBar::new(progress).desired_height(6.0));
-    crate::widgets::hint(ui, format!("Lade KI-Modell ({} MB, einmalig) … {:.0} %", f.download_mb(), progress * 100.0));
+    ui.horizontal(|ui| {
+        crate::widgets::hint(ui, format!("Lade KI-Modell ({} MB, einmalig) … {:.0} %", f.download_mb(), progress * 100.0));
+        if let Some(c) = &cancel {
+            crate::widgets::cancel_button(ui, c);
+        }
+    });
     ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
 }

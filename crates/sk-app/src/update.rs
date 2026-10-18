@@ -142,7 +142,7 @@ impl App {
             Err(e) if e == crate::jobs::CANCELLED => self.status = "Update abgebrochen".into(),
             Err(e) => {
                 self.updates.result = Some(Err(e.clone()));
-                self.status = format!("Update fehlgeschlagen: {e}");
+                self.report_error(format!("Update fehlgeschlagen: {e}"));
             }
         }
         true
@@ -198,7 +198,7 @@ impl App {
                         });
                     }
                     if let Some((p, _)) = &installing {
-                        ui.add(egui::ProgressBar::new(*p).desired_height(8.0).text(format!("Wird geladen … {:.0} %", p * 100.0)));
+                        ui.add(egui::ProgressBar::new(*p).desired_height(8.0).text(format!("Lade … {:.0} %", p * 100.0)));
                         ctx.request_repaint_after(std::time::Duration::from_millis(200));
                     }
                     if let Some(Err(e)) = &self.updates.result {

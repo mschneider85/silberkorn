@@ -199,7 +199,7 @@ impl App {
         let target = match c.move_faces(faces, to) {
             Ok(t) => t,
             Err(e) => {
-                self.status = format!("Gesichter verschieben fehlgeschlagen: {e:#}");
+                self.report_error(format!("Gesichter verschieben fehlgeschlagen: {e:#}"));
                 return;
             }
         };
@@ -310,7 +310,7 @@ impl App {
         let paths = match c.merge_persons(into, from) {
             Ok(p) => p,
             Err(e) => {
-                self.status = format!("Zusammenführen fehlgeschlagen: {e:#}");
+                self.report_error(format!("Zusammenführen fehlgeschlagen: {e:#}"));
                 return;
             }
         };

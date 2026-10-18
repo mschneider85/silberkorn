@@ -63,6 +63,11 @@ impl App {
         self.status = format!("{label} …");
     }
 
+    /// The cancel switch of a running job, by id or by label.
+    pub(crate) fn job_cancel(&self, id: Option<u64>, label: Option<&str>) -> Option<Arc<AtomicBool>> {
+        self.jobs.iter().find(|j| Some(j.id) == id || Some(j.label.as_str()) == label).map(|j| j.cancel.clone())
+    }
+
     pub(crate) fn job_progress(&mut self, id: u64, progress: f32) {
         if let Some(j) = self.jobs.iter_mut().find(|j| j.id == id) {
             j.progress = progress;
@@ -89,7 +94,7 @@ impl App {
                 }
             }
             Err(e) if e == CANCELLED => self.status = format!("{label} abgebrochen"),
-            Err(e) => self.status = format!("{label} fehlgeschlagen: {e}"),
+            Err(e) => self.report_error(format!("{label} fehlgeschlagen: {e}")),
         }
     }
 

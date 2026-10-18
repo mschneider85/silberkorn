@@ -99,7 +99,7 @@ impl App {
     pub fn open_folder(&mut self, folder: PathBuf) {
         let folder = folder.canonicalize().unwrap_or(folder);
         if !folder.is_dir() {
-            self.status = format!("Ordner nicht lesbar: {}", folder.display());
+            self.report_error(format!("Ordner nicht lesbar: {}", folder.display()));
             return;
         }
         self.folder_input = folder.display().to_string();
@@ -234,7 +234,7 @@ impl App {
                 let mut sc = match self.sidecar_for_update(path) {
                     Ok(sc) => sc,
                     Err(e) => {
-                        self.status = format!("Nicht gespeichert: {e:#}");
+                        self.report_error(format!("Nicht gespeichert: {e:#}"));
                         continue;
                     }
                 };
@@ -358,7 +358,7 @@ impl App {
                 let mut sc = match self.sidecar_for_update(path) {
                     Ok(sc) => sc,
                     Err(e) => {
-                        self.status = format!("Nicht gespeichert: {e:#}");
+                        self.report_error(format!("Nicht gespeichert: {e:#}"));
                         continue;
                     }
                 };
@@ -729,7 +729,7 @@ impl App {
         if let Some(style) = save {
             match styles::save_in(&styles::styles_dir(), &style) {
                 Ok(()) => self.status = format!("Stil „{}“ gespeichert", style.name),
-                Err(e) => self.status = format!("Fehler: {e:#}"),
+                Err(e) => self.report_error(format!("Fehler: {e:#}")),
             }
             self.library_ui.new_style.clear();
             self.library_ui.new_style_tools = None;

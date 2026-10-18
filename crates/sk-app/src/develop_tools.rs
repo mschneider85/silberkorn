@@ -914,8 +914,10 @@ impl App {
             return;
         }
         self.auto_progress = Some((0, items.len()));
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.auto_cancel = Some(cancel.clone());
         self.status = if items.len() == 1 { "Passe automatisch an …".into() } else { format!("Passe {} automatisch an …", widgets::image_count(items.len())) };
-        self.workers.auto_adjust(crate::workers::AutoJob { items, opts: self.auto_options });
+        self.workers.auto_adjust(crate::workers::AutoJob { items, opts: self.auto_options, cancel });
     }
 
     /// The auto adjustment of one image is done: its settings change (the open image's as one
@@ -935,7 +937,7 @@ impl App {
             }
             Err(e) => {
                 log::warn!("Automatisch anpassen: {e}");
-                self.status = format!("Automatisch anpassen fehlgeschlagen: {e}");
+                self.report_error(format!("Automatisch anpassen fehlgeschlagen: {e}"));
                 true
             }
         };

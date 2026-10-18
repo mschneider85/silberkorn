@@ -30,10 +30,13 @@ impl App {
             v.push(Activity { label: "Berechne Maske".into(), progress: None, in_viewer: true, cancel: None });
         }
         if let Some((done, total)) = self.look_progress {
-            v.push(Activity { label: "Look angleichen".into(), progress: Some(done as f32 / total.max(1) as f32), in_viewer: true, cancel: None });
+            v.push(Activity { label: "Look angleichen".into(), progress: Some(done as f32 / total.max(1) as f32), in_viewer: true, cancel: self.look_cancel.clone() });
         }
         if let Some((done, total)) = self.auto_progress {
-            v.push(Activity { label: "Automatisch anpassen".into(), progress: Some(done as f32 / total.max(1) as f32), in_viewer: true, cancel: None });
+            v.push(Activity { label: "Automatisch anpassen".into(), progress: Some(done as f32 / total.max(1) as f32), in_viewer: true, cancel: self.auto_cancel.clone() });
+        }
+        if self.spot_search.is_some() {
+            v.push(Activity { label: "Suche Staub und Flecken".into(), progress: None, in_viewer: false, cancel: self.spot_cancel.clone() });
         }
         for j in &self.jobs {
             v.push(Activity { label: j.label.clone(), progress: Some(j.progress), in_viewer: false, cancel: Some(j.cancel.clone()) });
@@ -53,6 +56,30 @@ impl App {
             v.push(Activity { label: "Lade Objektivprofile".into(), progress: None, in_viewer: false, cancel: None });
         }
         v
+    }
+
+    /// A cancel switch was set (✕ in the status bar or a panel): the work ends here; what was
+    /// finished stays.
+    pub(crate) fn poll_cancelled(&mut self) {
+        let set = |c: &Option<Arc<AtomicBool>>| c.as_ref().is_some_and(|c| c.load(Ordering::Relaxed));
+        if set(&self.auto_cancel) {
+            self.auto_cancel = None;
+            if let Some((done, total)) = self.auto_progress.take() {
+                self.status = format!("Automatisch anpassen abgebrochen ({done} von {total} fertig)");
+            }
+        }
+        if set(&self.look_cancel) {
+            self.look_cancel = None;
+            if let Some((done, total)) = self.look_progress.take() {
+                self.status = format!("Look angleichen abgebrochen ({done} von {total} fertig)");
+            }
+        }
+        if set(&self.spot_cancel) {
+            self.spot_cancel = None;
+            if self.spot_search.take().is_some() {
+                self.status = "Suche nach Staub und Flecken abgebrochen".into();
+            }
+        }
     }
 
     /// Status bar: one activity with a spinner (and its progress), the others in the tooltip.

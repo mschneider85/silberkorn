@@ -176,7 +176,7 @@ impl App {
                 self.edit(|a| a.removals.push(r));
                 self.status = "Entfernt".into();
             }
-            Err(e) => self.status = format!("Entfernen fehlgeschlagen: {e}"),
+            Err(e) => self.report_error(format!("Entfernen fehlgeschlagen: {e}")),
         }
     }
 
@@ -197,7 +197,7 @@ impl App {
             }
             brush.response.on_disabled_hover_text(crate::commands::hint("Pinsel des Werkzeugs „Entfernen“", "tool-remove"));
             if let Some(p) = downloading {
-                crate::ai_models::download_progress(ui, AiFeature::Inpaint, p);
+                crate::ai_models::download_progress(ui, AiFeature::Inpaint, p, self.job_cancel(None, Some(&AiFeature::Inpaint.job_label())));
             }
             ui.horizontal(|ui| {
                 ui.label(match n {

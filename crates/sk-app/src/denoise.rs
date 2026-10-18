@@ -117,7 +117,7 @@ impl App {
                 }
             }
             Err(e) => {
-                self.status = format!("{JOB_LABEL} für {name} fehlgeschlagen: {e}");
+                self.report_error(format!("{JOB_LABEL} für {name} fehlgeschlagen: {e}"));
                 if e != crate::jobs::CANCELLED {
                     self.denoise.failed.insert(path, e.clone());
                 } else {
@@ -224,14 +224,19 @@ impl App {
                     ui.label(faint(format!("Lädt beim ersten Einschalten ein KI-Modell ({} MB)", AiFeature::Denoise.download_mb())));
                 }
             }
-            DenoiseState::Downloading(p) => crate::ai_models::download_progress(ui, AiFeature::Denoise, p),
+            DenoiseState::Downloading(p) => crate::ai_models::download_progress(ui, AiFeature::Denoise, p, self.job_cancel(None, Some(&AiFeature::Denoise.job_label()))),
             _ if *amount <= 0.0 => {}
             DenoiseState::Waiting => {
-                ui.label(faint("Wird gleich berechnet …".into()));
+                ui.label(faint("Berechne gleich …".into()));
             }
             DenoiseState::Running(p) => {
                 ui.add(egui::ProgressBar::new(p).desired_height(6.0));
-                ui.label(faint(format!("Wird berechnet … {:.0} %", p * 100.0)));
+                ui.horizontal(|ui| {
+                    ui.label(faint(format!("Berechne … {:.0} %", p * 100.0)));
+                    if let Some(c) = self.job_cancel(self.denoise.running.as_ref().map(|r| r.0), None) {
+                        crate::widgets::cancel_button(ui, &c);
+                    }
+                });
             }
             DenoiseState::Ready => {}
             DenoiseState::Cancelled => {

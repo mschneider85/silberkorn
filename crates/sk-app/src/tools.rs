@@ -623,6 +623,9 @@ impl App {
             }
             if let (Some((done, total)), Some(f)) = (self.export_progress, self.export_fraction()) {
                 ui.add(egui::ProgressBar::new(f).text(format!("{done} / {total}")));
+                if let Some(c) = &self.export_cancel {
+                    crate::widgets::cancel_button(ui, c);
+                }
             }
             for msg in self.export_log.iter().rev().take(8) {
                 ui.label(RichText::new(msg).small());

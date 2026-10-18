@@ -389,7 +389,7 @@ impl App {
     fn object_controls(&mut self, ui: &mut Ui) {
         let faint = |t: &str| egui::RichText::new(t).small().color(crate::theme::TEXT_FAINT);
         if let Some(p) = self.ai_download_progress(AiFeature::Object) {
-            crate::ai_models::download_progress(ui, AiFeature::Object, p);
+            crate::ai_models::download_progress(ui, AiFeature::Object, p, self.job_cancel(None, Some(&AiFeature::Object.job_label())));
             return;
         }
         ui.label(faint("Klick: Objekt auswählen · weitere Klicks verfeinern · Alt+Klick: Teil ausnehmen"));
@@ -834,6 +834,7 @@ impl App {
         let mut pick = false;
         let busy = self.ai_busy;
         let subject_download = self.ai_download_progress(AiFeature::Subject);
+        let subject_cancel = self.job_cancel(None, Some(&AiFeature::Subject.job_label()));
         let busy = busy || subject_download.is_some();
         let tool = self.local_tool;
         let active = self.active_layer;
@@ -901,7 +902,7 @@ impl App {
             }
         }
         if let Some(p) = subject_download {
-            crate::ai_models::download_progress(ui, AiFeature::Subject, p);
+            crate::ai_models::download_progress(ui, AiFeature::Subject, p, subject_cancel);
         }
 
         if let Some(layer) = layer {
@@ -999,6 +1000,7 @@ impl App {
             hint("Löschen", "delete-spot")
         );
         let searching = self.spot_search.is_some();
+        let spot_cancel = self.spot_cancel.clone();
         let sensitivity = &mut self.spot_sensitivity;
         let mut reset_spots = false;
         crate::widgets::section_help(ui, "Reparieren & Klonen", &help, Some(&mut || reset_spots = true), |ui| {
@@ -1008,6 +1010,9 @@ impl App {
                 }
                 if searching {
                     ui.spinner();
+                    if let Some(c) = &spot_cancel {
+                        crate::widgets::cancel_button(ui, c);
+                    }
                 }
             });
             let mut percent = *sensitivity * 100.0;
@@ -1117,6 +1122,8 @@ impl App {
             ctx.request_repaint();
         });
         self.spot_search = Some(rx);
+        // Cancelling drops the receiver: the result of the search is not used.
+        self.spot_cancel = Some(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)));
         self.status = "Suche Staub und Flecken …".into();
     }
 
@@ -1128,7 +1135,7 @@ impl App {
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.spot_search = None;
-                self.status = "Suche nach Flecken fehlgeschlagen".into();
+                self.report_error("Suche nach Flecken fehlgeschlagen");
                 return;
             }
         };

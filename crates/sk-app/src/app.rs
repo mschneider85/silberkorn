@@ -513,6 +513,8 @@ pub struct App {
     pub object_session: Option<crate::layers::ObjectSession>,
     /// Running search for dust and blemishes: the image and the heal spots found.
     pub spot_search: Option<std::sync::mpsc::Receiver<(PathBuf, Vec<sk_core::params::Spot>)>>,
+    /// Drops the running spot search (see `poll_cancelled`).
+    pub spot_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// 0..1, see `sk_core::spots::find`.
     pub spot_sensitivity: f32,
     pub tiles: Tiles,
@@ -572,6 +574,8 @@ pub struct App {
     pub look_similarity_asked: Option<(PathBuf, Vec<crate::look::LookRef>)>,
     /// Images still being matched to the look: (done, total).
     pub look_progress: Option<(usize, usize)>,
+    /// Stops the running look match (see `poll_cancelled`).
+    pub look_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// The last look match of the open image, for its strength slider.
     pub look_mix: Option<crate::look::LookMix>,
     /// Which lines "Linien ziehen" places, the last mode chosen.
@@ -580,6 +584,8 @@ pub struct App {
     pub auto_options: sk_core::auto::AutoOptions,
     /// Images still being adjusted automatically: (done, total).
     pub auto_progress: Option<(usize, usize)>,
+    /// Stops the running auto adjustment (see `poll_cancelled`).
+    pub auto_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// The last auto adjustment of the open image, for its strength slider.
     pub auto_mix: Option<crate::develop_tools::AutoMix>,
     /// Sharp areas are marked in green (focus mask).
@@ -618,6 +624,11 @@ pub struct App {
     pub export_log: Vec<String>,
 
     pub status: String,
+    /// The last error and when it came (see `report_error`): red in the status bar, and kept
+    /// visible for a while even when another message follows.
+    pub last_error: Option<(String, Instant)>,
+    /// Exports that failed in the running export.
+    pub export_errors: usize,
     pub updates: crate::update::Updates,
     pub hot_folder: crate::hot_folder::HotFolder,
     pub show_filmstrip: bool,
@@ -883,6 +894,7 @@ impl App {
             magic_tolerance: 0.3,
             object_session: None,
             spot_search: None,
+            spot_cancel: None,
             spot_sensitivity: 0.5,
             remove_strokes: Vec::new(),
             inpaint_busy: false,
@@ -951,10 +963,12 @@ impl App {
             look_similarity: None,
             look_similarity_asked: None,
             look_progress: None,
+            look_cancel: None,
             look_mix: None,
             keystone_guide_mode: Default::default(),
             auto_options: settings.auto_options,
             auto_progress: None,
+            auto_cancel: None,
             auto_mix: None,
             confirm_delete_variant: None,
             rename: None,
@@ -986,6 +1000,8 @@ impl App {
             updates: crate::update::Updates::new(settings.update_check_off, settings.update_last_check, settings.update_skipped.clone()),
             hot_folder: crate::hot_folder::HotFolder::new(settings.watch_folder, !settings.watch_no_open),
             status,
+            last_error: None,
+            export_errors: 0,
             screenshot: std::env::var_os("SILBERKORN_SCREENSHOT").map(|p| (PathBuf::from(p), None)),
             viewer_window: crate::viewer_window::ViewerWindow {
                 open: (settings.viewer_window.open && opts.persist_settings) || std::env::var_os("SILBERKORN_VIEWER_WINDOW").is_some(),
@@ -1233,7 +1249,7 @@ impl App {
             Ok(sc) => (sc, None),
             Err(e) => {
                 let e = format!("{e:#}");
-                self.status = format!("Einstellungen nicht lesbar, Änderungen werden nicht gespeichert: {e}");
+                self.report_error(format!("Einstellungen nicht lesbar, Änderungen werden nicht gespeichert: {e}"));
                 (sidecar::load(&meta.path), Some(e))
             }
         };
@@ -1660,7 +1676,9 @@ impl App {
             && let Some(e) = &cur.unreadable
         {
             self.sidecar_dirty = false;
+            // (As `report_error`, field by field: `cur` is still borrowed.)
             self.status = format!("Nicht gespeichert, die Einstellungen waren beim Öffnen nicht lesbar: {e}");
+            self.last_error = Some((self.status.clone(), Instant::now()));
         }
         if self.sidecar_dirty {
             self.sidecar_dirty = false;
@@ -1698,7 +1716,7 @@ impl App {
                 self.unsaved.remove(path);
             }
             Err(e) => {
-                self.status = format!("Speichern fehlgeschlagen: {e:#}");
+                self.report_error(format!("Speichern fehlgeschlagen: {e:#}"));
                 self.unsaved.insert(path.to_path_buf(), sc.clone());
             }
         }
@@ -1813,6 +1831,14 @@ impl App {
         Some((done as f32 / total.max(1) as f32).min(1.0))
     }
 
+    /// Shows an error: in the status bar, in red, and still for a while after the next message.
+    pub fn report_error(&mut self, msg: impl Into<String>) {
+        let msg = msg.into();
+        log::warn!("{msg}");
+        self.status = msg.clone();
+        self.last_error = Some((msg, Instant::now()));
+    }
+
     /// Why exporting is not possible right now (shown on the disabled export buttons).
     pub fn export_blocked_reason(&self) -> &'static str {
         if self.export_progress.is_some() {
@@ -1848,6 +1874,7 @@ impl App {
             return;
         }
         self.export_progress = Some((0, items.len()));
+        self.export_errors = 0;
         self.status = format!("Exportiere {} …", crate::widgets::image_count(items.len()));
         self.save_settings();
         let mut recipes: Vec<ExportRecipe> = self.recipes.iter().filter(|r| r.enabled).cloned().collect();
@@ -1971,6 +1998,7 @@ impl App {
         self.pump_hot_folder(ctx);
         self.pump_depth();
         self.poll_spot_search();
+        self.poll_cancelled();
         // The rendered preview must fit into a single GPU texture.
         let max_side = ctx.input(|i| i.max_texture_side).max(512);
         let fit_texture = |preview: Arc<LinearImage>| {
@@ -2081,7 +2109,7 @@ impl App {
                             let texture = ctx.load_texture("proof", p.image, TextureOptions::LINEAR);
                             self.proof = Some(ProofView { version, key, texture, width: p.width, height: p.height, file_size: p.file_size });
                         }
-                        Err(e) => self.status = format!("Ausgabevorschau fehlgeschlagen: {e}"),
+                        Err(e) => self.report_error(format!("Ausgabevorschau fehlgeschlagen: {e}")),
                     }
                 }
                 Event::FullLoaded { generation, image } => {
@@ -2140,10 +2168,17 @@ impl App {
                     self.export_progress = (done < total).then_some((done, total));
                     match last {
                         Ok(p) => self.export_log.push(format!("✔ {}", p.display())),
-                        Err(e) => self.export_log.push(format!("✖ {e}")),
+                        Err(e) => {
+                            self.export_log.push(format!("✖ {e}"));
+                            self.export_errors += 1;
+                        }
                     }
                     if done == total {
-                        self.status = format!("Export abgeschlossen ({total})");
+                        if self.export_errors > 0 {
+                            self.report_error(format!("Export abgeschlossen, {} von {total} fehlgeschlagen (Details im Tab „Ausgabe“)", self.export_errors));
+                        } else {
+                            self.status = format!("Export abgeschlossen ({total})");
+                        }
                         self.export_cancel = None;
                     }
                 }
@@ -2180,7 +2215,7 @@ impl App {
                         Err(e) if e == "MODEL_MISSING" => {
                             self.status = "Motiv und Himmel: das KI-Modell wird noch geladen …".into();
                         }
-                        Err(e) => self.status = format!("Maske fehlgeschlagen: {e}"),
+                        Err(e) => self.report_error(format!("Maske fehlgeschlagen: {e}")),
                     }
                 }
                 Event::LensDb(db) => {
@@ -2228,7 +2263,12 @@ impl App {
                         continue;
                     }
                     if import {
-                        self.status = format!("Import: {}{}", crate::widgets::image_count(indexed), if failed > 0 { format!(", {failed} Fehler") } else { String::new() });
+                        let msg = format!("Import: {}{}", crate::widgets::image_count(indexed), if failed > 0 { format!(", {failed} Fehler") } else { String::new() });
+                        if failed > 0 {
+                            self.report_error(msg);
+                        } else {
+                            self.status = msg;
+                        }
                         self.open_scope(Scope::LastImport);
                     } else if indexed > 0 || failed > 0 {
                         self.reload_entries();
