@@ -178,13 +178,44 @@ fn paint_stroke_into(bm: &mut MaskBitmap, stroke: &crate::params::BrushStroke, a
     }
 }
 
-fn mask_key(mask: &Mask, aspect: f32, src: Option<&LinearImage>) -> u64 {
-    let drawn = serde_json::json!({ "f": mask.fill, "s": mask.strokes, "l": mask.linear, "r": mask.radial });
-    let ai = mask.ai.as_ref().map_or(0, |a| crate::cache::fnv1a(&a.data) ^ (a.width as u64) << 32 ^ a.height as u64);
+/// Keys of a mask and of the same mask without its last stroke (see [`cached_bitmap`]), in one
+/// pass over the strokes.
+fn mask_keys(mask: &Mask, aspect: f32, src: Option<&LinearImage>) -> (u64, u64) {
+    let drawn = serde_json::json!({ "f": mask.fill, "l": mask.linear, "r": mask.radial });
+    let ai = mask.ai.as_ref().map_or(0, |a| ai_hash(&a.data) ^ (a.width as u64) << 32 ^ a.height as u64);
+    let base = crate::cache::fnv1a(format!("{drawn}|{ai}|{aspect:.5}").as_bytes());
+    let fold = |strokes: &[crate::params::BrushStroke]| {
+        strokes.iter().fold(base, |h, s| (h ^ crate::cache::fnv1a(&serde_json::to_vec(s).unwrap_or_default())).wrapping_mul(0x0100_0000_01b3))
+    };
     // Automatic masking follows the image's edges: the same strokes on another image (pasted
     // layer, batch export) give another mask.
-    let image = src.filter(|_| mask.strokes.iter().any(|s| s.auto_mask)).map_or(0, image_fingerprint);
-    crate::cache::fnv1a(format!("{drawn}|{ai}|{aspect:.5}|{image}").as_bytes())
+    let fingerprint = std::cell::OnceCell::new();
+    let image = |strokes: &[crate::params::BrushStroke]| {
+        src.filter(|_| strokes.iter().any(|s| s.auto_mask)).map_or(0, |src| *fingerprint.get_or_init(|| image_fingerprint(src)))
+    };
+    let rest = mask.strokes.split_last().map_or(&[][..], |(_, rest)| rest);
+    let rest_hash = fold(rest);
+    let all_hash = match mask.strokes.last() {
+        Some(last) => (rest_hash ^ crate::cache::fnv1a(&serde_json::to_vec(last).unwrap_or_default())).wrapping_mul(0x0100_0000_01b3),
+        None => rest_hash,
+    };
+    let key = |h: u64, image: u64| crate::cache::fnv1a(format!("{h}|{image}").as_bytes());
+    (key(all_hash, image(&mask.strokes)), key(rest_hash, image(rest)))
+}
+
+/// Hash of the bitmap of an AI mask. Its data never changes once made (see `AiMask`), so the
+/// hash is kept per allocation: hashing megabytes each rendering costs milliseconds.
+fn ai_hash(data: &Arc<Vec<u8>>) -> u64 {
+    static HASHES: LazyLock<Mutex<Vec<(std::sync::Weak<Vec<u8>>, u64)>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+    let mut hashes = HASHES.lock().unwrap();
+    // A weak reference keeps its allocation, so no other data can be at that address meanwhile.
+    hashes.retain(|(w, _)| w.strong_count() > 0);
+    if let Some((_, h)) = hashes.iter().find(|(w, _)| std::ptr::eq(w.as_ptr(), Arc::as_ptr(data))) {
+        return *h;
+    }
+    let h = crate::cache::fnv1a(data);
+    hashes.push((Arc::downgrade(data), h));
+    h
 }
 
 /// Hash of the size and about 4096 evenly spread pixels of an image.
@@ -213,18 +244,17 @@ fn cache_lookup(key: u64) -> Option<Arc<MaskBitmap>> {
 /// [`crate::brush::LiveStroke`]). `src` (the oriented camera image) is needed for automatic
 /// masking.
 pub fn cached_bitmap(mask: &Mask, aspect: f32, src: Option<&LinearImage>) -> Arc<MaskBitmap> {
-    let key = mask_key(mask, aspect, src);
+    let (key, prefix_key) = mask_keys(mask, aspect, src);
     if let Some(bm) = cache_lookup(key) {
         return bm;
     }
     let guide = mask.strokes.iter().any(|s| s.auto_mask).then(|| src.map(cached_guide)).flatten();
     let guide = guide.as_deref();
     let prefix = mask.strokes.split_last().map(|(last, rest)| {
-        let without = Mask { strokes: rest.to_vec(), ..mask.clone() };
-        let prefix_key = mask_key(&without, aspect, src);
         // Not in the cache (the first stroke of a layer, or a mask just loaded): made and kept,
         // so that the next points of the stroke find it.
         let base = cache_lookup(prefix_key).unwrap_or_else(|| {
+            let without = Mask { strokes: rest.to_vec(), ..mask.clone() };
             let bm = Arc::new(rasterize(&without, aspect, guide));
             cache_insert(prefix_key, bm.clone());
             bm

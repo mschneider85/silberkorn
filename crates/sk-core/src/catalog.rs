@@ -6,6 +6,7 @@
 //! A session database (`.sksession`) stores paths relative to the session folder, with `/` as
 //! separator, so that the session can be moved, renamed or copied to another computer.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -566,13 +567,20 @@ impl Catalog {
         self.rename_one(from, to)
     }
 
+    /// Bounds of the stored paths of the variants of `file` ("file#..."): as a range, so that
+    /// the index on `path` finds them instead of a scan of all images.
+    fn variant_range(&self, file: &Path) -> (String, String) {
+        let key = self.key(file);
+        (format!("{key}#"), format!("{key}$"))
+    }
+
     /// Stored further variants of a file: (path, id).
     fn variant_rows(&self, file: &Path) -> Result<Vec<(PathBuf, i64)>> {
-        let prefix = format!("{}#", self.key(file));
+        let (lo, hi) = self.variant_range(file);
         let rows = self
             .conn
-            .prepare("SELECT path, id FROM images WHERE substr(path, 1, length(?1)) = ?1")?
-            .query_map([&prefix], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
+            .prepare("SELECT path, id FROM images WHERE path >= ?1 AND path < ?2")?
+            .query_map([&lo, &hi], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows.into_iter().map(|(p, id)| (self.resolve(&p), id)).filter(|(p, _)| crate::variant::number(p) > 1).collect())
     }
@@ -618,12 +626,16 @@ impl Catalog {
         let mut stmt = self.conn.prepare("SELECT person_id, embedding FROM faces WHERE person_id IS NOT NULL AND embedding IS NOT NULL")?;
         let rows: Vec<(i64, Vec<u8>)> = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
         let mut sums: Vec<(i64, Vec<f32>)> = Vec::new();
+        let mut index: HashMap<i64, usize> = HashMap::new();
         for (pid, blob) in rows {
             let e = embedding_from_blob(&blob);
-            match sums.iter_mut().find(|(p, _)| *p == pid) {
-                Some((_, s)) if s.len() == e.len() => s.iter_mut().zip(&e).for_each(|(a, b)| *a += b),
+            match index.get(&pid) {
+                Some(&i) if sums[i].1.len() == e.len() => sums[i].1.iter_mut().zip(&e).for_each(|(a, b)| *a += b),
                 Some(_) => {}
-                None => sums.push((pid, e)),
+                None => {
+                    index.insert(pid, sums.len());
+                    sums.push((pid, e));
+                }
             }
         }
         for (_, s) in &mut sums {
@@ -666,11 +678,11 @@ impl Catalog {
             )?;
         }
         // The file and its variants show the same.
-        let prefix = format!("{}#", self.key(path));
+        let (lo, hi) = self.variant_range(path);
         self.conn.execute(
             "UPDATE images SET analyzed = 1, sharpness = ?2, face_count = ?3, eyes_closed = ?4
-             WHERE path = ?1 OR substr(path, 1, length(?5)) = ?5",
-            params![self.key(path), sharpness, faces.len() as i64, closed as i64, prefix],
+             WHERE path = ?1 OR (path >= ?5 AND path < ?6)",
+            params![self.key(path), sharpness, faces.len() as i64, closed as i64, lo, hi],
         )?;
         // Persons without faces are gone.
         self.conn.execute("DELETE FROM persons WHERE id NOT IN (SELECT DISTINCT person_id FROM faces WHERE person_id IS NOT NULL)", [])?;
