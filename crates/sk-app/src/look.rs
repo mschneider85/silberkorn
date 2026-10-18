@@ -170,6 +170,7 @@ impl App {
             })
             .collect();
         self.look_progress = Some((0, items.len()));
+        self.batch_step = None;
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.look_cancel = Some(cancel.clone());
         self.status = if items.len() == 1 { "Gleiche den Look an …".into() } else { format!("Gleiche den Look von {} an …", widgets::image_count(items.len())) };

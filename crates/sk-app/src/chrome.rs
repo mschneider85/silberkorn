@@ -16,7 +16,7 @@ use crate::widgets::image_count;
 
 impl App {
     pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty() || self.current.as_ref().is_some_and(|c| c.adjustments != c.committed)
+        !self.undo.is_empty() || !self.extra_undo.is_empty() || self.current.as_ref().is_some_and(|c| c.adjustments != c.committed)
     }
 
     pub fn rotate(&mut self, quarter_turns: u8) {
@@ -424,7 +424,7 @@ impl App {
             if tool(ui, icon::ARROW_U_UP_LEFT, &crate::commands::hint("Rückgängig", "undo"), false, self.can_undo()).clicked() {
                 self.undo();
             }
-            if tool(ui, icon::ARROW_U_UP_RIGHT, &crate::commands::hint("Wiederholen", "redo"), false, !self.redo.is_empty()).clicked() {
+            if tool(ui, icon::ARROW_U_UP_RIGHT, &crate::commands::hint("Wiederholen", "redo"), false, self.can_redo()).clicked() {
                 self.redo();
             }
             group_gap(ui);

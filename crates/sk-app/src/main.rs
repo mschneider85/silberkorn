@@ -48,6 +48,7 @@ mod style_grid;
 mod theme;
 mod thumb_queue;
 mod tools;
+mod undo;
 mod update;
 mod variants;
 mod viewer_window;

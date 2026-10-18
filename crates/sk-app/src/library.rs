@@ -213,7 +213,16 @@ impl App {
     }
 
     /// Applies a metadata change to the given images (sidecar + catalog + entries).
+    /// Changes rating, label or keywords of `paths` (one undo step).
     pub fn update_meta(&mut self, paths: &[PathBuf], f: impl Fn(&mut Sidecar)) {
+        let before: Vec<_> = paths.iter().filter_map(|p| Some((p.clone(), self.meta_of(p)?))).collect();
+        self.update_meta_unrecorded(paths, f);
+        let changed: Vec<_> = before.into_iter().filter(|(p, m)| self.meta_of(p).as_ref() != Some(m)).collect();
+        self.record_step(crate::undo::Step::Meta(changed));
+    }
+
+    /// [`Self::update_meta`] without an undo step (for undo itself).
+    pub(crate) fn update_meta_unrecorded(&mut self, paths: &[PathBuf], f: impl Fn(&mut Sidecar)) {
         let current = self.current_path();
         for path in paths {
             let sc = if Some(path) == current.as_ref() {
@@ -343,35 +352,61 @@ impl App {
     }
 
     /// Writes new adjustments to images that are not open (e.g. paste, styles).
+    /// Changes the adjustments of `paths`, the open image's included, as one undo step (also
+    /// for the images that are not open: Ctrl+Z takes the whole change back).
     pub fn set_adjustments_on(&mut self, paths: &[PathBuf], f: impl Fn(&Adjustments) -> Adjustments) {
         let current = self.current_path();
+        let mut before = Vec::new();
         for path in paths {
-            if Some(path) == current.as_ref() {
-                self.edit(|a| *a = f(a));
+            let old = if Some(path) == current.as_ref() {
+                self.commit_and_save();
+                self.current.as_ref().map(|c| c.committed.clone())
             } else {
-                // Results arriving late (matching to a reference) must not bring back a deleted
-                // variant or write a sidecar next to a file that was moved away.
-                let (file, n) = sk_core::variant::split(path);
-                if !file.exists() || (n > 1 && !sk_core::variant::of_file(&file).contains(path)) {
-                    continue;
-                }
-                let mut sc = match self.sidecar_for_update(path) {
-                    Ok(sc) => sc,
-                    Err(e) => {
-                        self.report_error(format!("Nicht gespeichert: {e:#}"));
-                        continue;
-                    }
-                };
-                sc.adjustments = f(&sc.adjustments);
-                self.save_sidecar(path, &sc);
-                self.thumb_requested.remove(path);
-                self.compare_textures.remove(path);
-                self.compare_requested.remove(path);
-                self.focus_maps.remove(path);
-                self.compare_details.remove(path);
-                self.forget_prepared(path);
+                self.sidecar_for_update(path).ok().map(|sc| sc.adjustments)
+            };
+            let Some(old) = old else { continue };
+            if let Some(prev) = self.write_adjustments(path, f(&old)) {
+                before.push((path.clone(), prev));
             }
         }
+        self.record_step(crate::undo::Step::Adjustments(before));
+    }
+
+    /// Sets the adjustments of one image (open or not) and returns the ones before, or None when
+    /// they couldn't be written. No undo step of its own (see `set_adjustments_on`, `undo`).
+    pub(crate) fn write_adjustments(&mut self, path: &PathBuf, adj: Adjustments) -> Option<Adjustments> {
+        if self.current_path().as_ref() == Some(path) {
+            self.commit_and_save();
+            let cur = self.current.as_mut()?;
+            let prev = std::mem::replace(&mut cur.committed, adj.clone());
+            cur.adjustments = adj;
+            self.sidecar_dirty = true;
+            self.commit_and_save();
+            self.request_render();
+            return Some(prev);
+        }
+        // Results arriving late (matching to a reference) must not bring back a deleted
+        // variant or write a sidecar next to a file that was moved away.
+        let (file, n) = sk_core::variant::split(path);
+        if !file.exists() || (n > 1 && !sk_core::variant::of_file(&file).contains(path)) {
+            return None;
+        }
+        let mut sc = match self.sidecar_for_update(path) {
+            Ok(sc) => sc,
+            Err(e) => {
+                self.report_error(format!("Nicht gespeichert: {e:#}"));
+                return None;
+            }
+        };
+        let prev = std::mem::replace(&mut sc.adjustments, adj);
+        self.save_sidecar(path, &sc);
+        self.thumb_requested.remove(path);
+        self.compare_textures.remove(path);
+        self.compare_requested.remove(path);
+        self.focus_maps.remove(path);
+        self.compare_details.remove(path);
+        self.forget_prepared(path);
+        Some(prev)
     }
 
     pub fn reload_styles(&mut self) {

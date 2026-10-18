@@ -3368,3 +3368,42 @@ fn errors_are_reported_and_remembered() {
     f.app.status = "Nächste Meldung".into();
     assert_eq!(f.app.last_error.as_ref().map(|e| e.0.as_str()), Some("Speichern fehlgeschlagen: kein Platz"));
 }
+
+/// A change to several images is one undo step: Ctrl+Z restores all of them, also those not
+/// open; Ctrl+Y brings it back.
+#[test]
+fn undo_takes_back_a_change_to_several_images() {
+    let Some(mut f) = Fixture::new("undo-batch") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let (a, b) = (f.photo("_DSC0009.dng"), f.photo("_DSC0010.dng"));
+    let exposure = |f: &Fixture, p: &PathBuf| match f.app.current_path().as_ref() == Some(p) {
+        true => f.app.current.as_ref().unwrap().adjustments.exposure,
+        false => sidecar::load(p).adjustments.exposure,
+    };
+    f.app.set_adjustments_on(&[a.clone(), b.clone()], |adj| sk_core::params::Adjustments { exposure: 1.5, ..adj.clone() });
+    assert_eq!((exposure(&f, &a), exposure(&f, &b)), (1.5, 1.5));
+    f.app.undo();
+    assert_eq!((exposure(&f, &a), exposure(&f, &b)), (0.0, 0.0), "ein Schritt für beide Bilder");
+    f.app.redo();
+    assert_eq!((exposure(&f, &a), exposure(&f, &b)), (1.5, 1.5));
+}
+
+/// Ratings and labels can be undone; Ctrl+Z after a rating takes back the rating, not the last
+/// edit of the image.
+#[test]
+fn undo_takes_back_a_rating() {
+    let Some(mut f) = Fixture::new("undo-rating") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.edit(|a| a.exposure = 0.7);
+    f.app.commit_and_save();
+    f.app.set_rating(4);
+    assert_eq!(f.app.current.as_ref().unwrap().rating, 4);
+    f.app.undo();
+    assert_eq!(f.app.current.as_ref().unwrap().rating, 0, "die Bewertung");
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.exposure, 0.7, "nicht die Bearbeitung");
+    f.app.undo();
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.exposure, 0.0);
+    f.app.redo();
+    f.app.redo();
+    assert_eq!(f.app.current.as_ref().unwrap().rating, 4);
+}

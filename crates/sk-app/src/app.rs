@@ -535,6 +535,15 @@ pub struct App {
     render_requested: bool,
     pub(crate) undo: Vec<Adjustments>,
     pub(crate) redo: Vec<Adjustments>,
+    /// Sequence numbers of the `undo` and `redo` steps, to order them with `extra_undo`.
+    pub(crate) undo_seq: Vec<u64>,
+    pub(crate) redo_seq: Vec<u64>,
+    pub(crate) next_seq: u64,
+    /// Undo steps beyond the open image: several images, metadata (see `undo`).
+    pub(crate) extra_undo: Vec<(u64, crate::undo::Step)>,
+    pub(crate) extra_redo: Vec<(u64, crate::undo::Step)>,
+    /// The step the results of a running auto adjustment or look match join.
+    pub(crate) batch_step: Option<u64>,
     pub(crate) clipboard: Option<crate::clipboard::Clipboard>,
     pub(crate) copy_dialog: crate::clipboard::CopyDialog,
     pub sidecar_dirty: bool,
@@ -912,6 +921,12 @@ impl App {
             show_before: false,
             render_requested: false,
             undo: Vec::new(),
+            undo_seq: Vec::new(),
+            redo_seq: Vec::new(),
+            next_seq: 0,
+            extra_undo: Vec::new(),
+            extra_redo: Vec::new(),
+            batch_step: None,
             redo: Vec::new(),
             clipboard: None,
             copy_dialog: Default::default(),
@@ -1316,6 +1331,8 @@ impl App {
         let rendered = rendered.filter(|_| !self.auto_lens_profile());
         self.undo.clear();
         self.redo.clear();
+        self.undo_seq.clear();
+        self.redo_seq.clear();
         self.zoom = None;
         self.pan = Vec2::ZERO;
         match rendered {
@@ -1666,10 +1683,15 @@ impl App {
         cur.adjustments.assign_layer_ids();
         if cur.adjustments != cur.committed {
             self.undo.push(std::mem::replace(&mut cur.committed, cur.adjustments.clone()));
+            self.next_seq += 1;
+            self.undo_seq.push(self.next_seq);
             if self.undo.len() > UNDO_LIMIT {
                 self.undo.remove(0);
+                self.undo_seq.remove(0);
             }
             self.redo.clear();
+            self.redo_seq.clear();
+            self.extra_redo.clear();
             self.sidecar_dirty = true;
         }
         if self.sidecar_dirty
@@ -1725,11 +1747,14 @@ impl App {
         }
     }
 
-    pub(crate) fn undo(&mut self) {
+    /// One step back in the open image's history (see `undo` for Ctrl+Z).
+    pub(crate) fn undo_image(&mut self) {
         self.commit_and_save();
         let active = self.active_layer_id();
         let Some(cur) = self.current.as_mut() else { return };
         if let Some(prev) = self.undo.pop() {
+            let seq = self.undo_seq.pop().unwrap_or(0);
+            self.redo_seq.push(seq);
             self.redo.push(std::mem::replace(&mut cur.adjustments, prev.clone()));
             cur.committed = prev;
             self.sidecar_dirty = true;
@@ -1738,11 +1763,14 @@ impl App {
         }
     }
 
-    pub(crate) fn redo(&mut self) {
+    /// One step forward in the open image's history.
+    pub(crate) fn redo_image(&mut self) {
         self.commit_and_save();
         let active = self.active_layer_id();
         let Some(cur) = self.current.as_mut() else { return };
         if let Some(next) = self.redo.pop() {
+            let seq = self.redo_seq.pop().unwrap_or(0);
+            self.undo_seq.push(seq);
             self.undo.push(std::mem::replace(&mut cur.adjustments, next.clone()));
             cur.committed = next;
             self.sidecar_dirty = true;
@@ -1793,10 +1821,15 @@ impl App {
         let Some(cur) = self.current.as_mut() else { return };
         if base != cur.committed {
             self.undo.push(std::mem::replace(&mut cur.committed, base));
+            self.next_seq += 1;
+            self.undo_seq.push(self.next_seq);
             if self.undo.len() > UNDO_LIMIT {
                 self.undo.remove(0);
+                self.undo_seq.remove(0);
             }
             self.redo.clear();
+            self.redo_seq.clear();
+            self.extra_redo.clear();
             self.sidecar_dirty = true;
         }
     }

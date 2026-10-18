@@ -30,13 +30,13 @@ impl App {
         self.commit_and_save();
         while self.undo.len() > target {
             let before = self.undo.len();
-            self.undo();
+            self.undo_image();
             if self.undo.len() == before {
                 break;
             }
         }
         while self.undo.len() < target && !self.redo.is_empty() {
-            self.redo();
+            self.redo_image();
         }
     }
 

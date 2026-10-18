@@ -109,7 +109,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("export", icon::EXPORT, "Exportieren", "Datei", [CTRL => Key::D], "export ausgabe speichern verarbeiten", can_export, |a, _| a.export_selection()),
     // Bearbeiten
     cmd!("undo", icon::ARROW_U_UP_LEFT, "Rückgängig", "Bearbeiten", [CTRL => Key::Z], "undo", |a| a.can_undo(), |a, _| a.undo()),
-    cmd!("redo", icon::ARROW_U_UP_RIGHT, "Wiederholen", "Bearbeiten", [CTRL => Key::Y, CTRL_SHIFT => Key::Z], "redo", |a| !a.redo.is_empty(), |a, _| a.redo()),
+    cmd!("redo", icon::ARROW_U_UP_RIGHT, "Wiederholen", "Bearbeiten", [CTRL => Key::Y, CTRL_SHIFT => Key::Z], "redo", |a| a.can_redo(), |a, _| a.redo()),
     cmd!("copy-adjustments", icon::COPY, "Anpassungen kopieren", "Bearbeiten", [CTRL_SHIFT => Key::C], "copy", has_image, |a, _| a.copy_adjustments()),
     cmd!("copy-adjustments-choose", icon::LIST_CHECKS, "Anpassungen auswählen und kopieren …", "Bearbeiten", [], "copy clipboard zwischenablage werkzeuge auswählen", has_image, |a, _| a.open_copy_dialog()),
     cmd!("paste-adjustments", icon::CLIPBOARD_TEXT, "Anpassungen auf Auswahl anwenden", "Bearbeiten", [CTRL_SHIFT => Key::V], "paste einfügen", |a| a.clipboard.is_some() && !a.on_layer(), |a, _| a.paste_adjustments()),

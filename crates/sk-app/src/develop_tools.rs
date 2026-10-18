@@ -914,6 +914,7 @@ impl App {
             return;
         }
         self.auto_progress = Some((0, items.len()));
+        self.batch_step = None;
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.auto_cancel = Some(cancel.clone());
         self.status = if items.len() == 1 { "Passe automatisch an …".into() } else { format!("Passe {} automatisch an …", widgets::image_count(items.len())) };
