@@ -16,21 +16,21 @@ Zum Entscheiden ein `x` ins Kästchen setzen; bei Fragen oder Ergänzungen die Z
 **Heute:** Wer Anpassungen auf eine Auswahl einfügt, einen Stil anwendet oder „Automatisch anpassen“ bzw. „Look angleichen“ für mehrere Bilder startet, ändert alle diese Bilder sofort. Strg+Z nimmt nur das gerade offene Bild zurück, die anderen bleiben geändert. Es gibt auch keine Rückfrage.
 **Ziel:** Strg+Z nimmt die ganze Mehrfach-Änderung in einem Schritt zurück.
 **Aufwand:** groß · **Audit:** 6
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ### Story 2: Bewertung und Farb-Label rückgängig machen
 **Heute:** Sterne, Farb-Labels und Keywords laufen am Verlauf vorbei. Wer nach einer Bewertung Strg+Z drückt, nimmt stattdessen die letzte Bildbearbeitung zurück – das überrascht.
 **Ziel:** Auch Bewertung, Label und Keywords lassen sich mit Strg+Z zurücknehmen.
 **Aufwand:** mittel · **Audit:** 7
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ### Story 3: Ein Zuschnitt = ein Rückgängig-Schritt
 **Heute:** Beim Zuschneiden wird jeder einzelne Zug am Rahmen ein eigener Schritt im Verlauf. Wer den Rahmen fünfmal nachjustiert, muss fünfmal Strg+Z drücken.
 **Ziel:** Der ganze Zuschnitt (vom Starten bis „Übernehmen“) ist ein Schritt.
 **Aufwand:** klein · **Audit:** 14
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ---
@@ -47,14 +47,14 @@ Zum Entscheiden ein `x` ins Kästchen setzen; bei Fragen oder Ergänzungen die Z
 
 **Ziel:** Ein Muster für alle: gleicher Hinweis im Bild, gleiche Knöpfe, und beim Bild- oder Tab-Wechsel enden alle Werkzeuge gleich (Linien und Zuschnitt werden dabei übernommen, nicht verworfen).
 **Aufwand:** mittel · **Audit:** 15, 16, 17, 19
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ### Story 5: Ein Werkzeug öffnet seinen Tab
 **Heute:** „W“ (Weißabgleich-Pipette) springt in den Farb-Tab. „Geraderichten“ springt aus der Befehlssuche in den Objektiv-Tab, aus der Werkzeugleiste aber nicht. „Zuschneiden“ (C) wechselt nie den Tab.
 **Ziel:** Jedes Werkzeug öffnet beim Start immer den Tab mit seinen Einstellungen.
 **Aufwand:** klein · **Audit:** 18
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ### Story 6: Esc verlässt auch Ansichten
@@ -70,7 +70,7 @@ Zum Entscheiden ein `x` ins Kästchen setzen; bei Fragen oder Ergänzungen die Z
 **Ziel:** Entf löscht das, was gerade gewählt ist.
 **Frage an dich:** Soll Entf im Raster Bilder in den Papierkorb legen, oder bleibt das bewusst bei Strg+Entf (Schutz vor Versehen)?
 **Aufwand:** mittel · **Audit:** 31
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ---
@@ -81,36 +81,36 @@ Zum Entscheiden ein `x` ins Kästchen setzen; bei Fragen oder Ergänzungen die Z
 **Heute:** Eure Regel „deaktivieren statt ausblenden“ ist an einigen Stellen nicht umgesetzt. Ausgeblendet werden zum Beispiel die Masken-Knöpfe bei gewähltem Hintergrund, „Qualität“ bei Formaten ohne Qualität, „Hochformat“ beim Seitenverhältnis „Frei“ und die Einstellungen der Retusche, solange kein Punkt gewählt ist. Umgekehrt sind manche Regler aktiv, obwohl sie nichts bewirken (KI-Entrauschen bei HDR-DNG, Trapez-„Stärke“ bei 0/0). Abschnitte „nur ganzes Bild“ sehen im Ebenenmodus zweierlei aus.
 **Ziel:** Überall gleich: sichtbar, aber grau, wenn ohne Wirkung.
 **Aufwand:** mittel · **Audit:** 21, 22, 23, 24, 25, 26, 27
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ### Story 9: Zurücksetzen funktioniert überall gleich
 **Heute:** Der ↺-Knopf im Abschnittskopf setzt nicht immer alles zurück: „Drehen & Spiegeln“ lässt die 90°-Drehung stehen, „Zuschnitt“ das Seitenverhältnis. Einige Abschnitte haben gar kein ↺ (Basiskurve, Look angleichen, Maske, Retusche, Rezept, Wasserzeichen), dafür Knöpfe mit drei verschiedenen Namen („Leeren“, „Alle löschen“, „Alle“).
 **Ziel:** Jeder Abschnitt hat ↺ im Kopf, und es setzt den ganzen Abschnitt zurück; Inline-Knöpfe heißen einheitlich.
 **Aufwand:** klein · **Audit:** 37, 38
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ### Story 10: Zahlen an Reglern einheitlich anzeigen
 **Heute:** Regler zeigen „0.50“ mit Punkt, Statustexte „0,50“ mit Komma. Regler mit Minus-Bereich zeigen „12“ statt „+12“. Einheiten fehlen teils: Belichtung ohne „EV“, Geraderichten und Farbton ohne „°“, „Stärke“ mal mit, mal ohne „%“. Die Schnellbearbeitung zeigt „+5600.00“ für Kelvin.
 **Ziel:** Überall Komma, „+“ bei positiven Werten, passende Einheit.
 **Aufwand:** klein · **Audit:** 73, 74, 77, 78, 79, 81
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-**Input:**
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Input:** Änderung: statt überall Komma nehmen wir die amerikanische Schreibweise mit Punkt
 
 ### Story 11: Gleiche Größen auf gleicher Skala
 **Heute:** Deckkraft ist beim Pinsel 0,05–1,00, bei Ebene, Retusche und Wasserzeichen 0–100 %. Ähnlich bei Härte, Fluss, Toleranz und Weichheit (mal 0–0,5, mal 0–60, mal 0–100 %). Tönung geht im Weißabgleich bis ±150, auf Ebenen bis ±100.
 **Ziel:** Alles, was ein Anteil ist, wird in % angezeigt. Nur die Anzeige ändert sich, gespeicherte Bearbeitungen bleiben gültig.
 **Frage an dich:** Soll Tönung angeglichen werden, oder ist der Unterschied zwischen ganzem Bild und Ebene gewollt?
 **Aufwand:** mittel · **Audit:** 75, 76, 80
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-**Input:**
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Input:** Tönung angleichen
 
 ### Story 12: Schärfemasken-Regler wie alle anderen
 **Heute:** Der Regler „Empfindlichkeit“ der Schärfemaske (Menü Ansicht) ist ein Standard-Regler: anderes Aussehen, kein Doppelklick zum Zurücksetzen, anderes Verhalten bei Mausrad und Pfeiltasten.
 **Ziel:** Derselbe Regler wie überall sonst.
 **Aufwand:** klein · **Audit:** 82
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ---
@@ -121,21 +121,21 @@ Zum Entscheiden ein `x` ins Kästchen setzen; bei Fragen oder Ergänzungen die Z
 **Heute:** Export, HDR, Entrauschen usw. haben ein ✕ in der Statusleiste. Entfernen, KI-Maske, Look angleichen, Automatisch anpassen, Indexieren und die Fleckensuche lassen sich nicht abbrechen; die Fortschrittsbalken in den Panels haben kein Abbrechen. Die Fleckensuche erscheint auch nicht in der Statusleiste.
 **Ziel:** Wo ein Fortschrittsbalken ist, gibt es auch Abbrechen; alle Aufgaben erscheinen in der Statusleiste.
 **Aufwand:** mittel · **Audit:** 32, 35
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ### Story 14: Fehler gehen nicht unter
 **Heute:** Fehler landen an vier Orten: meist grau in der Statuszeile (und von der nächsten Meldung überschrieben), bei Entrauschen und Tiefe rot im Panel, beim Export nur im Protokoll im Ausgabe-Tab („Export abgeschlossen“ ohne Fehlerzahl), manche gar nicht (Stil oder Album löschen schlägt still fehl).
 **Ziel:** Fehler erscheinen einheitlich gut sichtbar (rot, länger stehend); der Export meldet „abgeschlossen, 2 Fehler“.
 **Aufwand:** mittel · **Audit:** 34
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ### Story 15: Vor dem endgültigen Löschen wird gefragt
 **Heute:** Variante löschen und Papierkorb leeren fragen nach. Eigenen Stil löschen (die Datei ist weg), Album löschen und Schnappschuss löschen passieren sofort, ohne Rückfrage und ohne Rückgängig.
 **Ziel:** Regel: Was sich nicht rückgängig machen lässt, wird vorher bestätigt.
 **Aufwand:** klein · **Audit:** 36
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ---
@@ -146,42 +146,42 @@ Zum Entscheiden ein `x` ins Kästchen setzen; bei Fragen oder Ergänzungen die Z
 **Heute:** Enter bestätigt nur in „Umbenennen“ und „Neue Session“; in allen anderen Dialogen braucht es die Maus. Der Beenden-Dialog nennt seinen Knopf „Abbrechen und beenden“ (missverständlich, weil „Abbrechen“ sonst „Dialog schließen“ heißt). „Personen zusammenführen“ lässt sich nicht rückgängig machen, der Knopf ist aber nicht rot.
 **Ziel:** Enter bestätigt, Esc bricht ab – in allen Dialogen. Endgültige Aktionen sind rot, Knopftexte eindeutig.
 **Aufwand:** klein · **Audit:** 41, 43, 44, 45
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ### Story 17: Umbenennen funktioniert überall gleich
 **Heute:** Bei Ebenen stellt Esc den alten Namen wieder her, bei Schnappschüssen und Alben speichert Esc den neuen. Ebenen benennt man per Doppelklick um, Schnappschüsse auch, Alben nur über das Rechtsklick-Menü.
 **Ziel:** Überall: Doppelklick startet, Enter speichert, Esc verwirft.
 **Aufwand:** klein · **Audit:** 42
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ### Story 18: Schnappschüsse in der Seitenleiste wie im Verlauf-Tab
 **Heute:** In der Seitenleiste fehlt das Umbenennen, der „+ Schnappschuss“-Knopf steht unten statt oben, es gibt keinen Hinweis bei leerer Liste. Der Tooltip „unter einem Namen sichern“ verspricht eine Namensabfrage, die es nicht gibt.
 **Ziel:** Seitenleiste und Verlauf-Tab verhalten sich gleich.
 **Aufwand:** klein · **Audit:** 40
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ### Story 19: Klarer Hinweis, wenn kein Bild gewählt ist
 **Heute:** Die meisten Tabs zeigen ohne Bild „Kein Bild ausgewählt“. Der Stile-Tab zeigt dann nur halb gefüllte Bedienelemente ohne Erklärung. Der Info-Tab zeigt „Kein Bild ausgewählt“, obwohl im Raster Bilder ausgewählt sind und Bewertungen auf diese wirken.
 **Ziel:** Überall derselbe Hinweis; der Info-Tab bearbeitet die Rasterauswahl.
 **Aufwand:** klein · **Audit:** 39
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ### Story 20: Rechtsklick-Menüs wo man sie erwartet
 **Heute:** Vorschaubilder, Alben, Stile und Personen haben ein Rechtsklick-Menü, Ebenen, Schnappschüsse, Look-Referenzen und Retuschepunkte nicht. Das Menü der Vorschaubilder bietet weder Bewertung, Label, Exportieren noch Anpassungen kopieren/einfügen.
 **Ziel:** Rechtsklick-Menüs in allen Listen; das Vorschaubild-Menü bekommt die wichtigsten Foto-Befehle.
 **Aufwand:** mittel · **Audit:** 47
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ### Story 21: Tastenkürzel in Tooltips stimmen immer
 **Heute:** Einige Tooltips nennen Tasten fest im Text („Enter“, „Esc“, „Vorschau mit P“, „Strg+Umschalt+V“). Wer im Tastenkürzel-Editor umbelegt, sieht dort weiter die alte Taste. Der größte Teil ist schon umgestellt.
 **Ziel:** Alle Tooltips zeigen die aktuell belegte Taste.
 **Aufwand:** klein · **Audit:** 48
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
 
 ---
@@ -220,8 +220,8 @@ Zum Entscheiden ein `x` ins Kästchen setzen; bei Fragen oder Ergänzungen die Z
 **Heute:** Fortschrittsmeldungen haben drei Satzformen („Berechne Maske…“, „Passe an …“, „Maske wird berechnet“), Zähler drei Formate („3 / 10“, „(3 von 10)“). Dazu Kleinigkeiten: „Bild(er)“ statt richtiger Mehrzahl, Großschreibung nach Doppelpunkt schwankt, eine einzige Du-Anrede (Kalibrieren), Tooltips mal mit, mal ohne Schlusspunkt, „&“ und „und“ gemischt.
 **Ziel:** Eine Form je Fall, z. B. „Maske wird berechnet …“ und „Exportieren: 3 von 10“.
 **Aufwand:** klein · **Audit:** 66–72
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-**Input:**
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Input:** Nimm eher die Form "Berechne Maske", "Passe an" in Fortschrittsmeldungen (möglichst kur eben)
 
 ---
 
@@ -231,5 +231,5 @@ Zum Entscheiden ein `x` ins Kästchen setzen; bei Fragen oder Ergänzungen die Z
 **Heute:** „90° links drehen“ hat dasselbe Symbol wie „Zurücksetzen“. Löschen erscheint mal als Minus, mal als Mülleimer, mal als X. Hinweistexte („Noch keine Alben.“) haben fünf verschiedene Grautöne. Einige Farben (Warnrot, Hilfslinien-Gelb) sind fest im Code statt im Farbschema.
 **Ziel:** Einheitliche Symbole, ein Grauton für Hinweise, alle Farben aus dem Farbschema. Für Nutzer ist das wenig sichtbar, es wirkt aber aufgeräumter.
 **Aufwand:** klein bis mittel · **Audit:** 85–89
-**Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+**Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 **Input:**
