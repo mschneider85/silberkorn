@@ -96,8 +96,8 @@ impl App {
         let n = ready.len();
         self.status = if n == 1 { "1 neue Aufnahme".into() } else { format!("{n} neue Aufnahmen") };
         let newest = ready.iter().max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok()).cloned();
+        self.add_entries(&ready);
         self.workers.index(IndexJob { catalog: self.catalog_path(), paths: ready, import: false, copy_to: None });
-        self.reload_entries();
         if self.hot_folder.open_new {
             self.select_when_listed = newest;
             self.select_created();

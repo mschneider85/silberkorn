@@ -27,10 +27,15 @@ fn analysis_image(path: &std::path::Path) -> anyhow::Result<::image::DynamicImag
 }
 
 /// Analyses one image.
-fn analyze_file(models: &sk_ai::faces::FaceModels, path: &std::path::Path) -> anyhow::Result<sk_ai::faces::Analysis> {
+/// The picture of [`analysis_image`] as the face models take it: (width, height, RGB 0..1).
+fn analysis_pixels(path: &std::path::Path) -> anyhow::Result<(usize, usize, Vec<[f32; 3]>)> {
     let rgb8 = analysis_image(path)?.to_rgb8();
-    let rgb: Vec<[f32; 3]> = rgb8.pixels().map(|p| [p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0]).collect();
-    models.analyze(&sk_ai::faces::Image { width: rgb8.width() as usize, height: rgb8.height() as usize, rgb: &rgb })
+    let rgb = rgb8.pixels().map(|p| [p[0] as f32 / 255.0, p[1] as f32 / 255.0, p[2] as f32 / 255.0]).collect();
+    Ok((rgb8.width() as usize, rgb8.height() as usize, rgb))
+}
+
+fn analyze_pixels(models: &sk_ai::faces::FaceModels, (width, height, rgb): &(usize, usize, Vec<[f32; 3]>)) -> anyhow::Result<sk_ai::faces::Analysis> {
+    models.analyze(&sk_ai::faces::Image { width: *width, height: *height, rgb })
 }
 
 /// Edge of a face thumbnail in pixels.
@@ -167,19 +172,32 @@ impl App {
             }
             let models = sk_ai::faces::FaceModels::load()?;
             let db = Catalog::open(&catalog)?;
-            for (i, path) in todo.iter().enumerate() {
-                if db.needs_index(path).unwrap_or(true) {
-                    let _ = db.index_file(path, 0);
-                }
-                match analyze_file(&models, path) {
-                    Ok(a) => {
-                        let faces: Vec<FaceRecord> =
-                            a.faces.iter().map(|f| FaceRecord { bbox: f.bbox, embedding: f.embedding.clone(), eyes_closed: f.eyes_closed }).collect();
-                        db.store_analysis(path, a.sharpness, &faces, sk_ai::faces::SAME_PERSON)?;
+            // A few images at a time: they are read and decoded in parallel, and analysed in
+            // parallel too unless the models work best one run at a time.
+            use rayon::prelude::*;
+            let mut done = 0;
+            for chunk in todo.chunks(4) {
+                for path in chunk {
+                    if db.needs_index(path).unwrap_or(true) {
+                        let _ = db.index_file(path, 0);
                     }
-                    Err(e) => log::warn!("Analyse {}: {e:#}", path.display()),
                 }
-                progress((i + 1) as f32 / todo.len() as f32);
+                let pixels: Vec<_> = chunk.par_iter().map(|p| analysis_pixels(p)).collect();
+                let analyse = |px: &anyhow::Result<_>| px.as_ref().map_err(|e| anyhow::anyhow!("{e:#}")).and_then(|px| analyze_pixels(&models, px));
+                let results: Vec<_> =
+                    if models.prefers_serial() { pixels.iter().map(analyse).collect() } else { pixels.par_iter().map(analyse).collect() };
+                for (path, result) in chunk.iter().zip(results) {
+                    match result {
+                        Ok(a) => {
+                            let faces: Vec<FaceRecord> =
+                                a.faces.iter().map(|f| FaceRecord { bbox: f.bbox, embedding: f.embedding.clone(), eyes_closed: f.eyes_closed }).collect();
+                            db.store_analysis(path, a.sharpness, &faces, sk_ai::faces::SAME_PERSON)?;
+                        }
+                        Err(e) => log::warn!("Analyse {}: {e:#}", path.display()),
+                    }
+                    done += 1;
+                    progress(done as f32 / todo.len() as f32);
+                }
             }
             Ok(Vec::new())
         }));

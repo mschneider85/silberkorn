@@ -200,6 +200,17 @@ impl App {
         self.request_proxies();
     }
 
+    /// Adds new files of the folder shown (from their sidecars) without reading the whole
+    /// folder again; the catalog's details follow when they are indexed.
+    pub(crate) fn add_entries(&mut self, paths: &[PathBuf]) {
+        let listed: std::collections::HashSet<&PathBuf> = self.entries.iter().map(|e| &e.path).collect();
+        let new: Vec<PathBuf> = paths.iter().filter(|p| !listed.contains(p)).cloned().collect();
+        self.entries.extend(sidecar::load_all(&new).into_iter().map(|(p, sc)| record_from_sidecar(p, sc)));
+        sort_records(&mut self.entries, self.sort, self.sort_desc);
+        self.refilter();
+        self.request_proxies();
+    }
+
     pub fn resort(&mut self) {
         sort_records(&mut self.entries, self.sort, self.sort_desc);
         self.refilter();

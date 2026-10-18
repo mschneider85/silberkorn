@@ -266,6 +266,11 @@ impl FaceModels {
     }
 
     /// Analyses an image (any size; about 1500 px on the long edge is plenty).
+    /// See [`Net::prefers_serial`].
+    pub fn prefers_serial(&self) -> bool {
+        self.det.prefers_serial()
+    }
+
     pub fn analyze(&self, img: &Image) -> Result<Analysis> {
         let (w, h) = (img.width as f32, img.height as f32);
         let mut faces = Vec::new();
