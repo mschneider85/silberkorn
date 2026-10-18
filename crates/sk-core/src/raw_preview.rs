@@ -20,6 +20,13 @@ const MIN_JPEG: u64 = 32 << 10;
 
 /// The largest embedded JPEG (its bytes) and the EXIF orientation of the image (1..8).
 pub fn read(path: &Path) -> Option<(Vec<u8>, u16)> {
+    read_at_least(path, usize::MAX)
+}
+
+/// Like [`read`], but the smallest embedded JPEG whose longer edge has at least `min_edge`
+/// pixels (the largest if none has): many raws hold a medium preview besides the full-size
+/// one, and decoding that is many times faster for a thumbnail.
+pub fn read_at_least(path: &Path, min_edge: usize) -> Option<(Vec<u8>, u16)> {
     let mut f = File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
     let mut head = [0u8; 16];
@@ -29,9 +36,42 @@ pub fn read(path: &Path) -> Option<(Vec<u8>, u16)> {
     }
     let tiff = Tiff::at(&mut f, 0, len)?;
     let found = tiff.scan(&mut f)?;
-    let (offset, size) = found.jpeg?;
+    let (mut offset, mut size) = found.jpeg?;
+    if min_edge < usize::MAX {
+        let mut smaller: Vec<(u64, u64)> = found.jpegs.iter().copied().filter(|&(_, l)| (MIN_JPEG..size).contains(&l)).collect();
+        smaller.sort_by_key(|&(_, l)| l);
+        if let Some(&(o, l)) = smaller.iter().find(|&&(o, l)| jpeg_size(&mut f, o, l).is_some_and(|(w, h)| w.max(h) >= min_edge)) {
+            (offset, size) = (o, l);
+        }
+    }
     let jpeg = read_range(&mut f, offset, size)?;
     Some((jpeg, found.orientation.unwrap_or(1)))
+}
+
+/// Width and height of the JPEG at `offset` from its frame header (within its first 64 KB).
+fn jpeg_size(f: &mut File, offset: u64, size: u64) -> Option<(usize, usize)> {
+    let mut buf = vec![0u8; size.min(64 << 10) as usize];
+    f.seek(SeekFrom::Start(offset)).ok()?;
+    f.read_exact(&mut buf).ok()?;
+    if !buf.starts_with(&[0xff, 0xd8]) {
+        return None;
+    }
+    let mut i = 2usize;
+    while i + 9 <= buf.len() && buf[i] == 0xff {
+        let marker = buf[i + 1];
+        let seg = u16::from_be_bytes([buf[i + 2], buf[i + 3]]) as usize;
+        // Start of frame (baseline, progressive, …; not DHT, JPG or DAC).
+        if matches!(marker, 0xc0..=0xcf) && !matches!(marker, 0xc4 | 0xc8 | 0xcc) {
+            let h = u16::from_be_bytes([buf[i + 5], buf[i + 6]]) as usize;
+            let w = u16::from_be_bytes([buf[i + 7], buf[i + 8]]) as usize;
+            return Some((w, h));
+        }
+        if marker == 0xda {
+            return None;
+        }
+        i += 2 + seg;
+    }
+    None
 }
 
 /// RAF: a fixed header points to the embedded JPEG (offset and length, big-endian, at bytes
@@ -94,6 +134,8 @@ struct Tiff {
 struct Found {
     /// Largest JPEG: (absolute offset, length).
     jpeg: Option<(u64, u64)>,
+    /// All JPEGs found.
+    jpegs: Vec<(u64, u64)>,
     orientation: Option<u16>,
 }
 
@@ -142,10 +184,11 @@ impl Tiff {
             }
             for (start, size) in ifd.jpegs() {
                 let start = self.base + start;
-                if start.checked_add(size).is_some_and(|end| end <= self.base + self.len)
-                    && found.jpeg.is_none_or(|(_, best)| size > best)
-                {
-                    found.jpeg = Some((start, size));
+                if start.checked_add(size).is_some_and(|end| end <= self.base + self.len) {
+                    found.jpegs.push((start, size));
+                    if found.jpeg.is_none_or(|(_, best)| size > best) {
+                        found.jpeg = Some((start, size));
+                    }
                 }
             }
             todo.extend(ifd.sub_ifds.iter().map(|o| (*o, false)));
@@ -272,6 +315,19 @@ mod tests {
         let p = std::env::temp_dir().join(format!("sk-rawprev-{name}-{}", std::process::id()));
         std::fs::write(&p, data).unwrap();
         p
+    }
+
+    /// A sample raw's medium preview is enough for a thumbnail, and it is smaller than the
+    /// largest (skipped without the samples).
+    #[test]
+    fn smallest_preview_large_enough() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples/_DSC0010.ARW");
+        let Some((largest, _)) = read(&path) else { return };
+        let (small, _) = read_at_least(&path, 400).unwrap();
+        let size = |jpeg: &[u8]| ::image::load_from_memory(jpeg).map(|i| i.width().max(i.height())).unwrap();
+        assert!(size(&small) >= 400);
+        assert!(small.len() <= largest.len());
+        eprintln!("Vorschau {} px ({} KB) statt {} px ({} KB)", size(&small), small.len() >> 10, size(&largest), largest.len() >> 10);
     }
 
     #[test]

@@ -509,8 +509,14 @@ fn superpixel(raw: &RawImage, cfa: &rawler::CFA, k: usize) -> Result<LinearImage
 /// Embedded JPEG preview (fast thumbnails), already oriented. Reads only the JPEG where the
 /// file's structure allows it (see `raw_preview`), else decodes the file's metadata with rawler.
 pub fn embedded_preview(path: &Path) -> Result<::image::DynamicImage> {
+    embedded_preview_at_least(path, usize::MAX)
+}
+
+/// [`embedded_preview`] from the smallest embedded JPEG with at least `min_edge` pixels on its
+/// longer side, where the file holds several (much faster for thumbnails).
+pub fn embedded_preview_at_least(path: &Path, min_edge: usize) -> Result<::image::DynamicImage> {
     let file = crate::variant::file_of(path);
-    if let Some((jpeg, orientation)) = crate::raw_preview::read(&file)
+    if let Some((jpeg, orientation)) = crate::raw_preview::read_at_least(&file, min_edge)
         && let Ok(img) = ::image::load_from_memory_with_format(&jpeg, ::image::ImageFormat::Jpeg)
     {
         return Ok(Orientation::from_exif(orientation).apply_dynamic(img));

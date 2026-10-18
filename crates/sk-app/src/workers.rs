@@ -1322,7 +1322,7 @@ fn make_thumbnail(path: &std::path::Path, session: Option<&std::path::Path>) -> 
         let r = Processor::new(&meta, &sc.adjustments).render(&preview, None, None);
         ::image::DynamicImage::ImageRgba8(::image::RgbaImage::from_raw(r.width as u32, r.height as u32, r.rgba)?)
     } else {
-        raw::embedded_preview(path).ok()?
+        raw::embedded_preview_at_least(path, THUMB_EDGE as usize).ok()?
     };
     let thumb = img.thumbnail(THUMB_EDGE, THUMB_EDGE);
     cache::store(path, &sc.adjustments, session, &thumb);

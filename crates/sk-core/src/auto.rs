@@ -528,7 +528,7 @@ pub fn camera_brightness(meta: &RawMeta) -> Option<f32> {
     if meta.hdr {
         return None;
     }
-    let img = crate::raw::embedded_preview(&meta.path).ok()?.thumbnail(320, 320).to_rgb8();
+    let img = crate::raw::embedded_preview_at_least(&meta.path, 320).ok()?.thumbnail(320, 320).to_rgb8();
     let (w, h) = (img.width() as usize, img.height() as usize);
     let px = img.as_raw().as_chunks::<3>().0;
     // Some previews have black bars (another aspect ratio than the sensor): left out.
