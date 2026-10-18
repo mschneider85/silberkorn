@@ -194,7 +194,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("edit-background", icon::X, "Hintergrund bearbeiten", "Ebenen", [], "ebene abwählen global ganzes bild background", on_layer, |a, _| a.select_layer(None)),
     cmd!("layer-up", icon::ARROW_UP, "Ebene darüber bearbeiten", "Ebenen", [ALT => Key::ArrowUp], "nächste ebene wählen layer", has_layers, |a, _| a.step_layer(true)),
     cmd!("layer-down", icon::ARROW_DOWN, "Ebene darunter bearbeiten", "Ebenen", [ALT => Key::ArrowDown], "vorherige ebene wählen layer hintergrund", has_layers, |a, _| a.step_layer(false)),
-    cmd!("delete-spot", icon::TRASH, "Retuschepunkt oder Verlauf löschen", "Retusche", [NONE => Key::Delete, NONE => Key::Backspace], "spot verlauf gradient", |a| a.selected_spot.is_some() || a.selected_gradient.is_some(), |a, _| a.delete_selected_spot()),
+    cmd!("delete-spot", icon::TRASH, "Gewähltes löschen (Retuschepunkt, Verlauf oder Ebene)", "Retusche", [NONE => Key::Delete, NONE => Key::Backspace], "spot verlauf gradient ebene layer entfernen", |a| a.selected_spot.is_some() || a.selected_gradient.is_some() || (a.tab == Tab::Layers && a.active_layer.is_some()), |a, _| a.delete_selected_spot()),
     // Ansicht
     cmd!("grid", icon::SQUARES_FOUR, "Raster / Einzelbild umschalten", "Ansicht", [NONE => Key::G], "grid browser übersicht viewer", always, |a, _| a.grid_view = !a.grid_view),
     cmd!("filmstrip", icon::FILM_STRIP, "Filmstreifen ein/aus", "Ansicht", [], "filmstrip", always, |a, _| a.show_filmstrip = !a.show_filmstrip),

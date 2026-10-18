@@ -427,16 +427,23 @@ impl App {
         } else if self.keystone_guides_active() {
             Some(format!("Trapezkorrektur – Linien an Kanten legen, {} übernimmt, Esc bricht ab", crate::commands::key_or("finish-crop", "„Übernehmen“")))
         } else if self.straighten_tool.is_some() {
-            Some("Geraderichten – Linie entlang des Horizonts ziehen".into())
+            Some("Geraderichten – Linie entlang des Horizonts ziehen, Esc beendet".into())
         } else if self.picking_wb {
-            Some("Weißabgleich – auf eine neutrale Fläche klicken".into())
+            Some("Weißabgleich – auf eine neutrale Fläche klicken, Esc beendet".into())
         } else if self.picking_skin {
             Some(match self.color_pick {
-                crate::develop_tools::ColorPick::Skin => "Hautton – auf eine typische Hautstelle klicken".into(),
-                _ => "Farbbereich – auf die Farbe klicken, die geändert werden soll".into(),
+                crate::develop_tools::ColorPick::Skin => "Hautton – auf eine typische Hautstelle klicken, Esc beendet".into(),
+                _ => "Farbbereich – auf die Farbe klicken, die geändert werden soll, Esc beendet".into(),
             })
         } else if self.picking_focus {
-            Some("Fokus – auf die Stelle klicken, die scharf bleiben soll".into())
+            Some("Fokus – auf die Stelle klicken, die scharf bleiben soll, Esc beendet".into())
+        } else if let Some(t) = self.local_tool {
+            // Brushes, gradients, retouching: the tool, the layer it paints on, how to leave it.
+            let (_, name, _) = t.tile();
+            Some(match self.edit_layer_name() {
+                Some(layer) => format!("{name} auf Ebene „{layer}“ – Esc beendet"),
+                None => format!("{name} – Esc beendet"),
+            })
         } else if self.show_before {
             Some("Vorher".into())
         } else {

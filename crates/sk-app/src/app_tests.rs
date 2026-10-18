@@ -3304,3 +3304,42 @@ fn a_new_snapshot_can_be_named_right_away() {
     f.app.add_snapshot_to_name();
     assert_eq!(f.app.snapshot_rename, Some((1, "Schnappschuss 2".to_string())));
 }
+
+/// Tools in the viewer end the same way when their panel goes: the crop stays as it was set.
+#[test]
+fn another_tab_ends_the_crop_and_keeps_it() {
+    use crate::app::Tab;
+    let Some(mut f) = Fixture::new("tab-ends-crop") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let smaller = sk_core::params::CropRect { x: 0.1, y: 0.1, w: 0.5, h: 0.5 };
+    f.app.start_crop_tool();
+    f.app.current.as_mut().unwrap().adjustments.geometry.crop = smaller;
+    f.app.tab = Tab::Color;
+    let mut frame = eframe::Frame::_new_kittest();
+    let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1500.0, 950.0))), ..Default::default() };
+    let app = &mut f.app;
+    let mut out = f.ctx.run_ui(input, |ui| eframe::App::ui(app, ui, &mut frame));
+    out.textures_delta.clear();
+    assert!(f.app.crop_tool.is_none());
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.geometry.crop, smaller);
+}
+
+/// Entf deletes what is chosen: in the layer tab the chosen layer (undoable).
+#[test]
+fn delete_key_deletes_the_chosen_layer() {
+    use crate::app::Tab;
+    let Some(mut f) = Fixture::new("delete-layer") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.edit(|a| a.layers = vec![sk_core::params::Layer { name: "Himmel".into(), ..Default::default() }]);
+    f.app.commit_and_save();
+    f.app.active_layer = Some(0);
+    f.app.tab = Tab::Exposure;
+    assert!(!f.app.command_available("delete-spot"), "nur im Ebenen-Tab");
+    f.app.tab = Tab::Layers;
+    assert!(f.app.command_available("delete-spot"));
+    f.app.run_command_id(&f.ctx.clone(), "delete-spot");
+    assert!(f.app.current.as_ref().unwrap().adjustments.layers.is_empty());
+    assert_eq!(f.app.active_layer, None);
+    f.app.undo();
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.layers.len(), 1);
+}

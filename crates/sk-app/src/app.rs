@@ -1566,6 +1566,9 @@ impl App {
     pub fn make_primary(&mut self, path: &PathBuf) {
         if self.primary_path().as_ref() != Some(path) {
             self.workers.touch();
+            // Every tool in the viewer ends with the image, as when another tool starts: moved
+            // keystone lines and the crop are applied to this image, not dropped.
+            self.end_viewer_tools();
             self.commit_and_save();
             self.stash_current();
             self.workers.cancel_tiles();
@@ -2407,6 +2410,21 @@ impl App {
         (true, (x1 > x0 && y1 > y0).then(|| sk_core::geometry::Region { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }))
     }
 
+    /// The tab with the settings of the tool working in the viewer, if one is.
+    pub(crate) fn viewer_tool_tab(&self) -> Option<Tab> {
+        if let Some(t) = self.local_tool {
+            Some(t.tab())
+        } else if self.crop_tool.is_some() || self.straighten_tool.is_some() {
+            Some(Tab::Lens)
+        } else if self.picking_wb || self.picking_skin {
+            Some(Tab::Color)
+        } else if self.picking_focus {
+            Some(Tab::Effects)
+        } else {
+            None
+        }
+    }
+
     /// A tool working in the viewer (crop, straighten, pickers, brushes …): Esc ends it first.
     pub(crate) fn viewer_tool_active(&self) -> bool {
         self.picking_wb || self.picking_skin || self.picking_focus || self.local_tool.is_some() || self.straighten_tool.is_some() || self.crop_tool.is_some()
@@ -2763,11 +2781,14 @@ impl eframe::App for App {
         if !self.tab_available(self.tab) {
             self.tab = Tab::Layers;
         }
-        // Another tab: a layer or retouch tool of the old one ends (its panel is gone).
+        // Another tab: a tool working in the viewer ends when its panel is gone, the same for
+        // all of them (keystone lines and the crop are kept, as when another tool starts).
         if self.tab != self.tab_shown {
             self.tab_shown = self.tab;
             if let Some(t) = self.local_tool.filter(|t| t.tab() != self.tab) {
                 self.set_local_tool(t);
+            } else if self.viewer_tool_tab().is_some_and(|t| t != self.tab) {
+                self.end_viewer_tools();
             }
         }
         self.confirm_quit(&ctx);

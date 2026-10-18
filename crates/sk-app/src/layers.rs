@@ -1152,6 +1152,8 @@ impl App {
         }
     }
 
+    /// Entf: deletes what is chosen – a gradient, a retouch area, or else the chosen layer in
+    /// the layer tab. All of it can be undone.
     pub fn delete_selected_spot(&mut self) {
         if self.delete_selected_gradient() {
             return;
@@ -1162,7 +1164,26 @@ impl App {
                     a.retouch.remove(i);
                 }
             });
+        } else if self.tab == Tab::Layers
+            && let Some(i) = self.active_layer
+        {
+            self.delete_layer(i);
         }
+    }
+
+    /// Removes layer `i` (undoable); the chosen one follows.
+    pub fn delete_layer(&mut self, i: usize) {
+        self.renaming_layer = None;
+        self.active_layer = match self.active_layer {
+            Some(a) if a == i => None,
+            Some(a) if a > i => Some(a - 1),
+            a => a,
+        };
+        self.edit(|a| {
+            if i < a.layers.len() {
+                a.layers.remove(i);
+            }
+        });
     }
 
     /// Layer overview: opacity of the chosen layer on top, one
@@ -1287,7 +1308,7 @@ impl App {
                 .response
                 .on_hover_text("Neue Ebene");
                 let minus = ui.add_enabled(active.is_some(), egui::Button::new(egui::RichText::new(icon::TRASH).size(15.0)));
-                if minus.on_hover_text("Gewählte Ebene löschen").clicked()
+                if minus.on_hover_text(crate::commands::hint("Gewählte Ebene löschen", "delete-spot")).clicked()
                     && let Some(li) = active
                 {
                     action = Some(LayerAction::Delete(li));
@@ -1569,19 +1590,7 @@ impl App {
                     }
                 });
             }
-            Some(LayerAction::Delete(i)) => {
-                self.renaming_layer = None;
-                self.active_layer = match self.active_layer {
-                    Some(a) if a == i => None,
-                    Some(a) if a > i => Some(a - 1),
-                    a => a,
-                };
-                self.edit(|a| {
-                    if i < a.layers.len() {
-                        a.layers.remove(i);
-                    }
-                });
-            }
+            Some(LayerAction::Delete(i)) => self.delete_layer(i),
             None => {}
         }
     }

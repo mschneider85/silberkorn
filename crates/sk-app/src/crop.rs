@@ -210,16 +210,27 @@ impl App {
             }
         }
 
-        // Apply and cancel, at the bottom of the image.
-        let size = vec2(110.0, 28.0);
-        let at = pos2(img_rect.center().x, img_rect.bottom().min(ui.clip_rect().bottom()) - 44.0);
-        let apply = ui.put(Rect::from_center_size(at - vec2(size.x / 2.0 + 4.0, 0.0), size), egui::Button::new(format!("{}  Übernehmen", crate::theme::icon::CHECK)));
-        let cancel = ui.put(Rect::from_center_size(at + vec2(size.x / 2.0 + 4.0, 0.0), size), egui::Button::new("Abbrechen"));
-        if apply.on_hover_text(crate::commands::shortcut_of("finish-crop")).clicked() {
-            self.apply_keystone_guides();
-        } else if cancel.on_hover_text("Esc").clicked() {
-            self.cancel_viewer_tools();
+        match apply_or_cancel(ui, img_rect) {
+            Some(true) => self.apply_keystone_guides(),
+            Some(false) => self.cancel_viewer_tools(),
+            None => {}
         }
+    }
+}
+
+/// "Übernehmen" and "Abbrechen" at the bottom of the image, for the tools that are confirmed
+/// (crop, keystone lines): Some(true) when applied, Some(false) when cancelled.
+fn apply_or_cancel(ui: &mut Ui, img_rect: Rect) -> Option<bool> {
+    let size = vec2(110.0, 28.0);
+    let at = pos2(img_rect.center().x, img_rect.bottom().min(ui.clip_rect().bottom()) - 44.0);
+    let apply = ui.put(Rect::from_center_size(at - vec2(size.x / 2.0 + 4.0, 0.0), size), egui::Button::new(format!("{}  Übernehmen", crate::theme::icon::CHECK)));
+    let cancel = ui.put(Rect::from_center_size(at + vec2(size.x / 2.0 + 4.0, 0.0), size), egui::Button::new("Abbrechen"));
+    if apply.on_hover_text(crate::commands::shortcut_of("finish-crop")).clicked() {
+        Some(true)
+    } else if cancel.on_hover_text("Esc").clicked() {
+        Some(false)
+    } else {
+        None
     }
 }
 
@@ -552,6 +563,12 @@ impl App {
             egui::FontId::proportional(12.0),
             Color32::WHITE,
         );
+        // Like the keystone lines: confirm or cancel right in the image.
+        match apply_or_cancel(ui, img_rect) {
+            Some(true) => self.finish_crop_tool(),
+            Some(false) => self.cancel_viewer_tools(),
+            None => {}
+        }
     }
 
     /// Straighten line tool: drag along a horizon or vertical edge.
