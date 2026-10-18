@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use image::{ImageBuffer, ImageEncoder, Rgb, imageops::FilterType};
+use image::{ImageBuffer, ImageEncoder, Rgb};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -300,13 +300,71 @@ fn resized(out: &crate::image::LinearImage, recipe: &ExportRecipe) -> Result<Ima
     let (w, h) = buf.dimensions();
     let (nw, nh) = recipe.output_size(w, h);
     if (nw, nh) != (w, h) {
-        buf = image::imageops::resize(&buf, nw, nh, FilterType::Lanczos3);
+        buf = resize_lanczos3(&buf, nw, nh);
     }
     if let Some((amount, radius)) = recipe.output_sharpening.strength() {
         sharpen(&mut buf, amount, radius);
     }
     recipe.watermark.apply(&mut buf, recipe.output_space)?;
     Ok(buf)
+}
+
+/// Lanczos3 resampling like `image::imageops::resize`, but on all cores (that one runs on one
+/// and took seconds for a large image).
+fn resize_lanczos3(src: &ImageBuffer<Rgb<f32>, Vec<f32>>, nw: u32, nh: u32) -> ImageBuffer<Rgb<f32>, Vec<f32>> {
+    let (w, h) = (src.width() as usize, src.height() as usize);
+    let (nw, nh) = (nw as usize, nh as usize);
+    // Per output position: first source index and normalized weights.
+    let weights = |n: usize, out: usize| -> Vec<(usize, Vec<f32>)> {
+        let ratio = n as f32 / out as f32;
+        let scale = ratio.max(1.0);
+        let support = 3.0 * scale;
+        (0..out)
+            .map(|o| {
+                let center = (o as f32 + 0.5) * ratio;
+                let lo = ((center - support).floor().max(0.0) as usize).min(n - 1);
+                let hi = ((center + support).ceil() as usize).clamp(lo + 1, n);
+                let mut ws: Vec<f32> = (lo..hi).map(|i| lanczos3((i as f32 + 0.5 - center) / scale)).collect();
+                let sum: f32 = ws.iter().sum();
+                if sum != 0.0 {
+                    ws.iter_mut().for_each(|v| *v /= sum);
+                }
+                (lo, ws)
+            })
+            .collect()
+    };
+    let (wx, wy) = (weights(w, nw), weights(h, nh));
+    let data = src.as_raw();
+    // Horizontal pass into an intermediate of nw x h, then vertical.
+    let mut mid = vec![0.0f32; nw * h * 3];
+    mid.par_chunks_mut(nw * 3).enumerate().for_each(|(y, row)| {
+        let line = &data[y * w * 3..(y + 1) * w * 3];
+        for (x, (lo, ws)) in wx.iter().enumerate() {
+            let mut acc = [0.0f32; 3];
+            for (k, wt) in ws.iter().enumerate() {
+                let p = &line[(lo + k) * 3..(lo + k) * 3 + 3];
+                acc[0] += p[0] * wt;
+                acc[1] += p[1] * wt;
+                acc[2] += p[2] * wt;
+            }
+            row[x * 3..x * 3 + 3].copy_from_slice(&acc);
+        }
+    });
+    let mut out = vec![0.0f32; nw * nh * 3];
+    out.par_chunks_mut(nw * 3).zip(&wy).for_each(|(row, (lo, ws))| {
+        for (k, wt) in ws.iter().enumerate() {
+            let line = &mid[(lo + k) * nw * 3..(lo + k + 1) * nw * 3];
+            row.iter_mut().zip(line).for_each(|(o, v)| *o += v * wt);
+        }
+        // Output-encoded values: the overshoot of the filter at edges is cut off.
+        row.iter_mut().for_each(|v| *v = v.clamp(0.0, 1.0));
+    });
+    ImageBuffer::from_raw(nw as u32, nh as u32, out).expect("size")
+}
+
+fn lanczos3(x: f32) -> f32 {
+    let sinc = |x: f32| if x == 0.0 { 1.0 } else { (std::f32::consts::PI * x).sin() / (std::f32::consts::PI * x) };
+    if x.abs() < 3.0 { sinc(x) * sinc(x / 3.0) } else { 0.0 }
 }
 
 /// Unsharp mask on the luminance of output-encoded RGB (colors keep their place: no colored halos).
@@ -445,6 +503,22 @@ pub fn proof(processed: &crate::image::LinearImage, recipe: &ExportRecipe, info:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The parallel resampling gives what `image` gives (smaller and larger).
+    #[test]
+    fn resize_matches_image_crate() {
+        let (w, h) = (301u32, 199u32);
+        let src = ImageBuffer::from_fn(w, h, |x, y| {
+            let v = |k: u32| ((x * k + y * (k + 3)) % 97) as f32 / 96.0;
+            Rgb([v(5), v(11), if (x / 7 + y / 5) % 2 == 0 { 1.0 } else { 0.0 }])
+        });
+        for (nw, nh) in [(100, 66), (37, 25), (450, 300), (301, 100)] {
+            let ours = resize_lanczos3(&src, nw, nh);
+            let theirs = image::imageops::resize(&src, nw, nh, image::imageops::FilterType::Lanczos3);
+            let max = ours.as_raw().iter().zip(theirs.as_raw()).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+            assert!(max < 2e-3, "{nw}x{nh}: {max}");
+        }
+    }
 
     #[test]
     fn names_are_unique_within_a_batch() {

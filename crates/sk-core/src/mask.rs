@@ -206,7 +206,8 @@ fn mask_keys(mask: &Mask, aspect: f32, src: Option<&LinearImage>) -> (u64, u64) 
 /// Hash of the bitmap of an AI mask. Its data never changes once made (see `AiMask`), so the
 /// hash is kept per allocation: hashing megabytes each rendering costs milliseconds.
 fn ai_hash(data: &Arc<Vec<u8>>) -> u64 {
-    static HASHES: LazyLock<Mutex<Vec<(std::sync::Weak<Vec<u8>>, u64)>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+    type Hashes = Vec<(std::sync::Weak<Vec<u8>>, u64)>;
+    static HASHES: Mutex<Hashes> = Mutex::new(Vec::new());
     let mut hashes = HASHES.lock().unwrap();
     // A weak reference keeps its allocation, so no other data can be at that address meanwhile.
     hashes.retain(|(w, _)| w.strong_count() > 0);
