@@ -680,21 +680,6 @@ fn exposure_gains(n: usize, pairs: &[PairMatches], guides: &[Plane]) -> Vec<f32>
 
 // ------------------------------------------------------------------ projection and blending
 
-fn direction(proj: Projection, u: f64, v: f64) -> [f64; 3] {
-    match proj {
-        Projection::Spherical => {
-            let (st, ct) = u.sin_cos();
-            let (sp, cp) = v.sin_cos();
-            [st * cp, sp, ct * cp]
-        }
-        Projection::Cylindrical => {
-            let (st, ct) = u.sin_cos();
-            [st, v, ct]
-        }
-        Projection::Perspective => [u, v, 1.0],
-    }
-}
-
 fn unproject(proj: Projection, d: [f64; 3]) -> Option<[f64; 2]> {
     match proj {
         Projection::Spherical => {
@@ -747,23 +732,41 @@ struct Source {
 
 /// Renders the panorama: output size, data (camera RGB) and coverage.
 fn render(sources: &[Source], focal: f64, proj: Projection, auto_crop: bool, max_pixels: usize) -> Result<LinearImage> {
-    // Extent: the borders of all images, projected.
+    // Extent: the borders of all images, projected. Each image's own range lets a pixel skip
+    // the images it can't be in; `None` where the border doesn't tell (part of it not
+    // projected, or a pole inside the image).
     let (mut umin, mut umax, mut vmin, mut vmax) = (f64::MAX, f64::MIN, f64::MAX, f64::MIN);
+    let mut ranges: Vec<Option<[f64; 4]>> = Vec::with_capacity(sources.len());
     for s in sources {
         let (w, h) = (s.img.width as f64, s.img.height as f64);
         let rt = transpose(&s.rot);
+        let mut range = Some([f64::MAX, f64::MIN, f64::MAX, f64::MIN]);
         for k in 0..=40 {
             let t = k as f64 / 40.0;
             for (x, y) in [(t * w, 0.0), (t * w, h), (0.0, t * h), (w, t * h)] {
                 let d = mulv(&rt, [x - w / 2.0, y - h / 2.0, focal]);
-                if let Some([u, v]) = unproject(proj, d) {
-                    umin = umin.min(u);
-                    umax = umax.max(u);
-                    vmin = vmin.min(v);
-                    vmax = vmax.max(v);
+                match unproject(proj, d) {
+                    Some([u, v]) => {
+                        umin = umin.min(u);
+                        umax = umax.max(u);
+                        vmin = vmin.min(v);
+                        vmax = vmax.max(v);
+                        if let Some(r) = &mut range {
+                            *r = [r[0].min(u), r[1].max(u), r[2].min(v), r[3].max(v)];
+                        }
+                    }
+                    None => range = None,
                 }
             }
         }
+        let pole_inside = [[0.0, 1.0, 0.0], [0.0, -1.0, 0.0]].iter().any(|pole| {
+            let q = mulv(&s.rot, *pole);
+            let (px, py) = (q[0] / q[2] * focal + w / 2.0, q[1] / q[2] * focal + h / 2.0);
+            q[2] > 1e-6 && px >= 0.0 && py >= 0.0 && px <= w && py <= h
+        });
+        #[cfg(test)]
+        let range = range.filter(|_| !tests::FULL_SEARCH.with(|f| f.get()));
+        ranges.push(range.filter(|_| proj == Projection::Perspective || !pole_inside));
     }
     if !(umin < umax && vmin < vmax) {
         bail!("Keine gültige Projektion");
@@ -781,16 +784,33 @@ fn render(sources: &[Source], focal: f64, proj: Projection, auto_crop: bool, max
         bail!("Das Panorama wäre {ow} × {oh} Pixel groß – bitte eine andere Projektion wählen");
     }
     let rots: Vec<M3> = sources.iter().map(|s| s.rot).collect();
+    // A pixel's margin around each range.
+    let m = 2.0 / scale;
+    let ranges: Vec<Option<[f64; 4]>> = ranges.into_iter().map(|r| r.map(|r| [r[0] - m, r[1] + m, r[2] - m, r[3] + m])).collect();
+    // The angles' sine and cosine per column and per row rather than per pixel.
+    let col_sc: Vec<(f64, f64)> = (0..ow).map(|x| (umin + (x as f64 + 0.5) / scale).sin_cos()).collect();
     let mut data = vec![[0.0f32; 3]; ow * oh];
     let mut covered = vec![false; ow * oh];
     data.par_chunks_mut(ow).zip(covered.par_chunks_mut(ow)).enumerate().for_each(|(y, (line, cov))| {
         let v = vmin + (y as f64 + 0.5) / scale;
+        let (sp, cp) = v.sin_cos();
+        // The images this row can show.
+        let active: Vec<usize> = (0..sources.len()).filter(|&i| ranges[i].is_none_or(|r| v >= r[2] && v <= r[3])).collect();
         for (x, (o, c)) in line.iter_mut().zip(cov.iter_mut()).enumerate() {
             let u = umin + (x as f64 + 0.5) / scale;
-            let d = direction(proj, u, v);
+            let (st, ct) = col_sc[x];
+            let d = match proj {
+                Projection::Spherical => [st * cp, sp, ct * cp],
+                Projection::Cylindrical => [st, v, ct],
+                Projection::Perspective => [u, v, 1.0],
+            };
             let mut acc = [0.0f32; 3];
             let mut wsum = 0.0f32;
-            for (s, r) in sources.iter().zip(&rots) {
+            for &i in &active {
+                if ranges[i].is_some_and(|r| u < r[0] || u > r[1]) {
+                    continue;
+                }
+                let (s, r) = (&sources[i], &rots[i]);
                 let q = mulv(r, d);
                 if q[2] <= 1e-6 {
                     continue;
@@ -974,6 +994,37 @@ pub fn stitch_files(paths: &[PathBuf], opts: &PanoramaOptions, progress: &dyn Fn
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        /// Every image is checked for every pixel (the reference for the ranges).
+        pub(super) static FULL_SEARCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    /// Skipping the images a pixel can't be in gives exactly the result of checking all, also
+    /// with an image around the pole.
+    #[test]
+    fn image_ranges_change_nothing() {
+        let f = 120.0;
+        let rot = |pitch: f64, yaw: f64| {
+            let (p, y) = (pitch.to_radians(), yaw.to_radians());
+            let rx = [[1.0, 0.0, 0.0], [0.0, p.cos(), -p.sin()], [0.0, p.sin(), p.cos()]];
+            let ry = [[y.cos(), 0.0, -y.sin()], [0.0, 1.0, 0.0], [y.sin(), 0.0, y.cos()]];
+            mul(&rx, &ry)
+        };
+        for (proj, views) in [
+            (Projection::Spherical, vec![rot(0.0, 0.0), rot(0.0, 40.0), rot(85.0, 20.0)]),
+            (Projection::Cylindrical, vec![rot(0.0, -30.0), rot(5.0, 10.0), rot(-5.0, 50.0)]),
+            (Projection::Perspective, vec![rot(0.0, -20.0), rot(0.0, 15.0), rot(10.0, 0.0)]),
+        ] {
+            let sources: Vec<Source> = views.iter().map(|r| Source { img: view(160, 120, f, r), rot: *r, gain: 1.0 }).collect();
+            let fast = render(&sources, f, proj, false, 400_000).unwrap();
+            FULL_SEARCH.with(|s| s.set(true));
+            let full = render(&sources, f, proj, false, 400_000).unwrap();
+            FULL_SEARCH.with(|s| s.set(false));
+            assert_eq!((fast.width, fast.height), (full.width, full.height), "{proj:?}");
+            assert!(fast.data == full.data, "{proj:?}");
+        }
+    }
 
     #[test]
     fn vertical_panorama_keeps_the_middle_frame_level() {
