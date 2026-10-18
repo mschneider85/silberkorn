@@ -848,11 +848,17 @@ impl App {
         let depth_map = self.current.as_ref().and_then(|c| sk_core::depth::load(&c.meta.path));
         let show_mask = &mut self.show_mask;
         let Some(cur) = self.current.as_mut() else { return };
-        let mut layer = active.and_then(|li| cur.adjustments.layers.get_mut(li));
+        // The background has no mask: its controls are shown, but disabled.
+        let mut placeholder = Layer::default();
+        let has_layer = active.is_some_and(|li| li < cur.adjustments.layers.len());
+        let mut layer = Some(active.and_then(|li| cur.adjustments.layers.get_mut(li)).unwrap_or(&mut placeholder));
 
         if let Some(layer) = layer.as_deref_mut() {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
+                if !has_layer {
+                    ui.disable();
+                }
                 if ui.button("Füllen").on_hover_text("Maske aufs ganze Bild; unter „Eingrenzen“ auf Helligkeit oder Farben beschränken").clicked() {
                     layer.mask = Mask { fill: true, ..Default::default() };
                     *changed = true;
@@ -897,7 +903,7 @@ impl App {
                 layer.mask.ai = Some(map.resized(sk_ai::MASK_EDGE).range_mask(&r));
                 *changed = true;
             }
-            if layer.mask.ai.is_some() && ui.button("Auswahl entfernen").clicked() {
+            if ui.add_enabled(has_layer && layer.mask.ai.is_some(), egui::Button::new("Auswahl entfernen")).clicked() {
                 layer.mask.ai = None;
                 *changed = true;
             }
@@ -908,43 +914,48 @@ impl App {
 
         if let Some(layer) = layer {
             subheading(ui, "Eingrenzen");
-            let m = &mut layer.mask;
-            let mut luma_on = m.luma_range.is_some();
-            if ui.checkbox(&mut luma_on, "Helligkeitsbereich").changed() {
-                m.luma_range = luma_on.then(Default::default);
-                *changed = true;
-            }
-            // Switched off: the range is shown, but disabled.
-            let mut r = m.luma_range.unwrap_or_default();
-            ui.add_enabled_ui(luma_on, |ui| {
-                let luma = SliderOpts { rail: Some(RAIL_LUMA), ..Default::default() };
-                *changed |= slider_row_with(ui, "Von", &mut r.low, 0.0..=1.0, 0.0, 2, luma);
-                *changed |= slider_row_with(ui, "Bis", &mut r.high, 0.0..=1.0, 1.0, 2, luma);
-                *changed |= slider_row(ui, "Weichheit", &mut r.falloff, 0.0..=0.5, 0.1, 2);
-                *changed |= ui.checkbox(&mut r.invert, "Bereich umkehren").changed();
-            });
-            if luma_on {
-                m.luma_range = Some(r);
-            }
-            let mut color_on = m.color_range.is_some();
-            if ui.checkbox(&mut color_on, "Farbbereich").changed() {
-                m.color_range = color_on.then(Default::default);
-                *changed = true;
-            }
-            let mut c = m.color_range.unwrap_or_default();
-            ui.add_enabled_ui(color_on, |ui| {
-                if ui.selectable_label(tool == Some(LocalTool::ColorPick), LocalTool::ColorPick.label()).clicked() {
-                    pick = true;
+            ui.scope(|ui| {
+                if !has_layer {
+                    ui.disable();
                 }
-                let rail = hue_rail();
-                *changed |= slider_row_with(ui, "Farbton", &mut c.hue, 0.0..=360.0, 30.0, 0, SliderOpts { suffix: "°", rail: Some(&rail), ..Default::default() });
-                *changed |= slider_row(ui, "Breite", &mut c.width, 2.0..=90.0, 25.0, 0);
-                *changed |= slider_row(ui, "Weichheit", &mut c.falloff, 0.0..=60.0, 15.0, 0);
-                *changed |= slider_row(ui, "Min. Chroma", &mut c.min_chroma, 0.0..=0.2, 0.03, 3);
+                let m = &mut layer.mask;
+                let mut luma_on = m.luma_range.is_some();
+                if ui.checkbox(&mut luma_on, "Helligkeitsbereich").changed() {
+                    m.luma_range = luma_on.then(Default::default);
+                    *changed = true;
+                }
+                // Switched off: the range is shown, but disabled.
+                let mut r = m.luma_range.unwrap_or_default();
+                ui.add_enabled_ui(luma_on, |ui| {
+                    let luma = SliderOpts { rail: Some(RAIL_LUMA), ..Default::default() };
+                    *changed |= slider_row_with(ui, "Von", &mut r.low, 0.0..=1.0, 0.0, 2, luma);
+                    *changed |= slider_row_with(ui, "Bis", &mut r.high, 0.0..=1.0, 1.0, 2, luma);
+                    *changed |= slider_row(ui, "Weichheit", &mut r.falloff, 0.0..=0.5, 0.1, 2);
+                    *changed |= ui.checkbox(&mut r.invert, "Bereich umkehren").changed();
+                });
+                if luma_on {
+                    m.luma_range = Some(r);
+                }
+                let mut color_on = m.color_range.is_some();
+                if ui.checkbox(&mut color_on, "Farbbereich").changed() {
+                    m.color_range = color_on.then(Default::default);
+                    *changed = true;
+                }
+                let mut c = m.color_range.unwrap_or_default();
+                ui.add_enabled_ui(color_on, |ui| {
+                    if ui.selectable_label(tool == Some(LocalTool::ColorPick), LocalTool::ColorPick.label()).clicked() {
+                        pick = true;
+                    }
+                    let rail = hue_rail();
+                    *changed |= slider_row_with(ui, "Farbton", &mut c.hue, 0.0..=360.0, 30.0, 0, SliderOpts { suffix: "°", rail: Some(&rail), ..Default::default() });
+                    *changed |= slider_row(ui, "Breite", &mut c.width, 2.0..=90.0, 25.0, 0);
+                    *changed |= slider_row(ui, "Weichheit", &mut c.falloff, 0.0..=60.0, 15.0, 0);
+                    *changed |= slider_row(ui, "Min. Chroma", &mut c.min_chroma, 0.0..=0.2, 0.03, 3);
+                });
+                if color_on {
+                    m.color_range = Some(c);
+                }
             });
-            if color_on {
-                m.color_range = Some(c);
-            }
         }
         match ai_action {
             Some(k @ (1 | 2)) => {
@@ -997,7 +1008,8 @@ impl App {
         );
         let searching = self.spot_search.is_some();
         let sensitivity = &mut self.spot_sensitivity;
-        crate::widgets::section_help(ui, "Reparieren & Klonen", &help, None, |ui| {
+        let mut reset_spots = false;
+        crate::widgets::section_help(ui, "Reparieren & Klonen", &help, Some(&mut || reset_spots = true), |ui| {
             ui.horizontal(|ui| {
                 if ui.add_enabled(!searching, egui::Button::new(format!("{}  Staub und Flecken finden", crate::theme::icon::BROOM))).clicked() {
                     act = Some(Act::Find);
@@ -1013,7 +1025,6 @@ impl App {
             ui.add_space(4.0);
             if spots.is_empty() {
                 crate::widgets::hint(ui, "Noch keine.");
-                return;
             }
             for (i, s) in spots.iter().enumerate() {
                 let (ic, kind) = match s.mode {
@@ -1026,36 +1037,47 @@ impl App {
                     act = Some(Act::Select(i));
                 }
             }
-            if let Some(s) = selected.and_then(|i| spots.get_mut(i)) {
-                ui.add_space(6.0);
-                crate::widgets::field(ui, "Art", |ui| {
-                    changed |= ui.selectable_value(&mut s.mode, SpotMode::Heal, "Reparieren").changed();
-                    changed |= ui.selectable_value(&mut s.mode, SpotMode::Clone, "Klonen").changed();
-                });
-                let mut opacity = s.opacity * 100.0;
-                if slider_row(ui, "Deckkraft", &mut opacity, 0.0..=100.0, 100.0, 0) {
-                    s.opacity = opacity / 100.0;
-                    changed = true;
+            // The settings of the chosen area; without one they are shown, but disabled.
+            let mut placeholder = Spot { mode: SpotMode::Heal, target: [0.0; 2], source: [0.0; 2], path: Vec::new(), radius: 0.0, feather: 0.4, opacity: 1.0 };
+            let chosen = selected.and_then(|i| spots.get_mut(i));
+            let has = chosen.is_some();
+            let s = chosen.unwrap_or(&mut placeholder);
+            ui.scope(|ui| {
+                if !has {
+                    ui.disable();
                 }
-                let mut feather = s.feather * 100.0;
-                if slider_row(ui, "Weichheit", &mut feather, 0.0..=100.0, 40.0, 0) {
-                    s.feather = feather / 100.0;
-                    changed = true;
-                }
-                ui.horizontal(|ui| {
-                    if ui.button(format!("{}  Neue Quelle", crate::theme::icon::MAGIC_WAND)).on_hover_text("Quelle erneut automatisch wählen").clicked() {
-                        act = Some(Act::NewSource);
+                    ui.add_space(6.0);
+                    crate::widgets::field(ui, "Art", |ui| {
+                        changed |= ui.selectable_value(&mut s.mode, SpotMode::Heal, "Reparieren").changed();
+                        changed |= ui.selectable_value(&mut s.mode, SpotMode::Clone, "Klonen").changed();
+                    });
+                    let mut opacity = s.opacity * 100.0;
+                    if slider_row(ui, "Deckkraft", &mut opacity, 0.0..=100.0, 100.0, 0) {
+                        s.opacity = opacity / 100.0;
+                        changed = true;
                     }
-                    if ui.button(format!("{}  Löschen", crate::theme::icon::TRASH)).on_hover_text("Entf").clicked() {
-                        act = Some(Act::Delete);
+                    let mut feather = s.feather * 100.0;
+                    if slider_row(ui, "Weichheit", &mut feather, 0.0..=100.0, 40.0, 0) {
+                        s.feather = feather / 100.0;
+                        changed = true;
                     }
-                });
-            }
+                    ui.horizontal(|ui| {
+                        if ui.button(format!("{}  Neue Quelle", crate::theme::icon::MAGIC_WAND)).on_hover_text("Quelle erneut automatisch wählen").clicked() {
+                            act = Some(Act::NewSource);
+                        }
+                        if ui.button(format!("{}  Löschen", crate::theme::icon::TRASH)).on_hover_text(crate::commands::shortcut_of("delete-spot")).clicked() {
+                            act = Some(Act::Delete);
+                        }
+                    });
+            });
             ui.add_space(4.0);
-            if ui.button(format!("{}  Alle löschen", crate::theme::icon::TRASH)).clicked() {
+            if ui.add_enabled(!spots.is_empty(), egui::Button::new(format!("{}  Alle löschen", crate::theme::icon::TRASH))).clicked() {
                 act = Some(Act::Clear);
             }
         });
+        if reset_spots {
+            act = Some(Act::Clear);
+        }
         if changed {
             self.request_render();
         }
@@ -1394,7 +1416,15 @@ impl App {
         let action = self.layer_list(ui);
         let mut changed = false;
         let help = "Wo die gewählte Ebene wirkt: mit Pinsel, Verlauf, Zauberpinsel oder Objekt malen bzw. auswählen.\n\n[ und ] oder Ziehen mit der rechten Maustaste: Pinselgröße und Härte. Bei Objekt nimmt Alt+Klick Teile aus. Eingrenzen beschränkt auf einen Helligkeits- oder Farbbereich.";
-        crate::widgets::section_help(ui, "Maske", help, None, |ui| self.mask_body(ui, &mut changed));
+        let mut reset_mask = false;
+        crate::widgets::section_help(ui, "Maske", help, Some(&mut || reset_mask = true), |ui| self.mask_body(ui, &mut changed));
+        if reset_mask && let Some(li) = self.active_layer {
+            self.edit(|a| {
+                if let Some(l) = a.layers.get_mut(li) {
+                    l.mask = Mask::default();
+                }
+            });
+        }
 
         let mut jump = None;
         let Some(cur) = self.current.as_mut() else { return };

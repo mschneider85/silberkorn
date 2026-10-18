@@ -208,19 +208,24 @@ impl App {
         };
         let as_shot = cur.as_shot_temp_tint;
         // Matching a look sets the whole image.
-        widgets::background_only(ui, |ui| self.look_section(ui));
+        widgets::image_only_section(ui, "Look angleichen", |ui| self.look_section(ui));
         let Some(cur) = self.current.as_mut() else { return };
         let adj = &mut cur.adjustments;
         let mut t = Target::new(adj, self.active_layer);
         let mut changed = false;
 
-        widgets::tool_section(ui, sk_core::tools::Tool::BaseCurve, None, |ui| {
+        let mut reset_curve = false;
+        widgets::tool_section(ui, sk_core::tools::Tool::BaseCurve, Some(&mut || reset_curve = true), |ui| {
             widgets::combo_field(ui, "Kurve", adj.base_curve.label(), |ui| {
                     for c in BaseCurve::ALL {
                         changed |= ui.selectable_value(&mut adj.base_curve, c, c.label()).on_hover_text(c.hint()).changed();
                     }
                 });
         });
+        if reset_curve {
+            sk_core::tools::Tool::BaseCurve.copy(&Default::default(), adj);
+            changed = true;
+        }
         // The camera's curve is fitted the first time it is chosen.
         let mut no_camera_curve = false;
         if adj.base_curve == BaseCurve::Camera && adj.camera_curve.is_none() {
@@ -490,12 +495,15 @@ impl App {
                         .on_disabled_hover_text("AVIF-Dateien kennzeichnen den Farbraum ohne ICC-Profil; das geht nur für sRGB und Display P3.");
                 }
             });
-            if r.format.has_quality() {
+            // Lossless formats have no quality: shown, but disabled.
+            ui.add_enabled_ui(r.format.has_quality(), |ui| {
                 let mut q = r.quality as f32;
                 if slider_row(ui, "Qualität", &mut q, 1.0..=100.0, 90.0, 0) {
                     r.quality = q.round() as _;
                 }
-            }
+            })
+            .response
+            .on_disabled_hover_text("Verlustfreies Format: ohne Qualitätsstufe");
             let size_label = if r.size.is_some() { r.resize.label() } else { "Originalgröße" };
             let mut resize = r.size.map(|_| r.resize);
             widgets::combo_field(ui, "Größe", size_label, |ui| {
@@ -544,7 +552,8 @@ impl App {
             });
             widgets::field(ui, "Suffix", |ui| ui.text_edit_singleline(&mut r.suffix));
         });
-        section(ui, "Wasserzeichen", None, |ui| {
+        let mut reset_watermark = false;
+        section(ui, "Wasserzeichen", Some(&mut || reset_watermark = true), |ui| {
             let wm = &mut r.watermark;
             ui.checkbox(&mut wm.enabled, "Wasserzeichen einfügen");
             ui.add_enabled_ui(wm.enabled, |ui| {
@@ -589,6 +598,9 @@ impl App {
                 ui.label(RichText::new(format!("Größe und Abstand in % der kurzen Bildkante. {}.", crate::commands::hint("Vorschau in der Ausgabevorschau", "proof"))).small().color(crate::theme::TEXT_FAINT));
             });
         });
+        if reset_watermark {
+            r.watermark = Default::default();
+        }
         section(ui, "Metadaten", None, |ui| {
             ui.checkbox(&mut r.capture_metadata, "Aufnahmedaten übernehmen").on_hover_text("Kamera, Objektiv, Belichtung und Aufnahmedatum");
             widgets::field(ui, "Fotograf", |ui| ui.text_edit_singleline(&mut r.artist));

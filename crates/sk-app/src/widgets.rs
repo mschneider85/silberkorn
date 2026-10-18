@@ -116,10 +116,32 @@ fn on_layer(ui: &Ui) -> bool {
 /// Explanation on what only works on the whole image while a layer is chosen.
 pub const ONLY_IMAGE: &str = "Wirkt nur aufs ganze Bild. Zum Ändern oben in der Leiste den Hintergrund wählen.";
 
-/// Shows what only works on the whole image disabled while a layer is chosen.
+/// Shows controls that only work on the whole image disabled while a layer is chosen (for a
+/// row of buttons; a whole section uses [`image_only_section`]).
 pub fn background_only(ui: &mut Ui, body: impl FnOnce(&mut Ui)) {
     let layer = on_layer(ui);
     ui.add_enabled_ui(!layer, body).response.on_disabled_hover_text(ONLY_IMAGE);
+}
+
+/// A section that only works on the whole image: while a layer is chosen, only its closed
+/// header with "nur ganzes Bild" (as for the develop tools, see `section_inner`).
+pub fn image_only_section(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui)) {
+    if on_layer(ui) {
+        image_only_header(ui, title);
+    } else {
+        body(ui);
+    }
+}
+
+fn image_only_header(ui: &mut Ui, title: &str) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+    let painter = ui.painter();
+    painter.hline(rect.x_range(), rect.top(), Stroke::new(1.0, theme::BORDER));
+    let inner = rect.shrink2(vec2(0.0, 2.0)).translate(vec2(0.0, 1.0));
+    painter.text(pos2(inner.left() + 6.0, inner.center().y), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(13.5), theme::TEXT_FAINT);
+    painter.text(inner.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, "nur ganzes Bild", egui::FontId::proportional(11.5), theme::TEXT_FAINT);
+    resp.on_hover_text(ONLY_IMAGE);
+    ui.add_space(2.0);
 }
 
 /// The tool whose copy button was clicked since the last call.
@@ -171,14 +193,7 @@ fn section_inner(
     let on_layer = on_layer(ui);
     let layer_support = copy.filter(|_| on_layer).map(|t| t.layer_support());
     if layer_support == Some(sk_core::tools::LayerSupport::None) {
-        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
-        let painter = ui.painter();
-        painter.hline(rect.x_range(), rect.top(), Stroke::new(1.0, theme::BORDER));
-        let inner = rect.shrink2(vec2(0.0, 2.0)).translate(vec2(0.0, 1.0));
-        painter.text(pos2(inner.left() + 6.0, inner.center().y), egui::Align2::LEFT_CENTER, title, egui::FontId::proportional(13.5), theme::TEXT_FAINT);
-        painter.text(inner.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, "nur ganzes Bild", egui::FontId::proportional(11.5), theme::TEXT_FAINT);
-        resp.on_hover_text(ONLY_IMAGE);
-        ui.add_space(2.0);
+        image_only_header(ui, title);
         return;
     }
     // Specialized sections start closed; their state is kept under a key of its own, so that

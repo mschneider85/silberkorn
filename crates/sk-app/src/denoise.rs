@@ -204,7 +204,9 @@ impl App {
     /// The KI-Entrauschen amount and the state of its computation; returns whether it changed.
     fn denoise_controls(&mut self, ui: &mut egui::Ui, amount: &mut f32, path: &Path, hdr: bool) -> bool {
         let before = *amount;
-        let changed = crate::widgets::slider_row_with(ui, "KI-Entrauschen", amount, 0.0..=100.0, 0.0, 0, crate::widgets::SliderOpts { ai: true, ..Default::default() });
+        // Merged HDR images can't be denoised: the slider is shown, but disabled.
+        let opts = crate::widgets::SliderOpts { ai: true, ..Default::default() };
+        let changed = ui.add_enabled_ui(!hdr, |ui| crate::widgets::slider_row_with(ui, "KI-Entrauschen", amount, 0.0..=100.0, 0.0, 0, opts)).inner;
         if changed && self.denoise.cancelled.remove(path) {
             // Queued again by `pump_denoise`.
             self.denoise.checked = None;

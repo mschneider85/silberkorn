@@ -1,7 +1,7 @@
 //! Tool tabs for geometry/lens, details and the advanced color tools.
 
 use sk_core::auto;
-use sk_core::params::{AspectRatio, ColorWheel, ColorZone, CropRect, Detail, HUE_BANDS, HslBand, LensCorrection, MAX_COLOR_ZONES, SkinTone};
+use sk_core::params::{AspectRatio, ColorWheel, ColorZone, Detail, HUE_BANDS, HslBand, LensCorrection, MAX_COLOR_ZONES, SkinTone};
 use egui::{Color32, RichText, Ui};
 
 use crate::app::App;
@@ -358,14 +358,17 @@ impl App {
                     }
                 });
             });
-            if !matches!(g.aspect, AspectRatio::Free) && ui.checkbox(&mut g.aspect_portrait, "Hochformat").changed() {
+            // A free crop has no orientation: shown, but disabled.
+            let fixed = !matches!(g.aspect, AspectRatio::Free);
+            if ui.add_enabled(fixed, egui::Checkbox::new(&mut g.aspect_portrait, "Hochformat")).changed() {
                 apply_aspect = true;
             }
             let c = g.crop;
             ui.label(RichText::new(format!("{:.0} % × {:.0} %", c.w * 100.0, c.h * 100.0)).color(Color32::from_gray(150)));
         });
+        // ↺ resets all the section holds, as copying the tool would (aspect ratio included).
         if reset_crop {
-            adj.geometry.crop = CropRect::default();
+            sk_core::tools::Tool::Crop.copy(&Default::default(), adj);
             changed = true;
         }
 
@@ -400,9 +403,7 @@ impl App {
             });
         });
         if reset_rot {
-            adj.geometry.straighten = 0.0;
-            adj.geometry.flip_h = false;
-            adj.geometry.flip_v = false;
+            sk_core::tools::Tool::Rotation.copy(&Default::default(), adj);
             changed = true;
         }
 
@@ -472,7 +473,9 @@ impl App {
             let mut moved = slider_row(ui, "Vertikal", &mut g.keystone_v, -max..=max, 0.0, 0);
             moved |= slider_row(ui, "Horizontal", &mut g.keystone_h, -max..=max, 0.0, 0);
             let pct = widgets::SliderOpts { suffix: " %", ..Default::default() };
-            moved |= widgets::slider_row_with(ui, "Stärke", &mut g.keystone_amount, 0.0..=100.0, 100.0, 0, pct);
+            // How much of the correction is applied: without one it has no effect.
+            let has_keystone = g.keystone_v != 0.0 || g.keystone_h != 0.0;
+            moved |= ui.add_enabled_ui(has_keystone, |ui| widgets::slider_row_with(ui, "Stärke", &mut g.keystone_amount, 0.0..=100.0, 100.0, 0, pct)).inner;
             changed |= moved;
             grid_moved |= moved;
         });

@@ -186,30 +186,38 @@ impl App {
         let mut clear: Option<bool> = None;
         let downloading = self.ai_download_progress(AiFeature::Inpaint);
         let active = self.local_tool == Some(LocalTool::Remove);
-        // The tool itself sits in the tool grid; this section only appears when it has something to show.
-        if !active && n == 0 && downloading.is_none() {
-            return;
-        }
+        // Always there, like the other sections: the brush only works while the tool is on, the
+        // buttons only with something removed (shown, but disabled otherwise).
         let help = "Über das Störende malen; beim Loslassen füllt die KI die Stelle passend zur Umgebung.";
-        section_help_ai(ui, "Entfernen", help, None, |ui| {
-            if active && crate::layers::brush_controls(ui, &mut self.brushes.remove, Some(LocalTool::Remove), true) {
+        let mut reset = false;
+        section_help_ai(ui, "Entfernen", help, Some(&mut || reset = true), |ui| {
+            let brush = ui.add_enabled_ui(active, |ui| crate::layers::brush_controls(ui, &mut self.brushes.remove, Some(LocalTool::Remove), true));
+            if brush.inner {
                 self.brushes_changed_at = Some(std::time::Instant::now());
             }
+            brush.response.on_disabled_hover_text(crate::commands::hint("Pinsel des Werkzeugs „Entfernen“", "tool-remove"));
             if let Some(p) = downloading {
                 crate::ai_models::download_progress(ui, AiFeature::Inpaint, p);
             }
-            if n > 0 {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{n} {} entfernt", if n == 1 { "Bereich" } else { "Bereiche" }));
+            ui.horizontal(|ui| {
+                ui.label(match n {
+                    0 => "Noch nichts entfernt".to_string(),
+                    1 => "1 Bereich entfernt".to_string(),
+                    _ => format!("{n} Bereiche entfernt"),
+                });
+                ui.add_enabled_ui(n > 0, |ui| {
                     if ui.small_button("Letzten zurücknehmen").clicked() {
                         clear = Some(false);
                     }
-                    if ui.small_button("Alle").on_hover_text("Alle entfernten Bereiche wiederherstellen").clicked() {
+                    if ui.small_button("Alle löschen").on_hover_text("Alle entfernten Bereiche wiederherstellen").clicked() {
                         clear = Some(true);
                     }
                 });
-            }
+            });
         });
+        if reset {
+            clear = Some(true);
+        }
         match clear {
             Some(true) => self.edit(|a| a.removals.clear()),
             Some(false) => self.edit(|a| {
