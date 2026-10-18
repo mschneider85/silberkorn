@@ -468,8 +468,8 @@ pub struct App {
     /// Active crop tool state (the viewer shows the uncropped frame).
     pub crop_tool: Option<crate::crop::CropTool>,
     pub straighten_tool: Option<crate::crop::StraightenTool>,
-    /// Until when (egui time) the viewer shows a grid: while the keystone sliders move.
-    pub keystone_grid_until: f64,
+    /// Until when (egui time) the viewer shows a grid: while the straighten or keystone sliders move.
+    pub slider_grid_until: f64,
     pub local_tool: Option<crate::layers::LocalTool>,
     pub local_drag: crate::layers::LocalDrag,
     pub active_layer: Option<usize>,
@@ -574,6 +574,8 @@ pub struct App {
     pub look_progress: Option<(usize, usize)>,
     /// The last look match of the open image, for its strength slider.
     pub look_mix: Option<crate::look::LookMix>,
+    /// Which lines "Linien ziehen" places, the last mode chosen.
+    pub keystone_guide_mode: crate::crop::GuideMode,
     /// What the one-click auto adjustment sets.
     pub auto_options: sk_core::auto::AutoOptions,
     /// Images still being adjusted automatically: (done, total).
@@ -854,7 +856,7 @@ impl App {
             picking_focus: false,
             crop_tool: None,
             straighten_tool: None,
-            keystone_grid_until: 0.0,
+            slider_grid_until: 0.0,
             local_tool: None,
             local_drag: Default::default(),
             active_layer: None,
@@ -947,6 +949,7 @@ impl App {
             look_similarity_asked: None,
             look_progress: None,
             look_mix: None,
+            keystone_guide_mode: Default::default(),
             auto_options: settings.auto_options,
             auto_progress: None,
             auto_mix: None,

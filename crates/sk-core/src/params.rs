@@ -800,6 +800,10 @@ impl AspectRatio {
     }
 }
 
+/// Largest keystone value the sliders and the automatic correction set: beyond it the image
+/// is stretched more than it looks good.
+pub const KEYSTONE_MAX: f32 = 50.0;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Geometry {
@@ -811,7 +815,8 @@ pub struct Geometry {
     pub straighten: f32,
     pub flip_h: bool,
     pub flip_v: bool,
-    /// Perspective (keystone) correction, -100..100.
+    /// Perspective (keystone) correction, -KEYSTONE_MAX..KEYSTONE_MAX (older edits may hold
+    /// up to ±100, which still render as before).
     pub keystone_v: f32,
     pub keystone_h: f32,
     /// How much of the keystone correction is applied, 0..100 %: a little less than all

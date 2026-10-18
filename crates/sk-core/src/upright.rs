@@ -7,7 +7,7 @@
 
 use crate::geometry::GeoMap;
 use crate::image::LinearImage;
-use crate::params::{Geometry, LensCorrection};
+use crate::params::{Geometry, KEYSTONE_MAX, LensCorrection};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UprightMode {
@@ -363,7 +363,7 @@ pub fn solve_guides(
         free.push(horizontal);
     }
     // Exact lines: a cost that keeps growing with the deviation.
-    let p = problem.search(&free, [45.0, 100.0, 100.0], 20.0);
+    let p = problem.search(&free, [45.0, KEYSTONE_MAX, KEYSTONE_MAX], 20.0);
     let mut out = solved(geometry, p);
     if !free.contains(&1) {
         out.keystone_v = geometry.keystone_v;
@@ -445,7 +445,7 @@ pub fn solve(
     if mode == UprightMode::Full && supported(false) {
         free.push(horizontal);
     }
-    let p = problem.search(&free, [NEAR_VERTICAL, 100.0, 100.0], SOFT);
+    let p = problem.search(&free, [NEAR_VERTICAL, KEYSTONE_MAX, KEYSTONE_MAX], SOFT);
     let mut out = solved(geometry, p);
     if mode == UprightMode::Level {
         (out.keystone_v, out.keystone_h) = (geometry.keystone_v, geometry.keystone_h);

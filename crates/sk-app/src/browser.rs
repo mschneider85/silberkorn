@@ -335,9 +335,9 @@ impl App {
         if self.crop_tool.is_none() && self.straighten_tool.is_none() {
             self.draw_guides(&painter, img_rect);
             let now = ui.input(|i| i.time);
-            if now < self.keystone_grid_until {
+            if now < self.slider_grid_until {
                 crate::crop::draw_fine_grid(&painter, img_rect);
-                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(self.keystone_grid_until - now));
+                ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(self.slider_grid_until - now));
             }
         }
 

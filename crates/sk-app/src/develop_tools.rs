@@ -246,10 +246,11 @@ impl App {
         let mut apply_aspect = false;
         let mut toggle_straighten = false;
         let mut upright = None;
-        // Keystone lines: start (with their mode), apply or cancel.
+        // Keystone lines: start (with their mode), apply or cancel; a slider moved under the grid.
         let mut guides: Option<Option<crate::crop::GuideMode>> = None;
-        let (mut apply_guides, mut keystone_moved) = (false, false);
+        let (mut apply_guides, mut grid_moved) = (false, false);
         let guide_mode = self.straighten_tool.as_ref().and_then(|t| t.guides.as_ref()).map(|g| g.mode);
+        let guide_pref = self.keystone_guide_mode;
         let crop_active = self.crop_tool.is_some();
         let straighten_active = self.straightening();
         let downloading = self.lens_db_downloading;
@@ -371,16 +372,23 @@ impl App {
         let mut reset_rot = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Rotation, Some(&mut || reset_rot = true), |ui| {
             let g = &mut adj.geometry;
-            changed |= slider_row(ui, "Geraderichten", &mut g.straighten, -45.0..=45.0, 0.0, 1);
-            ui.horizontal(|ui| {
-                if ui.selectable_label(straighten_active, "\u{E6B8}  Linie ziehen").on_hover_text("Horizont oder Kante nachziehen").clicked() {
+            let moved = slider_row(ui, "Geraderichten", &mut g.straighten, -45.0..=45.0, 0.0, 1);
+            changed |= moved;
+            grid_moved |= moved;
+            ui.horizontal_wrapped(|ui| {
+                let line = egui::Button::new(format!("{}  Linie ziehen", icon::RULER)).selected(straighten_active);
+                if ui.add(line).on_hover_text("Horizont oder Kante nachziehen").clicked() {
                     toggle_straighten = true;
                 }
-                if ui.button("\u{E038}  90°").clicked() {
+                let tip = "Horizont und Kanten automatisch waagerecht, ohne Perspektivkorrektur";
+                if ui.button(format!("{}  Auto", icon::MAGIC_WAND)).on_hover_text(tip).clicked() {
+                    upright = Some(sk_core::upright::UprightMode::Level);
+                }
+                if ui.button("\u{E038}  90°").on_hover_text("90° nach links drehen").clicked() {
                     adj.rotation = (adj.rotation + 3) % 4;
                     changed = true;
                 }
-                if ui.button("\u{E036}  90°").clicked() {
+                if ui.button("\u{E036}  90°").on_hover_text("90° nach rechts drehen").clicked() {
                     adj.rotation = (adj.rotation + 1) % 4;
                     changed = true;
                 }
@@ -400,32 +408,54 @@ impl App {
 
         let mut reset_key = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Perspective, Some(&mut || reset_key = true), |ui| {
+            use crate::crop::GuideMode;
             use sk_core::upright::UprightMode;
-            ui.horizontal(|ui| {
-                ui.label("Automatisch");
-                let auto_tip = crate::commands::hint("Drehung und stürzende Linien", "auto-upright");
-                for (mode, label, tip) in [
-                    (UprightMode::Vertical, "Auto", auto_tip.as_str()),
-                    (UprightMode::Level, "Nur Drehung", "Horizont und Kanten waagerecht, ohne Perspektivkorrektur"),
-                    (UprightMode::Full, "Voll", "Drehung, vertikale und horizontale Perspektive"),
-                ] {
-                    if ui.button(label).on_hover_text(tip).clicked() {
-                        upright = Some(mode);
+            ui.horizontal_wrapped(|ui| {
+                // Each button stays together with its menu arrow when the row wraps.
+                ui.horizontal(|ui| {
+                    let tip = crate::commands::hint("Stürzende Linien automatisch korrigieren, die Drehung wird mit ausgerichtet", "auto-upright");
+                    if ui.button(format!("{}  Automatisch", icon::PERSPECTIVE)).on_hover_text(tip).clicked() {
+                        upright = Some(UprightMode::Vertical);
                     }
-                }
-            });
-            ui.horizontal(|ui| {
-                use crate::crop::GuideMode;
-                ui.label("Linien");
-                for (mode, label, tip) in [
-                    (GuideMode::Vertical, "Vertikal", "Zwei Linien an Kanten legen, die senkrecht sein sollen"),
-                    (GuideMode::Horizontal, "Horizontal", "Zwei Linien an Kanten legen, die waagerecht sein sollen"),
-                    (GuideMode::Both, "Beides", "Je zwei Linien für senkrechte und waagerechte Kanten"),
-                ] {
-                    if ui.selectable_label(guide_mode == Some(mode), label).on_hover_text(tip).clicked() {
-                        guides = Some((guide_mode != Some(mode)).then_some(mode));
+                    ui.menu_button(icon::CARET_DOWN, |ui| {
+                        ui.label(RichText::new("Automatisch ausrichten:").weak());
+                        let vertical_tip = crate::commands::hint("Stürzende Linien werden parallel", "auto-upright");
+                        for (mode, label, tip) in [
+                            (UprightMode::Vertical, "Senkrechte Kanten", vertical_tip.as_str()),
+                            (UprightMode::Full, "Senkrechte und waagerechte Kanten", "Auch die horizontale Perspektive wird korrigiert"),
+                        ] {
+                            if ui.button(label).on_hover_text(tip).clicked() {
+                                upright = Some(mode);
+                                ui.close();
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Wie automatisch korrigiert wird");
+                });
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let tip = "Linien an Kanten legen, die senkrecht oder waagerecht sein sollen";
+                    let label = format!("{}  Linien ziehen", icon::LINE_SEGMENTS);
+                    if ui.add(egui::Button::new(label).selected(guide_mode.is_some())).on_hover_text(tip).clicked() {
+                        guides = Some(guide_mode.is_none().then_some(guide_pref));
                     }
-                }
+                    ui.menu_button(icon::CARET_DOWN, |ui| {
+                        ui.label(RichText::new("Linien für:").weak());
+                        for (mode, label, tip) in [
+                            (GuideMode::Vertical, "Senkrechte Kanten", "Zwei Linien an Kanten legen, die senkrecht sein sollen"),
+                            (GuideMode::Horizontal, "Waagerechte Kanten", "Zwei Linien an Kanten legen, die waagerecht sein sollen"),
+                            (GuideMode::Both, "Beides", "Je zwei Linien für senkrechte und waagerechte Kanten"),
+                        ] {
+                            if ui.radio(guide_mode.unwrap_or(guide_pref) == mode, label).on_hover_text(tip).clicked() {
+                                guides = Some(Some(mode));
+                                ui.close();
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Welche Linien gezogen werden");
+                });
             });
             if guide_mode.is_some() {
                 ui.horizontal(|ui| {
@@ -438,12 +468,13 @@ impl App {
                 });
             }
             let g = &mut adj.geometry;
-            let mut moved = slider_row(ui, "Vertikal", &mut g.keystone_v, -100.0..=100.0, 0.0, 0);
-            moved |= slider_row(ui, "Horizontal", &mut g.keystone_h, -100.0..=100.0, 0.0, 0);
+            let max = sk_core::params::KEYSTONE_MAX;
+            let mut moved = slider_row(ui, "Vertikal", &mut g.keystone_v, -max..=max, 0.0, 0);
+            moved |= slider_row(ui, "Horizontal", &mut g.keystone_h, -max..=max, 0.0, 0);
             let pct = widgets::SliderOpts { suffix: " %", ..Default::default() };
             moved |= widgets::slider_row_with(ui, "Stärke", &mut g.keystone_amount, 0.0..=100.0, 100.0, 0, pct);
             changed |= moved;
-            keystone_moved = moved;
+            grid_moved |= moved;
         });
         if reset_key {
             adj.geometry.keystone_v = 0.0;
@@ -481,9 +512,9 @@ impl App {
         if apply_guides {
             self.apply_keystone_guides();
         }
-        if keystone_moved {
-            // A grid over the image while the keystone sliders move (see `viewer_content`).
-            self.keystone_grid_until = ui.input(|i| i.time) + 0.6;
+        if grid_moved {
+            // A grid over the image while the straighten or keystone sliders move (see `viewer_content`).
+            self.slider_grid_until = ui.input(|i| i.time) + 0.6;
         }
         if toggle_straighten {
             self.toggle_straighten();

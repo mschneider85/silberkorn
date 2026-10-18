@@ -447,8 +447,11 @@ pub fn slider_row_with(
             w.inactive.bg_fill = Color32::TRANSPARENT;
             w.inactive.fg_stroke.color = if modified { Color32::WHITE } else { theme::TEXT_DIM };
             let span = range.end() - range.start();
+            // Without `clamp_existing_to_range(false)` merely drawing the row would pull a value
+            // from an older, wider range (e.g. keystone ±100) into the current one.
             let drag = egui::DragValue::new(value)
                 .range(range.clone())
+                .clamp_existing_to_range(false)
                 .fixed_decimals(decimals)
                 .suffix(opts.suffix)
                 .speed(span as f64 / 400.0);

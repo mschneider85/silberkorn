@@ -37,8 +37,9 @@ pub struct StraightenTool {
 }
 
 /// Which lines the keystone tool places.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GuideMode {
+    #[default]
     Vertical,
     Horizontal,
     Both,
@@ -95,6 +96,7 @@ impl App {
     /// The keystone tool with lines for `mode`, placed over the middle of the image.
     pub fn start_keystone_guides(&mut self, mode: GuideMode) {
         self.end_viewer_tools();
+        self.keystone_guide_mode = mode;
         let Some(geo) = self.shown_geomap() else { return };
         let (w, h) = (geo.out_w as f32, geo.out_h as f32);
         let src = |x: f32, y: f32| {

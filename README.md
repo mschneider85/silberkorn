@@ -495,23 +495,24 @@ Kommandozeile (Vorher | Nachher nebeneinander): `cargo run --release -p sk-ai --
 ### Trapezkorrektur und automatisches Geraderichten
 
 Der Abschnitt **Trapezkorrektur** (Tab „Objektiv“) richtet stürzende Linien auf: mit den Reglern
-**Vertikal** und **Horizontal**, mit gezogenen Linien oder automatisch. **Stärke** (0–100 %) schwächt
-die Korrektur ab, etwa damit ein Gebäude oben noch leicht zuläuft. Solange man an den Reglern zieht,
-liegt ein Raster über dem Bild.
+**Vertikal** und **Horizontal** (je ±50, stärker verzerrt es das Bild zu sehr), mit gezogenen Linien
+oder automatisch. **Stärke** (0–100 %) schwächt die Korrektur ab, etwa damit ein Gebäude oben noch
+leicht zuläuft. Solange man an den Reglern zieht, liegt ein Raster über dem Bild, ebenso beim Regler „Geraderichten“.
 
-**Linien:** „Vertikal“, „Horizontal“ oder „Beides“ legt zwei bzw. vier Linien ins Bild. Ihre Enden
-(oder die ganze Linie) auf Kanten ziehen, die senkrecht bzw. waagerecht sein sollen; **Übernehmen** (Enter)
-berechnet Drehung und Trapezkorrektur so, dass die Linien genau ausgerichtet sind, Esc bricht ab. Wer
-verschobene Linien liegen lässt und ein anderes Werkzeug wählt, übernimmt sie ebenfalls. Eine
-gezogene Linie je Richtung dreht nur, zwei korrigieren auch die Perspektive.
+**Linien ziehen:** legt zwei bzw. vier Linien ins Bild; im Menü daneben wählt man senkrechte Kanten,
+waagerechte Kanten oder beides. Ihre Enden (oder die ganze Linie) auf Kanten ziehen, die senkrecht bzw.
+waagerecht sein sollen; **Übernehmen** (Enter) berechnet Drehung und Trapezkorrektur so, dass die Linien
+genau ausgerichtet sind, Esc bricht ab. Wer verschobene Linien liegen lässt und ein anderes Werkzeug wählt,
+übernimmt sie ebenfalls. Eine gezogene Linie je Richtung dreht nur, zwei korrigieren auch die Perspektive.
 
 **Automatisch:** Silberkorn sucht gerade Kanten im Bild (Linienerkennung nach dem
 LSD-Prinzip) und bestimmt Drehung und Perspektive so, dass sie waagerecht bzw. senkrecht stehen.
 Bewertet wird jede Lösung über die echte Geometrie-Kette, einschließlich Objektivkorrektur.
 
-- **Auto** (Umschalt+A, Entwickeln → „Automatisch geraderichten“): Drehung und stürzende Linien.
-- **Nur Drehung:** Horizont und Kanten waagerecht, die Perspektive bleibt unverändert.
-- **Voll:** zusätzlich die horizontale Perspektive, etwa für eine schräg fotografierte Fassade.
+- **Automatisch** (Umschalt+A, Entwickeln → „Automatisch geraderichten“): Drehung und stürzende Linien.
+- Im Menü daneben **Senkrechte und waagerechte Kanten:** zusätzlich die horizontale Perspektive, etwa
+  für eine schräg fotografierte Fassade.
+- **Auto** im Abschnitt Drehung: nur Horizont und Kanten waagerecht, die Perspektive bleibt unverändert.
 
 Waagerechte zählen bis 8° Abweichung, Senkrechte bis 15°; deutlich schräge Kanten wie Dächer
 oder Wege bleiben unberücksichtigt. Die Perspektive wird nur korrigiert, wenn mehrere passende Kanten über

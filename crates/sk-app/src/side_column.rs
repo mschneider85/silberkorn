@@ -203,13 +203,20 @@ impl App {
     fn side_snapshots(&mut self, ui: &mut Ui) {
         let Some(cur) = &self.current else { return };
         let rows: Vec<(String, bool)> = cur.snapshots.iter().map(|s| (s.name.clone(), s.adjustments == cur.adjustments)).collect();
-        let mut apply = None;
+        let (mut apply, mut delete) = (None, None);
         let mut add = false;
         section(ui, "Schnappschüsse", None, |ui| {
             for (i, (name, current)) in rows.iter().enumerate() {
-                if ui.selectable_label(*current, format!("{}  {name}", theme::icon::CAMERA)).on_hover_text("Anwenden").clicked() && !current {
-                    apply = Some(i);
-                }
+                ui.horizontal(|ui| {
+                    if ui.selectable_label(*current, format!("{}  {name}", theme::icon::CAMERA)).on_hover_text("Anwenden").clicked() && !current {
+                        apply = Some(i);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button(theme::icon::TRASH).on_hover_text("Schnappschuss löschen").clicked() {
+                            delete = Some(i);
+                        }
+                    });
+                });
             }
             if ui.button(format!("{}  Schnappschuss", theme::icon::PLUS)).on_hover_text("Den jetzigen Stand unter einem Namen sichern").clicked() {
                 add = true;
@@ -217,6 +224,9 @@ impl App {
         });
         if add {
             self.add_snapshot(None);
+        }
+        if let Some(i) = delete {
+            self.delete_snapshot(i);
         }
         if let Some(adj) = apply.and_then(|i| self.current.as_ref()?.snapshots.get(i)).map(|s| s.adjustments.clone()) {
             self.apply_snapshot(adj);

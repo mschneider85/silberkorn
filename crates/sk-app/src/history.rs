@@ -40,6 +40,14 @@ impl App {
         }
     }
 
+    /// Removes snapshot `i` of the open image.
+    pub fn delete_snapshot(&mut self, i: usize) {
+        if let Some(cur) = self.current.as_mut().filter(|c| i < c.snapshots.len()) {
+            cur.snapshots.remove(i);
+            self.save_snapshots();
+        }
+    }
+
     /// Saves the current adjustments as a snapshot.
     pub fn add_snapshot(&mut self, name: Option<String>) {
         self.commit_and_save();
@@ -131,12 +139,7 @@ impl App {
                     self.apply_snapshot(adj);
                 }
             }
-            Some(SnapshotAction::Delete(i)) => {
-                if let Some(cur) = self.current.as_mut().filter(|c| i < c.snapshots.len()) {
-                    cur.snapshots.remove(i);
-                    self.save_snapshots();
-                }
-            }
+            Some(SnapshotAction::Delete(i)) => self.delete_snapshot(i),
             Some(SnapshotAction::StartRename(i)) => {
                 self.snapshot_rename = self.current.as_ref().and_then(|c| c.snapshots.get(i)).map(|s| (i, s.name.clone()));
             }
