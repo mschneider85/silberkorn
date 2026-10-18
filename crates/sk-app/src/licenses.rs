@@ -65,7 +65,7 @@ impl App {
             }
             dialog::note(ui, "Die KI-Modelle, die Objektivprofile und die KI-Beschleunigung werden nicht mitgeliefert, sondern bei Bedarf geladen.");
             dialog::footer(ui, |ui| {
-                if ui.add(dialog::primary("Schließen")).clicked() {
+                if dialog::default_button(ui, true, dialog::primary("Schließen")) {
                     close = true;
                 }
             });

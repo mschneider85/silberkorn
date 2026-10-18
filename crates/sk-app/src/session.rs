@@ -549,7 +549,7 @@ impl App {
                     ui.label(RichText::new(e).color(theme::DANGER));
                 }
                 dialog::footer(ui, |ui| {
-                    if ui.add_enabled(!name.is_empty(), dialog::primary("Anlegen")).clicked() {
+                    if dialog::default_button(ui, !name.is_empty(), dialog::primary("Anlegen")) {
                         create = true;
                     }
                     if ui.add(dialog::secondary("Abbrechen")).clicked() {

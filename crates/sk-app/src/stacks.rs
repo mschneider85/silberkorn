@@ -305,7 +305,7 @@ impl App {
                 });
             });
             dialog::footer(ui, |ui| {
-                if ui.add(dialog::primary("Stapeln")).clicked() {
+                if dialog::default_button(ui, true, dialog::primary("Stapeln")) {
                     run = true;
                 }
                 if ui.add(dialog::secondary("Abbrechen")).clicked() {

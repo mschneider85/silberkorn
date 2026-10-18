@@ -166,6 +166,13 @@ pub fn footer(ui: &mut Ui, buttons: impl FnOnce(&mut Ui)) {
     });
 }
 
+/// The dialog's main action, which Enter also runs (Esc closes the dialog, see
+/// `ModalResponse::should_close`). Not for what deletes: an Enter too many must not destroy.
+pub fn default_button(ui: &mut Ui, enabled: bool, button: Button<'static>) -> bool {
+    let clicked = ui.add_enabled(enabled, button).clicked();
+    clicked || (enabled && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+}
+
 /// The main action: filled with the accent.
 pub fn primary(text: impl Into<String>) -> Button<'static> {
     Button::new(RichText::new(text.into()).color(Color32::WHITE).strong()).fill(theme::ACCENT).corner_radius(8).min_size(BUTTON)

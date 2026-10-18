@@ -360,7 +360,7 @@ impl App {
                 crate::widgets::image_count(a.count + b.count)
             ));
             crate::dialog::footer(ui, |ui| {
-                if ui.add(crate::dialog::primary("Zusammenführen")).clicked() {
+                if ui.add(crate::dialog::danger("Zusammenführen")).clicked() {
                     confirmed = true;
                 }
                 if ui.add(crate::dialog::secondary("Abbrechen")).clicked() {

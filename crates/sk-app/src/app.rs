@@ -675,6 +675,8 @@ pub struct App {
     pub show_licenses: bool,
     pub shortcut_editor: crate::shortcut_editor::ShortcutEditor,
     /// Start screen (also the "about" dialog).
+    /// A deletion that can't be undone, waiting for confirmation (see `deletion`).
+    pub pending_deletion: Option<crate::deletion::Deletion>,
     pub splash: Option<crate::splash::Splash>,
     pub(crate) window_title: String,
     /// Zoom of the viewer relative to the full sensor resolution, for the status bar.
@@ -920,6 +922,7 @@ impl App {
             show_licenses: false,
             shortcut_editor: Default::default(),
             // Debug screenshots should show the app, not the start screen.
+            pending_deletion: None,
             splash: std::env::var_os("SILBERKORN_SCREENSHOT").is_none().then(crate::splash::Splash::startup),
             window_title: "Silberkorn".into(),
             zoom_pct: None,
@@ -2479,10 +2482,10 @@ impl App {
             crate::dialog::note(ui, "Beim Beenden wird es abgebrochen.");
             let mut choice = None;
             crate::dialog::footer(ui, |ui| {
-                if ui.add(crate::dialog::primary("Weiterarbeiten")).clicked() {
+                if crate::dialog::default_button(ui, true, crate::dialog::primary("Weiterarbeiten")) {
                     choice = Some(false);
                 }
-                if ui.add(crate::dialog::secondary("Abbrechen und beenden")).clicked() {
+                if ui.add(crate::dialog::danger("Trotzdem beenden")).clicked() {
                     choice = Some(true);
                 }
             });

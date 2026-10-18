@@ -3280,3 +3280,16 @@ fn tools_open_their_tab() {
         assert_eq!(f.app.tab, tab, "{id}");
     }
 }
+
+/// What can't be undone asks first: deleting a snapshot only happens after confirming.
+#[test]
+fn deleting_a_snapshot_asks_first() {
+    let Some(mut f) = Fixture::new("delete-confirm") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.add_snapshot(Some("Erster Stand".into()));
+    let count = |a: &App| a.current.as_ref().unwrap().snapshots.len();
+    assert_eq!(count(&f.app), 1);
+    f.app.request_snapshot_deletion(0);
+    assert_eq!(count(&f.app), 1, "erst nach der Rückfrage");
+    assert!(matches!(f.app.pending_deletion, Some(crate::deletion::Deletion::Snapshot(0, _))));
+}

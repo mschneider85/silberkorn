@@ -682,6 +682,7 @@ impl App {
         self.update_dialog(ctx);
         self.copy_dialog(ctx);
         self.shortcut_editor(ctx);
+        self.deletion_dialog(ctx);
     }
 }
 

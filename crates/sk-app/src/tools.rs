@@ -448,7 +448,7 @@ impl App {
                 if ui.button("+ Rezept").clicked() {
                     add = true;
                 }
-                if self.recipes.len() > 1 && ui.button("\u{E4A6}  Entfernen").clicked() {
+                if self.recipes.len() > 1 && ui.button("\u{E4A6}  Löschen …").clicked() {
                     remove = Some(self.selected_recipe);
                 }
             });
@@ -460,8 +460,8 @@ impl App {
             self.selected_recipe = self.recipes.len() - 1;
         }
         if let Some(i) = remove {
-            self.recipes.remove(i);
-            self.selected_recipe = self.selected_recipe.min(self.recipes.len() - 1);
+            let name = self.recipes[i].name.clone();
+            self.request_deletion(crate::deletion::Deletion::Recipe(i, name));
         }
         self.selected_recipe = self.selected_recipe.min(self.recipes.len().saturating_sub(1));
         let Some(r) = self.recipes.get_mut(self.selected_recipe) else { return };

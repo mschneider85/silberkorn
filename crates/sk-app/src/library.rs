@@ -466,7 +466,7 @@ impl App {
         enum AlbumAction {
             Create(String, bool),
             Rename(i64, String),
-            Delete(i64),
+            Delete(i64, String),
             AddSelection(i64),
             RemoveSelection(i64),
         }
@@ -479,15 +479,19 @@ impl App {
                 {
                     let resp = ui.text_edit_singleline(name);
                     if resp.lost_focus() {
-                        action = Some(AlbumAction::Rename(*id, name.trim().to_string()));
+                        // Esc keeps the old name (an empty one is ignored), as for layers.
+                        let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                        action = Some(AlbumAction::Rename(*id, if esc { String::new() } else { name.trim().to_string() }));
                     } else {
                         resp.request_focus();
                     }
                     continue;
                 }
                 let icon = if album.smart.is_some() { "\u{E272}" } else { "\u{E25A}" };
-                let resp = ui.selectable_label(self.scope == scope, format!("{icon}  {} ({})", album.name, album.count));
-                if resp.clicked() {
+                let resp = ui.selectable_label(self.scope == scope, format!("{icon}  {} ({})", album.name, album.count)).on_hover_text("Doppelklick: umbenennen");
+                if resp.double_clicked() {
+                    self.library_ui.renaming = Some((album.id, album.name.clone()));
+                } else if resp.clicked() {
                     open = Some(scope);
                 }
                 resp.context_menu(|ui| {
@@ -499,8 +503,8 @@ impl App {
                         self.library_ui.renaming = Some((album.id, album.name.clone()));
                         ui.close();
                     }
-                    if ui.button("Löschen").clicked() {
-                        action = Some(AlbumAction::Delete(album.id));
+                    if ui.button("Löschen …").clicked() {
+                        action = Some(AlbumAction::Delete(album.id, album.name.clone()));
                         ui.close();
                     }
                 });
@@ -547,12 +551,7 @@ impl App {
                         }
                         self.library_ui.renaming = None;
                     }
-                    AlbumAction::Delete(id) => {
-                        let _ = c.delete_album(id);
-                        if self.scope == Scope::Album(id) {
-                            open = Some(Scope::All);
-                        }
-                    }
+                    AlbumAction::Delete(id, name) => self.pending_deletion = Some(crate::deletion::Deletion::Album(id, name)),
                     AlbumAction::AddSelection(id) => {
                         let n = c.add_to_album(id, &selected).unwrap_or(0);
                         self.status = format!("{n} Bild(er) zum Album hinzugefügt");
@@ -736,8 +735,7 @@ impl App {
             self.status = format!("Stil „{}“ auf {} angewendet", style.name, crate::widgets::image_count(paths.len()));
         }
         if let Some(name) = delete {
-            let _ = styles::delete_in(&styles::styles_dir(), &name);
-            self.reload_styles();
+            self.request_deletion(crate::deletion::Deletion::Style(name));
         }
     }
 }
@@ -754,7 +752,7 @@ fn style_rows(ui: &mut Ui, list: &[(Style, bool, String)]) -> crate::style_grid:
             ui.label(&style.name).on_hover_text(help.as_str());
             if !look {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if widgets::small_button(ui, "\u{E4A6}", "Stil löschen").clicked() {
+                    if widgets::small_button(ui, "\u{E4A6}", "Stil löschen …").clicked() {
                         delete = Some(style.name.clone());
                     }
                 });

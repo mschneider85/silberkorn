@@ -255,7 +255,7 @@ impl App {
             px_per_mm = dpi.clamp(*range.start(), *range.end()) / 25.4;
             crate::dialog::note(ui, "Fein: Umschalt beim Ziehen halten, oder den Wert eintippen.");
             crate::dialog::footer(ui, |ui| {
-                if ui.add(crate::dialog::primary("Übernehmen")).clicked() {
+                if crate::dialog::default_button(ui, true, crate::dialog::primary("Übernehmen")) {
                     save = true;
                 }
                 if ui.add(crate::dialog::secondary("Abbrechen")).clicked() {

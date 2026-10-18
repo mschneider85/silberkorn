@@ -129,7 +129,7 @@ impl App {
                     }
                     if !look {
                         resp.context_menu(|ui| {
-                            if ui.button("Stil löschen").clicked() {
+                            if ui.button("Stil löschen …").clicked() {
                                 delete = Some(style.name.clone());
                                 ui.close();
                             }

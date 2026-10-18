@@ -221,7 +221,7 @@ impl App {
             dialog::footer(ui, |ui| {
                 let release = self.updates.available.as_ref();
                 if self.updates.setup.is_some() {
-                    if ui.add(dialog::primary("Jetzt neu starten")).clicked() {
+                    if dialog::default_button(ui, true, dialog::primary("Jetzt neu starten")) {
                         restart = true;
                     }
                     if ui.add(dialog::secondary("Beim Beenden")).clicked() {
@@ -236,13 +236,13 @@ impl App {
                     return;
                 }
                 let Some(r) = release else {
-                    if ui.add(dialog::primary("Schließen")).clicked() {
+                    if dialog::default_button(ui, true, dialog::primary("Schließen")) {
                         close = true;
                     }
                     return;
                 };
                 if cfg!(windows) && r.asset.is_some() {
-                    if ui.add(dialog::primary(format!("{}  Jetzt aktualisieren", icon::DOWNLOAD_SIMPLE))).clicked() {
+                    if dialog::default_button(ui, true, dialog::primary(format!("{}  Jetzt aktualisieren", icon::DOWNLOAD_SIMPLE))) {
                         install = true;
                     }
                 } else if ui.add(dialog::primary("Release-Seite öffnen")).clicked() {

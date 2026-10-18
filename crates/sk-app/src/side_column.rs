@@ -212,7 +212,7 @@ impl App {
                         apply = Some(i);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button(theme::icon::TRASH).on_hover_text("Schnappschuss löschen").clicked() {
+                        if ui.small_button(theme::icon::TRASH).on_hover_text("Schnappschuss löschen …").clicked() {
                             delete = Some(i);
                         }
                     });
@@ -226,7 +226,7 @@ impl App {
             self.add_snapshot(None);
         }
         if let Some(i) = delete {
-            self.delete_snapshot(i);
+            self.request_snapshot_deletion(i);
         }
         if let Some(adj) = apply.and_then(|i| self.current.as_ref()?.snapshots.get(i)).map(|s| s.adjustments.clone()) {
             self.apply_snapshot(adj);

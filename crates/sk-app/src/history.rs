@@ -48,6 +48,13 @@ impl App {
         }
     }
 
+    /// Asks before deleting snapshot `i` (it can't be restored).
+    pub fn request_snapshot_deletion(&mut self, i: usize) {
+        if let Some(name) = self.current.as_ref().and_then(|c| c.snapshots.get(i)).map(|s| s.name.clone()) {
+            self.request_deletion(crate::deletion::Deletion::Snapshot(i, name));
+        }
+    }
+
     /// Saves the current adjustments as a snapshot.
     pub fn add_snapshot(&mut self, name: Option<String>) {
         self.commit_and_save();
@@ -89,7 +96,9 @@ impl App {
                             let r = ui.text_edit_singleline(&mut text);
                             r.request_focus();
                             if r.lost_focus() {
-                                action = Some(SnapshotAction::Rename(i, text));
+                                // Esc keeps the old name (an empty one is ignored), as for layers.
+                                let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                                action = Some(SnapshotAction::Rename(i, if esc { String::new() } else { text }));
                             } else if r.changed() {
                                 typed = Some((i, text));
                             }
@@ -103,7 +112,7 @@ impl App {
                                 action = Some(SnapshotAction::Apply(i));
                             }
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button(icon::TRASH).on_hover_text("Schnappschuss löschen").clicked() {
+                                if ui.small_button(icon::TRASH).on_hover_text("Schnappschuss löschen …").clicked() {
                                     action = Some(SnapshotAction::Delete(i));
                                 }
                             });
@@ -139,7 +148,7 @@ impl App {
                     self.apply_snapshot(adj);
                 }
             }
-            Some(SnapshotAction::Delete(i)) => self.delete_snapshot(i),
+            Some(SnapshotAction::Delete(i)) => self.request_snapshot_deletion(i),
             Some(SnapshotAction::StartRename(i)) => {
                 self.snapshot_rename = self.current.as_ref().and_then(|c| c.snapshots.get(i)).map(|s| (i, s.name.clone()));
             }

@@ -13,6 +13,7 @@ mod commands;
 mod compare;
 mod crop;
 mod culling;
+mod deletion;
 mod dialog;
 mod denoise;
 mod depth;

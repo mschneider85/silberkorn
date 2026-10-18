@@ -125,7 +125,7 @@ impl App {
                 }
             }
             dialog::footer(ui, |ui| {
-                if ui.add(dialog::primary("Zusammenfügen")).clicked() {
+                if dialog::default_button(ui, true, dialog::primary("Zusammenfügen")) {
                     run = true;
                 }
                 if ui.add(dialog::secondary("Abbrechen")).clicked() {

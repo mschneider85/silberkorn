@@ -115,7 +115,7 @@ impl App {
             });
             dialog::note(ui, "Ist ein Name schon vergeben, wird „-2“ usw. angehängt.");
             dialog::footer(ui, |ui| {
-                if ui.add(dialog::primary("Umbenennen")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                if dialog::default_button(ui, true, dialog::primary("Umbenennen")) {
                     apply = true;
                 }
                 if ui.add(dialog::secondary("Abbrechen")).clicked() {
