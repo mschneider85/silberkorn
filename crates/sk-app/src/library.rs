@@ -428,7 +428,7 @@ impl App {
                 }
             };
             entry(ui, Scope::All, format!("{}  Alle Bilder ({})", crate::theme::icon::STACK_SIMPLE, self.lists.total));
-            entry(ui, Scope::LastImport, format!("{}  Letzter Import", crate::theme::icon::CLOCK_COUNTER_CLOCKWISE).into());
+            entry(ui, Scope::LastImport, format!("{}  Letzter Import", crate::theme::icon::CLOCK_COUNTER_CLOCKWISE));
             ui.horizontal(|ui| {
                 if self.session.is_none()
                     && ui.button(format!("{}  Ordner importieren", crate::theme::icon::DOWNLOAD_SIMPLE)).on_hover_text("Aktuellen Ordner inkl. Unterordnern in den Katalog aufnehmen").clicked()
