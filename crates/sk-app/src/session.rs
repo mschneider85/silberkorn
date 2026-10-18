@@ -346,7 +346,7 @@ impl App {
     /// "Move to" and trash entries for the image menu and the thumbnail context menu (they act
     /// on the selection). They look like the commands but run after the browser is drawn.
     pub fn move_menu(&mut self, ui: &mut Ui) {
-        let n = self.selected_paths().len();
+        let n = self.selected_count();
         ui.add_enabled_ui(n > 0, |ui| {
             if self.session.is_some() && self.command_button(ui, "to-selects") {
                 self.pending = Some(PendingAction::ToSelects);

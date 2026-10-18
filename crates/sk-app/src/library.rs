@@ -11,6 +11,7 @@ use sk_core::styles::{self, Style};
 use egui::{Color32, RichText, Ui};
 
 use crate::app::App;
+use crate::undo::Meta;
 use crate::widgets::{self, section};
 use crate::workers::IndexJob;
 
@@ -214,18 +215,35 @@ impl App {
 
     /// Applies a metadata change to the given images (sidecar + catalog + entries).
     /// Changes rating, label or keywords of `paths` (one undo step).
-    pub fn update_meta(&mut self, paths: &[PathBuf], f: impl Fn(&mut Sidecar)) {
-        let before: Vec<_> = paths.iter().filter_map(|p| Some((p.clone(), self.meta_of(p)?))).collect();
-        self.update_meta_unrecorded(paths, f);
-        let changed: Vec<_> = before.into_iter().filter(|(p, m)| self.meta_of(p).as_ref() != Some(m)).collect();
+    pub fn update_meta(&mut self, paths: &[PathBuf], f: impl Fn(&mut Sidecar) + Sync) {
+        let changed = self.update_meta_unrecorded(paths, f).into_iter().filter(|(_, before, after)| before != after).map(|(p, before, _)| (p, before)).collect();
         self.record_step(crate::undo::Step::Meta(changed));
     }
 
-    /// [`Self::update_meta`] without an undo step (for undo itself).
-    pub(crate) fn update_meta_unrecorded(&mut self, paths: &[PathBuf], f: impl Fn(&mut Sidecar)) {
+    /// [`Self::update_meta`] without an undo step (for undo itself). Returns rating, label and
+    /// keywords before and after for each image that could be read.
+    pub(crate) fn update_meta_unrecorded(&mut self, paths: &[PathBuf], f: impl Fn(&mut Sidecar) + Sync) -> Vec<(PathBuf, Meta, Meta)> {
+        use rayon::prelude::*;
         let current = self.current_path();
+        // The other images in parallel: each sidecar write waits for the disk.
+        let others: Vec<(&PathBuf, Option<&Sidecar>)> =
+            paths.iter().filter(|p| Some(*p) != current.as_ref()).map(|p| (p, self.unsaved.get(p))).collect();
+        let written: Vec<_> = others
+            .into_par_iter()
+            .map(|(path, unsaved)| {
+                let mut sc = crate::app::with_unsaved(unsaved, sidecar::try_load(path)?);
+                let before = Meta::of(&sc);
+                f(&mut sc);
+                let saved = sidecar::save(path, &sc);
+                Ok::<_, anyhow::Error>((path, before, sc, saved))
+            })
+            .collect();
+        let mut written = written.into_iter();
+        let mut out = Vec::new();
+        // One transaction for the whole batch instead of one commit per statement.
+        let batch = self.catalog.as_ref().is_some_and(|c| c.begin_batch().is_ok());
         for path in paths {
-            let sc = if Some(path) == current.as_ref() {
+            let (before, sc) = if Some(path) == current.as_ref() {
                 let cur = self.current.as_mut().expect("current");
                 let mut sc = Sidecar {
                     rating: cur.rating,
@@ -233,23 +251,24 @@ impl App {
                     keywords: cur.keywords.clone(),
                     ..Default::default()
                 };
+                let before = Meta::of(&sc);
                 f(&mut sc);
                 cur.rating = sc.rating;
                 cur.color_label = sc.color_label;
                 cur.keywords = sc.keywords.clone();
                 self.sidecar_dirty = true;
-                sc
+                (before, sc)
             } else {
-                let mut sc = match self.sidecar_for_update(path) {
-                    Ok(sc) => sc,
+                match written.next().expect("one result per other path") {
+                    Ok((_, before, sc, saved)) => {
+                        self.saved_sidecar(path, &sc, saved);
+                        (before, sc)
+                    }
                     Err(e) => {
                         self.report_error(format!("Nicht gespeichert: {e:#}"));
                         continue;
                     }
-                };
-                f(&mut sc);
-                self.save_sidecar(path, &sc);
-                sc
+                }
             };
             if let Some(i) = self.index_of(path) {
                 let e = &mut self.entries[i];
@@ -257,10 +276,15 @@ impl App {
                 e.color_label = sc.color_label;
                 e.keywords = sc.keywords.clone();
             }
+            out.push((path.clone(), before, Meta::of(&sc)));
+        }
+        if batch && let Some(c) = &self.catalog {
+            let _ = c.end_batch();
         }
         self.commit_and_save();
         self.refilter();
         self.refresh_catalog_lists();
+        out
     }
 
     /// Writes rating, label and keywords of the selected images into XMP files.
@@ -320,6 +344,12 @@ impl App {
             v.push(p);
         }
         v
+    }
+
+    /// `selected_paths().len()` without collecting them (for labels drawn every frame).
+    pub fn selected_count(&self) -> usize {
+        let n = self.visible.iter().filter(|&&i| self.selection.contains(&self.entries[i].path)).count();
+        if n == 0 && self.current.is_some() { 1 } else { n }
     }
 
     pub fn set_rating(&mut self, rating: u8) {

@@ -20,6 +20,12 @@ pub struct Meta {
     pub keywords: Vec<String>,
 }
 
+impl Meta {
+    pub fn of(sc: &sk_core::sidecar::Sidecar) -> Self {
+        Meta { rating: sc.rating, color_label: sc.color_label, keywords: sc.keywords.clone() }
+    }
+}
+
 /// What to restore: the state of each image before the change (for undo) or after it (redo).
 #[derive(Clone, Debug)]
 pub enum Step {
@@ -175,7 +181,6 @@ impl App {
             let cur = self.current.as_ref()?;
             return Some(Meta { rating: cur.rating, color_label: cur.color_label, keywords: cur.keywords.clone() });
         }
-        let sc = self.sidecar_for_update(path).ok()?;
-        Some(Meta { rating: sc.rating, color_label: sc.color_label, keywords: sc.keywords })
+        Some(Meta::of(&self.sidecar_for_update(path).ok()?))
     }
 }

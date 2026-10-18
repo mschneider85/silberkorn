@@ -325,6 +325,14 @@ struct Settings {
 /// Thumbnail textures kept at most (see `App::trim_thumbs`).
 pub(crate) const MAX_THUMBS: usize = 2000;
 
+/// `sc` with settings of an image that couldn't be saved yet (`unsaved`): they win over the file.
+pub(crate) fn with_unsaved(unsaved: Option<&Sidecar>, sc: Sidecar) -> Sidecar {
+    match unsaved {
+        Some(u) => Sidecar { rating: u.rating, color_label: u.color_label, keywords: u.keywords.clone(), adjustments: u.adjustments.clone(), ..sc },
+        None => sc,
+    }
+}
+
 fn settings_path() -> Option<PathBuf> {
     Some(sk_core::paths::config_dir().join("settings.json"))
 }
@@ -1722,10 +1730,7 @@ impl App {
 
     /// `sc` with the settings of `path` that couldn't be saved yet: they win over the file.
     pub(crate) fn with_unsaved(&self, path: &Path, sc: Sidecar) -> Sidecar {
-        match self.unsaved.get(path) {
-            Some(u) => Sidecar { rating: u.rating, color_label: u.color_label, keywords: u.keywords.clone(), adjustments: u.adjustments.clone(), ..sc },
-            None => sc,
-        }
+        with_unsaved(self.unsaved.get(path), sc)
     }
 
     /// Settings of an image for changing them: an error if its sidecar can't be read (saving
@@ -1737,7 +1742,13 @@ impl App {
     /// Writes the sidecar of an image and syncs the catalog; settings that can't be saved are
     /// kept in `unsaved` (and tried again when the image is opened).
     pub(crate) fn save_sidecar(&mut self, path: &Path, sc: &Sidecar) {
-        match sidecar::save(path, sc) {
+        let saved = sidecar::save(path, sc);
+        self.saved_sidecar(path, sc, saved);
+    }
+
+    /// The bookkeeping of [`Self::save_sidecar`] after `sidecar::save` gave `saved`.
+    pub(crate) fn saved_sidecar(&mut self, path: &Path, sc: &Sidecar, saved: anyhow::Result<()>) {
+        match saved {
             Ok(()) => {
                 self.unsaved.remove(path);
             }

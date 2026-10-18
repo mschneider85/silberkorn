@@ -62,14 +62,8 @@ pub fn expand(files: Vec<PathBuf>) -> Vec<PathBuf> {
 
 /// The distinct raw files of some paths, in order.
 pub fn files_of(paths: &[PathBuf]) -> Vec<PathBuf> {
-    let mut out: Vec<PathBuf> = Vec::new();
-    for p in paths {
-        let f = file_of(p);
-        if !out.contains(&f) {
-            out.push(f);
-        }
-    }
-    out
+    let mut seen = std::collections::HashSet::new();
+    paths.iter().map(|p| file_of(p)).filter(|f| seen.insert(f.clone())).collect()
 }
 
 #[cfg(test)]

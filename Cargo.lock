@@ -4454,6 +4454,7 @@ dependencies = [
  "image",
  "log",
  "raw-window-handle",
+ "rayon",
  "rfd",
  "serde",
  "serde_json",

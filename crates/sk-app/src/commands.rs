@@ -499,6 +499,10 @@ impl App {
             if focused && k == Key::Enter {
                 continue;
             }
+            // Checked first: `enabled` can cost a pass over the selection, and this runs every frame.
+            if !ctx.input(|i| i.key_pressed(k)) {
+                continue;
+            }
             // A key of an unavailable command stays for others (Enter of "finish crop" must still
             // reach a dialog); with modifiers it is taken anyway, or Shift+X would run X.
             let enabled = (c.enabled)(self);

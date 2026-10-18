@@ -13,7 +13,7 @@ use crate::widgets::{self, section, slider_row};
 impl App {
     pub fn tools_ui(&mut self, ui: &mut Ui) {
         // The copy buttons of the tool headers carry a tool over to the other selected images.
-        let others = if self.current.is_some() { self.selected_paths().len().saturating_sub(1) } else { 0 };
+        let others = if self.current.is_some() { self.selected_count().saturating_sub(1) } else { 0 };
         widgets::set_copy_targets(ui.ctx(), others);
         widgets::set_edit_layer(ui.ctx(), self.on_layer());
         widgets::set_tool_states(ui.ctx(), self.tool_states());
@@ -398,7 +398,7 @@ impl App {
             crate::widgets::no_image(ui);
             return;
         };
-        let n_sel = self.selected_paths().len();
+        let n_sel = self.selected_count();
         let mut new_rating = None;
         let mut new_label = None;
         let title = if n_sel > 1 { format!("Bewertung ({n_sel} Bilder)") } else { "Bewertung".to_string() };
@@ -614,7 +614,7 @@ impl App {
             crate::widgets::hint(ui, note);
         });
         section(ui, "Exportieren", None, |ui| {
-            let n = self.selected_paths().len();
+            let n = self.selected_count();
             let k = self.recipes.iter().filter(|r| r.enabled).count();
             let text = RichText::new(format!("{}  {} × {} exportieren", crate::theme::icon::EXPORT, widgets::image_count(n), if k == 1 { "1 Rezept".to_string() } else { format!("{k} Rezepte") })).color(Color32::WHITE);
             let button = egui::Button::new(text).fill(crate::theme::ACCENT).corner_radius(6).min_size(egui::vec2(ui.available_width(), 30.0));

@@ -177,7 +177,7 @@ impl App {
     }
 
     fn file_menu(&mut self, ui: &mut Ui) {
-        let n_sel = self.selected_paths().len();
+        let n_sel = self.selected_count();
         self.session_file_menu(ui);
         ui.separator();
         self.command_item(ui, "open-folder");
@@ -239,7 +239,7 @@ impl App {
     }
 
     fn photo_menu(&mut self, ui: &mut Ui) {
-        let n_sel = self.selected_paths().len();
+        let n_sel = self.selected_count();
         ui.add_enabled_ui(n_sel > 0, |ui| {
             self.rating_label_menus(ui);
             ui.menu_button(format!("{}  XMP", icon::FILE_CODE), |ui| {
@@ -463,7 +463,7 @@ impl App {
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 2.0;
-                let n = self.selected_paths().len();
+                let n = self.selected_count();
                 let text = RichText::new(format!("{}  Exportieren", icon::EXPORT)).color(Color32::WHITE).strong();
                 let button = Button::new(text).fill(theme::ACCENT).corner_radius(6).min_size(vec2(0.0, 28.0));
                 let resp = ui.add_enabled(self.command_available("export"), button).on_disabled_hover_text(self.export_blocked_reason());
@@ -672,7 +672,7 @@ impl App {
                     ui.label(RichText::new(format!("{pct:.0} %")).size(12.0).color(theme::TEXT));
                     ui.separator();
                 }
-                let n = self.selected_paths().len();
+                let n = self.selected_count();
                 let sel = if n > 1 { format!("  ·  {n} ausgewählt") } else { String::new() };
                 let count = image_count(self.visible.len());
                 ui.label(dim(format!("{}  ·  {count}{sel}", scope_label(&self.scope, &self.lists, self.session.as_ref()))));

@@ -329,6 +329,7 @@ impl Catalog {
         );
         conn.execute_batch(
             "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
              PRAGMA foreign_keys=ON;
              CREATE TABLE IF NOT EXISTS images (
                  id INTEGER PRIMARY KEY,
@@ -425,6 +426,16 @@ impl Catalog {
         let id = now();
         self.conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES ('last_import', ?1)", [id.to_string()])?;
         Ok(id)
+    }
+
+    /// Starts a transaction for many small writes (one commit at [`Self::end_batch`] instead of
+    /// one per statement). Not around methods that open a transaction of their own.
+    pub fn begin_batch(&self) -> Result<()> {
+        Ok(self.conn.execute_batch("BEGIN")?)
+    }
+
+    pub fn end_batch(&self) -> Result<()> {
+        Ok(self.conn.execute_batch("COMMIT")?)
     }
 
     /// Reads metadata + sidecar of `path` and stores it.
