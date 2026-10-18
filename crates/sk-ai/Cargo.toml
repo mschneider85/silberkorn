@@ -5,7 +5,7 @@ version.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
-sk-core = { version = "0.1.0", path = "../sk-core" }
+sk-core = { path = "../sk-core" }
 image = { version = "0.25", default-features = false }
 flate2 = "1"
 log = "0.4"
