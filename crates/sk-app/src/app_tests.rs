@@ -3293,3 +3293,14 @@ fn deleting_a_snapshot_asks_first() {
     assert_eq!(count(&f.app), 1, "erst nach der Rückfrage");
     assert!(matches!(f.app.pending_deletion, Some(crate::deletion::Deletion::Snapshot(0, _))));
 }
+
+/// "+ Schnappschuss" saves the state and offers its name for editing right away, in the side
+/// column as in the history tab (both draw the same list).
+#[test]
+fn a_new_snapshot_can_be_named_right_away() {
+    let Some(mut f) = Fixture::new("snapshot-name") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.add_snapshot_to_name();
+    f.app.add_snapshot_to_name();
+    assert_eq!(f.app.snapshot_rename, Some((1, "Schnappschuss 2".to_string())));
+}

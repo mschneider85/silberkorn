@@ -658,6 +658,9 @@ impl App {
             })
             .collect();
         let grid = !self.style_list && self.current.is_some();
+        if !self.style_list && self.current.is_none() {
+            crate::widgets::hint(ui, "Die Vorschauen erscheinen, sobald ein Bild geöffnet ist.");
+        }
         if grid {
             self.pump_style_thumbs();
         }
@@ -695,9 +698,12 @@ impl App {
         }
         let mut save = None;
         section(ui, "Neuer Stil", None, |ui| {
+            let Some(cur) = &self.current else {
+                crate::widgets::hint(ui, "Ein Bild öffnen, um seine Einstellungen als Stil zu speichern.");
+                return;
+            };
             ui.add(egui::TextEdit::singleline(&mut self.library_ui.new_style).hint_text("Name des Stils"));
             let name = self.library_ui.new_style.trim().to_string();
-            let Some(cur) = &self.current else { return };
             // Until chosen by hand: the edited tools of the image.
             let auto: std::collections::BTreeSet<_> = sk_core::tools::edited(&cur.adjustments).into_iter().collect();
             let mut chosen = self.library_ui.new_style_tools.clone().unwrap_or(auto);

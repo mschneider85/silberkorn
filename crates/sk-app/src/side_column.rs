@@ -199,37 +199,10 @@ impl App {
         }
     }
 
-    /// Saved states of the image; a click applies one, "+" saves the current state.
+    /// Saved states of the image: the same list as in the history tab.
     fn side_snapshots(&mut self, ui: &mut Ui) {
-        let Some(cur) = &self.current else { return };
-        let rows: Vec<(String, bool)> = cur.snapshots.iter().map(|s| (s.name.clone(), s.adjustments == cur.adjustments)).collect();
-        let (mut apply, mut delete) = (None, None);
-        let mut add = false;
-        section(ui, "Schnappschüsse", None, |ui| {
-            for (i, (name, current)) in rows.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    if ui.selectable_label(*current, format!("{}  {name}", theme::icon::CAMERA)).on_hover_text("Anwenden").clicked() && !current {
-                        apply = Some(i);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.small_button(theme::icon::TRASH).on_hover_text("Schnappschuss löschen …").clicked() {
-                            delete = Some(i);
-                        }
-                    });
-                });
-            }
-            if ui.button(format!("{}  Schnappschuss", theme::icon::PLUS)).on_hover_text("Den jetzigen Stand unter einem Namen sichern").clicked() {
-                add = true;
-            }
-        });
-        if add {
-            self.add_snapshot(None);
-        }
-        if let Some(i) = delete {
-            self.request_snapshot_deletion(i);
-        }
-        if let Some(adj) = apply.and_then(|i| self.current.as_ref()?.snapshots.get(i)).map(|s| s.adjustments.clone()) {
-            self.apply_snapshot(adj);
+        if self.current.is_some() {
+            self.snapshot_section(ui);
         }
     }
 
@@ -237,9 +210,6 @@ impl App {
     fn side_history(&mut self, ui: &mut Ui) {
         const SHOWN: usize = 8;
         let Some((steps, now)) = self.history_steps() else { return };
-        if steps.len() <= 1 {
-            return;
-        }
         let start = steps.len().saturating_sub(SHOWN);
         let rows: Vec<(usize, String)> =
             (start..steps.len()).rev().map(|j| (j, if j == 0 { "Geöffnet".to_string() } else { describe(steps[j - 1], steps[j]) })).collect();

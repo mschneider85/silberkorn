@@ -337,9 +337,19 @@ impl App {
     }
 
     /// Keyword chips (click removes), an input with catalog suggestions.
+    /// Rating, color label and keywords shown in the info tab: of the open image, or else of
+    /// the first selected one (they are set for the whole selection either way).
+    fn shown_meta(&self) -> Option<(u8, ColorLabel, Vec<String>)> {
+        if let Some(cur) = &self.current {
+            return Some((cur.rating, cur.color_label, cur.keywords.clone()));
+        }
+        let first = self.selected_paths().into_iter().next()?;
+        let e = self.entries.iter().find(|e| e.path == first)?;
+        Some((e.rating, e.color_label, e.keywords.clone()))
+    }
+
     pub(crate) fn keywords_ui(&mut self, ui: &mut Ui) {
-        let Some(cur) = self.current.as_ref() else { return };
-        let keywords = cur.keywords.clone();
+        let Some((_, _, keywords)) = self.shown_meta() else { return };
         let mut remove_kw = None;
         let mut add_kw = None;
         ui.horizontal_wrapped(|ui| {
@@ -378,12 +388,11 @@ impl App {
     }
 
     fn metadata_tab(&mut self, ui: &mut Ui) {
-        let Some(cur) = self.current.as_ref() else {
+        let Some((mut rating, current_label, _)) = self.shown_meta() else {
             crate::widgets::no_image(ui);
             return;
         };
         let n_sel = self.selected_paths().len();
-        let (mut rating, current_label) = (cur.rating, cur.color_label);
         let mut new_rating = None;
         let mut new_label = None;
         let title = if n_sel > 1 { format!("Bewertung ({n_sel} Bilder)") } else { "Bewertung".to_string() };
