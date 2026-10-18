@@ -311,11 +311,11 @@ impl App {
                 }
             });
             if let Some(f) = &focal {
-                ui.label(RichText::new(format!("Brennweite {f}")).small().color(crate::theme::TEXT_FAINT));
+                crate::widgets::hint(ui, format!("Brennweite {f}"));
             }
             changed |= slider_row(ui, "Verzeichnung", &mut l.distortion, -100.0..=100.0, 0.0, 0);
             changed |= crate::widgets::slider_row_with(ui, "Fisheye", &mut l.fisheye, 0.0..=220.0, 0.0, 0, crate::widgets::SliderOpts { suffix: "°", ..Default::default() });
-            ui.label(RichText::new("Fisheye: Bildwinkel über die Diagonale (meist 180°), rechnet in ein normales Weitwinkelbild um").small().color(crate::theme::TEXT_FAINT));
+            crate::widgets::hint(ui, "Fisheye: Bildwinkel über die Diagonale (meist 180°), rechnet in ein normales Weitwinkelbild um");
             changed |= slider_row(ui, "CA Rot/Cyan", &mut l.ca_red, -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "CA Blau/Gelb", &mut l.ca_blue, -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Farbsaum Lila", &mut l.defringe_purple, 0.0..=100.0, 0.0, 0);
@@ -344,7 +344,7 @@ impl App {
                     if ui.button("Abbrechen").on_hover_text("Esc").clicked() {
                         cancel_crop = true;
                     }
-                } else if ui.button("\u{E1D4}  Zuschneiden").on_hover_text(crate::commands::hint("Zuschneiden", "crop")).clicked() {
+                } else if ui.button(format!("{}  Zuschneiden", crate::theme::icon::CROP)).on_hover_text(crate::commands::hint("Zuschneiden", "crop")).clicked() {
                     start_crop = true;
                 }
             });
@@ -387,11 +387,11 @@ impl App {
                 if ui.button(format!("{}  Auto", icon::MAGIC_WAND)).on_hover_text(tip).clicked() {
                     upright = Some(sk_core::upright::UprightMode::Level);
                 }
-                if ui.button("\u{E038}  90°").on_hover_text("90° nach links drehen").clicked() {
+                if ui.button(format!("{}  90°", crate::theme::icon::ARROW_COUNTER_CLOCKWISE)).on_hover_text("90° nach links drehen").clicked() {
                     adj.rotation = (adj.rotation + 3) % 4;
                     changed = true;
                 }
-                if ui.button("\u{E036}  90°").on_hover_text("90° nach rechts drehen").clicked() {
+                if ui.button(format!("{}  90°", crate::theme::icon::ARROW_CLOCKWISE)).on_hover_text("90° nach rechts drehen").clicked() {
                     adj.rotation = (adj.rotation + 1) % 4;
                     changed = true;
                 }
@@ -551,7 +551,7 @@ impl App {
                 changed |= slider_row(ui, "Radius", &mut d.sharpen_radius, 0.2..=3.0, defaults.sharpen_radius, 1);
                 changed |= slider_row(ui, "Schwelle", &mut d.sharpen_threshold, 0.0..=20.0, defaults.sharpen_threshold, 1);
             });
-            ui.label(RichText::new(crate::commands::hint("Wirkung bei 100 % prüfen", "zoom-100")).small().color(crate::theme::TEXT_FAINT));
+            crate::widgets::hint(ui, crate::commands::hint("Wirkung bei 100 % prüfen", "zoom-100"));
         });
         widgets::tool_section(ui, sk_core::tools::Tool::Clarity, Some(&mut || r_clarity = true), |ui| {
             changed |= slider_row(ui, "Klarheit", t.pick(&mut d.clarity, |l| &mut l.clarity), -100.0..=100.0, 0.0, 0);
@@ -703,7 +703,7 @@ impl App {
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
                         changed |= ui.checkbox(&mut z.enabled, format!("Bereich {}", i + 1)).changed();
-                        if ui.selectable_label(picking_zone == Some(i), icon::EYEDROPPER).on_hover_text("Farbe neu aufnehmen").clicked() {
+                        if ui.add(egui::Button::new(icon::EYEDROPPER).selected(picking_zone == Some(i))).on_hover_text("Farbe neu aufnehmen").clicked() {
                             toggle_pick = Some(ColorPick::Zone(i));
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -767,7 +767,7 @@ impl App {
                 ui.painter().rect_filled(rect, 3.0, skin_color(st));
                 ui.painter().rect_stroke(rect, 3.0, egui::Stroke::new(1.0, Color32::from_gray(90)), egui::StrokeKind::Inside);
                 let pipette = format!("{}  Hautton aufnehmen", crate::theme::icon::EYEDROPPER);
-                if ui.selectable_label(picking_skin, pipette).on_hover_text("Auf eine typische Hautstelle im Bild klicken").clicked() {
+                if ui.add(egui::Button::new(pipette).selected(picking_skin)).on_hover_text("Auf eine typische Hautstelle im Bild klicken").clicked() {
                     toggle_pick = Some(ColorPick::Skin);
                 }
             });

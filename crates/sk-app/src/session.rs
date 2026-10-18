@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use egui::{Button, Color32, Modifiers, RichText, Ui, vec2};
+use egui::{Button, Modifiers, RichText, Ui, vec2};
 use sk_core::cache;
 use sk_core::catalog::{self, Catalog, Scope};
 use sk_core::session::{self, Session, SessionFolder};
@@ -483,7 +483,7 @@ impl App {
                 });
             }
             if self.lists.favorites.is_empty() {
-                ui.label(RichText::new("Häufig genutzte Ordner hier ablegen.").color(Color32::from_gray(150)));
+                crate::widgets::hint(ui, "Häufig genutzte Ordner hier ablegen.");
             }
             let is_fav = self.lists.favorites.contains(&self.folder);
             let is_std = SessionFolder::ALL.iter().any(|f| s.folder(*f) == self.folder);

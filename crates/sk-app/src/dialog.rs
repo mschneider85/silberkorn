@@ -180,7 +180,7 @@ pub fn primary(text: impl Into<String>) -> Button<'static> {
 
 /// What deletes: filled red.
 pub fn danger(text: impl Into<String>) -> Button<'static> {
-    Button::new(RichText::new(text.into()).color(Color32::WHITE).strong()).fill(Color32::from_rgb(186, 64, 54)).corner_radius(8).min_size(BUTTON)
+    Button::new(RichText::new(text.into()).color(Color32::WHITE).strong()).fill(theme::DANGER_FILL).corner_radius(8).min_size(BUTTON)
 }
 
 /// Every other button of the footer.

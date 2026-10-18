@@ -26,6 +26,12 @@ pub const TEXT: Color32 = Color32::from_rgb(222, 222, 226);
 pub const TEXT_DIM: Color32 = Color32::from_rgb(150, 150, 158);
 pub const TEXT_FAINT: Color32 = Color32::from_rgb(108, 108, 116);
 pub const DANGER: Color32 = Color32::from_rgb(230, 110, 100);
+/// Fill of buttons that delete for good.
+pub const DANGER_FILL: Color32 = Color32::from_rgb(186, 64, 54);
+/// Guides drawn over the image: lines to align, retouch sources.
+pub const GUIDE: Color32 = Color32::from_rgb(255, 210, 0);
+/// Second guide color (horizontal keystone lines).
+pub const GUIDE_ALT: Color32 = Color32::from_rgb(80, 200, 255);
 pub const STAR: Color32 = Color32::from_rgb(240, 196, 70);
 /// Mark of the AI functions (a sparkle after their name, see `widgets::ai_text`).
 pub const AI: Color32 = Color32::from_rgb(246, 200, 50);

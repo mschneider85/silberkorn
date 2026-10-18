@@ -123,7 +123,7 @@ impl App {
         }
         let deletable = current.as_ref().is_some_and(|p| variant::number(p) > 1);
         let delete = ui
-            .add_enabled(deletable, Button::new(format!("{}  Variante löschen …", icon::X_SQUARE)))
+            .add_enabled(deletable, Button::new(format!("{}  Variante löschen …", icon::TRASH)))
             .on_disabled_hover_text("Nur weitere Varianten lassen sich löschen; die erste gehört zur Datei");
         if delete.clicked() {
             self.pending = Some(PendingAction::DeleteVariant);
@@ -134,7 +134,7 @@ impl App {
         let Some(paths) = self.confirm_delete_variant.clone() else { return };
         let (mut confirmed, mut cancel) = (false, false);
         let title = if paths.len() == 1 { "Variante löschen".to_string() } else { format!("{} Varianten löschen", paths.len()) };
-        let modal = Dialog::new("delete_variant", icon::X_SQUARE, title).subtitle("Die RAW-Dateien bleiben erhalten").tone(Tone::Danger).width(420.0).show(ctx, |ui| {
+        let modal = Dialog::new("delete_variant", icon::TRASH, title).subtitle("Die RAW-Dateien bleiben erhalten").tone(Tone::Danger).width(420.0).show(ctx, |ui| {
             let what = match paths.as_slice() {
                 [p] => format!("„{}“ wird", variant::display_name(p)),
                 _ => format!("{} Varianten werden", paths.len()),

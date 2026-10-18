@@ -50,19 +50,11 @@ pub const STYLE_BRUSHES: &[(&str, LayerAdjustments)] = &[
 const ZERO: LayerAdjustments = LayerAdjustments::NEUTRAL;
 
 impl LocalTool {
-    pub fn label(self) -> &'static str {
-        match self {
-            LocalTool::Brush => "\u{E6F0}  Pinsel",
-            LocalTool::Eraser => "\u{E21E}  Radierer",
-            LocalTool::Linear => "\u{E098}  Linear",
-            LocalTool::Radial => "\u{E602}  Radial",
-            LocalTool::Heal => "\u{E0B2}  Reparieren",
-            LocalTool::Clone => "\u{EA48}  Klonen",
-            LocalTool::Magic => "\u{E6B6}  Zauberpinsel",
-            LocalTool::Object => "\u{E7C8}  Objekt",
-            LocalTool::ColorPick => "\u{E568}  Farbe wählen",
-            LocalTool::Remove => "\u{E6F0}  Entfernen",
-        }
+    /// Icon and name, from the tool tiles (one name per tool everywhere).
+    pub fn label(self) -> String {
+        let (icon, name, _) = self.tile();
+        let name = if self == LocalTool::ColorPick { "Farbe wählen" } else { name };
+        format!("{icon}  {name}")
     }
 
     /// Icon, short name and command (for the shortcut) of the tool tiles.
@@ -655,9 +647,9 @@ impl App {
             paint_area(&painter, pts, *r, if sel { Color32::WHITE } else { Color32::from_white_alpha(150) });
             if sel {
                 let src: Vec<Pos2> = pts.iter().map(|p| *p + *offset).collect();
-                paint_area(&painter, &src, *r, Color32::from_rgb(255, 210, 0));
-                painter.line_segment([pts[0], pts[0] + *offset], Stroke::new(1.0, Color32::from_rgb(255, 210, 0)));
-                pin(&painter, pts[0] + *offset, Color32::from_rgb(255, 210, 0), hovered_pin == Some((i, true)));
+                paint_area(&painter, &src, *r, crate::theme::GUIDE);
+                painter.line_segment([pts[0], pts[0] + *offset], Stroke::new(1.0, crate::theme::GUIDE));
+                pin(&painter, pts[0] + *offset, crate::theme::GUIDE, hovered_pin == Some((i, true)));
             }
             pin(&painter, pts[0], if sel { Color32::WHITE } else { Color32::from_white_alpha(170) }, hovered_pin == Some((i, false)));
         }
@@ -878,14 +870,14 @@ impl App {
         subheading(ui, "Automatisch auswählen");
         ui.horizontal_wrapped(|ui| {
             let ai = |ui: &Ui, text: &str| crate::widgets::ai_text(ui, text);
-            if ui.add_enabled(!busy, egui::Button::new(ai(ui, "\u{E4C2}  Motiv"))).on_hover_text(format!("Motiv auswählen\n\n{}", crate::widgets::AI_HINT)).clicked() {
+            if ui.add_enabled(!busy, egui::Button::new(ai(ui, &format!("{}  Motiv", crate::theme::icon::USER)))).on_hover_text(format!("Motiv auswählen\n\n{}", crate::widgets::AI_HINT)).clicked() {
                 ai_action = Some(1);
             }
-            if ui.add_enabled(!busy, egui::Button::new(ai(ui, "\u{E1AA}  Himmel"))).on_hover_text(format!("Himmel auswählen\n\n{}", crate::widgets::AI_HINT)).clicked() {
+            if ui.add_enabled(!busy, egui::Button::new(ai(ui, &format!("{}  Himmel", crate::theme::icon::CLOUD)))).on_hover_text(format!("Himmel auswählen\n\n{}", crate::widgets::AI_HINT)).clicked() {
                 ai_action = Some(2);
             }
             if ui
-                .add_enabled(!busy, egui::Button::new(ai(ui, "\u{E7AE}  Tiefe")))
+                .add_enabled(!busy, egui::Button::new(ai(ui, &format!("{}  Tiefe", crate::theme::icon::MOUNTAINS))))
                 .on_hover_text(format!("Wählt nach Entfernung aus (anfangs den nahen Teil des Bildes); der Bereich lässt sich danach einstellen\n\n{}", crate::widgets::AI_HINT))
                 .clicked()
             {
@@ -943,7 +935,7 @@ impl App {
                 }
                 let mut c = m.color_range.unwrap_or_default();
                 ui.add_enabled_ui(color_on, |ui| {
-                    if ui.selectable_label(tool == Some(LocalTool::ColorPick), LocalTool::ColorPick.label()).clicked() {
+                    if ui.add(egui::Button::new(LocalTool::ColorPick.label()).selected(tool == Some(LocalTool::ColorPick))).clicked() {
                         pick = true;
                     }
                     let rail = hue_rail();
@@ -1294,7 +1286,7 @@ impl App {
                 })
                 .response
                 .on_hover_text("Neue Ebene");
-                let minus = ui.add_enabled(active.is_some(), egui::Button::new(egui::RichText::new(icon::MINUS).size(15.0)));
+                let minus = ui.add_enabled(active.is_some(), egui::Button::new(egui::RichText::new(icon::TRASH).size(15.0)));
                 if minus.on_hover_text("Gewählte Ebene löschen").clicked()
                     && let Some(li) = active
                 {

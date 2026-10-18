@@ -203,7 +203,7 @@ impl App {
             ui.add_enabled_ui(!lb.is_off(), |ui| {
                 ui.horizontal(|ui| {
                     let pipette = format!("{}  Fokus setzen", crate::theme::icon::EYEDROPPER);
-                    if ui.selectable_label(picking, pipette).on_hover_text("Auf die Stelle klicken, die scharf bleiben soll").clicked() {
+                    if ui.add(egui::Button::new(pipette).selected(picking)).on_hover_text("Auf die Stelle klicken, die scharf bleiben soll").clicked() {
                         toggle_pick = true;
                     }
                 });

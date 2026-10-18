@@ -392,15 +392,15 @@ impl App {
                     open = Some(scope);
                 }
             };
-            entry(ui, Scope::All, format!("\u{E468}  Alle Bilder ({})", self.lists.total));
-            entry(ui, Scope::LastImport, "\u{E1A0}  Letzter Import".into());
+            entry(ui, Scope::All, format!("{}  Alle Bilder ({})", crate::theme::icon::STACK_SIMPLE, self.lists.total));
+            entry(ui, Scope::LastImport, format!("{}  Letzter Import", crate::theme::icon::CLOCK_COUNTER_CLOCKWISE).into());
             ui.horizontal(|ui| {
                 if self.session.is_none()
-                    && ui.button("\u{E20C}  Ordner importieren").on_hover_text("Aktuellen Ordner inkl. Unterordnern in den Katalog aufnehmen").clicked()
+                    && ui.button(format!("{}  Ordner importieren", crate::theme::icon::DOWNLOAD_SIMPLE)).on_hover_text("Aktuellen Ordner inkl. Unterordnern in den Katalog aufnehmen").clicked()
                 {
                     do_import = true;
                 }
-                if ui.button("\u{EC54}  Bereinigen").on_hover_text("Fehlende Dateien aus dem Katalog entfernen").clicked() {
+                if ui.button(format!("{}  Bereinigen", crate::theme::icon::BROOM)).on_hover_text("Fehlende Dateien aus dem Katalog entfernen").clicked() {
                     do_cleanup = true;
                 }
             });
@@ -418,7 +418,7 @@ impl App {
         let mut resort = false;
         section(ui, "Filter & Suche", None, |ui| {
             refilter |= ui
-                .add(egui::TextEdit::singleline(&mut self.filter.text).hint_text("\u{E30C}  Name, Kamera, Objektiv, Keyword"))
+                .add(egui::TextEdit::singleline(&mut self.filter.text).hint_text(format!("{}  Name, Kamera, Objektiv, Keyword", crate::theme::icon::MAGNIFYING_GLASS)))
                 .changed();
             widgets::field(ui, "Mindestens", |ui| refilter |= widgets::stars(ui, &mut self.filter.min_rating, 16.0));
             widgets::combo_field(ui, "Farb-Label", self.filter.color_label.map_or("Alle", |l| l.label()), |ui| {
@@ -439,11 +439,11 @@ impl App {
                         resort |= ui.selectable_value(&mut self.sort, s, s.label()).changed();
                     }
                 });
-                if ui.button(if self.sort_desc { "\u{E446}" } else { "\u{E444}" }).on_hover_text("Sortierrichtung").clicked() {
+                if ui.button(if self.sort_desc { crate::theme::icon::SORT_DESCENDING } else { crate::theme::icon::SORT_ASCENDING }).on_hover_text("Sortierrichtung").clicked() {
                     self.sort_desc = !self.sort_desc;
                     resort = true;
                 }
-                if !self.filter.is_empty() && ui.button("\u{E4F6}  Filter").clicked() {
+                if !self.filter.is_empty() && ui.button(format!("{}  Filter", crate::theme::icon::X)).clicked() {
                     self.filter = Filter::default();
                     refilter = true;
                 }
@@ -487,7 +487,7 @@ impl App {
                     }
                     continue;
                 }
-                let icon = if album.smart.is_some() { "\u{E272}" } else { "\u{E25A}" };
+                let icon = if album.smart.is_some() { crate::theme::icon::GEAR_SIX } else { crate::theme::icon::FOLDER_SIMPLE };
                 let resp = ui.selectable_label(self.scope == scope, format!("{icon}  {} ({})", album.name, album.count)).on_hover_text("Doppelklick: umbenennen");
                 if resp.double_clicked() {
                     self.library_ui.renaming = Some((album.id, album.name.clone()));
@@ -510,7 +510,7 @@ impl App {
                 });
             }
             if self.lists.albums.is_empty() {
-                ui.label(RichText::new("Noch keine Alben.").color(Color32::from_gray(150)));
+                crate::widgets::hint(ui, "Noch keine Alben.");
             }
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut self.library_ui.new_album).hint_text("Name").desired_width(110.0));
@@ -573,7 +573,7 @@ impl App {
         section(ui, "Ordner", None, |ui| {
             ui.horizontal(|ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("\u{E256}  Durchsuchen …").on_hover_text(crate::commands::hint("Ordner auswählen", "open-folder")).clicked() {
+                    if ui.button(format!("{}  Durchsuchen …", crate::theme::icon::FOLDER_OPEN)).on_hover_text(crate::commands::hint("Ordner auswählen", "open-folder")).clicked() {
                         browse = true;
                     }
                     let resp = ui.add(egui::TextEdit::singleline(&mut self.folder_input).desired_width(ui.available_width()));
@@ -584,7 +584,7 @@ impl App {
             });
             ui.horizontal(|ui| {
                 if let Some(parent) = self.folder.parent()
-                    && ui.button("\u{E08E}  Übergeordnet").clicked()
+                    && ui.button(format!("{}  Übergeordnet", crate::theme::icon::ARROW_UP)).clicked()
                 {
                     open_folder = Some(parent.to_path_buf());
                 }
@@ -599,7 +599,7 @@ impl App {
             egui::ScrollArea::vertical().id_salt("subdirs").max_height(180.0).show(ui, |ui| {
                 for dir in &self.subdirs {
                     let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                    if ui.selectable_label(false, format!("\u{E24A}  {name}")).clicked() {
+                    if ui.selectable_label(false, format!("{}  {name}", crate::theme::icon::FOLDER)).clicked() {
                         open_folder = Some(dir.clone());
                     }
                 }
@@ -683,10 +683,10 @@ impl App {
         });
         section(ui, "Eigene Stile", None, |ui| {
             if own.is_empty() {
-                ui.label(RichText::new("Noch keine Stile gespeichert.").color(Color32::from_gray(150)));
+                crate::widgets::hint(ui, "Noch keine Stile gespeichert.");
             } else if grid {
                 take(self.style_tiles(ui, &own));
-                ui.label(RichText::new("Rechtsklick auf einen Stil: löschen").small().color(crate::theme::TEXT_FAINT));
+                crate::widgets::hint(ui, "Rechtsklick auf einen Stil: löschen");
             } else {
                 take(style_rows(ui, &own));
             }
@@ -758,7 +758,7 @@ fn style_rows(ui: &mut Ui, list: &[(Style, bool, String)]) -> crate::style_grid:
             ui.label(&style.name).on_hover_text(help.as_str());
             if !look {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if widgets::small_button(ui, "\u{E4A6}", "Stil löschen …").clicked() {
+                    if widgets::small_button(ui, crate::theme::icon::TRASH, "Stil löschen …").clicked() {
                         delete = Some(style.name.clone());
                     }
                 });

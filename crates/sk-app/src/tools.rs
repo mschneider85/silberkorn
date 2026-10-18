@@ -259,7 +259,7 @@ impl App {
                 changed |= widgets::slider_row_with(ui, "Tönung", &mut l.tint, -150.0..=150.0, 0.0, 0, opts(widgets::RAIL_TINT));
                 ui.add_enabled_ui(false, |ui| {
                     ui.horizontal(|ui| {
-                        let _ = ui.selectable_label(false, "\u{E568}  Weißabgleich-Pipette");
+                        let _ = ui.add(egui::Button::new(format!("{}  Weißabgleich-Pipette", crate::theme::icon::EYEDROPPER)).selected(false));
                         let _ = ui.button(format!("{}  Auto", crate::theme::icon::MAGIC_WAND));
                     });
                 })
@@ -287,7 +287,7 @@ impl App {
                 changed = true;
             }
             ui.horizontal(|ui| {
-                if ui.selectable_label(picking, "\u{E568}  Weißabgleich-Pipette").on_hover_text("Auf eine neutrale (graue) Stelle im Bild klicken").clicked() {
+                if ui.add(egui::Button::new(format!("{}  Weißabgleich-Pipette", crate::theme::icon::EYEDROPPER)).selected(picking)).on_hover_text("Auf eine neutrale (graue) Stelle im Bild klicken").clicked() {
                     toggle_picker = true;
                 }
                 if ui
@@ -360,7 +360,7 @@ impl App {
         let mut add_kw = None;
         ui.horizontal_wrapped(|ui| {
             for k in &keywords {
-                if ui.add(egui::Button::new(format!("{k}  \u{E4F6}")).small()).on_hover_text("Entfernen").clicked() {
+                if ui.add(egui::Button::new(format!("{k}  {}", crate::theme::icon::X)).small()).on_hover_text("Entfernen").clicked() {
                     remove_kw = Some(k.clone());
                 }
             }
@@ -456,14 +456,14 @@ impl App {
                     if ui.selectable_label(self.selected_recipe == i, &r.name).clicked() {
                         self.selected_recipe = i;
                     }
-                    ui.label(RichText::new(format!("{} · {}", r.format.label(), r.output_space.label())).small().color(crate::theme::TEXT_FAINT));
+                    crate::widgets::hint(ui, format!("{} · {}", r.format.label(), r.output_space.label()));
                 });
             }
             ui.horizontal(|ui| {
                 if ui.button(format!("{}  Rezept", crate::theme::icon::PLUS)).clicked() {
                     add = true;
                 }
-                if self.recipes.len() > 1 && ui.button("\u{E4A6}  Löschen …").clicked() {
+                if self.recipes.len() > 1 && ui.button(format!("{}  Löschen …", crate::theme::icon::TRASH)).clicked() {
                     remove = Some(self.selected_recipe);
                 }
             });
@@ -541,7 +541,7 @@ impl App {
                     r.output_dir = dir.into();
                 }
             });
-            ui.label(RichText::new("Relativ zum Bildordner, z. B. „Output“").small().color(crate::theme::TEXT_FAINT));
+            crate::widgets::hint(ui, "Relativ zum Bildordner, z. B. „Output“");
             widgets::field(ui, "Dateiname", |ui| ui.add(egui::TextEdit::singleline(&mut r.name_template).hint_text("{Name}")));
             ui.horizontal_wrapped(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -580,7 +580,7 @@ impl App {
                             let name = wm.image.file_name().map_or("kein Logo".into(), |n| n.to_string_lossy().to_string());
                             ui.label(RichText::new(name).small().color(Color32::from_gray(160)));
                         });
-                        ui.label(RichText::new("PNG mit Transparenz empfohlen").small().color(crate::theme::TEXT_FAINT));
+                        crate::widgets::hint(ui, "PNG mit Transparenz empfohlen");
                     }
                 }
                 widgets::combo_field(ui, "Position", wm.anchor.label(), |ui| {
@@ -596,7 +596,7 @@ impl App {
                 if widgets::slider_row_with(ui, "Deckkraft", &mut opacity, 5.0..=100.0, d.opacity * 100.0, 0, pct) {
                     wm.opacity = opacity / 100.0;
                 }
-                ui.label(RichText::new(format!("Größe und Abstand in % der kurzen Bildkante. {}.", crate::commands::hint("Vorschau in der Ausgabevorschau", "proof"))).small().color(crate::theme::TEXT_FAINT));
+                crate::widgets::hint(ui, format!("Größe und Abstand in % der kurzen Bildkante. {}.", crate::commands::hint("Vorschau in der Ausgabevorschau", "proof")));
             });
         });
         if reset_watermark {
@@ -611,7 +611,7 @@ impl App {
             } else {
                 "TIFF-Dateien erhalten keine Metadaten."
             };
-            ui.label(RichText::new(note).small().color(crate::theme::TEXT_FAINT));
+            crate::widgets::hint(ui, note);
         });
         section(ui, "Exportieren", None, |ui| {
             let n = self.selected_paths().len();

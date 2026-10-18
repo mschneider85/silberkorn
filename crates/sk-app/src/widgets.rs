@@ -296,7 +296,7 @@ fn section_inner(
     if let Some(reset) = reset {
         let r = Rect::from_center_size(inner.right_center() - vec2(x, 0.0), vec2(24.0, 22.0));
         let color = if hovered || ui.rect_contains_pointer(r) { theme::TEXT } else { theme::TEXT_FAINT };
-        let b = egui::Button::new(RichText::new(theme::icon::ARROW_COUNTER_CLOCKWISE).size(13.0).color(color)).frame_when_inactive(false);
+        let b = egui::Button::new(RichText::new(theme::icon::ARROWS_COUNTER_CLOCKWISE).size(13.0).color(color)).frame_when_inactive(false);
         if ui.put(r, b).on_hover_text("Werkzeug zurücksetzen").clicked() {
             reset();
             header_button_clicked = true;

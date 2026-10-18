@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use egui::{Color32, RichText, Ui};
+use egui::{RichText, Ui};
 use sk_core::color::OutputSpace;
 use sk_core::softproof::{ProofSettings, ProofTarget, RenderIntent, SoftProof};
 
@@ -141,7 +141,7 @@ impl App {
             ui.checkbox(&mut s.paper_margin, "Papierrand zeigen")
                 .on_hover_text("Papier um das Bild, im Papierton, wenn er simuliert wird");
             if let Some(e) = &self.softproof.error {
-                ui.label(RichText::new(e).small().color(Color32::from_rgb(230, 110, 100)));
+                ui.label(RichText::new(e).small().color(crate::theme::DANGER));
             }
         });
         if pick

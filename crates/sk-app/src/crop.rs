@@ -200,7 +200,7 @@ impl App {
         let painter = ui.painter_at(img_rect);
         draw_fine_grid(&painter, img_rect);
         for (i, ((_, vertical), s)) in guides.lines.iter().zip(&screen).enumerate() {
-            let color = if *vertical { Color32::from_rgb(255, 210, 0) } else { Color32::from_rgb(80, 200, 255) };
+            let color = if *vertical { crate::theme::GUIDE } else { crate::theme::GUIDE_ALT };
             let hot = active.is_some_and(|(j, _)| j == i);
             painter.line_segment([s[0], s[1]], Stroke::new(3.0, Color32::from_black_alpha(120)));
             painter.line_segment([s[0], s[1]], Stroke::new(if hot { 2.0 } else { 1.5 }, color));
@@ -573,7 +573,7 @@ impl App {
         }
         if let Some((a, b)) = tool.line {
             let painter = ui.painter();
-            painter.line_segment([a, b], Stroke::new(2.0, Color32::from_rgb(255, 210, 0)));
+            painter.line_segment([a, b], Stroke::new(2.0, crate::theme::GUIDE));
             if (b - a).length() > 10.0 {
                 painter.text(
                     b + vec2(10.0, 0.0),
