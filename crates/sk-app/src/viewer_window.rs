@@ -81,7 +81,9 @@ impl App {
                 return;
             }
             let fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
-            let toggle = command == Some("fullscreen") || (fullscreen && vctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)));
+            // As in the main window, Esc first ends a tool (in `shortcuts`), then the full screen.
+            let esc = fullscreen && !self.viewer_tool_active() && vctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+            let toggle = command == Some("fullscreen") || esc;
             if toggle {
                 vctx.send_viewport_cmd(ViewportCommand::Fullscreen(!fullscreen));
                 self.viewer_window.fullscreen = !fullscreen;

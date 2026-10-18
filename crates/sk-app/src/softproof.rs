@@ -99,7 +99,9 @@ impl App {
         let mut toggle = false;
         let mut pick = false;
         section(ui, "Softproof", None, |ui| {
-            if ui.checkbox(&mut self.softproof.on.clone(), crate::commands::hint("Softproof anzeigen", "softproof")).changed() {
+            let mut on = self.softproof.on;
+            let checkbox = egui::Checkbox::new(&mut on, crate::commands::hint("Softproof anzeigen", "softproof"));
+            if ui.add_enabled(self.current.is_some() || self.softproof.on, checkbox).changed() {
                 toggle = true;
             }
             let name = match &s.target {

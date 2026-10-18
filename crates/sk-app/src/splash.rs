@@ -42,6 +42,11 @@ impl Splash {
         Self { about: true, ..Self::startup() }
     }
 
+    /// The "Über Silberkorn" card (not the start screen).
+    pub fn is_about(&self) -> bool {
+        self.about
+    }
+
     fn texture(&mut self, ctx: &egui::Context) -> Option<&TextureHandle> {
         if self.texture.is_none() {
             let img = ::image::load_from_memory(PHOTO).ok()?.to_rgba8();

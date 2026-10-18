@@ -1077,6 +1077,8 @@ fn proof_shows_the_image_as_the_recipe_writes_it() {
 #[test]
 fn fullscreen_toggles_and_esc_leaves_it_unless_a_tool_is_active() {
     let Some(mut f) = Fixture::new("fullscreen") else { return };
+    // Full screen shows the image: without one there is nothing to switch to.
+    f.pump("Bild geladen", |a| a.current.is_some());
     let key = |k: egui::Key| vec![egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() }];
     use egui::ViewportCommand as Cmd;
     // Runs one frame (the window maximized or not) and returns the window commands.
@@ -3088,7 +3090,7 @@ fn layer_mode_leaves_out_whole_image_tabs_and_commands() {
     for t in [Tab::Exposure, Tab::Color, Tab::Details, Tab::Layers, Tab::Library, Tab::History, Tab::Output] {
         assert!(f.app.tab_available(t), "{t:?}");
     }
-    for id in ["crop", "straighten", "rotate-left", "wb-picker", "tool-heal", "tool-clone", "tool-remove", "find-spots"] {
+    for id in ["crop", "straighten", "rotate-left", "wb-picker", "tool-heal", "tool-clone", "tool-remove", "find-spots", "reset"] {
         assert!(!enabled(&f, id), "{id}");
     }
     // The open tab was one of them: the next frame shows the layer tab instead.
@@ -3191,4 +3193,51 @@ fn watched_folder_shows_new_pictures() {
     std::fs::copy(f.photo("_DSC0009.dng"), photos.join("_DSC0013.dng")).unwrap();
     f.pump("Zweite Aufnahme gelistet", |a| a.entries.iter().any(|e| e.path.ends_with("_DSC0013.dng")));
     assert!(f.app.current_path().is_some_and(|p| p.ends_with("_DSC0011.dng")));
+}
+
+/// Commands that could do nothing right now are unavailable, not silently ignored.
+#[test]
+fn commands_without_effect_are_unavailable() {
+    let Some(mut f) = Fixture::new("unavailable") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let enabled = |f: &Fixture, id: &str| f.app.command_available(id);
+    // Exporting needs a recipe switched on, and runs once at a time.
+    assert!(enabled(&f, "export"));
+    for r in &mut f.app.recipes {
+        r.enabled = false;
+    }
+    assert!(!enabled(&f, "export"));
+    assert!(f.app.export_blocked_reason().contains("Ausgaberezept"));
+    // Entf only with a spot or gradient to delete.
+    assert!(!enabled(&f, "delete-spot"));
+    f.app.selected_spot = Some(0);
+    assert!(enabled(&f, "delete-spot"));
+    // The trash is a session folder.
+    assert!(!enabled(&f, "trash"));
+    let a = f.photo("_DSC0009.dng");
+    f.app.create_session(&f.dir, "Shooting").unwrap();
+    f.app.selection = [a].into_iter().collect();
+    assert!(enabled(&f, "trash"));
+    // Full screen shows the image: without one it can only be left.
+    f.app.selection.clear();
+    f.app.close_current();
+    assert!(!enabled(&f, "fullscreen"));
+    f.app.fullscreen = true;
+    assert!(enabled(&f, "fullscreen"));
+}
+
+/// The about card takes the keyboard like a dialog: no shortcuts and no palette behind it.
+#[test]
+fn about_card_blocks_shortcuts() {
+    let Some(mut f) = Fixture::new("about-keys") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.splash = Some(crate::splash::Splash::about());
+    let grid = f.app.grid_view;
+    let key = |key: egui::Key, modifiers: egui::Modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    let input = egui::RawInput { events: vec![key(egui::Key::K, egui::Modifiers::COMMAND), key(egui::Key::G, egui::Modifiers::NONE)], ..Default::default() };
+    let app = &mut f.app;
+    let mut out = f.ctx.run_ui(input, |ui| app.shortcuts(ui.ctx()));
+    out.textures_delta.clear();
+    assert!(!f.app.palette.open);
+    assert_eq!(f.app.grid_view, grid);
 }

@@ -18,6 +18,9 @@ pub struct RunningJob {
     pub cancel: Arc<AtomicBool>,
 }
 
+/// The error of a job that was cancelled (not a failure).
+pub const CANCELLED: &str = "abgebrochen";
+
 /// Unwinds a cancelled job from its progress report (not a panic: no hook, no log).
 struct Cancelled;
 
@@ -43,7 +46,7 @@ impl crate::workers::Workers {
             };
             let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&progress))) {
                 Ok(r) => r.map_err(|e| format!("{e:#}")),
-                Err(p) if p.is::<Cancelled>() => Err("abgebrochen".to_string()),
+                Err(p) if p.is::<Cancelled>() => Err(CANCELLED.to_string()),
                 Err(_) => Err("Interner Fehler (Details in panic.log)".to_string()),
             };
             let _ = tx.send(Event::JobDone { id, label, result });
@@ -85,6 +88,7 @@ impl App {
                     self.files_created(files);
                 }
             }
+            Err(e) if e == CANCELLED => self.status = format!("{label} abgebrochen"),
             Err(e) => self.status = format!("{label} fehlgeschlagen: {e}"),
         }
     }

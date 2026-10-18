@@ -118,7 +118,7 @@ impl App {
             }
             Err(e) => {
                 self.status = format!("{JOB_LABEL} für {name} fehlgeschlagen: {e}");
-                if e != "abgebrochen" {
+                if e != crate::jobs::CANCELLED {
                     self.denoise.failed.insert(path, e.clone());
                 } else {
                     // Cancelled by the user: the rest of the queue too; this image stays so.

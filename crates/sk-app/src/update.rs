@@ -139,7 +139,7 @@ impl App {
                 self.updates.dialog = true;
                 self.status = "Update geladen; es wird beim Neustart oder Beenden installiert".into();
             }
-            Err(e) if e == "abgebrochen" => self.status = "Update abgebrochen".into(),
+            Err(e) if e == crate::jobs::CANCELLED => self.status = "Update abgebrochen".into(),
             Err(e) => {
                 self.updates.result = Some(Err(e.clone()));
                 self.status = format!("Update fehlgeschlagen: {e}");

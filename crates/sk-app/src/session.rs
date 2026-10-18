@@ -279,6 +279,12 @@ impl App {
     }
 
     /// Asks before emptying the trash.
+    /// Images in the session trash (from the folder counts of the catalog).
+    pub fn trash_count(&self) -> usize {
+        let Some(trash) = self.session.as_ref().map(|s| s.folder(SessionFolder::Trash)) else { return 0 };
+        self.lists.folders.iter().filter(|(p, _)| p.starts_with(&trash)).map(|(_, n)| n).sum()
+    }
+
     pub fn request_empty_trash(&mut self) {
         if let Some(trash) = self.session.as_ref().map(|s| s.folder(SessionFolder::Trash)) {
             self.session_ui.confirm_empty_trash = Some(catalog::scan_folder(&trash, true).len());
@@ -394,7 +400,7 @@ impl App {
             });
         });
         if self.session.is_some() {
-            if ui.button(format!("{}  Papierkorb leeren …", icon::TRASH)).clicked() {
+            if ui.add_enabled(self.trash_count() > 0, Button::new(format!("{}  Papierkorb leeren …", icon::TRASH))).clicked() {
                 self.request_empty_trash();
             }
             if ui.button(format!("{}  Session schließen", icon::SIGN_OUT)).on_hover_text("Zurück zum Katalog").clicked() {

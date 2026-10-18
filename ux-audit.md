@@ -22,28 +22,28 @@ ergänzen.
 - **Notiz:** erledigt (18.10.): `clamp_existing_to_range(false)` in `slider_row_with`
 
 ### 2. Esc schließt nicht-modale Fenster nicht (bestätigt)
-- **Stand 18.10.:** **teilweise** – Kopieren und Tastenkürzel sind jetzt Modals und schließen mit Esc; „Über Silberkorn“ schließt weiter nicht mit Esc – aktuelle Stelle: `app.rs:2423, splash.rs:154`
+- **Stand 18.10.:** **behoben** (Paket A) – Kopieren und Tastenkürzel sind jetzt Modals und schließen mit Esc; „Über Silberkorn“ schließt weiter nicht mit Esc – aktuelle Stelle: `app.rs:2423, splash.rs:154`
 - **Stelle:** `app.rs:2376` (Esc per `consume_key`), danach `clipboard.rs:169`, `shortcut_editor.rs:201`, `splash.rs:154` (nur `key_pressed`)
 - **Befund:** „Anpassungen kopieren“, „Tastenkürzel“ und „Über Silberkorn“ reagieren nicht auf Esc, weil `shortcuts()` die Taste vorher abholt. Esc beendet stattdessen Werkzeuge oder das Vollbild dahinter. „Über“ schließt mit Enter, aber nicht mit Esc. Modals schließen dagegen korrekt per `should_close()`.
 - **Vorschlag:** Diese Fenster im Shortcut-Schutz berücksichtigen bzw. Esc vor `shortcuts()` auswerten.
-- **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-- **Notiz:**
+- **Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+- **Notiz:** erledigt (18.10.): „Über Silberkorn“ blockiert die Tastenkürzel wie ein Dialog, Esc schließt es
 
 ### 3. Tastenkürzel wirken hinter nicht-modalen Fenstern
-- **Stand 18.10.:** **teilweise** – Kopieren/Tastenkürzel abgeschirmt; hinter dem Über-Fenster wirken Kürzel weiter – aktuelle Stelle: `app.rs:2409`
+- **Stand 18.10.:** **behoben** (Paket A) – Kopieren/Tastenkürzel abgeschirmt; hinter dem Über-Fenster wirken Kürzel weiter – aktuelle Stelle: `app.rs:2409`
 - **Stelle:** `app.rs:2361`
 - **Befund:** Der Schutz greift nur bei Popup, Modal, Palette oder Textfeld. Hinter Kopier-Fenster, Tastenkürzel-Fenster und Über-Splash laufen C, G, Entf, Strg+Umschalt+V usw. Widerspricht dem Kommentar dort.
 - **Vorschlag:** Diese Fenster in die Schutzbedingung aufnehmen oder als Modal umbauen (siehe 46).
-- **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-- **Notiz:**
+- **Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+- **Notiz:** erledigt (18.10.): Kürzel wirken auch hinter dem Über-Fenster nicht mehr
 
 ### 4. Strg+K im Vollbild sperrt die Tastatur
-- **Stand 18.10.:** **offen** – aktuelle Stelle: `app.rs:2401-2403, Vollbild-Zweig app.rs:2769-2780`
+- **Stand 18.10.:** **behoben** (Paket A) – aktuelle Stelle: `app.rs:2401-2403, Vollbild-Zweig app.rs:2769-2780`
 - **Stelle:** `app.rs:2355`, Vollbild-Zweig `app.rs:2700-2711`
 - **Befund:** Die Palette wird geöffnet, im Vollbild aber nicht gezeichnet. `shortcuts()` bricht wegen `palette.open` ab, auch Esc. Nur ein zweites Strg+K hilft. Außerdem öffnet Strg+K die Palette auch über einem offenen Modal, deren Befehle laufen dann hinter dem Dialog.
 - **Vorschlag:** Palette auch im Vollbild zeichnen; Strg+K bei offenem Modal ignorieren.
-- **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-- **Notiz:**
+- **Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+- **Notiz:** erledigt (18.10.): Befehlssuche wird im Vollbild gezeichnet; Strg+K über Dialogen wirkungslos
 
 ### 5. Ein Undo-Schritt pro Mausrad-Raste und Pfeiltaste (bestätigt)
 - **Stand 18.10.:** **behoben** – Mausrad-/Pfeiltasten-Schritte werden bis 0,8 s Pause zu einem Undo-Schritt gebündelt (db46af1) – aktuelle Stelle: `app.rs:2502-2528, widgets.rs:680-713`
@@ -70,44 +70,44 @@ ergänzen.
 - **Notiz:**
 
 ### 8. Abbrechen nur für die erste Aktivität erreichbar (bestätigt)
-- **Stand 18.10.:** **offen** – aktuelle Stelle: `activity.rs:57-79`
+- **Stand 18.10.:** **behoben** (Paket A) – aktuelle Stelle: `activity.rs:57-79`
 - **Stelle:** `activity.rs:66-75`, Reihenfolge in `activities()`
 - **Befund:** Das ✕ erscheint nur für `all.first()`. Nicht abbrechbare Aufgaben (Entfernen, KI-Maske, Look, Auto) stehen vorn. Läuft gleichzeitig ein Export oder HDR-Zusammenfügen, gibt es keine Abbrechen-Möglichkeit, auch nicht im Tooltip.
 - **Vorschlag:** Abbrechbare Aktivitäten zuerst sortieren oder ein Popup mit allen Aktivitäten und je einem ✕.
-- **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-- **Notiz:**
+- **Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+- **Notiz:** erledigt (18.10.): die Statusleiste zeigt zuerst eine abbrechbare Aufgabe mit ✕
 
 ### 9. Beenden-Dialog fragt nur bei abbrechbaren Aufgaben nach (bestätigt)
-- **Stand 18.10.:** **offen** – Dialog nutzt jetzt dialog::Dialog, filtert aber weiter auf cancel.is_some() – aktuelle Stelle: `app.rs:2438`
+- **Stand 18.10.:** **behoben** (Paket A) – Dialog nutzt jetzt dialog::Dialog, filtert aber weiter auf cancel.is_some() – aktuelle Stelle: `app.rs:2438`
 - **Stelle:** `app.rs:2391`
 - **Befund:** Filtert auf `cancel.is_some()`. Wer während Entfernen, Look angleichen, Auto-Anpassen oder Indexieren schließt, verliert die Arbeit ohne Rückfrage.
 - **Vorschlag:** Alle laufenden Aktivitäten berücksichtigen.
-- **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-- **Notiz:**
+- **Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+- **Notiz:** erledigt (18.10.): Beenden fragt bei allen laufenden Aufgaben nach
 
 ### 10. „Alle Anpassungen zurücksetzen“ im Ebenenmodus aktiv
-- **Stand 18.10.:** **offen** – aktuelle Stelle: `commands.rs:108, chrome.rs:457`
+- **Stand 18.10.:** **behoben** (Paket A) – aktuelle Stelle: `commands.rs:108, chrome.rs:457`
 - **Stelle:** `commands.rs:102` (`has_image`), Werkzeugleiste `chrome.rs:451`, `chrome.rs:24-30`
 - **Befund:** Setzt das ganze Bild samt aller Ebenen zurück. Einfügen, Drehen, Auto-Anpassen, Look angleichen und Retusche sind auf einer Ebene dagegen gesperrt („Wirkt nur aufs ganze Bild“).
 - **Vorschlag:** Auf einer Ebene sperren oder nur die Ebene zurücksetzen (Klärung, was gewünscht ist).
-- **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-- **Notiz:**
+- **Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+- **Notiz:** erledigt (18.10.): „Alle Anpassungen zurücksetzen“ ist auf einer Ebene deaktiviert (Befehl und Werkzeugleiste)
 
 ### 11. „In den Papierkorb“: außerhalb der Session wirkungslos, in der Session doppelt
-- **Stand 18.10.:** **teilweise** – doppelter Menüeintrag ist weg; Freigabe außerhalb der Session weiter has_selection – aktuelle Stelle: `commands.rs:173, session.rs:256-273`
+- **Stand 18.10.:** **behoben** (Paket A) – doppelter Menüeintrag ist weg; Freigabe außerhalb der Session weiter has_selection – aktuelle Stelle: `commands.rs:173, session.rs:256-273`
 - **Stelle:** `commands.rs` (`trash`, `has_selection`), `session.rs:252-268`, `session.rs:363`, Menü „Foto“ in `chrome.rs`
 - **Befund:** Außerhalb einer Session aktiv, setzt aber nur „gibt es nur in einer Session“. Der Nachbarbefehl `to-selects` ist dort korrekt deaktiviert. In der Session steht der Eintrag zweimal im Menü: „In Papierkorb verschieben“ (mit fest eingetipptem Strg+Entf) und „In den Papierkorb“.
 - **Vorschlag:** Freigabe `in_session`; einen der beiden Menüeinträge streichen.
-- **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-- **Notiz:**
+- **Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+- **Notiz:** erledigt (18.10.): „In den Papierkorb“ außerhalb einer Session nur noch für Varianten aktiv
 
 ### 12. Esc im Bildfenster: umgekehrte Reihenfolge
-- **Stand 18.10.:** **offen** – aktuelle Stelle: `viewer_window.rs:84`
+- **Stand 18.10.:** **behoben** (Paket A) – aktuelle Stelle: `viewer_window.rs:84`
 - **Stelle:** `viewer_window.rs:77-78`
 - **Befund:** Im Bildfenster verlässt Esc zuerst das Vollbild, auch bei aktivem Zuschnitt oder Pinsel. Im Hauptfenster beendet Esc zuerst das Werkzeug (`app.rs:2378-2382`).
 - **Vorschlag:** Reihenfolge wie im Hauptfenster.
-- **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-- **Notiz:**
+- **Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+- **Notiz:** erledigt (18.10.): Esc im Bildfenster beendet zuerst das Werkzeug
 
 ### 13. F11 / Umschalt+F11 im Bildfenster fest verdrahtet
 - **Stand 18.10.:** **behoben** – Tasten kommen aus der Befehlsliste – aktuelle Stelle: `viewer_window.rs:75-84`
@@ -238,28 +238,28 @@ ergänzen.
 - **Notiz:**
 
 ### 28. Laufende Aktion: drei verschiedene Verhalten
-- **Stand 18.10.:** **offen** – aktuelle Stelle: `commands.rs:120, look.rs:83-98, app.rs:1814, layers.rs:996, :1086`
+- **Stand 18.10.:** **behoben** (Paket A) – aktuelle Stelle: `commands.rs:120, look.rs:83-98, app.rs:1814, layers.rs:996, :1086`
 - **Stelle:** `commands.rs` (`auto_progress.is_none()`), `look.rs:83-98`, `app.rs:1765`, `layers.rs:994`, `layers.rs:1084`
 - **Befund:** Auto-Anpassen und Look angleichen sind während des Laufs deaktiviert (mit Hover-Grund). Exportieren bleibt aktiv und meldet erst beim Klick „Es läuft bereits ein Export“. „Staub und Flecken finden“ ist im Panel deaktiviert, als Befehl aktiv und ignoriert den Klick still.
 - **Vorschlag:** Überall deaktivieren mit Hover-Grund.
-- **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-- **Notiz:**
+- **Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+- **Notiz:** erledigt (18.10.): Export während eines Exports und „Staub und Flecken finden“ während der Suche deaktiviert
 
 ### 29. Exportieren mit drei verschiedenen Freigaben
-- **Stand 18.10.:** **offen** – aktuelle Stelle: `commands.rs:101, chrome.rs:466, tools.rs:599`
+- **Stand 18.10.:** **behoben** (Paket A) – aktuelle Stelle: `commands.rs:101, chrome.rs:466, tools.rs:599`
 - **Stelle:** Befehl (`has_selection`), Werkzeugleiste `chrome.rs` (`n > 0`), Ausgabe-Tab `tools.rs` (`n > 0 && k > 0`)
 - **Befund:** Ohne aktives Rezept bleiben Werkzeugleiste und Befehl aktiv und melden nur „Kein Ausgaberezept aktiviert“.
 - **Vorschlag:** Einheitlich `n > 0 && k > 0` mit Hover-Grund.
-- **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-- **Notiz:**
+- **Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+- **Notiz:** erledigt (18.10.): Export überall gleich freigegeben (Bild, aktives Rezept, kein laufender Export), Grund im Tooltip
 
 ### 30. Weitere Freigaben, die zwischen Befehl und Oberfläche abweichen
-- **Stand 18.10.:** **offen** – im Session-Panel ist „Papierkorb leeren“ korrekt deaktiviert, nur das Datei-Menü weicht ab – aktuelle Stelle: `chrome.rs:470, commands.rs:197/225/232, session.rs:397`
+- **Stand 18.10.:** **behoben** (Paket A) – im Session-Panel ist „Papierkorb leeren“ korrekt deaktiviert, nur das Datei-Menü weicht ab – aktuelle Stelle: `chrome.rs:470, commands.rs:197/225/232, session.rs:397`
 - **Stelle:** `chrome.rs:462`, `commands.rs:226`, `softproof.rs:102`, `print_preview.rs:168`, `commands.rs:182`, `layers.rs:1133`, `session.rs:392`, `:572`
 - **Befund:** Vollbild: Befehl immer, Werkzeugleiste nur mit Bild. Softproof/Druckvorschau: Befehle brauchen ein Bild, die Checkboxen nicht. `delete-spot` ist immer aktiv, tut ohne gewählten Punkt nichts und holt Entf/Rück immer ab. „Papierkorb leeren …“ ist auch bei leerem Papierkorb aktiv.
 - **Vorschlag:** Freigaben angleichen.
-- **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-- **Notiz:**
+- **Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+- **Notiz:** erledigt (18.10.): Vollbild nur mit Bild; Softproof/Druckvorschau-Checkbox ohne Bild deaktiviert; Entf nur mit gewähltem Punkt/Verlauf; „Papierkorb leeren …“ im Datei-Menü nur bei vollem Papierkorb
 
 ### 31. Entf wirkt nur auf Retuschepunkte und Verläufe
 - **Stand 18.10.:** **offen** – aktuelle Stelle: `commands.rs:197, layers.rs:1135`
@@ -282,12 +282,12 @@ ergänzen.
 - **Notiz:**
 
 ### 33. Abgebrochene Jobs als Fehler gemeldet
-- **Stand 18.10.:** **offen** – aktuelle Stelle: `jobs.rs:46, :88`
+- **Stand 18.10.:** **behoben** (Paket A) – aktuelle Stelle: `jobs.rs:46, :88`
 - **Stelle:** `jobs.rs:47`, `jobs.rs:87`
 - **Befund:** „HDR zusammenfügen fehlgeschlagen: abgebrochen“ (betrifft Merge, Gesichter). Sonst: „Export abgebrochen (n von m fertig)“, „Update abgebrochen“.
 - **Vorschlag:** Abbruch als eigenen Fall melden: „… abgebrochen“.
-- **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
-- **Notiz:**
+- **Entscheidung:** [x] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
+- **Notiz:** erledigt (18.10.): abgebrochene Jobs melden „… abgebrochen“ statt „fehlgeschlagen“
 
 ### 34. Fehler landen in vier verschiedenen Kanälen
 - **Stand 18.10.:** **offen** – aktuelle Stelle: `app.rs:2124-2130, library.rs:551/739`

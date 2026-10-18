@@ -165,7 +165,9 @@ impl App {
         let mut s = self.print.settings.clone();
         let (mut toggle, mut zoom, mut calibrate) = (false, false, false);
         section(ui, "Druckvorschau", None, |ui| {
-            if ui.checkbox(&mut self.print.on.clone(), crate::commands::hint("Druckvorschau in Druckgröße", "print-preview")).changed() {
+            let mut on = self.print.on;
+            let checkbox = egui::Checkbox::new(&mut on, crate::commands::hint("Druckvorschau in Druckgröße", "print-preview"));
+            if ui.add_enabled(self.current.is_some() || self.print.on, checkbox).changed() {
                 toggle = true;
             }
             widgets::combo_field(ui, "Papierformat", s.format.label(), |ui| {

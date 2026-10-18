@@ -55,10 +55,11 @@ impl App {
         v
     }
 
-    /// Status bar: the first activity with a spinner (and its progress), the others in the tooltip.
+    /// Status bar: one activity with a spinner (and its progress), the others in the tooltip.
+    /// One that can be cancelled comes first, so that its ✕ is always within reach.
     pub(crate) fn activity_status(&self, ui: &mut Ui) {
         let all = self.activities();
-        let Some(first) = all.first() else { return };
+        let Some(first) = all.iter().find(|a| a.cancel.is_some()).or(all.first()) else { return };
         // The status bar's right part is laid out from right to left: last item first.
         let resp = ui
             .horizontal(|ui| {

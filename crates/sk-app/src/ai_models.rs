@@ -194,7 +194,7 @@ impl App {
                     then(self);
                 }
             }
-            Err(e) if e == "abgebrochen" => {
+            Err(e) if e == crate::jobs::CANCELLED => {
                 // Not tried again by itself: only when the user asks for the feature again.
                 self.status = format!("{}: Laden des KI-Modells abgebrochen", f.label());
                 match f {

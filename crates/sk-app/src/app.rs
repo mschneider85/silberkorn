@@ -1807,6 +1807,17 @@ impl App {
         Some((done as f32 / total.max(1) as f32).min(1.0))
     }
 
+    /// Why exporting is not possible right now (shown on the disabled export buttons).
+    pub fn export_blocked_reason(&self) -> &'static str {
+        if self.export_progress.is_some() {
+            "Es läuft bereits ein Export"
+        } else if !self.recipes.iter().any(|r| r.enabled) {
+            "Kein Ausgaberezept aktiviert (Tab „Ausgabe“)"
+        } else {
+            "Kein Bild ausgewählt"
+        }
+    }
+
     pub fn export_selection(&mut self) {
         // One export at a time: a second would take over the first's progress and cancel switch,
         // and neither could be cancelled any more.
@@ -2393,20 +2404,26 @@ impl App {
         (true, (x1 > x0 && y1 > y0).then(|| sk_core::geometry::Region { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }))
     }
 
+    /// A tool working in the viewer (crop, straighten, pickers, brushes …): Esc ends it first.
+    pub(crate) fn viewer_tool_active(&self) -> bool {
+        self.picking_wb || self.picking_skin || self.picking_focus || self.local_tool.is_some() || self.straighten_tool.is_some() || self.crop_tool.is_some()
+    }
+
     pub(crate) fn shortcuts(&mut self, ctx: &egui::Context) {
         // A shortcut being recorded in the shortcut editor does nothing else.
         if self.shortcut_editor.recording.is_some() {
             return;
         }
-        if ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::K)) {
+        // A dialog (or the about card) keeps Ctrl+K too: the palette's commands would act behind it.
+        let dialog_open = self.splash.as_ref().is_some_and(|s| s.is_about()) || ctx.memory(|m| m.top_modal_layer()).is_some();
+        if (self.palette.open || !dialog_open) && ctx.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::K)) {
             self.palette.toggle();
         }
         // While a menu, a dialog or the palette is open the keyboard belongs to it, as in native
         // applications (Ctrl+Entf must not trash the selection behind the rename dialog).
         // A focused slider or button keeps only the keys it uses itself (arrows, space); only a
-        // text field takes them all. The shortcut editor and the copy dialog are windows, not
-        // modals, but block the keys just the same.
-        if self.palette.open || self.show_shortcuts || self.copy_dialog.tools.is_some() || ctx.text_edit_focused() || egui::Popup::is_any_open(ctx) || ctx.memory(|m| m.top_modal_layer()).is_some() {
+        // text field takes them all. The about card is no modal, but closes with Esc itself.
+        if dialog_open || self.palette.open || self.show_shortcuts || self.copy_dialog.tools.is_some() || ctx.text_edit_focused() || egui::Popup::is_any_open(ctx) {
             return;
         }
         // Ctrl+1 … Ctrl+0: the tool tabs in rail order.
@@ -2422,8 +2439,7 @@ impl App {
         let pressed = |k: Key, m: Modifiers| ctx.input_mut(|i| i.consume_key(m, k));
         if pressed(Key::Escape, Modifiers::NONE) {
             // Esc first ends a tool; with none active it leaves full screen.
-            let tool_active = self.picking_wb || self.picking_skin || self.picking_focus || self.local_tool.is_some() || self.straighten_tool.is_some() || self.crop_tool.is_some();
-            if !tool_active && self.fullscreen {
+            if !self.viewer_tool_active() && self.fullscreen {
                 self.toggle_fullscreen(ctx);
             }
             self.cancel_viewer_tools();
@@ -2432,10 +2448,10 @@ impl App {
 
     // ---------------------------------------------------------------- layout
 
-    /// Closing while work is running (export, merge, denoising …) asks first; quitting then
-    /// cancels it.
+    /// Closing while work is running (export, merge, removing, indexing …) asks first; quitting
+    /// then cancels it.
     fn confirm_quit(&mut self, ctx: &egui::Context) {
-        let mut busy: Vec<String> = self.activities().into_iter().filter(|a| a.cancel.is_some()).map(|a| a.label).collect();
+        let mut busy: Vec<String> = self.activities().into_iter().map(|a| a.label).collect();
         if !self.unsaved.is_empty() {
             busy.push(format!("Einstellungen von {} Bild(ern) konnten nicht gespeichert werden und gehen verloren", self.unsaved.len()));
         }
@@ -2772,6 +2788,7 @@ impl eframe::App for App {
             // Distraction-free: only the image.
             egui::CentralPanel::no_frame().show(ui, |ui| self.viewer(ui));
             self.dialogs(&ctx);
+            self.palette_ui(&ctx);
             self.session_dialogs(&ctx);
             self.variant_dialogs(&ctx);
             self.person_dialogs(&ctx);

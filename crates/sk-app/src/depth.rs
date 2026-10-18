@@ -134,7 +134,7 @@ impl App {
             Err(e) => {
                 self.status = format!("{JOB_LABEL} für {name} fehlgeschlagen: {e}");
                 self.depth.mask_for = None;
-                if e != "abgebrochen" {
+                if e != crate::jobs::CANCELLED {
                     self.depth.failed.insert(path, e.clone());
                 } else {
                     self.depth.cancelled.insert(path);

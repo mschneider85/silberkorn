@@ -53,6 +53,14 @@ fn several_files(a: &App) -> bool {
 fn in_session(a: &App) -> bool {
     a.session.is_some() && has_selection(a)
 }
+/// The trash is a session folder; outside a session only variants can be deleted.
+fn can_trash(a: &App) -> bool {
+    has_selection(a) && (a.session.is_some() || a.selected_paths().iter().all(|p| sk_core::variant::number(p) > 1))
+}
+/// One export at a time, and only with a recipe switched on.
+fn can_export(a: &App) -> bool {
+    has_selection(a) && a.export_progress.is_none() && a.recipes.iter().any(|r| r.enabled)
+}
 
 /// Changes the whole image: not while a layer is chosen (only what works on it is there).
 fn image_tool(a: &App) -> bool {
@@ -98,14 +106,14 @@ pub const COMMANDS: &[Command] = &[
         a.session_ui.start_new(&folder);
     }),
     cmd!("open-session", icon::FOLDER_OPEN, "Session öffnen …", "Datei", [CTRL_SHIFT => Key::O], "session", always, |a, _| a.open_session_dialog()),
-    cmd!("export", icon::EXPORT, "Exportieren", "Datei", [CTRL => Key::D], "export ausgabe speichern verarbeiten", has_selection, |a, _| a.export_selection()),
+    cmd!("export", icon::EXPORT, "Exportieren", "Datei", [CTRL => Key::D], "export ausgabe speichern verarbeiten", can_export, |a, _| a.export_selection()),
     // Bearbeiten
     cmd!("undo", icon::ARROW_U_UP_LEFT, "Rückgängig", "Bearbeiten", [CTRL => Key::Z], "undo", |a| a.can_undo(), |a, _| a.undo()),
     cmd!("redo", icon::ARROW_U_UP_RIGHT, "Wiederholen", "Bearbeiten", [CTRL => Key::Y, CTRL_SHIFT => Key::Z], "redo", |a| !a.redo.is_empty(), |a, _| a.redo()),
     cmd!("copy-adjustments", icon::COPY, "Anpassungen kopieren", "Bearbeiten", [CTRL_SHIFT => Key::C], "copy", has_image, |a, _| a.copy_adjustments()),
     cmd!("copy-adjustments-choose", icon::LIST_CHECKS, "Anpassungen auswählen und kopieren …", "Bearbeiten", [], "copy clipboard zwischenablage werkzeuge auswählen", has_image, |a, _| a.open_copy_dialog()),
     cmd!("paste-adjustments", icon::CLIPBOARD_TEXT, "Anpassungen auf Auswahl anwenden", "Bearbeiten", [CTRL_SHIFT => Key::V], "paste einfügen", |a| a.clipboard.is_some() && !a.on_layer(), |a, _| a.paste_adjustments()),
-    cmd!("reset", icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", "Bearbeiten", [], "reset", has_image, |a, _| a.reset_adjustments()),
+    cmd!("reset", icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", "Bearbeiten", [], "reset", image_tool, |a, _| a.reset_adjustments()),
     cmd!("select-all", icon::CHECK_SQUARE, "Alle auswählen", "Bearbeiten", [CTRL => Key::A], "select all", has_images, |a, _| a.select_all()),
     cmd!("gpu", icon::LIGHTNING, "Grafikkarte …", "Bearbeiten", [], "gpu grafikkarte ki beschleunigung directml zwischenspeicher", always, |a, _| a.show_gpu_dialog = true),
     // Foto und Entwickeln
@@ -170,7 +178,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("row-up", icon::CARET_UP, "Bild darüber", "Foto", [NONE => Key::ArrowUp], "raster zeile hoch up", in_grid, |a, ctx| a.step_row(-1, shift(ctx))),
     cmd!("row-down", icon::CARET_DOWN, "Bild darunter", "Foto", [NONE => Key::ArrowDown], "raster zeile runter down", in_grid, |a, ctx| a.step_row(1, shift(ctx))),
     cmd!("to-selects", icon::FOLDER_SIMPLE_STAR, "Nach „Auswahl“ verschieben", "Foto", [CTRL => Key::J], "selects session", in_session, |a, _| a.move_to_session_folder(sk_core::session::SessionFolder::Selects)),
-    cmd!("trash", icon::TRASH, "In den Papierkorb", "Foto", [CTRL => Key::Delete, CTRL => Key::Backspace], "löschen delete", has_selection, |a, _| a.trash_selection()),
+    cmd!("trash", icon::TRASH, "In den Papierkorb", "Foto", [CTRL => Key::Delete, CTRL => Key::Backspace], "löschen delete", can_trash, |a, _| a.trash_selection()),
     // Ebenen und Retusche
     cmd!("tool-brush", icon::PAINT_BRUSH, "Pinsel", "Ebenen", [NONE => Key::B], "brush maske malen", has_image, |a, _| tool(a, LocalTool::Brush)),
     cmd!("tool-eraser", icon::ERASER, "Radierer", "Ebenen", [NONE => Key::N], "eraser maske", has_image, |a, _| tool(a, LocalTool::Eraser)),
@@ -178,7 +186,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("tool-radial", icon::CIRCLE_DASHED, "Radialer Verlauf", "Ebenen", [NONE => Key::R], "radial", has_image, |a, _| tool(a, LocalTool::Radial)),
     cmd!("tool-magic", icon::MAGIC_WAND, "Zauberpinsel", "Ebenen", [NONE => Key::J], "zauberstab magic brush auswahl", has_image, |a, _| tool(a, LocalTool::Magic)),
     cmd!("tool-object", icon::CURSOR_CLICK, "Objekt auswählen", "Ebenen", [SHIFT => Key::J], "objekt auswahl klick sam maske", has_image, |a, _| tool(a, LocalTool::Object)),
-    cmd!("find-spots", icon::BROOM, "Staub und Flecken finden", "Retusche", [], "sensorstaub flecken unreinheiten pickel retusche reparieren", image_tool, |a, _| a.find_spots()),
+    cmd!("find-spots", icon::BROOM, "Staub und Flecken finden", "Retusche", [], "sensorstaub flecken unreinheiten pickel retusche reparieren", |a| image_tool(a) && a.spot_search.is_none(), |a, _| a.find_spots()),
     cmd!("tool-heal", icon::BANDAIDS, "Reparieren", "Retusche", [NONE => Key::H], "heal flecken", image_tool, |a, _| tool(a, LocalTool::Heal)),
     cmd!("tool-clone", icon::STAMP, "Klonen", "Retusche", [NONE => Key::S], "clone stempel", image_tool, |a, _| tool(a, LocalTool::Clone)),
     cmd!("tool-remove", icon::SPARKLE, "Entfernen", "Retusche", [NONE => Key::X], "remove objekt", image_tool, |a, _| tool(a, LocalTool::Remove)),
@@ -194,7 +202,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("edit-background", icon::X, "Hintergrund bearbeiten", "Ebenen", [], "ebene abwählen global ganzes bild background", on_layer, |a, _| a.select_layer(None)),
     cmd!("layer-up", icon::ARROW_UP, "Ebene darüber bearbeiten", "Ebenen", [ALT => Key::ArrowUp], "nächste ebene wählen layer", has_layers, |a, _| a.step_layer(true)),
     cmd!("layer-down", icon::ARROW_DOWN, "Ebene darunter bearbeiten", "Ebenen", [ALT => Key::ArrowDown], "vorherige ebene wählen layer hintergrund", has_layers, |a, _| a.step_layer(false)),
-    cmd!("delete-spot", icon::TRASH, "Retuschepunkt oder Verlauf löschen", "Retusche", [NONE => Key::Delete, NONE => Key::Backspace], "spot verlauf gradient", always, |a, _| a.delete_selected_spot()),
+    cmd!("delete-spot", icon::TRASH, "Retuschepunkt oder Verlauf löschen", "Retusche", [NONE => Key::Delete, NONE => Key::Backspace], "spot verlauf gradient", |a| a.selected_spot.is_some() || a.selected_gradient.is_some(), |a, _| a.delete_selected_spot()),
     // Ansicht
     cmd!("grid", icon::SQUARES_FOUR, "Raster / Einzelbild umschalten", "Ansicht", [NONE => Key::G], "grid browser übersicht viewer", always, |a, _| a.grid_view = !a.grid_view),
     cmd!("filmstrip", icon::FILM_STRIP, "Filmstreifen ein/aus", "Ansicht", [], "filmstrip", always, |a, _| a.show_filmstrip = !a.show_filmstrip),
@@ -229,7 +237,7 @@ pub const COMMANDS: &[Command] = &[
         a.save_settings();
     }),
     cmd!("viewer-window", icon::MONITOR, "Bild in eigenem Fenster", "Ansicht", [SHIFT => Key::F11], "zweitmonitor viewer", always, |a, _| a.toggle_viewer_window()),
-    cmd!("fullscreen", icon::ARROWS_OUT, "Vollbild ohne Ablenkung", "Ansicht", [NONE => Key::F11, CTRL_SHIFT => Key::F], "fullscreen", always, |a, ctx| a.toggle_fullscreen(ctx)),
+    cmd!("fullscreen", icon::ARROWS_OUT, "Vollbild ohne Ablenkung", "Ansicht", [NONE => Key::F11, CTRL_SHIFT => Key::F], "fullscreen", |a| a.fullscreen || has_image(a), |a, ctx| a.toggle_fullscreen(ctx)),
     cmd!("find", icon::MAGNIFYING_GLASS, "Suchen (Bibliothek)", "Ansicht", [CTRL => Key::F], "filter suche", always, |a, _| a.tab = Tab::Library),
     // Hilfe
     cmd!("shortcuts", icon::KEYBOARD, "Tastenkürzel", "Hilfe", [NONE => Key::F1], "shortcuts hilfe", always, |a, _| a.show_shortcuts = !a.show_shortcuts),
@@ -461,6 +469,11 @@ impl Command {
 }
 
 impl App {
+    /// Whether a command can run now (for buttons outside menus that run it).
+    pub fn command_available(&self, id: &str) -> bool {
+        get(id).is_some_and(|c| (c.enabled)(self))
+    }
+
     /// Runs a command by id, if it is available now.
     pub fn run_command_id(&mut self, ctx: &egui::Context, id: &str) {
         if let Some(c) = get(id)
