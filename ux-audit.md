@@ -6,6 +6,11 @@ und die aktuelle Stelle. Die übrigen Zeilennummern stammen vom Stand 17.10.2026
 Trapezkorrektur). Mit „bestätigt“ markierte Punkte sind im Code nachgeprüft, die übrigen
 stammen aus der Code-Durchsicht und wurden nicht im laufenden Programm ausprobiert.
 
+**Regel für Begriffe (18.10.2026):** Die Oberfläche ist deutsch, eingeführte englische Fachbegriffe
+dürfen aber bleiben. Entscheidend ist, dass eine Funktion überall genau einen Namen hat. Abschnitt J
+listet deshalb nur noch Fälle, in denen dieselbe Funktion verschieden heißt (oder ein Name mehrere
+Funktionen meint), dazu einige reine Stilfragen.
+
 Entscheidung je Punkt: das zutreffende Kästchen ankreuzen (`[x]`), bei Bedarf eine Notiz
 ergänzen.
 
@@ -452,25 +457,23 @@ ergänzen.
 
 ## J. Begriffe und Texte
 
-### 49. Englische Reste
-- **Stand 18.10.:** **offen** – alles noch da; neu „Farbsaum Lila/Grün“ direkt unter „CA Rot/Cyan“ spricht zusätzlich für „Farbsaum Rot/Cyan“
-- **Stelle/Befund:**
-  - „Focus Stacking …“ `commands.rs:144`, `merge.rs:83`, README → „Fokus-Stacking …“ oder „Schärfentiefe erweitern …“
-  - „Fisheye“ `develop_tools.rs:236-237` → „Fischauge“
-  - „Master“ `develop_tools.rs:695`, `layers.rs:1625` → „Gesamt“
-  - „Keywords“/„Keyword“ `tools.rs:330`, `:333`, `:380`, `palette.rs:110`, `library.rs:421`, `:430`, `chrome.rs:249`, README → „Stichwörter“
-  - „Release-Seite öffnen“ `update.rs:254` → „Download-Seite öffnen“
-  - „Split-Toning“ im Tooltip `look.rs:330` → streichen
-  - „SPEED EDIT“ `browser.rs:565`, `:579` → „Schnellbearbeitung“
-  - „CA Rot/Cyan“, „CA Blau/Gelb“ `develop_tools.rs:238-239` → „Farbsaum Rot/Cyan“ usw.
-- **Vorschlag:** wie angegeben.
+### 49. Englische Begriffe mit deutschem Zweitnamen
+- **Stand 18.10.:** **offen** – nach der Regel vom 18.10. (siehe Kopf) eingegrenzt
+- **Stelle:** `browser.rs:618`, `:632` („SPEED EDIT“); `develop_tools.rs:319-322` („CA Rot/Cyan“, „CA Blau/Gelb“, „Farbsaum Lila/Grün“)
+- **Befund:** Nur zwei Fälle haben zwei Namen für dieselbe Funktion:
+  - Die Meldung der Schnellbearbeitung beginnt mit „SPEED EDIT“; Tastenkürzel-Liste und README sagen „Schnellbearbeitung“.
+  - Im Objektiv-Abschnitt stehen „CA Rot/Cyan“ und „CA Blau/Gelb“ direkt neben „Farbsaum Lila/Grün“; der Tooltip sagt „Farbsäume“.
+- **Kein Handlungsbedarf** (englisch, aber überall gleich benannt): „Focus Stacking“, „Fisheye“, „Master“, „Keywords“, „Release-Seite“, „Split-Toning“ (nur als Erklärung im Tooltip).
+- **Vorschlag:** „Schnellbearbeitung“ in der Meldung; „Farbsaum Rot/Cyan“, „Farbsaum Blau/Gelb“ (oder alle drei als „CA …“).
 - **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 - **Notiz:**
 
-### 50. Grenzfälle: bleiben diese Begriffe?
-- **Stand 18.10.:** **offen** – aktuelle Stelle: `README.md:208, :754`
-- **Befund:** „Session“, „Farb-Label“, „Look“, „Softproof“, „Navigator“, „Update(s)“. Alternativen: „Sitzung“, „Farbmarkierung“, „Aktualisierungen“. README nutzt außerdem „Preset“ (`README.md:208`, `:744`), die Oberfläche „Stil“/„Stilpinsel“.
-- **Vorschlag:** Je Begriff festlegen; README auf „Stil“ umstellen.
+### 50. „Preset“ in der README, „Stil“ in der Oberfläche
+- **Stand 18.10.:** **offen** – nach der Regel vom 18.10. eingegrenzt
+- **Stelle:** `README.md:208` („Pinsel-Presets“), `README.md:754` („als Preset speichern“)
+- **Befund:** Die Oberfläche nennt die Funktion „Stil“ bzw. „Stilpinsel“, die README an zwei Stellen „Preset“.
+- **Kein Handlungsbedarf** (überall gleich benannt): „Session“, „Look“, „Softproof“, „Farb-Label“, „Navigator“, „Update“.
+- **Vorschlag:** README auf „Stil“ bzw. „Stilpinsel“ umstellen.
 - **Entscheidung:** [ ] umsetzen  [ ] nicht umsetzen  [ ] Klärung erforderlich
 - **Notiz:**
 
