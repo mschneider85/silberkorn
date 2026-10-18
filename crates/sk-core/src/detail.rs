@@ -36,22 +36,18 @@ pub fn median_hv(p: &Plane, r: usize) -> Plane {
     let (w, h) = (p.w, p.h);
     let mut rows = vec![0.0f32; w * h];
     rows.par_chunks_mut(w).zip(p.data.par_chunks(w)).for_each(|(out, row)| median_line(row, out, r));
-    // Columns: gathered into lines, filtered, written back.
-    let cols: Vec<Vec<f32>> = (0..w)
-        .into_par_iter()
-        .map(|x| {
-            let col: Vec<f32> = (0..h).map(|y| rows[y * w + x]).collect();
-            let mut out = vec![0.0f32; h];
-            median_line(&col, &mut out, r);
-            out
-        })
-        .collect();
+    // Columns: gathered into the lines of a transposed plane, filtered there, written back
+    // (both in parallel).
+    let mut cols = vec![0.0f32; w * h];
+    cols.par_chunks_mut(h).enumerate().for_each_init(
+        || vec![0.0f32; h],
+        |col, (x, out)| {
+            col.iter_mut().enumerate().for_each(|(y, v)| *v = rows[y * w + x]);
+            median_line(col, out, r);
+        },
+    );
     let mut data = vec![0.0f32; w * h];
-    for (x, col) in cols.iter().enumerate() {
-        for (y, v) in col.iter().enumerate() {
-            data[y * w + x] = *v;
-        }
-    }
+    data.par_chunks_mut(w).enumerate().for_each(|(y, row)| row.iter_mut().enumerate().for_each(|(x, v)| *v = cols[x * h + y]));
     Plane::new(w, h, data)
 }
 

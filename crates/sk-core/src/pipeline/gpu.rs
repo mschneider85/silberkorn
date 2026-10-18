@@ -576,8 +576,10 @@ impl DarkPool {
 
     fn finish(self, g: &Gpu, airlight: Option<[f32; 3]>) -> Result<DarkChannel> {
         let count = g.read::<u32>(&self.count, 1)?[0] as usize;
-        let samples = g.read::<f32>(&self.samples, count * 3)?.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
-        let blocks = g.read::<f32>(&self.blocks, self.lw * self.lh * 4)?;
+        // Samples and block minima with one wait.
+        let [samples, blocks] = g.read_bytes([(&self.samples, count * 12), (&self.blocks, self.lw * self.lh * 16)])?;
+        let samples = bytemuck::pod_collect_to_vec::<u8, f32>(&samples).chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let blocks = bytemuck::pod_collect_to_vec::<u8, f32>(&blocks);
         let minima = blocks.chunks_exact(4).map(|b| [b[0], b[1], b[2], b[3]]).collect();
         Ok(DarkChannel::from_parts(samples, minima, self.lw, self.lh, self.step, airlight))
     }
@@ -1156,14 +1158,15 @@ impl Processor {
             let hist = g.upload(&[0u32; 1024]);
             ops.enc.run_2d(DISPLAY, &[&a, &developed, decode, encode8, &rgba, &hist], r.w, r.h);
             ops.flush();
+            // Image and histogram with one wait.
             #[allow(unused_mut)]
-            let mut rgba = g.read::<u8>(&rgba, r.w * r.h * 4)?;
+            let [mut rgba, h] = g.read_bytes([(&rgba, r.w * r.h * 4), (&hist, 1024 * 4)])?;
+            let h = bytemuck::pod_collect_to_vec::<u8, u32>(&h);
             #[cfg(test)]
             if g.inject_incomplete.swap(false, std::sync::atomic::Ordering::Relaxed) {
                 rgba[3] = 0;
             }
             check_display(g, &rgba)?;
-            let h = g.read::<u32>(&hist, 1024)?;
             timer.lap("gpu: develop + display");
             let histogram = Histogram { r: h[0..256].to_vec(), g: h[256..512].to_vec(), b: h[512..768].to_vec(), luma: h[768..1024].to_vec() };
             Ok(Rendered { width: r.w, height: r.h, rgba, histogram, full_size: plan.full })

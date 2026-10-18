@@ -249,10 +249,12 @@ impl DarkChannel {
             // Removing the haze darkens: brighten the dark part of the result somewhat (the
             // haze's own brightness stays, or the sky would burn out).
             let ya = dot(al, LUMA).max(1e-3);
-            let lift = 1.0 + (t.powf(-0.3) - 1.0) * (1.0 - dot(j, LUMA) / ya).clamp(0.0, 1.0);
+            // t^-0.3 and t^0.4 from one logarithm.
+            let ln_t = t.ln();
+            let lift = 1.0 + ((-0.3 * ln_t).exp() - 1.0) * (1.0 - dot(j, LUMA) / ya).clamp(0.0, 1.0);
             // Colors gain less than contrast (1/t^0.6 instead of 1/t), or they turn garish.
             let y = dot(j, LUMA);
-            let chroma = t.powf(0.4);
+            let chroma = (0.4 * ln_t).exp();
             // Values below black run out softly instead of clipping.
             let toe = 0.05 * (1.0 - t) * ya;
             j.map(|v| haze_toe((y + (v - y) * chroma) * lift, toe))

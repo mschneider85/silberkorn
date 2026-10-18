@@ -328,22 +328,38 @@ impl Gpu {
         Encoder { gpu: self, enc: self.device.create_command_encoder(&Default::default()) }
     }
 
-    /// Copies `bytes` of a buffer back into memory (waits for all submitted work).
+    /// Copies `count` values of a buffer back into memory (waits for all submitted work).
     pub(crate) fn read<T: bytemuck::Pod>(&self, buf: &wgpu::Buffer, count: usize) -> Result<Vec<T>> {
-        let bytes = (count * size_of::<T>()) as u64;
-        if bytes == 0 {
-            return Ok(Vec::new());
+        let [bytes] = self.read_bytes([(buf, count * size_of::<T>())])?;
+        Ok(bytemuck::pod_collect_to_vec(&bytes))
+    }
+
+    /// Like [`Self::read`] for several buffers (bytes of each) with one wait for the card.
+    pub(crate) fn read_bytes<const N: usize>(&self, parts: [(&wgpu::Buffer, usize); N]) -> Result<[Vec<u8>; N]> {
+        // Each part at an offset the copy accepts.
+        let mut offsets = [0u64; N];
+        let mut total = 0u64;
+        for (o, (_, bytes)) in offsets.iter_mut().zip(&parts) {
+            *o = total;
+            total += (*bytes as u64).next_multiple_of(8);
         }
-        let staging = self.pool().take(bytes.next_multiple_of(4), true).unwrap_or_else(|| {
+        if total == 0 {
+            return Ok(std::array::from_fn(|_| Vec::new()));
+        }
+        let staging = self.pool().take(total, true).unwrap_or_else(|| {
             self.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("readback"),
-                size: bytes.next_multiple_of(4),
+                size: total,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             })
         });
         let mut enc = self.device.create_command_encoder(&Default::default());
-        enc.copy_buffer_to_buffer(buf, 0, &staging, 0, bytes.next_multiple_of(4));
+        for ((buf, bytes), o) in parts.iter().zip(offsets) {
+            if *bytes > 0 {
+                enc.copy_buffer_to_buffer(buf, 0, &staging, o, (*bytes as u64).next_multiple_of(4));
+            }
+        }
         self.queue.submit([enc.finish()]);
         let (tx, rx) = std::sync::mpsc::channel();
         staging.map_async(wgpu::MapMode::Read, .., move |r| {
@@ -356,7 +372,7 @@ impl Gpu {
         }
         rx.recv_timeout(Duration::from_secs(1)).map_err(|_| anyhow!("Grafikkarte: Ergebnis kam nicht zurück"))??;
         let view = staging.get_mapped_range(..)?;
-        let out = bytemuck::cast_slice::<u8, T>(&view[..bytes as usize]).to_vec();
+        let out = std::array::from_fn(|i| view[offsets[i] as usize..offsets[i] as usize + parts[i].1].to_vec());
         drop(view);
         staging.unmap();
         self.pool().give(staging, true);

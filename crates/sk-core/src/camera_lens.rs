@@ -15,6 +15,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use rawler::bits::Endian;
+use rayon::prelude::*;
 use rawler::formats::tiff::{IFD, Value};
 
 use crate::image::Orientation;
@@ -503,23 +504,32 @@ impl GainMap {
             let i = (g.floor() as usize).min(n.saturating_sub(2));
             (i, (g - i as f64) as f32)
         };
-        for row in (top..bottom).step_by(self.row_pitch as usize) {
-            let (r0, tr) = grid(row, height, 0, pv);
-            let r1 = (r0 + 1).min(pv - 1);
-            for col in (left..right).step_by(self.col_pitch as usize) {
+        // The grid position of each column once; the rows in parallel.
+        let cols: Vec<(usize, usize, usize, f32)> = (left..right)
+            .step_by(self.col_pitch as usize)
+            .map(|col| {
                 let (c0, tc) = grid(col, width, 1, ph);
-                let c1 = (c0 + 1).min(ph - 1);
-                for plane in self.plane as usize..self.plane.saturating_add(self.planes) as usize {
-                    if plane >= cpp {
-                        break;
+                (col, c0, (c0 + 1).min(ph - 1), tc)
+            })
+            .collect();
+        let pitch = self.row_pitch as usize;
+        data.par_chunks_mut(width * cpp).enumerate().filter(|(row, _)| (top..bottom).contains(row) && (row - top) % pitch == 0).for_each(
+            |(row, line)| {
+                let (r0, tr) = grid(row, height, 0, pv);
+                let r1 = (r0 + 1).min(pv - 1);
+                for &(col, c0, c1, tc) in &cols {
+                    for plane in self.plane as usize..self.plane.saturating_add(self.planes) as usize {
+                        if plane >= cpp {
+                            break;
+                        }
+                        let top = at(r0, c0, plane) + (at(r0, c1, plane) - at(r0, c0, plane)) * tc;
+                        let bot = at(r1, c0, plane) + (at(r1, c1, plane) - at(r1, c0, plane)) * tc;
+                        let v = &mut line[col * cpp + plane];
+                        *v = (*v * (top + (bot - top) * tr)).min(1.0);
                     }
-                    let top = at(r0, c0, plane) + (at(r0, c1, plane) - at(r0, c0, plane)) * tc;
-                    let bot = at(r1, c0, plane) + (at(r1, c1, plane) - at(r1, c0, plane)) * tc;
-                    let v = &mut data[(row * width + col) * cpp + plane];
-                    *v = (*v * (top + (bot - top) * tr)).min(1.0);
                 }
-            }
-        }
+            },
+        );
     }
 }
 
