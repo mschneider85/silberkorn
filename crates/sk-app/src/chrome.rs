@@ -438,9 +438,6 @@ impl App {
             let wb_hover = crate::commands::hint("Weißabgleich-Pipette: auf eine neutrale Stelle klicken", "wb-picker");
             if labeled_tool(ui, wide, icon::EYEDROPPER, "Weißabgleich", &image_hover(&wb_hover), self.picking_wb, image).clicked() {
                 self.toggle_wb_picker();
-                if self.picking_wb {
-                    self.tab = Tab::Color;
-                }
             }
             group_gap(ui);
             let copy = tool(ui, icon::COPY, &format!("{}\nRechtsklick: Werkzeuge auswählen", crate::commands::hint("Anpassungen kopieren", "copy-adjustments")), false, has);

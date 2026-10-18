@@ -121,22 +121,14 @@ pub const COMMANDS: &[Command] = &[
     cmd!("rotate-right", icon::ARROW_CLOCKWISE, "Rechts drehen", "Entwickeln", [CTRL => Key::CloseBracket], "rotate", image_tool, |a, _| a.rotate(1)),
     cmd!("crop", icon::CROP, "Zuschneiden", "Entwickeln", [NONE => Key::C], "crop", image_tool, |a, _| a.toggle_crop()),
     cmd!("finish-crop", icon::CHECK, "Zuschnitt bzw. Trapezkorrektur übernehmen", "Entwickeln", [NONE => Key::Enter], "crop fertig trapez anwenden", |a| a.crop_tool.is_some() || a.keystone_guides_active(), |a, _| a.finish_viewer_tool()),
-    cmd!("straighten", icon::RULER, "Geraderichten (Linie ziehen)", "Entwickeln", [], "straighten horizont", image_tool, |a, _| {
-        a.tab = Tab::Lens;
-        a.toggle_straighten();
-    }),
+    cmd!("straighten", icon::RULER, "Geraderichten (Linie ziehen)", "Entwickeln", [], "straighten horizont", image_tool, |a, _| a.toggle_straighten()),
     cmd!("auto-adjust", icon::MAGIC_WAND, "Automatisch anpassen", "Entwickeln", [CTRL => Key::L], "auto adjust automatisch belichtung weißabgleich tonwerte", |a| has_selection(a) && a.auto_progress.is_none() && !a.on_layer(), |a, _| a.auto_adjust_selection()),
     cmd!("auto-upright", icon::PERSPECTIVE, "Automatisch geraderichten", "Entwickeln", [SHIFT => Key::A], "upright", image_tool, |a, _| a.auto_upright(sk_core::upright::UprightMode::Vertical)),
     cmd!("auto-wb", icon::MAGIC_WAND, "Weißabgleich automatisch", "Entwickeln", [], "auto wb white balance weißabgleich automatisch", image_tool, |a, _| {
         a.tab = Tab::Color;
         a.auto_white_balance();
     }),
-    cmd!("wb-picker", icon::EYEDROPPER, "Weißabgleich-Pipette", "Entwickeln", [NONE => Key::W], "white balance wb aufnehmen", image_tool, |a, _| {
-        if !a.picking_wb {
-            a.tab = Tab::Color;
-        }
-        a.toggle_wb_picker();
-    }),
+    cmd!("wb-picker", icon::EYEDROPPER, "Weißabgleich-Pipette", "Entwickeln", [NONE => Key::W], "white balance wb aufnehmen", image_tool, |a, _| a.toggle_wb_picker()),
     cmd!("rename", icon::PENCIL_SIMPLE, "Umbenennen …", "Foto", [CTRL_SHIFT => Key::R], "rename", has_selection, |a, _| a.open_rename()),
     cmd!("process-update", icon::ARROW_CIRCLE_UP, "Auf aktuelle Prozessversion heben", "Entwickeln", [], "prozessversion engine update", has_selection, |a, _| a.update_process_version()),
     cmd!("rating-0", icon::STAR, "Bewertung entfernen", "Foto", [NONE => Key::Num0], "sterne rating", has_selection, |a, _| a.set_rating(0)),

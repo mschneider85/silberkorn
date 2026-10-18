@@ -319,12 +319,14 @@ impl App {
         self.end_viewer_tools();
     }
 
-    /// The straighten tool (draw a line along the horizon) on or off.
+    /// The straighten tool (draw a line along the horizon) on or off. Like every tool, it opens
+    /// the tab with its settings.
     pub fn toggle_straighten(&mut self) {
         let on = !self.straightening();
         self.end_viewer_tools();
         if on {
             self.straighten_tool = Some(Default::default());
+            self.tab = crate::app::Tab::Lens;
         }
     }
 
@@ -333,6 +335,9 @@ impl App {
         let on = !self.picking_wb;
         self.end_viewer_tools();
         self.picking_wb = on;
+        if on {
+            self.tab = crate::app::Tab::Color;
+        }
     }
 
     /// The color pipette for `target` on, or off when it is on for it already.
@@ -351,6 +356,7 @@ impl App {
                 (g.crop, g.aspect, g.aspect_portrait)
             });
             self.crop_tool = Some(CropTool { start, ..Default::default() });
+            self.tab = crate::app::Tab::Lens;
             self.zoom = None;
             self.request_render();
         }

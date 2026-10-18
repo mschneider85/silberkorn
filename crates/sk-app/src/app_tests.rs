@@ -3266,3 +3266,17 @@ fn a_crop_is_one_undo_step() {
     f.app.undo();
     assert_eq!(f.app.current.as_ref().unwrap().adjustments.geometry.crop, sk_core::params::CropRect::default());
 }
+
+/// Every tool opens the tab with its settings, however it is started.
+#[test]
+fn tools_open_their_tab() {
+    use crate::app::Tab;
+    let Some(mut f) = Fixture::new("tool-tabs") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    for (id, tab) in [("crop", Tab::Lens), ("straighten", Tab::Lens), ("wb-picker", Tab::Color)] {
+        f.app.end_viewer_tools();
+        f.app.tab = Tab::Library;
+        f.app.run_command_id(&f.ctx.clone(), id);
+        assert_eq!(f.app.tab, tab, "{id}");
+    }
+}
