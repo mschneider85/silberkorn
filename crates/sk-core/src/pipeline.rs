@@ -407,11 +407,11 @@ pub struct Processor {
     skin_active: bool,
     balance_active: bool,
     /// display-linear working 0..1 -> encoded 0..1, per channel (brightness, levels, curves)
-    lut: [Vec<f32>; 3],
+    lut: Arc<[Vec<f32>; 3]>,
     /// The luma curve (`None` when it is a straight line).
     luma_lut: Option<Vec<f32>>,
     /// Precomputed tone functions of the background settings (layers may deviate per pixel).
-    tone_luts: ToneLuts,
+    tone_luts: Arc<ToneLuts>,
     /// Ratio of the rendered source to the full sensor resolution (for radii in full-res pixels).
     sensor_long_edge: f32,
     /// Unclipped floating point data: no highlight reconstruction.
@@ -492,9 +492,11 @@ impl Processor {
             editor_active: !adj.color_editor.is_neutral() || layer_bands,
             skin_active: !adj.skin_tone.is_neutral(),
             balance_active: !adj.color_balance.is_neutral() || layer_balance,
-            lut: build_output_luts(adj),
+            lut: cached_lut(serde_json::json!({ "b": adj.brightness, "l": adj.levels, "c": adj.curves }), || build_output_luts(adj)),
             luma_lut: (!adj.curves.luma.is_identity()).then(|| adj.curves.luma.build_lut(LUT_SIZE)),
-            tone_luts: ToneLuts::new(&base, adj.base_curve, adj.camera_curve.as_ref()),
+            tone_luts: cached_lut(serde_json::json!({ "h": base.hdr, "c": base.contrast, "k": adj.base_curve, "cc": adj.camera_curve }), || {
+                ToneLuts::new(&base, adj.base_curve, adj.camera_curve.as_ref())
+            }),
             sensor_long_edge: meta.info.width.max(meta.info.height).max(1) as f32,
             hdr: meta.hdr,
             opts,
@@ -1528,6 +1530,27 @@ const EV_STEPS: f32 = 128.0;
 /// Scene values up to this are covered by the curve table (the base curves are flat beyond).
 const CURVE_MAX: f32 = 256.0;
 const CURVE_SIZE: usize = 16384;
+
+/// Tables of a processor from a small cache by what they are made of (`key`): building them
+/// costs about as much as rendering a small image, which auto adjustment and look matching do
+/// many times with the same tables.
+fn cached_lut<T: Send + Sync + 'static>(key: serde_json::Value, build: impl FnOnce() -> T) -> Arc<T> {
+    use std::any::{Any, TypeId};
+    type Entries = Vec<(TypeId, u64, Arc<dyn Any + Send + Sync>)>;
+    static CACHE: Mutex<Entries> = Mutex::new(Vec::new());
+    let key = crate::cache::fnv1a(key.to_string().as_bytes());
+    let found = CACHE.lock().unwrap().iter().find(|(t, k, _)| *t == TypeId::of::<T>() && *k == key).map(|(_, _, v)| v.clone());
+    if let Some(v) = found.and_then(|v| v.downcast::<T>().ok()) {
+        return v;
+    }
+    let v = Arc::new(build());
+    let mut cache = CACHE.lock().unwrap();
+    cache.push((TypeId::of::<T>(), key, v.clone()));
+    if cache.len() > 16 {
+        cache.remove(0);
+    }
+    v
+}
 
 /// Tables that replace transcendental functions per pixel by a lookup.
 struct ToneLuts {
