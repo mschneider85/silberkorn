@@ -45,8 +45,10 @@ deshalb nur auf Prozessoren mit AVX2, die Releases überall):
 PATH=~/.local/xwin-bin:$PATH CL="-msse4.1 -mavx2" cargo xwin build --release -p sk-app --target x86_64-pc-windows-msvc
 ```
 
-Ergebnis: `target/x86_64-pc-windows-msvc/release/silberkorn.exe`. Sie braucht die Visual-C++-Laufzeit
-(`VCRUNTIME140.dll`), wie die Releases. Unter Windows nativ geht `cargo build --release -p sk-app`.
+Ergebnis: `target/x86_64-pc-windows-msvc/release/silberkorn.exe`, eine einzelne Datei: die C-Laufzeit ist
+eingebunden (`crt-static` in `.cargo/config.toml`, auch für die Releases), sonst bräuchte sie
+`VCRUNTIME140.dll`, die einem frischen Windows fehlt. Deren `exp2f`/`log2f` sind langsam; in Pixel-Schleifen
+deshalb `color::exp2`/`color::log2` nehmen. Unter Windows nativ geht `cargo build --release -p sk-app`.
 Zum Messen von Geschwindigkeit immer diesen Weg nehmen: mingw-Builds (`x86_64-pc-windows-gnu`) nutzen die
 alte msvcrt, deren Mathe-Funktionen 4–8× langsamer sind als in den Releases.
 

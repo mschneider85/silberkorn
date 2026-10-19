@@ -6,3 +6,8 @@
 t = "test --workspace"
 t-slow = "test --workspace -- --ignored"
 t-all = "test --workspace -- --include-ignored"
+
+# The C runtime linked into the program (as with the earlier mingw builds): without it the MSVC build
+# needs VCRUNTIME140.dll, which a fresh Windows doesn't have, and Silberkorn wouldn't start.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

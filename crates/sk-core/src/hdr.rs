@@ -266,7 +266,7 @@ fn merge(images: Vec<(LinearImage, f32, (i32, i32))>, reference: usize, opts: &H
                     }
                     let ea = luma(*a) / k;
                     let eb = luma(*b);
-                    let d = ((ea + 1e-4) / (eb + 1e-4)).log2().abs();
+                    let d = crate::color::log2((ea + 1e-4) / (eb + 1e-4)).abs();
                     ((d - thr) / (thr * 0.5)).clamp(0.0, 1.0)
                 })
                 .collect();

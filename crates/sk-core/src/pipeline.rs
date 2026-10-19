@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use rayon::prelude::*;
 
-use crate::color::{Mat3, Oklab, OutputSpace, luminance, mat_vec, srgb_decode, srgb_encode};
+use crate::color::{Mat3, Oklab, OutputSpace, exp2, log2, luminance, mat_vec, srgb_decode, srgb_encode};
 use crate::detail::{Plane, box_blur, fast_guided_filter, gaussian_blur, guided_filter, median_hv, value_noise};
 use crate::geometry::{GeoMap, Region};
 use crate::image::LinearImage;
@@ -598,17 +598,17 @@ impl Processor {
     /// Scene-linear working RGB -> display-linear working RGB.
     #[inline]
     fn tone(&self, rgb: [f32; 3], local_ev: Option<f32>, detail_ev: [f32; 2], tp: &ToneParams) -> [f32; 3] {
-        let gain = (tp.exposure_ev + detail_ev[0] * tp.clarity / 100.0 * 0.6 + detail_ev[1] * tp.structure / 100.0 * 0.8).exp2();
+        let gain = exp2(tp.exposure_ev + detail_ev[0] * tp.clarity / 100.0 * 0.6 + detail_ev[1] * tp.structure / 100.0 * 0.8);
         let mut rgb = rgb.map(|v| v * gain);
         if tp.temperature != 0.0 || tp.tint != 0.0 {
             let t = tp.temperature / 100.0;
-            rgb[0] *= (t * 0.35).exp2();
-            rgb[2] *= (-t * 0.35).exp2();
-            rgb[1] *= (-tp.tint / 100.0 * 0.25).exp2();
+            rgb[0] *= exp2(t * 0.35);
+            rgb[2] *= exp2(-t * 0.35);
+            rgb[1] *= exp2(-tp.tint / 100.0 * 0.25);
         }
         let l = dot(rgb, LUMA);
         if l > 1e-7 && tp.hdr.iter().any(|v| *v != 0.0) {
-            let ev_px = (l / MID_GREY).log2();
+            let ev_px = log2(l / MID_GREY);
             // Weights come mostly from the smoothed neighborhood (local tone mapping).
             let ev = match local_ev {
                 Some(e) => (e + tp.exposure_ev) * 0.75 + ev_px * 0.25,
@@ -618,7 +618,7 @@ impl Processor {
                 Some([by_ev, by_px]) if tp.hdr == self.base.hdr => ev_lookup(by_ev, ev) + ev_lookup(by_px, ev_px),
                 _ => hdr_gain_ev(tp.hdr, ev, ev_px),
             };
-            let g = gain_ev.exp2();
+            let g = exp2(gain_ev);
             rgb.iter_mut().for_each(|v| *v *= g);
         }
         let lut = self.tone_luts.curve.as_ref().filter(|_| tp.contrast == self.base.contrast);
@@ -997,7 +997,7 @@ impl Processor {
                 c.local.lock().unwrap().as_ref().filter(|(k, _)| *k == key).map(|(_, planes)| planes.clone())
             });
             let compute = || {
-                let log_l = Plane::new(w, h, working.data.par_iter().map(|p| dot(*p, LUMA).max(1e-6).log2() - MID_GREY.log2()).collect());
+                let log_l = Plane::new(w, h, working.data.par_iter().map(|p| log2(dot(*p, LUMA).max(1e-6)) - MID_GREY.log2()).collect());
                 let sub = guided_sub;
                 LocalPlanes {
                     hdr_base: hdr_active.then(|| match median_radius(r_hdr) {

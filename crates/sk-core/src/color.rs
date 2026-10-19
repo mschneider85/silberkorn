@@ -431,6 +431,20 @@ impl Oklab {
     }
 }
 
+/// 2^x, computed as e^(x ln 2): the static C runtime of the Windows build (`crt-static`) has a slow
+/// `exp2f` (about 40 ns against 6 ns for `expf`); glibc and the system's ucrtbase.dll are fast at
+/// both. For every pixel.
+#[inline]
+pub fn exp2(x: f32) -> f32 {
+    (x * std::f32::consts::LN_2).exp()
+}
+
+/// log2(x), computed as ln(x) / ln 2 for the same reason as [`exp2`] (`log2f` about 23 ns there).
+#[inline]
+pub fn log2(x: f32) -> f32 {
+    x.ln() * std::f32::consts::LOG2_E
+}
+
 /// Cube root to full `f32` precision, several times faster than `f32::cbrt` (libm):
 /// a bit-level estimate refined by two Halley steps (cubic convergence).
 #[inline]
