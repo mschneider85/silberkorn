@@ -170,11 +170,12 @@ impl App {
             })
             .collect();
         self.look_progress = Some((0, items.len()));
+        self.look_run += 1;
         self.batch_step = None;
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.look_cancel = Some(cancel.clone());
         self.status = if items.len() == 1 { "Gleiche den Look an …".into() } else { format!("Gleiche den Look von {} an …", widgets::image_count(items.len())) };
-        self.workers.look(LookRequest::Match { refs: self.look_refs.clone(), items, opts: self.look_options, cancel });
+        self.workers.look(LookRequest::Match { run: self.look_run, refs: self.look_refs.clone(), items, opts: self.look_options, cancel });
     }
 
     /// A reference has been measured.
@@ -191,11 +192,15 @@ impl App {
 
     /// The look of one image has been matched: its settings change (the open image's as one
     /// undo step). Only what the options cover changes, so edits made meanwhile stay.
-    pub(crate) fn look_matched(&mut self, path: PathBuf, opts: LookOptions, result: Result<LookResult, String>) {
+    /// Results of another run (cancelled or replaced meanwhile) are dropped.
+    pub(crate) fn look_matched(&mut self, run: u64, path: PathBuf, opts: LookOptions, result: Result<LookResult, String>) {
+        if run != self.look_run {
+            return;
+        }
         let failed = match result {
             Ok(m) => {
                 let before = self.current.as_ref().filter(|_| self.current_path().as_ref() == Some(&path)).map(|c| c.adjustments.clone());
-                self.set_adjustments_on(std::slice::from_ref(&path), |a| opts.take(&m.adjustments, a));
+                self.set_batch_result(&path, |a| opts.take(&m.adjustments, a));
                 if let Some(before) = before
                     && let Some(cur) = &self.current
                 {

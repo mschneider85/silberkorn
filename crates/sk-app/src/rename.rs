@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use egui::{Modifiers, RichText, vec2};
+use rayon::prelude::*;
 use sk_core::naming::{self, NameFields};
 use sk_core::{raw, session, variant};
 
@@ -27,9 +28,8 @@ impl App {
     /// "Umbenennen …" for the selection.
     pub fn open_rename(&mut self) {
         let selected = self.selected_paths();
-        let order: Vec<PathBuf> = self.visible.iter().map(|&i| self.entries[i].path.clone()).collect();
-        let mut files: Vec<PathBuf> = variant::files_of(&selected);
-        files.sort_by_key(|f| order.iter().position(|p| p == f).unwrap_or(usize::MAX));
+        // Already in browser order (a lone variant stands where it is shown).
+        let files: Vec<PathBuf> = variant::files_of(&selected);
         if files.is_empty() {
             return;
         }
@@ -51,9 +51,10 @@ impl App {
         } else {
             self.commit_and_save();
         }
+        // Capture data of all files first, read in parallel (before any of them is renamed).
+        let infos: Vec<Option<raw::CaptureInfo>> = files.par_iter().map(|f| raw::read_meta(f).ok().map(|m| m.info)).collect();
         let (mut renamed, mut error, mut new_primary) = (0, None, None);
-        for (i, file) in files.iter().enumerate() {
-            let info = raw::read_meta(file).ok().map(|m| m.info);
+        for (i, (file, info)) in files.iter().zip(infos).enumerate() {
             let fields = NameFields { image: file, capture: info.as_ref(), counter: start + i as u32, session: &session };
             let stem = naming::expand(template, &fields);
             match session::rename_image(file, &stem) {

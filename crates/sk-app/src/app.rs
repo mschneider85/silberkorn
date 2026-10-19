@@ -219,6 +219,17 @@ const TRANSITION_MAX: Duration = Duration::from_millis(600);
 /// Fade-in of the image after the switch.
 const FADE_IN: Duration = Duration::from_millis(150);
 
+/// The last `App::proof_key` (it is asked for every frame): computed again when the recipe
+/// changes; the logo file is looked at at most once a second.
+#[derive(Default)]
+struct ProofKeyCache {
+    recipe: Option<sk_core::export::ExportRecipe>,
+    gamut: bool,
+    stamp: Option<(u64, std::time::SystemTime)>,
+    checked: Option<Instant>,
+    key: Option<u64>,
+}
+
 /// A finished proof of the current image (see `App::proof_view`).
 pub struct ProofView {
     pub version: u64,
@@ -557,6 +568,12 @@ pub struct App {
     pub(crate) extra_redo: Vec<(u64, crate::undo::Step)>,
     /// The step the results of a running auto adjustment or look match join.
     pub(crate) batch_step: Option<u64>,
+    /// Set while a result of such a run is written: only those join `batch_step`.
+    pub(crate) batch_result: bool,
+    /// Number of the running (or last) auto adjustment and look match: results of a run
+    /// cancelled or replaced meanwhile carry another one and are dropped.
+    pub(crate) auto_run: u64,
+    pub(crate) look_run: u64,
     pub(crate) clipboard: Option<crate::clipboard::Clipboard>,
     pub(crate) copy_dialog: crate::clipboard::CopyDialog,
     pub sidecar_dirty: bool,
@@ -712,6 +729,7 @@ pub struct App {
     pub(crate) proof: Option<ProofView>,
     /// (generation, edit version, recipe key) of the last proof request.
     proof_requested: Option<(u64, u64, u64)>,
+    proof_key_cache: std::cell::RefCell<ProofKeyCache>,
     pub show_shortcuts: bool,
     pub show_licenses: bool,
     pub shortcut_editor: crate::shortcut_editor::ShortcutEditor,
@@ -734,6 +752,8 @@ pub struct App {
     pub viewer_window: crate::viewer_window::ViewerWindow,
     /// The viewer window has been created (its full screen state is only set on creation).
     pub(crate) viewer_window_shown: bool,
+    /// The monitors in points, read when the viewer window opens (empty if unknown).
+    pub(crate) monitors: Vec<egui::Rect>,
     /// A mouse button is held in the viewer window (as of its last frame).
     pub(crate) viewer_pointer_down: bool,
     /// The viewer window was moved or resized at this time (saved once it rests).
@@ -976,6 +996,9 @@ impl App {
             extra_undo: Vec::new(),
             extra_redo: Vec::new(),
             batch_step: None,
+            batch_result: false,
+            auto_run: 0,
+            look_run: 0,
             redo: Vec::new(),
             clipboard: None,
             copy_dialog: Default::default(),
@@ -994,6 +1017,7 @@ impl App {
             proof_view: false,
             proof: None,
             proof_requested: None,
+            proof_key_cache: Default::default(),
             show_shortcuts: false,
             show_licenses: false,
             shortcut_editor: Default::default(),
@@ -1077,6 +1101,7 @@ impl App {
                 ..settings.viewer_window
             },
             viewer_window_shown: false,
+            monitors: Vec::new(),
             viewer_pointer_down: false,
             viewer_window_moved: None,
             softproof: crate::softproof::SoftProofState { settings: settings.softproof.clone(), ..Default::default() },
@@ -1233,6 +1258,8 @@ impl App {
     }
 
     pub fn close_current(&mut self) {
+        // Keystone lines the user moved are applied, as when another tool starts.
+        self.end_viewer_tools();
         self.commit_and_save();
         self.current = None;
         self.loading = None;
@@ -1585,10 +1612,20 @@ impl App {
     /// Identifies the settings of the selected recipe (a changed recipe needs a new proof).
     pub(crate) fn proof_key(&self) -> Option<u64> {
         let recipe = self.recipes.get(self.selected_recipe)?;
+        let gamut = self.softproof.settings.gamut_warning;
+        let mut c = self.proof_key_cache.borrow_mut();
+        let same = c.recipe.as_ref() == Some(recipe) && c.gamut == gamut;
+        if same && c.checked.is_some_and(|t| t.elapsed() < Duration::from_secs(1)) {
+            return c.key;
+        }
         // A logo replaced under the same name changes the proof as well.
         let stamp = recipe.watermark.file_stamp();
-        let gamut = self.softproof.settings.gamut_warning;
-        Some(sk_core::cache::fnv1a(format!("{}|{stamp:?}|{gamut}", serde_json::to_string(recipe).ok()?).as_bytes()))
+        if !same || stamp != c.stamp {
+            c.key = serde_json::to_string(recipe).ok().map(|json| sk_core::cache::fnv1a(format!("{json}|{stamp:?}|{gamut}").as_bytes()));
+            (c.recipe, c.gamut, c.stamp) = (Some(recipe.clone()), gamut, stamp);
+        }
+        c.checked = Some(Instant::now());
+        c.key
     }
 
     /// Requests a proof of the current state when the proof view is on.
@@ -1816,15 +1853,8 @@ impl App {
     pub(crate) fn undo_image(&mut self) {
         self.commit_and_save();
         let active = self.active_layer_id();
-        let Some(cur) = self.current.as_mut() else { return };
-        if let Some(prev) = self.undo.pop() {
-            let seq = self.undo_seq.pop().unwrap_or(0);
-            self.redo_seq.push(seq);
-            self.redo.push(std::mem::replace(&mut cur.adjustments, prev.clone()));
-            cur.committed = prev;
-            self.sidecar_dirty = true;
-            self.layers_replaced(active);
-            self.request_render();
+        if self.move_image_step(true) {
+            self.image_stepped(active);
         }
     }
 
@@ -1832,16 +1862,32 @@ impl App {
     pub(crate) fn redo_image(&mut self) {
         self.commit_and_save();
         let active = self.active_layer_id();
-        let Some(cur) = self.current.as_mut() else { return };
-        if let Some(next) = self.redo.pop() {
-            let seq = self.redo_seq.pop().unwrap_or(0);
-            self.undo_seq.push(seq);
-            self.undo.push(std::mem::replace(&mut cur.adjustments, next.clone()));
-            cur.committed = next;
-            self.sidecar_dirty = true;
-            self.layers_replaced(active);
-            self.request_render();
+        if self.move_image_step(false) {
+            self.image_stepped(active);
         }
+    }
+
+    /// Moves one step between the open image's undo and redo stacks, without saving
+    /// (the caller has committed before). Whether there was a step.
+    pub(crate) fn move_image_step(&mut self, back: bool) -> bool {
+        let Some(cur) = self.current.as_mut() else { return false };
+        let (from, from_seq, to, to_seq) = if back {
+            (&mut self.undo, &mut self.undo_seq, &mut self.redo, &mut self.redo_seq)
+        } else {
+            (&mut self.redo, &mut self.redo_seq, &mut self.undo, &mut self.undo_seq)
+        };
+        let Some(step) = from.pop() else { return false };
+        to_seq.push(from_seq.pop().unwrap_or(0));
+        to.push(std::mem::replace(&mut cur.adjustments, step.clone()));
+        cur.committed = step;
+        self.sidecar_dirty = true;
+        true
+    }
+
+    /// After undo/redo steps: the layers, the picture (the sidecar is saved by the next commit).
+    pub(crate) fn image_stepped(&mut self, active: Option<u32>) {
+        self.layers_replaced(active);
+        self.request_render();
     }
 
     /// Sets the adjustments to a snapshot's.
@@ -1853,7 +1899,7 @@ impl App {
         self.layers_replaced(active);
     }
 
-    fn active_layer_id(&self) -> Option<u32> {
+    pub(crate) fn active_layer_id(&self) -> Option<u32> {
         let cur = self.current.as_ref()?;
         cur.adjustments.layers.get(self.active_layer?).map(|l| l.id)
     }
@@ -1909,7 +1955,7 @@ impl App {
             .iter()
             .filter(|p| match &current {
                 Some((c, process)) if c == *p => *process < latest,
-                _ => sidecar::load(p).adjustments.process < latest,
+                _ => self.with_unsaved(p, sidecar::load(p)).adjustments.process < latest,
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -1963,7 +2009,8 @@ impl App {
             .map(|path| {
                 let adj = match &current {
                     Some((p, a)) if *p == path => a.clone(),
-                    _ => sidecar::load(&path).adjustments,
+                    // Settings that couldn't be saved yet are exported as shown.
+                    _ => self.with_unsaved(&path, sidecar::load(&path)).adjustments,
                 };
                 (path, adj)
             })
@@ -2211,11 +2258,14 @@ impl App {
                         Err(e) => self.report_error(format!("Ausgabevorschau fehlgeschlagen: {e}")),
                     }
                 }
-                Event::FullLoaded { generation, image } => {
+                Event::FullLoaded { generation, result } => {
                     if generation == self.generation
                         && let Some(cur) = &mut self.current
                     {
-                        cur.full = Some(image);
+                        match result {
+                            Ok(image) => cur.full = Some(image),
+                            Err(e) => self.report_error(format!("Volle Auflösung nicht geladen, die Ansicht bleibt bei der Vorschau: {e}")),
+                        }
                     }
                 }
                 Event::TileRendered { generation, version, index, region, level, full_size, image, focus } => {
@@ -2343,10 +2393,10 @@ impl App {
                 Event::CompareDetail { path, version, uv, width, full_res, image, focus } => {
                     self.detail_received(ctx, path, version, uv, width, full_res, image, focus);
                 }
-                Event::LookMatched { path, opts, result } => self.look_matched(path, opts, result),
+                Event::LookMatched { run, path, opts, result } => self.look_matched(run, path, opts, result),
                 Event::LookRef { r, result } => self.look_ref_arrived(ctx, r, result),
                 Event::LookSimilarity { path, refs, values } => self.look_similarity = Some(crate::look::LookSimilarity { path, refs, values }),
-                Event::AutoAdjusted { path, kind, result } => self.auto_adjusted(path, kind, result),
+                Event::AutoAdjusted { run, path, kind, result } => self.auto_adjusted(run, path, kind, result),
                 Event::Focus { path, version, size, sharpness } => self.focus_received(path, version, size, sharpness),
                 Event::ThumbFocus { path, size, sharpness } => {
                     // Not requested (any more): the thumbnail changed meanwhile.
@@ -2676,10 +2726,17 @@ impl App {
                 self.quit_asked = false;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            Some(false) => self.quit_asked = false,
-            None if modal.should_close() => self.quit_asked = false,
+            Some(false) => self.keep_working(),
+            None if modal.should_close() => self.keep_working(),
             None => {}
         }
+    }
+
+    /// "Weiterarbeiten": the program stays open, also after "Jetzt neu starten" of an update
+    /// (the installer then waits for quitting, without starting the program again).
+    pub(crate) fn keep_working(&mut self) {
+        self.quit_asked = false;
+        self.restart_cancelled();
     }
 
     /// End of every frame (also in full screen): pending actions, saving and rendering.
@@ -2924,6 +2981,9 @@ impl eframe::App for App {
         self.finish_leaving_fullscreen(&ctx);
         self.restore_window_animations();
         self.pixels_per_point = ctx.pixels_per_point();
+        if self.viewer_detached() && !self.viewer_window_shown {
+            self.monitors = crate::viewer_window::monitors(frame, self.pixels_per_point);
+        }
         // Background previews wait while the user is doing something.
         let input = ctx.input(|i| i.pointer.any_down() || i.events.iter().any(|e| !matches!(e, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_))));
         if input || self.loading.is_some() || self.render_requested {
@@ -3059,6 +3119,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.end_viewer_tools();
         self.commit_and_save();
         self.save_settings();
         self.install_update_on_exit();

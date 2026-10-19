@@ -424,7 +424,7 @@ impl App {
         let mut analyze: Option<bool> = None;
         let mut cull: Option<Option<CullFilter>> = None;
         let mut open: Option<Scope> = None;
-        let mut rename: Option<(i64, String)> = None;
+        let mut rename: Option<(i64, Option<String>)> = None;
         // Faces of the chosen person to give to another person (or to a new one).
         let mut move_faces: Option<(Vec<i64>, Option<i64>)> = None;
         let chosen_person = match self.scope {
@@ -474,7 +474,9 @@ impl App {
                 if let Some((id, text)) = &mut self.library_ui.naming {
                     let resp = ui.add(egui::TextEdit::singleline(text).hint_text("Name").desired_width(ui.available_width()));
                     if resp.lost_focus() {
-                        rename = Some((*id, text.clone()));
+                        // Esc keeps the old name (an empty one would clear it), as for albums.
+                        let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                        rename = Some((*id, (!esc).then(|| text.clone())));
                     } else {
                         resp.request_focus();
                     }
@@ -550,7 +552,9 @@ impl App {
         });
         if let Some((id, name)) = rename {
             self.library_ui.naming = None;
-            self.name_person(id, &name);
+            if let Some(name) = name {
+                self.name_person(id, &name);
+            }
         }
         if let Some((faces, to)) = move_faces
             && let Some(from) = chosen_person

@@ -224,11 +224,62 @@ pub enum LocalDrag {
     BrushAdjust { anchor: Pos2, last: Pos2 },
 }
 
+/// What the geometric map of the viewer image depends on.
+struct MapKey {
+    path: std::path::PathBuf,
+    geometry: sk_core::params::Geometry,
+    lens: sk_core::params::LensCorrection,
+    rotation: u8,
+    hidden: Vec<Tool>,
+    size: (usize, usize),
+    ignore_crop: bool,
+}
+
+impl MapKey {
+    fn matches(&self, cur: &crate::app::Current, ignore_crop: bool) -> bool {
+        let a = &cur.adjustments;
+        self.size == (cur.preview.width, cur.preview.height)
+            && self.ignore_crop == ignore_crop
+            && self.rotation == a.rotation
+            && self.path == cur.meta.path
+            && self.hidden == a.hidden
+            && self.geometry == a.geometry
+            && self.lens == a.lens
+    }
+}
+
+thread_local! {
+    /// The last geometric map: asked for per stroke point and per retouch area, and building
+    /// it clones the adjustments while a tool is switched off.
+    static MAPPING: std::cell::RefCell<Option<(MapKey, sk_core::geometry::GeoMap)>> = const { std::cell::RefCell::new(None) };
+}
+
 impl App {
     fn mapping(&self) -> Option<(sk_core::geometry::GeoMap, f32, f32)> {
         let cur = self.current.as_ref()?;
         let (pw, ph) = (cur.preview.width as f32, cur.preview.height as f32);
-        Some((sk_core::pipeline::geomap(&cur.meta, &cur.adjustments, self.crop_tool.is_some(), cur.preview.width, cur.preview.height), pw, ph))
+        let ignore_crop = self.crop_tool.is_some();
+        let geo = MAPPING.with_borrow_mut(|m| {
+            if let Some((key, geo)) = m
+                && key.matches(cur, ignore_crop)
+            {
+                return geo.clone();
+            }
+            let geo = sk_core::pipeline::geomap(&cur.meta, &cur.adjustments, ignore_crop, cur.preview.width, cur.preview.height);
+            let a = &cur.adjustments;
+            let key = MapKey {
+                path: cur.meta.path.clone(),
+                geometry: a.geometry.clone(),
+                lens: a.lens.clone(),
+                rotation: a.rotation,
+                hidden: a.hidden.clone(),
+                size: (cur.preview.width, cur.preview.height),
+                ignore_crop,
+            };
+            *m = Some((key, geo.clone()));
+            geo
+        });
+        Some((geo, pw, ph))
     }
 
     /// Screen position -> normalized source coordinates.
@@ -345,7 +396,12 @@ impl App {
 
     pub fn set_local_tool(&mut self, tool: LocalTool) {
         let new = if self.local_tool == Some(tool) { None } else { Some(tool) };
+        // The chosen retouch area stays chosen only while its pins are shown (heal, clone).
+        let spot = self.selected_spot;
         self.end_viewer_tools();
+        if matches!(new, Some(LocalTool::Heal | LocalTool::Clone)) {
+            self.selected_spot = spot;
+        }
         self.local_tool = new;
         self.object_session = None;
         if self.local_tool.is_some_and(|t| t.is_mask_tool()) {
@@ -530,8 +586,7 @@ impl App {
         matches!(self.local_drag, LocalDrag::BrushAdjust { .. })
     }
 
-    /// Dragging with the right mouse button (also with Alt) changes the
-    /// brush: left/right its size, up/down its hardness (up is harder). Each movement changes
+    /// Dragging with the right mouse button changes the brush: left/right its size, up/down its hardness (up is harder). Each movement changes
     /// only what its main direction says: a hand moving up and down drifts a little sideways
     /// as well, which must not change the size. The outline stays where the drag started.
     fn brush_adjust_gesture(&mut self, ui: &Ui, response: &Response, painter: &egui::Painter, tool: LocalTool) {
@@ -835,7 +890,11 @@ impl App {
         let busy = busy || subject_download.is_some();
         let tool = self.local_tool;
         let active = self.active_layer;
-        let depth_map = self.current.as_ref().and_then(|c| sk_core::depth::load(&c.meta.path));
+        // The map only for a depth mask (looked up once per image, see `depth_mask_map`).
+        let depth_mask = self.current.as_ref().is_some_and(|c| {
+            active.and_then(|li| c.adjustments.layers.get(li)).is_some_and(|l| l.mask.ai.as_ref().is_some_and(|a| a.depth.is_some()))
+        });
+        let depth_map = if depth_mask { self.current_path().and_then(|p| self.depth_mask_map(&p)) } else { None };
         let show_mask = &mut self.show_mask;
         let Some(cur) = self.current.as_mut() else { return };
         // The background has no mask: its controls are shown, but disabled.
@@ -886,12 +945,14 @@ impl App {
             }
         });
         if let Some(layer) = layer.as_deref_mut() {
-            if let Some(range) = layer.mask.ai.as_ref().and_then(|a| a.depth)
-                && let Some(r) = App::depth_mask_controls(ui, &range)
-                && let Some(map) = &depth_map
-            {
-                layer.mask.ai = Some(map.resized(sk_ai::MASK_EDGE).range_mask(&r));
-                *changed = true;
+            if let Some(range) = layer.mask.ai.as_ref().and_then(|a| a.depth) {
+                let far = depth_map.as_ref().map_or(sk_core::params::DepthRange::default().far, |m| m.1);
+                if let Some(r) = App::depth_mask_controls(ui, &range, far)
+                    && let Some((map, _)) = &depth_map
+                {
+                    layer.mask.ai = Some(sk_core::depth::range_mask_cached(map, &r));
+                    *changed = true;
+                }
             }
             if ui.add_enabled(has_layer && layer.mask.ai.is_some(), egui::Button::new("Auswahl entfernen")).clicked() {
                 layer.mask.ai = None;
@@ -1187,7 +1248,10 @@ impl App {
         if self.delete_selected_gradient() {
             return;
         }
-        if let Some(i) = self.selected_spot.take() {
+        // A retouch area only while it can be seen (retouch tab or its tools), otherwise an
+        // invisible area would go instead of the chosen layer.
+        let retouch = self.tab == Tab::Retouch || matches!(self.local_tool, Some(LocalTool::Heal | LocalTool::Clone));
+        if let Some(i) = self.selected_spot.take().filter(|_| retouch) {
             self.edit(|a| {
                 if i < a.retouch.len() {
                     a.retouch.remove(i);
@@ -1802,7 +1866,7 @@ pub(crate) fn drag_trail(ui: &Ui, response: &Response) -> Vec<Pos2> {
 /// Where the primary button went down on the viewer this frame. Tools act from the press on
 /// instead of on `clicked()`, which egui drops when the mouse moves a little or the button is
 /// held a moment (it then counts as a drag).
-fn pressed_on(ui: &Ui, response: &Response) -> Option<Pos2> {
+pub(crate) fn pressed_on(ui: &Ui, response: &Response) -> Option<Pos2> {
     if response.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed()) { response.interact_pointer_pos() } else { None }
 }
 

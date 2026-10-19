@@ -502,7 +502,8 @@ impl App {
         }
         match guides {
             Some(Some(mode)) => self.start_keystone_guides(mode),
-            Some(None) => self.straighten_tool = None,
+            // Off as with any other tool switch: moved lines are applied (only Esc drops them).
+            Some(None) => self.end_viewer_tools(),
             None => {}
         }
         if apply_guides {

@@ -39,7 +39,7 @@ fn make_samples() -> Option<Vec<PathBuf>> {
                         width: img.width,
                         height: img.height,
                         data: &img.data,
-                        xyz_to_cam: meta.color.xyz_to_cam,
+                        color: &meta.color,
                         as_shot_wb: meta.as_shot_wb,
                         info: &info,
                         baseline_exposure: 0.0,
@@ -794,7 +794,7 @@ fn stepping_shows_prefetched_images_instantly() {
 
     // Both previews are now in the disk cache, so even a cold start shows them at once.
     let adj = sidecar::load(&a).adjustments;
-    f.pump("Vorschau im Cache", |_| sk_core::cache::has_preview(&b, &adj, None));
+    f.pump("Vorschau im Cache", |_| sk_core::cache::has_preview(&b, &crate::workers::preview_key(&adj), None));
 }
 
 #[test]
@@ -878,7 +878,7 @@ fn previews_are_generated_in_the_background_when_idle() {
         })
         .collect();
     let adj = sidecar::load(&paths[0]).adjustments;
-    assert!(paths.iter().all(|p| !sk_core::cache::has_preview(p, &adj, None)));
+    assert!(paths.iter().all(|p| !sk_core::cache::has_preview(p, &crate::workers::preview_key(&adj), None)));
 
     let ctx = egui::Context::default();
     let workers = crate::workers::Workers::spawn(ctx);
@@ -895,7 +895,7 @@ fn previews_are_generated_in_the_background_when_idle() {
     }
     // Nothing starts before the app has been idle for a while.
     assert!(start.elapsed() >= Duration::from_millis(1500));
-    assert!(paths.iter().all(|p| sk_core::cache::has_preview(p, &adj, None)));
+    assert!(paths.iter().all(|p| sk_core::cache::has_preview(p, &crate::workers::preview_key(&adj), None)));
     assert_eq!(thumbs, paths.len(), "Thumbnails passen zur Entwicklung");
 
     // A second pass finds everything done.
@@ -1017,7 +1017,7 @@ fn hovering_a_film_look_previews_it_without_changing_the_image() {
     assert_eq!(sidecar::load(&a).adjustments, before);
     std::thread::sleep(Duration::from_millis(1200));
     f.pump("Ereignisse", |_| true);
-    assert!(!sk_core::cache::has_preview(&a, &look, None), "Vorschau landet nicht im Cache");
+    assert!(!sk_core::cache::has_preview(&a, &crate::workers::preview_key(&look), None), "Vorschau landet nicht im Cache");
 
     // Apply: only the look changes, exposure is kept.
     f.app.style_preview = None;
@@ -1622,6 +1622,23 @@ fn keystone_lines_correct_converging_verticals() {
     assert_eq!(f.app.undo.len(), undo + 1);
 }
 
+/// Moved keystone lines are not lost when the image is closed (other folder, quitting).
+#[test]
+fn moved_keystone_lines_are_applied_on_close() {
+    let Some(mut f) = Fixture::new("keystone-close") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let path = f.app.current_path().unwrap();
+    f.app.start_keystone_guides(crate::crop::GuideMode::Vertical);
+    let guides = f.app.straighten_tool.as_mut().unwrap().guides.as_mut().unwrap();
+    let dx = (guides.lines[1].0[0][0] - guides.lines[0].0[0][0]) * 0.1;
+    guides.lines[0].0[0][0] += dx;
+    guides.lines[1].0[0][0] -= dx;
+    guides.moved = true;
+    f.app.close_current();
+    assert!(f.app.straighten_tool.is_none());
+    assert!(sidecar::load(&path).adjustments.geometry.keystone_v.abs() > 5.0);
+}
+
 #[test]
 fn batch_rename_keeps_settings_variants_and_selection() {
     let Some(mut f) = Fixture::new("rename") else { return };
@@ -1712,6 +1729,7 @@ fn history_jumps_and_snapshots_persist() {
     f.app.jump_history(1);
     assert_eq!(f.app.current.as_ref().unwrap().adjustments.exposure, 0.5);
     assert_eq!(f.app.history_steps().unwrap().0.len(), 4, "spätere Schritte bleiben erreichbar");
+    assert_eq!(sidecar::load(&path).adjustments.exposure, 0.5, "der Sprung wird gespeichert");
     f.app.jump_history(3);
     assert_eq!(f.app.current.as_ref().unwrap().adjustments.exposure, 1.5);
 
@@ -1924,7 +1942,7 @@ fn dng_from_jpeg(jpeg: &Path, out: &Path, mirror: bool) {
     let data: Vec<[f32; 3]> = img.pixels().map(|p| p.0.map(|v| sk_core::color::srgb_decode(v as f32 / 255.0))).collect();
     let info = sk_core::raw::CaptureInfo { make: "Test".into(), model: "JPEG".into(), ..Default::default() };
     let xyz_to_cam = sk_core::color::mat_inv(&sk_core::color::SRGB_TO_XYZ).unwrap();
-    sk_core::dng::write_linear_dng(out, &sk_core::dng::LinearDng { width: w, height: h, data: &data, xyz_to_cam, as_shot_wb: [1.0; 3], info: &info, baseline_exposure: 0.0, preview: Some(&img), lens_corrected: false }).unwrap();
+    sk_core::dng::write_linear_dng(out, &sk_core::dng::LinearDng { width: w, height: h, data: &data, color: &sk_core::color::CameraColor::new(xyz_to_cam), as_shot_wb: [1.0; 3], info: &info, baseline_exposure: 0.0, preview: Some(&img), lens_corrected: false }).unwrap();
 }
 
 /// One person recognized as two is merged by hand: one person with the images of both, the
@@ -3403,7 +3421,14 @@ fn deleting_a_snapshot_asks_first() {
     assert_eq!(count(&f.app), 1);
     f.app.request_snapshot_deletion(0);
     assert_eq!(count(&f.app), 1, "erst nach der Rückfrage");
-    assert!(matches!(f.app.pending_deletion, Some(crate::deletion::Deletion::Snapshot(0, _))));
+    assert!(matches!(f.app.pending_deletion, Some(crate::deletion::Deletion::Snapshot(_, 0, _))));
+    // Confirmed for another image (or after the list changed): nothing is deleted.
+    let path = f.app.current_path().unwrap();
+    f.app.delete_snapshot_of(&path.with_file_name("anderes.jpg"), 0, "Erster Stand");
+    f.app.delete_snapshot_of(&path, 0, "Anderer Name");
+    assert_eq!(count(&f.app), 1, "nicht das Bild oder der Schnappschuss, nach dem gefragt wurde");
+    f.app.delete_snapshot_of(&path, 0, "Erster Stand");
+    assert_eq!(count(&f.app), 0);
 }
 
 /// "+ Schnappschuss" saves the state and offers its name for editing right away, in the side
@@ -3601,4 +3626,88 @@ fn catalog_keeps_the_settings() {
     f.pump("Import", |a| a.scope == Scope::LastImport && a.entries.len() == 2);
     let copy = f.app.session.as_ref().unwrap().folder(SessionFolder::Capture).join(path.file_name().unwrap());
     assert_eq!(sidecar::read_sidecar_file(&copy).unwrap().map(|s| s.rating), Some(4));
+}
+
+#[test]
+fn auto_stack_only_stacks_the_shown_images() {
+    let Some(mut f) = Fixture::new("auto_stack_view") else { return };
+    f.index_photos();
+    f.pump("Indexiert", |a| a.lists.total == 2);
+    let a = f.photo("_DSC0009.dng");
+    let b = f.photo("_DSC0010.dng");
+    f.app.selection = [a.clone()].into_iter().collect();
+    f.app.set_rating(5);
+    // Only `a` is shown: `b` is filtered out and must not be stacked with it.
+    f.app.filter.min_rating = 4;
+    f.app.refilter();
+    assert_eq!(f.app.visible.len(), 1);
+    f.app.selection.clear();
+    f.app.auto_stack_by_time(3600.0);
+    assert!(sidecar::load(&a).stack.is_none() && sidecar::load(&b).stack.is_none(), "{}", f.app.status);
+    // The whole view: both are stacked.
+    f.app.filter = Filter::default();
+    f.app.refilter();
+    f.app.auto_stack_by_time(3600.0);
+    assert!(sidecar::load(&a).stack.is_some() && sidecar::load(&b).stack.is_some(), "{}", f.app.status);
+}
+
+/// Entf in the layer tab deletes the chosen layer, not a retouch area chosen earlier and no
+/// longer shown; another tool ends the area's selection.
+#[test]
+fn delete_in_layer_tab_ignores_hidden_spot() {
+    use crate::app::Tab;
+    use crate::layers::LocalTool;
+    use sk_core::params::{Spot, SpotMode};
+    let Some(mut f) = Fixture::new("delete-hidden-spot") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    let spot = Spot { mode: SpotMode::Heal, target: [0.3, 0.3], source: [0.6, 0.6], path: Vec::new(), radius: 0.02, feather: 0.5, opacity: 1.0 };
+    f.app.edit(|a| a.retouch.push(spot));
+    f.app.set_local_tool(LocalTool::Heal);
+    f.app.selected_spot = Some(0);
+    f.app.set_local_tool(LocalTool::Clone);
+    assert_eq!(f.app.selected_spot, Some(0), "Reparieren und Klonen zeigen die Bereiche weiter");
+    f.app.set_local_tool(LocalTool::Brush);
+    assert_eq!(f.app.selected_spot, None);
+    // Left over (as from before this fix): the layer goes, the area stays.
+    f.app.end_viewer_tools();
+    f.app.tab = Tab::Layers;
+    f.app.selected_spot = Some(0);
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.layers.len(), 1);
+    f.app.delete_selected_spot();
+    let adj = &f.app.current.as_ref().unwrap().adjustments;
+    assert!(adj.layers.is_empty());
+    assert_eq!(adj.retouch.len(), 1);
+}
+
+/// The results of an auto run join one undo step, a paste onto several images meanwhile stays a
+/// step of its own; a result of a cancelled or older run is dropped.
+#[test]
+fn auto_run_keeps_foreign_steps_and_results_apart() {
+    use crate::auto_tools::AutoKind;
+    use sk_core::params::Adjustments;
+    let Some(mut f) = Fixture::new("auto-run") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let (a, b) = (f.photo("_DSC0009.dng"), f.photo("_DSC0010.dng"));
+    let mut opts = sk_core::auto::AutoOptions::NONE;
+    opts.exposure = true;
+    let kind = AutoKind::Adjust(opts);
+    let result = |ev: f32| Ok(Some(Box::new(Adjustments { exposure: ev, ..Default::default() })));
+    // As `run_auto` starts a run, without the worker.
+    f.app.auto_run += 1;
+    let run = f.app.auto_run;
+    f.app.auto_progress = Some((0, 2));
+    f.app.batch_step = None;
+
+    f.app.auto_adjusted(run - 1, b.clone(), kind, result(2.0));
+    assert_eq!(f.app.auto_progress, Some((0, 2)), "Ergebnis eines alten Laufs zählt nicht");
+    assert_eq!(sidecar::load(&b).adjustments.exposure, 0.0);
+
+    f.app.auto_adjusted(run, a.clone(), kind, result(1.0));
+    let steps = f.app.extra_undo.len();
+    f.app.set_adjustments_on(&[a.clone(), b.clone()], |x| Adjustments { contrast: 20.0, ..x.clone() });
+    assert_eq!(f.app.extra_undo.len(), steps + 1, "Einfügen bleibt ein eigener Schritt");
+    f.app.auto_adjusted(run, b.clone(), kind, result(1.0));
+    assert_eq!(f.app.extra_undo.len(), steps + 1, "das zweite Ergebnis kommt zum Schritt des Laufs");
+    assert!(f.app.auto_progress.is_none());
+    assert_eq!(sidecar::load(&b).adjustments.exposure, 1.0);
 }

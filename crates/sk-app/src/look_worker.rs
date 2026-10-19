@@ -36,7 +36,8 @@ pub enum LookRequest {
     Similarity { path: PathBuf, open: Box<Open>, refs: Vec<LookRef> },
     /// Gives `items` the look of `refs`.
     /// `cancel` stops before the next image (the finished ones stay).
-    Match { refs: Vec<LookRef>, items: Vec<AutoItem>, opts: LookOptions, cancel: Arc<std::sync::atomic::AtomicBool> },
+    /// `run` comes back with each result (see `App::look_matched`).
+    Match { run: u64, refs: Vec<LookRef>, items: Vec<AutoItem>, opts: LookOptions, cancel: Arc<std::sync::atomic::AtomicBool> },
 }
 
 /// What a match gives for one image.
@@ -98,7 +99,7 @@ fn run(rx: &Receiver<LookRequest>, ev_tx: &Sender<Event>, ctx: &egui::Context, a
                         send(Event::LookSimilarity { path, refs, values });
                     }
                 }
-                LookRequest::Match { refs, items, opts, cancel } => {
+                LookRequest::Match { run, refs, items, opts, cancel } => {
                     // The references as they are now (a reference image may have been edited).
                     let mut usable = Vec::new();
                     let mut failed = Vec::new();
@@ -131,7 +132,7 @@ fn run(rx: &Receiver<LookRequest>, ev_tx: &Sender<Event>, ctx: &egui::Context, a
                                 weights: m.weights,
                             })
                         };
-                        send(Event::LookMatched { path, opts, result });
+                        send(Event::LookMatched { run, path, opts, result });
                     }
                 }
             }

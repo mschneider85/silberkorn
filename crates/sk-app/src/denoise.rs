@@ -29,6 +29,8 @@ pub struct DenoiseQueue {
     checked: Option<PathBuf>,
     /// Cancelled by the user: not started again until its amount changes or it is transferred.
     cancelled: HashSet<PathBuf>,
+    /// Whether the viewer image's denoised data exists (the panel asks every frame).
+    ready: crate::depth::ReadyCache,
 }
 
 /// What the Details panel shows below the amount.
@@ -102,6 +104,7 @@ impl App {
         }
         let (_, path) = self.denoise.running.take().unwrap();
         self.jobs.retain(|j| j.id != id);
+        self.denoise.ready.forget();
         let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
         match result {
             Ok(_) => {
@@ -152,7 +155,7 @@ impl App {
         if self.denoise.pending.contains(&path.to_path_buf()) {
             return DenoiseState::Waiting;
         }
-        if sk_core::ai_denoise::is_ready(path) { DenoiseState::Ready } else { DenoiseState::Waiting }
+        if self.denoise.ready.get(path, sk_core::ai_denoise::is_ready) { DenoiseState::Ready } else { DenoiseState::Waiting }
     }
 
     /// The "Rauschreduzierung" section of the Details panel: KI-Entrauschen and the classic noise

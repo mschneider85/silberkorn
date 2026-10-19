@@ -56,7 +56,7 @@ pub struct KeystoneGuides {
     /// Line and end being dragged (2: the whole line), and the last pointer position.
     drag: Option<(usize, usize, Pos2)>,
     /// A line was moved: switching to another tool applies them instead of dropping them.
-    moved: bool,
+    pub(crate) moved: bool,
 }
 
 /// Grabbing distance of a line's end points and of the line itself, in screen points.
@@ -279,6 +279,8 @@ impl App {
             self.apply_keystone_guides();
         }
         self.straighten_tool = None;
+        // Its pins are gone with the tool (heal and clone keep it, see `set_local_tool`).
+        self.selected_spot = None;
         self.picking_wb = false;
         self.picking_skin = false;
         self.picking_focus = false;

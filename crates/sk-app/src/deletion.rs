@@ -12,7 +12,8 @@ use crate::theme::icon;
 pub enum Deletion {
     Style(String),
     Album(i64, String),
-    Snapshot(usize, String),
+    /// Image, index and name: the image may have changed until the question is answered.
+    Snapshot(std::path::PathBuf, usize, String),
     Recipe(usize, String),
 }
 
@@ -30,7 +31,7 @@ impl Deletion {
         match self {
             Deletion::Style(name) => format!("Der Stil „{name}“ wird gelöscht. Bilder, auf die er angewendet wurde, bleiben unverändert."),
             Deletion::Album(_, name) => format!("Das Album „{name}“ wird gelöscht. Die Bilder darin bleiben erhalten."),
-            Deletion::Snapshot(_, name) => format!("Der Schnappschuss „{name}“ wird gelöscht. Die Einstellungen des Bildes bleiben, wie sie sind."),
+            Deletion::Snapshot(_, _, name) => format!("Der Schnappschuss „{name}“ wird gelöscht. Die Einstellungen des Bildes bleiben, wie sie sind."),
             Deletion::Recipe(_, name) => format!("Das Ausgaberezept „{name}“ wird gelöscht."),
         }
     }
@@ -84,7 +85,7 @@ impl App {
                     self.refresh_catalog_lists();
                 }
             }
-            Deletion::Snapshot(i, _) => self.delete_snapshot(i),
+            Deletion::Snapshot(path, i, name) => self.delete_snapshot_of(&path, i, &name),
             Deletion::Recipe(i, _) => {
                 if self.recipes.len() > 1 && i < self.recipes.len() {
                     self.recipes.remove(i);

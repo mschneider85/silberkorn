@@ -42,7 +42,8 @@ pub enum Event {
     /// The current image as the selected recipe writes it (see [`ProofJob`]).
     Proof { generation: u64, version: u64, key: u64, result: Result<ProofImage, String> },
     Thumbnail { path: PathBuf, image: ColorImage },
-    FullLoaded { generation: u64, image: Arc<LinearImage> },
+    /// The full resolution of the open image, or why it couldn't be decoded.
+    FullLoaded { generation: u64, result: Result<Arc<LinearImage>, String> },
     /// `index` is the grid position, or `None` for the view region. `region` is in full-resolution
     /// output pixels; the image has 1/`level` of its size (drafts while dragging).
     TileRendered {
@@ -71,9 +72,9 @@ pub enum Event {
     /// How similar the open image is to each reference (`None`: not measured).
     LookSimilarity { path: PathBuf, refs: Vec<crate::look::LookRef>, values: Vec<Option<f32>> },
     /// The settings that give an image the look of the references.
-    LookMatched { path: PathBuf, opts: sk_core::look_match::LookOptions, result: Result<crate::look_worker::LookResult, String> },
+    LookMatched { run: u64, path: PathBuf, opts: sk_core::look_match::LookOptions, result: Result<crate::look_worker::LookResult, String> },
     /// The settings an automatic run chose for an image, None for nothing to set (see [`AutoJob`]).
-    AutoAdjusted { path: PathBuf, kind: crate::auto_tools::AutoKind, result: Result<Option<Box<Adjustments>>, String> },
+    AutoAdjusted { run: u64, path: PathBuf, kind: crate::auto_tools::AutoKind, result: Result<Option<Box<Adjustments>>, String> },
     /// Part of an image of the compare view at a higher resolution than its preview. `uv` is the
     /// part (0..1 of the output), `width` the whole output's width at this resolution.
     CompareDetail { path: PathBuf, version: Option<u64>, uv: [f32; 4], width: f32, full_res: bool, image: ColorImage, focus: Option<Arc<Vec<u8>>> },
@@ -209,6 +210,8 @@ pub struct ProofImage {
 
 /// Automatic settings for images (see `auto_tools`).
 pub struct AutoJob {
+    /// Comes back with each result (see `App::auto_adjusted`).
+    pub run: u64,
     pub items: Vec<AutoItem>,
     pub kind: crate::auto_tools::AutoKind,
     /// For the lens profile.
@@ -480,13 +483,9 @@ impl Workers {
             crate::guard::spawn("Volle Auflösung laden", move || {
                 while let Some((generation, path)) = recv_latest(&full_rx) {
                     activity.touch();
-                    match raw::load_full(&path) {
-                        Ok((_, img)) => {
-                            let _ = ev_tx.send(Event::FullLoaded { generation, image: Arc::new(img) });
-                            ctx.request_repaint();
-                        }
-                        Err(e) => log::warn!("Vollauflösung nicht geladen: {e:#}"),
-                    }
+                    let result = raw::load_full(&path).map(|(_, img)| Arc::new(img)).map_err(|e| format!("{e:#}"));
+                    let _ = ev_tx.send(Event::FullLoaded { generation, result });
+                    ctx.request_repaint();
                 }
             });
         }
@@ -682,7 +681,7 @@ impl Workers {
                             Ok(job) => job,
                             Err(RecvTimeoutError::Timeout) => {
                                 if let Some((path, session, adj, img)) = pending.take() {
-                                    cache::store_preview(&path, &adj, session.as_deref(), &img);
+                                    cache::store_preview(&path, &preview_key(&adj), session.as_deref(), &img);
                                 }
                                 continue;
                             }
@@ -776,13 +775,13 @@ impl Workers {
                     if let (Some(img), Some((path, session))) = (full, job.cache_as) {
                         // A different image: store the previous one right away.
                         if let Some((p, sess, a, prev)) = pending.take_if(|(p, ..)| *p != path) {
-                            cache::store_preview(&p, &a, sess.as_deref(), &prev);
+                            cache::store_preview(&p, &preview_key(&a), sess.as_deref(), &prev);
                         }
                         pending = Some((path, session, job.adjustments, img));
                     }
                 }
                 if let Some((path, session, adj, img)) = pending {
-                    cache::store_preview(&path, &adj, session.as_deref(), &img);
+                    cache::store_preview(&path, &preview_key(&adj), session.as_deref(), &img);
                 }
             });
         }
@@ -874,7 +873,7 @@ impl Workers {
                                 continue 'list;
                             }
                             let adj = sidecar::load(path).adjustments;
-                            if cache::has_preview(path, &adj, session.as_deref()) {
+                            if cache::has_preview(path, &preview_key(&adj), session.as_deref()) {
                                 continue;
                             }
                             let _ = ev_tx.send(Event::ProxyProgress(Some((done, total))));
@@ -920,7 +919,7 @@ impl Workers {
                         activity.touch();
                         // The cached preview if it is up to date, else a fresh rendering.
                         let adj = sidecar::load(&path).adjustments;
-                        let image = match cache::load_preview(&path, &adj, session.as_deref()) {
+                        let image = match cache::load_preview(&path, &preview_key(&adj), session.as_deref()) {
                             Some(img) => Some(to_color_image(&img)),
                             None => prepare(&path, session.as_deref()).map(|p| p.image),
                         };
@@ -1061,7 +1060,7 @@ impl Workers {
                             Ok(job.kind.compute(&meta, &preview, adj, &mut models, job.lens_db.as_deref().map(|d| d.as_slice())).map(Box::new))
                         })
                         .and_then(|r| r);
-                        let _ = ev_tx.send(Event::AutoAdjusted { path, kind: job.kind, result });
+                        let _ = ev_tx.send(Event::AutoAdjusted { run: job.run, path, kind: job.kind, result });
                         ctx.request_repaint();
                     }
                 }
@@ -1298,10 +1297,25 @@ impl Workers {
     }
 }
 
+/// The adjustments a cached preview is stored and looked up under: without the fitted camera
+/// curve, which is a function of the file (see `camera_look::apply_if_wanted`). So the saved
+/// settings find the preview rendered with the camera's look without fitting it first.
+pub(crate) fn preview_key(adj: &Adjustments) -> Adjustments {
+    use sk_core::params::BaseCurve;
+    let mut key = adj.clone();
+    if sk_core::camera_look::wanted(adj, sk_core::camera_look::for_new()) {
+        key.base_curve = BaseCurve::Camera;
+    }
+    if key.base_curve == BaseCurve::Camera {
+        key.camera_curve = None;
+    }
+    key
+}
+
 /// The cached preview with the saved adjustments, or the camera JPEG for unedited images.
 fn quick_preview(path: &std::path::Path, session: Option<&std::path::Path>) -> Option<::image::DynamicImage> {
     let adj = sidecar::load(path).adjustments;
-    cache::load_preview(path, &adj, session).or_else(|| (adj == Adjustments::default()).then(|| raw::embedded_preview(path).ok()).flatten())
+    cache::load_preview(path, &preview_key(&adj), session).or_else(|| (adj == Adjustments::default()).then(|| raw::embedded_preview(path).ok()).flatten())
 }
 
 /// Loads and renders an image with its saved adjustments; also fills the preview cache.
@@ -1312,10 +1326,11 @@ fn prepare(path: &std::path::Path, session: Option<&std::path::Path>) -> Option<
     let adjustments = sk_core::camera_look::apply_if_wanted(&meta, &preview, &adjustments, sk_core::camera_look::for_new()).unwrap_or(adjustments);
     let r = Processor::new(&meta, &adjustments).render(&preview, None, None);
     let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
-    if !cache::has_preview(path, &adjustments, session)
+    let key = preview_key(&adjustments);
+    if !cache::has_preview(path, &key, session)
         && let Some(img) = ::image::RgbaImage::from_raw(r.width as u32, r.height as u32, r.rgba)
     {
-        cache::store_preview(path, &adjustments, session, &::image::DynamicImage::ImageRgba8(img));
+        cache::store_preview(path, &key, session, &::image::DynamicImage::ImageRgba8(img));
     }
     Some(Prepared { relocations: 0, meta: Arc::new(meta), preview: Arc::new(preview), adjustments, image, histogram: r.histogram })
 }
@@ -1418,4 +1433,20 @@ fn render_detail(job: DetailJob, fulls: &mut Vec<(PathBuf, Arc<RawMeta>, Arc<Lin
         image,
         focus,
     })
+}
+
+#[cfg(test)]
+mod preview_key_tests {
+    use super::*;
+    use sk_core::params::{BaseCurve, CameraCurve};
+
+    /// The saved settings and those with the fitted camera curve give the same cache key.
+    #[test]
+    fn camera_curve_is_not_part_of_the_key() {
+        let saved = Adjustments { base_curve: BaseCurve::Camera, exposure: 0.3, ..Default::default() };
+        let opened = Adjustments { camera_curve: Some(CameraCurve { points: vec![[0.0, 0.18]] }), ..saved.clone() };
+        assert_eq!(preview_key(&saved), preview_key(&opened));
+        let other = Adjustments { base_curve: BaseCurve::Linear, exposure: 0.3, ..Default::default() };
+        assert_eq!(preview_key(&other), other);
+    }
 }

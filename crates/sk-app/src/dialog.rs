@@ -168,9 +168,39 @@ pub fn footer(ui: &mut Ui, buttons: impl FnOnce(&mut Ui)) {
 
 /// The dialog's main action, which Enter also runs (Esc closes the dialog, see
 /// `ModalResponse::should_close`). Not for what deletes: an Enter too many must not destroy.
+/// Enter belongs to another widget that has the focus ("Abbrechen" presses itself, a text
+/// field ends its input), also when that field gave the focus up earlier in this frame.
 pub fn default_button(ui: &mut Ui, enabled: bool, button: Button<'static>) -> bool {
-    let clicked = ui.add_enabled(enabled, button).clicked();
-    clicked || (enabled && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+    let response = ui.add_enabled(enabled, button);
+    let others = other_focus(ui.ctx(), response.id);
+    response.clicked() || (enabled && !others && ui.input(|i| i.key_pressed(egui::Key::Enter)))
+}
+
+/// Focus at the end of the last frame and now, kept for `default_button`.
+#[derive(Clone, Copy, Default)]
+struct FocusTrace {
+    frame: u64,
+    before: Option<egui::Id>,
+    now: Option<egui::Id>,
+}
+
+/// Whether a widget other than `own` has the focus now or had it at the end of the last frame.
+fn other_focus(ctx: &egui::Context, own: egui::Id) -> bool {
+    let key = egui::Id::new("dialog-focus-trace");
+    let frame = ctx.cumulative_frame_nr();
+    let now = ctx.memory(|m| m.focused());
+    let trace: FocusTrace = ctx.data(|d| d.get_temp(key)).unwrap_or_default();
+    let before = match frame.checked_sub(trace.frame) {
+        Some(0) => trace.before,
+        Some(1) => trace.now,
+        _ => None,
+    };
+    ctx.data_mut(|d| d.insert_temp(key, FocusTrace { frame, before, now }));
+    focused_elsewhere(before, now, own)
+}
+
+fn focused_elsewhere(before: Option<egui::Id>, now: Option<egui::Id>, own: egui::Id) -> bool {
+    [before, now].into_iter().flatten().any(|id| id != own)
 }
 
 /// The main action: filled with the accent.
@@ -186,4 +216,20 @@ pub fn danger(text: impl Into<String>) -> Button<'static> {
 /// Every other button of the footer.
 pub fn secondary(text: impl Into<String>) -> Button<'static> {
     Button::new(text.into()).corner_radius(8).min_size(BUTTON)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn enter_stays_with_a_focused_widget() {
+        let (own, other) = (egui::Id::new("own"), egui::Id::new("other"));
+        assert!(!focused_elsewhere(None, None, own));
+        assert!(!focused_elsewhere(Some(own), Some(own), own));
+        // "Abbrechen" focused.
+        assert!(focused_elsewhere(None, Some(other), own));
+        // A text field that ended its input with this very Enter.
+        assert!(focused_elsewhere(Some(other), None, own));
+    }
 }

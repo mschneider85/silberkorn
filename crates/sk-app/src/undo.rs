@@ -72,14 +72,14 @@ impl Step {
 }
 
 impl App {
-    /// Records a change to several images or to metadata as one undo step. While an auto
-    /// adjustment or look match runs, its results (they arrive one image at a time) join the
-    /// step of its first result.
+    /// Records a change to several images or to metadata as one undo step. The results of an
+    /// auto adjustment or look match (they arrive one image at a time, see `batch_result`) join
+    /// the step of its first result; other changes made meanwhile stay steps of their own.
     pub(crate) fn record_step(&mut self, step: Step) {
         if step.len() == 0 {
             return;
         }
-        let batch = self.auto_progress.is_some() || self.look_progress.is_some();
+        let batch = self.batch_result;
         if batch
             && matches!(step, Step::Adjustments(_))
             && let Some(seq) = self.batch_step
@@ -101,6 +101,13 @@ impl App {
         self.extra_redo.clear();
         self.redo.clear();
         self.redo_seq.clear();
+    }
+
+    /// Writes one result of an auto adjustment or look match (see `record_step`).
+    pub(crate) fn set_batch_result(&mut self, path: &PathBuf, f: impl Fn(&Adjustments) -> Adjustments) {
+        self.batch_result = true;
+        self.set_adjustments_on(std::slice::from_ref(path), f);
+        self.batch_result = false;
     }
 
     /// Ctrl+Z: takes back the latest step, an edit of the open image or a step beyond it.

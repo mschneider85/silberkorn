@@ -967,8 +967,13 @@ pub fn color_wheel(ui: &mut Ui, label: &str, wheel: &mut ColorWheel, with_lightn
 
         let drag_id = resp.id.with("drag");
         let fine = ui.input(|i| i.modifiers.shift);
-        if resp.is_pointer_button_down_on()
-            && ui.input(|i| i.pointer.primary_pressed())
+        let pressed = resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed());
+        // A drag lasts from press to release: a press beside every part must not go on with
+        // the previous one.
+        if pressed || !resp.is_pointer_button_down_on() {
+            ui.data_mut(|d| d.remove::<WheelDrag>(drag_id));
+        }
+        if pressed
             && let Some(p) = resp.interact_pointer_pos()
             && let Some(part) = part_at(p)
         {
@@ -1373,6 +1378,11 @@ pub fn remap_bins(bins: &[u32], f: impl Fn(f32) -> f32) -> Vec<f32> {
     out
 }
 
+/// A point added to a curve: its x stays inside the borders, which belong to the endpoints.
+fn inner_point(p: [f32; 2]) -> [f32; 2] {
+    [p[0].clamp(0.001, 0.999), p[1]]
+}
+
 /// Interactive curve editor. Click to add a point, drag to move, right-click to remove.
 pub fn curve_editor(ui: &mut Ui, curve: &mut Curve, color: Color32, hist: Option<&[u32]>) -> bool {
     let size = ui.available_width().min(280.0);
@@ -1400,6 +1410,9 @@ pub fn curve_editor(ui: &mut Ui, curve: &mut Curve, color: Color32, hist: Option
         [((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0), ((rect.bottom() - p.y) / rect.height()).clamp(0.0, 1.0)]
     };
 
+    // A new point stays off the borders: there it would be an endpoint the curve drops.
+    let new_point = |p: Pos2| inner_point(from_screen(p));
+
     let mut changed = false;
     let drag_id = response.id.with("drag_point");
     let mut dragging: Option<usize> = ui.data(|d| d.get_temp(drag_id));
@@ -1415,7 +1428,7 @@ pub fn curve_editor(ui: &mut Ui, curve: &mut Curve, color: Color32, hist: Option
         && let Some(pos) = response.interact_pointer_pos()
     {
         dragging = hit(pos, &curve.points).or_else(|| {
-            curve.points.push(from_screen(pos));
+            curve.points.push(new_point(pos));
             changed = true;
             Some(curve.points.len() - 1)
         });
@@ -1444,7 +1457,7 @@ pub fn curve_editor(ui: &mut Ui, curve: &mut Curve, color: Color32, hist: Option
         && let Some(pos) = response.interact_pointer_pos()
         && hit(pos, &curve.points).is_none()
     {
-        curve.points.push(from_screen(pos));
+        curve.points.push(new_point(pos));
         changed = true;
     }
     if response.secondary_clicked()
@@ -1556,6 +1569,14 @@ pub fn images_dative(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A point clicked on the border becomes an inner point, not a second endpoint.
+    #[test]
+    fn new_curve_points_stay_inside() {
+        assert_eq!(inner_point([0.0, 0.3]), [0.001, 0.3]);
+        assert_eq!(inner_point([1.0, 0.7]), [0.999, 0.7]);
+        assert_eq!(inner_point([0.5, 1.0]), [0.5, 1.0]);
+    }
 
     /// Key and wheel steps count as one gesture until they pause.
     #[test]

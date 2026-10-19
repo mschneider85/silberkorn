@@ -62,7 +62,13 @@ impl AutoKind {
     pub fn take(&self, auto: &Adjustments, onto: &Adjustments) -> Adjustments {
         match self {
             AutoKind::Adjust(opts) => opts.take(auto, onto),
-            AutoKind::Upright(_) => Adjustments { geometry: auto.geometry.clone(), ..onto.clone() },
+            AutoKind::Upright(_) => {
+                // Only what `upright::solve` sets: a crop or flip made meanwhile stays.
+                let mut out = onto.clone();
+                let (g, a) = (&mut out.geometry, &auto.geometry);
+                (g.straighten, g.keystone_v, g.keystone_h) = (a.straighten, a.keystone_v, a.keystone_h);
+                out
+            }
             AutoKind::LensProfile => {
                 let mut out = onto.clone();
                 out.lens.profile = auto.lens.profile.clone();
@@ -191,22 +197,27 @@ impl App {
             return;
         }
         self.auto_progress = Some((0, items.len()));
+        self.auto_run += 1;
         (self.auto_missed, self.auto_failed) = (0, false);
         self.batch_step = None;
         let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.auto_cancel = Some(cancel.clone());
         self.status = if items.len() == 1 { "Passe automatisch an …".into() } else { format!("Passe {} automatisch an …", widgets::image_count(items.len())) };
-        self.workers.auto_adjust(crate::workers::AutoJob { items, kind, lens_db: self.lens_db.clone(), cancel });
+        self.workers.auto_adjust(crate::workers::AutoJob { run: self.auto_run, items, kind, lens_db: self.lens_db.clone(), cancel });
     }
 
     /// The automatic run on one image is done: its settings change (the open image's as one
     /// undo step). Only what the run covers changes, so edits made meanwhile stay.
-    pub(crate) fn auto_adjusted(&mut self, path: std::path::PathBuf, kind: AutoKind, result: Result<Option<Box<Adjustments>>, String>) {
+    /// Results of another run (cancelled or replaced meanwhile) are dropped.
+    pub(crate) fn auto_adjusted(&mut self, run: u64, path: std::path::PathBuf, kind: AutoKind, result: Result<Option<Box<Adjustments>>, String>) {
+        if run != self.auto_run {
+            return;
+        }
         let mut single = None;
         match result {
             Ok(Some(adj)) => {
                 let before = self.current.as_ref().filter(|_| self.current_path().as_ref() == Some(&path)).map(|c| c.adjustments.clone());
-                self.set_adjustments_on(std::slice::from_ref(&path), |a| kind.take(&adj, a));
+                self.set_batch_result(&path, |a| kind.take(&adj, a));
                 // The open image: the strength of the auto adjustment can still be changed.
                 if let Some(before) = before
                     && let Some(cur) = &self.current
@@ -245,5 +256,25 @@ impl App {
             (_, 0) => format!("{} automatisch angepasst", widgets::image_count(total)),
             (_, missed) => format!("{} automatisch angepasst, bei {missed}: {}", widgets::image_count(changed), kind.nothing_found()),
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn upright_takes_only_angle_and_keystone() {
+        let mut auto = Adjustments::default();
+        (auto.geometry.straighten, auto.geometry.keystone_v, auto.geometry.keystone_h) = (1.5, 12.0, -3.0);
+        let mut onto = Adjustments::default();
+        onto.geometry.flip_h = true;
+        onto.geometry.keystone_amount = 70.0;
+        onto.geometry.crop.x = 0.1;
+        onto.exposure = 0.4;
+        let out = AutoKind::Upright(UprightMode::Full).take(&auto, &onto);
+        let g = &out.geometry;
+        assert_eq!((g.straighten, g.keystone_v, g.keystone_h), (1.5, 12.0, -3.0));
+        assert!(g.flip_h && g.keystone_amount == 70.0 && g.crop.x == 0.1 && out.exposure == 0.4);
     }
 }

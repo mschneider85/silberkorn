@@ -159,6 +159,12 @@ impl App {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
+    /// Quitting for the update's restart was cancelled ("Weiterarbeiten"): quitting later only
+    /// installs, as with "Beim Beenden".
+    pub(crate) fn restart_cancelled(&mut self) {
+        self.updates.restart = false;
+    }
+
     /// The program closes: runs a downloaded installer (which starts the new version after a
     /// restart for the update).
     pub(crate) fn install_update_on_exit(&self) {

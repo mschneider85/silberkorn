@@ -5,6 +5,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use egui::{Button, Ui};
+use rayon::prelude::*;
+use sk_core::catalog::ImageRecord;
 use sk_core::sidecar::Stack;
 use sk_core::{stack, variant};
 
@@ -232,16 +234,13 @@ impl App {
     /// Stacks the images (the selection, or all shown ones) by capture time: a gap of more
     /// than `seconds` starts a new stack. Images already in a stack keep it.
     pub fn auto_stack_by_time(&mut self, seconds: f32) {
-        let selected = self.selected_paths();
-        let pool: Vec<usize> = if selected.len() >= 2 {
-            selected.iter().filter_map(|p| self.index_of(p)).collect()
-        } else {
-            (0..self.entries.len()).collect()
-        };
-        let items: Vec<(PathBuf, Option<i64>)> = pool
-            .into_iter()
-            .map(|i| &self.entries[i])
-            .filter(|e| e.stack.is_none() && variant::number(&e.path) == 1)
+        // Same condition as the dialog: two or more selected images shown, else the whole view.
+        let selected: Vec<usize> = self.visible.iter().copied().filter(|&i| self.selection.contains(&self.entries[i].path)).collect();
+        let pool = if selected.len() >= 2 { selected } else { self.visible.clone() };
+        let entries: Vec<&ImageRecord> = pool.iter().map(|&i| &self.entries[i]).filter(|e| e.stack.is_none() && variant::number(&e.path) == 1).collect();
+        // Missing capture dates come from the files' headers, read in parallel.
+        let items: Vec<(PathBuf, Option<i64>)> = entries
+            .par_iter()
             .map(|e| {
                 let date = e.capture_date.clone().or_else(|| sk_core::raw::read_meta(&e.path).ok().and_then(|m| m.info.date));
                 (e.path.clone(), date.as_deref().and_then(stack::parse_capture_time))
@@ -292,9 +291,9 @@ impl App {
     }
 
     pub(crate) fn stack_dialogs(&mut self, ctx: &egui::Context) {
+        let selected = self.selected_count() >= 2;
         let Some(dialog) = &mut self.auto_stack else { return };
         let (mut run, mut cancel) = (false, false);
-        let selected = self.selection.len() >= 2;
         let modal = Dialog::new("auto_stack", icon::STACK_SIMPLE, "Automatisch stapeln").subtitle("Serien nach Aufnahmezeit zusammenfassen").width(440.0).show(ctx, |ui| {
             let scope = if selected { "Die ausgewählten Bilder" } else { "Alle Bilder dieser Ansicht" };
             ui.label(format!("{scope} werden nach Aufnahmezeit gestapelt. Bilder, die schon in einem Stapel sind, bleiben dort."));

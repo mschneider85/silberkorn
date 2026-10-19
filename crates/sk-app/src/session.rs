@@ -84,7 +84,10 @@ fn reveal(dir: &Path) -> Result<(), String> {
     } else {
         "xdg-open"
     };
-    std::process::Command::new(cmd).arg(dir).spawn().map(|_| ()).map_err(|e| format!("{cmd}: {e}"))
+    let mut child = std::process::Command::new(cmd).arg(dir).spawn().map_err(|e| format!("{cmd}: {e}"))?;
+    // Reaped, or it would stay a zombie until the program ends.
+    std::thread::spawn(move || child.wait());
+    Ok(())
 }
 
 impl App {

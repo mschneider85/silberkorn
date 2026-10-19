@@ -2,10 +2,14 @@
 //! in the viewer when its lens blur, relight, atmosphere or a depth mask needs one, and kept in a
 //! cache. Here also the sections of those tools, the focus pipette, and the depth mask of a layer.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use egui::{Color32, RichText, Ui, Vec2};
+use sk_core::depth::DepthMap;
 use sk_core::params::{Atmosphere, DepthRange, LensBlur, Relight};
 
 use crate::ai_models::{self, AiFeature};
@@ -32,6 +36,36 @@ pub struct DepthQueue {
     /// Image whose focus is set to its subject once the map exists (the lens blur was just
     /// switched on).
     autofocus: Option<PathBuf>,
+    /// Whether the viewer image's map exists (the panels ask every frame).
+    ready: ReadyCache,
+    /// The viewer image's map at mask size, with the "Fern" of a new depth mask: the depth mask
+    /// sliders reuse it, so it is neither resized nor its range masks remade per frame.
+    small: Option<(PathBuf, Arc<DepthMap>, f32)>,
+}
+
+/// Whether an image's computed file exists, looked up on disk at most once a second (panels ask
+/// every frame, the lookup reads file metadata); `forget` when a computation finished.
+#[derive(Default)]
+pub(crate) struct ReadyCache(RefCell<Option<(PathBuf, bool, Instant)>>);
+
+impl ReadyCache {
+    const FRESH: Duration = Duration::from_secs(1);
+
+    pub(crate) fn get(&self, path: &Path, check: impl FnOnce(&Path) -> bool) -> bool {
+        if let Some((p, ready, at)) = &*self.0.borrow()
+            && p == path
+            && at.elapsed() < Self::FRESH
+        {
+            return *ready;
+        }
+        let ready = check(path);
+        *self.0.borrow_mut() = Some((path.to_path_buf(), ready, Instant::now()));
+        ready
+    }
+
+    pub(crate) fn forget(&self) {
+        self.0.take();
+    }
 }
 
 /// What the lens blur section shows.
@@ -61,13 +95,33 @@ impl App {
         {
             return DepthState::Running(self.jobs.iter().find(|j| j.id == *id).map_or(0.0, |j| j.progress));
         }
-        if sk_core::depth::is_ready(path) {
+        if self.depth_ready(path) {
             DepthState::Ready
         } else if self.depth.cancelled.contains(path) {
             DepthState::Cancelled
         } else {
             DepthState::Waiting
         }
+    }
+
+    /// The image's map exists (see [`ReadyCache`]).
+    fn depth_ready(&self, path: &Path) -> bool {
+        self.depth.ready.get(path, sk_core::depth::is_ready)
+    }
+
+    /// The image's map at mask size and the "Fern" of a new depth mask (the nearest fifth of the
+    /// image), kept for the image in the viewer.
+    pub(crate) fn depth_mask_map(&mut self, path: &Path) -> Option<(Arc<DepthMap>, f32)> {
+        if let Some((p, small, far)) = &self.depth.small
+            && p == path
+        {
+            return Some((small.clone(), *far));
+        }
+        let map = sk_core::depth::load(path)?;
+        let far = (map.quantile(0.8) * 100.0).round() / 100.0;
+        let small = Arc::new(map.resized(MASK_EDGE));
+        self.depth.small = Some((path.to_path_buf(), small.clone(), far));
+        Some((small, far))
     }
 
     /// Each frame: starts computing the viewer image's map when something needs it.
@@ -78,7 +132,7 @@ impl App {
         let Some(cur) = &self.current else { return };
         let path = cur.meta.path.clone();
         let wanted = cur.adjustments.needs_depth() || self.depth.mask_for.as_ref().is_some_and(|(p, _)| *p == path);
-        if !wanted || self.depth.failed.contains_key(&path) || self.depth.cancelled.contains(&path) || sk_core::depth::is_ready(&path) || !self.ensure_ai(AiFeature::Depth) {
+        if !wanted || self.depth.failed.contains_key(&path) || self.depth.cancelled.contains(&path) || self.depth_ready(&path) || !self.ensure_ai(AiFeature::Depth) {
             return;
         }
         let label = format!("{JOB_LABEL}: {}", path.file_name().unwrap_or_default().to_string_lossy());
@@ -106,6 +160,8 @@ impl App {
         }
         let (_, path) = self.depth.running.take().unwrap();
         self.jobs.retain(|j| j.id != id);
+        self.depth.ready.forget();
+        self.depth.small.take_if(|(p, ..)| *p == path);
         let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
         match result {
             Ok(_) => {
@@ -223,7 +279,7 @@ impl App {
             // Switched on for the first time: focus on the subject (once the map exists). A focus
             // chosen before stays, also after the amount was at 0 for a while.
             if before.is_off() && !lb.is_off() && lb.focus == LensBlur::default().focus {
-                if sk_core::depth::is_ready(&path) {
+                if self.depth_ready(&path) {
                     if let Some(map) = sk_core::depth::load(&path) {
                         lb.focus = (map.quantile(0.9) * 100.0).round() / 100.0;
                     }
@@ -301,7 +357,7 @@ impl App {
     /// image's depth map exists; computes the map first if needed.
     pub(crate) fn set_depth_mask(&mut self, layer: usize, range: Option<DepthRange>) {
         let Some(path) = self.current_path() else { return };
-        let Some(map) = sk_core::depth::load(&path) else {
+        let Some((small, far)) = self.depth_mask_map(&path) else {
             if !self.ensure_ai(AiFeature::Depth) {
                 self.status = format!("Tiefe auswählen: lade KI-Modell ({} MB, einmalig) …", AiFeature::Depth.download_mb());
             } else {
@@ -313,19 +369,20 @@ impl App {
             return;
         };
         // By default the nearest fifth of the image (usually the subject).
-        let range = range.unwrap_or_else(|| DepthRange { near: 1.0, far: (map.quantile(0.8) * 100.0).round() / 100.0, ..Default::default() });
-        let small = map.resized(MASK_EDGE);
+        let range = range.unwrap_or(DepthRange { near: 1.0, far, ..Default::default() });
+        let mask = sk_core::depth::range_mask_cached(&small, &range);
         self.edit(|a| {
             if let Some(l) = a.layers.get_mut(layer) {
-                l.mask.ai = Some(small.range_mask(&range));
+                l.mask.ai = Some(mask);
             }
         });
     }
 
-    /// Range sliders of a layer's depth mask; returns the changed range.
-    pub(crate) fn depth_mask_controls(ui: &mut Ui, range: &DepthRange) -> Option<DepthRange> {
+    /// Range sliders of a layer's depth mask; returns the changed range. A double click sets
+    /// "Fern" back to `far`, the value of a new depth mask on this image.
+    pub(crate) fn depth_mask_controls(ui: &mut Ui, range: &DepthRange, far: f32) -> Option<DepthRange> {
         let mut r = *range;
-        let d = DepthRange::default();
+        let d = DepthRange { near: 1.0, far, ..Default::default() };
         let mut changed = false;
         ui.label(RichText::new("Tiefe (0 % fern, 100 % nah)").strong());
         changed |= crate::widgets::unit_percent_row(ui, "Nah", &mut r.near, 0.0..=1.0, d.near, Default::default());

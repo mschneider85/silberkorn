@@ -29,9 +29,9 @@ impl App {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
             crate::layers::brush_cursor(&painter, p, &b);
         }
-        // Only the left button paints; the right one changes the brush.
-        if response.drag_started_by(egui::PointerButton::Primary)
-            && let Some(p) = response.interact_pointer_pos()
+        // Only the left button paints; the right one changes the brush. From the press on, like
+        // the brush: a click marks a dab, and the start of the stroke isn't lost.
+        if let Some(p) = crate::layers::pressed_on(ui, response)
             && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
         {
             self.remove_strokes.push(BrushStroke {
@@ -61,7 +61,7 @@ impl App {
             }
             self.local_drag = LocalDrag::Stroke(last);
         }
-        if response.drag_stopped_by(egui::PointerButton::Primary) && !self.remove_strokes.is_empty() {
+        if matches!(self.local_drag, LocalDrag::Stroke(_)) && ui.input(|i| i.pointer.primary_released()) && !self.remove_strokes.is_empty() {
             self.request_removal();
         }
     }

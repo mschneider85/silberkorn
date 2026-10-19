@@ -64,12 +64,15 @@ impl App {
         let set = |c: &Option<Arc<AtomicBool>>| c.as_ref().is_some_and(|c| c.load(Ordering::Relaxed));
         if set(&self.auto_cancel) {
             self.auto_cancel = None;
+            // The image in work when cancelled no longer counts (see `auto_adjusted`).
+            self.auto_run += 1;
             if let Some((done, total)) = self.auto_progress.take() {
                 self.status = format!("Automatisch anpassen abgebrochen ({done} von {total} fertig)");
             }
         }
         if set(&self.look_cancel) {
             self.look_cancel = None;
+            self.look_run += 1;
             if let Some((done, total)) = self.look_progress.take() {
                 self.status = format!("Look angleichen abgebrochen ({done} von {total} fertig)");
             }

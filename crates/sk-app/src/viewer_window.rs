@@ -44,6 +44,13 @@ impl App {
             self.viewer_pointer_down = false;
             return;
         }
+        // A monitor unplugged since: the window would open where no one sees it.
+        if !self.viewer_window_shown
+            && let Some(p) = self.viewer_window.pos
+            && !on_a_monitor(p, &self.monitors)
+        {
+            (self.viewer_window.pos, self.viewer_window.fullscreen) = (None, false);
+        }
         let w = self.viewer_window;
         let mut builder = ViewportBuilder::default()
             .with_title(format!("{} – Bild", self.window_title))
@@ -137,6 +144,25 @@ impl App {
     }
 }
 
+/// The monitors in points (`ppp` of the main window), empty without a native window.
+pub(crate) fn monitors(frame: &eframe::Frame, ppp: f32) -> Vec<egui::Rect> {
+    let Some(window) = frame.winit_window() else { return Vec::new() };
+    window
+        .available_monitors()
+        .map(|m| {
+            let (p, s) = (m.position(), m.size());
+            egui::Rect::from_min_size(egui::pos2(p.x as f32 / ppp, p.y as f32 / ppp), egui::vec2(s.width as f32 / ppp, s.height as f32 / ppp))
+        })
+        .collect()
+}
+
+/// Whether a window at `pos` (outer top left) has its title bar on one of `monitors` (true
+/// when they are unknown).
+fn on_a_monitor(pos: [f32; 2], monitors: &[egui::Rect]) -> bool {
+    let title = egui::pos2(pos[0] + 100.0, pos[1] + 15.0);
+    monitors.is_empty() || monitors.iter().any(|m| m.contains(title))
+}
+
 /// Which of the commands had a shortcut pressed (it is consumed). Shortcuts with more modifiers
 /// first, as in `command_shortcuts` (Shift+F11 would also match F11).
 fn pressed(ctx: &egui::Context, ids: &[&'static str]) -> Option<&'static str> {
@@ -144,4 +170,19 @@ fn pressed(ctx: &egui::Context, ids: &[&'static str]) -> Option<&'static str> {
         ids.iter().filter_map(|id| crate::commands::get(id)).flat_map(|c| c.bindings().into_iter().map(move |k| (c.id, k))).collect();
     keys.sort_by_key(|(_, (m, _))| std::cmp::Reverse(m.command as u8 + m.ctrl as u8 + m.shift as u8 + m.alt as u8));
     keys.into_iter().find(|(_, (m, k))| ctx.input_mut(|i| i.consume_key(*m, *k))).map(|(id, _)| id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_position_off_all_monitors_is_dropped() {
+        let left = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1920.0, 1080.0));
+        let right = egui::Rect::from_min_size(egui::pos2(1920.0, 0.0), egui::vec2(2560.0, 1440.0));
+        assert!(on_a_monitor([2000.0, 100.0], &[left, right]));
+        assert!(!on_a_monitor([2000.0, 100.0], &[left]), "rechter Monitor abgesteckt");
+        assert!(on_a_monitor([-50.0, 0.0], &[left]), "etwas über den Rand");
+        assert!(on_a_monitor([5000.0, 5000.0], &[]), "unbekannt: wie gespeichert");
+    }
 }

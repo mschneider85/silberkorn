@@ -25,18 +25,20 @@ impl App {
         Some((steps, self.undo.len()))
     }
 
-    /// Goes to step `target` of the timeline (undo or redo as often as needed).
+    /// Goes to step `target` of the timeline (undo or redo as often as needed), saving once.
     pub fn jump_history(&mut self, target: usize) {
         self.commit_and_save();
-        while self.undo.len() > target {
-            let before = self.undo.len();
-            self.undo_image();
-            if self.undo.len() == before {
-                break;
-            }
+        let active = self.active_layer_id();
+        let mut moved = false;
+        while self.undo.len() > target && self.move_image_step(true) {
+            moved = true;
         }
-        while self.undo.len() < target && !self.redo.is_empty() {
-            self.redo_image();
+        while self.undo.len() < target && self.move_image_step(false) {
+            moved = true;
+        }
+        if moved {
+            self.image_stepped(active);
+            self.commit_and_save();
         }
     }
 
@@ -48,10 +50,19 @@ impl App {
         }
     }
 
+    /// Removes snapshot `i` named `name` of image `path`, only if that image is still open and
+    /// the snapshot still there (another image may have opened while the question was asked).
+    pub(crate) fn delete_snapshot_of(&mut self, path: &std::path::Path, i: usize, name: &str) {
+        let still = self.current.as_ref().is_some_and(|c| c.meta.path == path && c.snapshots.get(i).is_some_and(|s| s.name == name));
+        if still {
+            self.delete_snapshot(i);
+        }
+    }
+
     /// Asks before deleting snapshot `i` (it can't be restored).
     pub fn request_snapshot_deletion(&mut self, i: usize) {
-        if let Some(name) = self.current.as_ref().and_then(|c| c.snapshots.get(i)).map(|s| s.name.clone()) {
-            self.request_deletion(crate::deletion::Deletion::Snapshot(i, name));
+        if let Some((path, name)) = self.current.as_ref().and_then(|c| Some((c.meta.path.clone(), c.snapshots.get(i)?.name.clone()))) {
+            self.request_deletion(crate::deletion::Deletion::Snapshot(path, i, name));
         }
     }
 
