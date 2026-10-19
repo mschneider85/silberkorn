@@ -139,7 +139,7 @@ fn tile(m: &Mosaic, wb: [f32; 3], x0: usize, y0: usize) -> Tile {
 
     // 3. Both candidates in a perceptual space (cube roots: lightness and two opponent axes).
     let lab = |p: [f32; 3]| {
-        let c = p.map(|v| v.max(0.0).cbrt());
+        let c = p.map(|v| crate::color::fast_cbrt(v.max(0.0)));
         [(c[0] + 2.0 * c[1] + c[2]) / 4.0, c[0] - c[1], c[1] - c[2]]
     };
     let labs: [Vec<[f32; 3]>; 2] = [rgb[0].iter().map(|p| lab(*p)).collect(), rgb[1].iter().map(|p| lab(*p)).collect()];
