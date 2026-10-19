@@ -26,7 +26,7 @@ impl AiFeature {
             Self::Denoise => "KI-Entrauschen",
             Self::Subject => "Motiv und Himmel auswählen",
             Self::Object => "Objekt auswählen",
-            Self::Inpaint => "Entfernen",
+            Self::Inpaint => "Objekt entfernen",
             Self::Depth => "Tiefenkarte",
             Self::Faces => "Gesichter und Augen",
         }

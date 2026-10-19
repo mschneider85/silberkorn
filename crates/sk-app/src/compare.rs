@@ -321,7 +321,7 @@ impl App {
                 clicked = Some(path.clone());
             }
             resp.context_menu(|ui| {
-                let text = if is_ref { "Referenzbild entfernen" } else { "Als Referenzbild festlegen" };
+                let text = if is_ref { "Referenzbild entfernen" } else { "Referenzbild festlegen" };
                 if ui.button(format!("{}  {text}", icon::PUSH_PIN)).clicked() {
                     toggle_ref = Some(path.clone());
                 }

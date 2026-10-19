@@ -57,7 +57,7 @@ impl SessionFolder {
     pub fn label(self) -> &'static str {
         match self {
             SessionFolder::Capture => "Aufnahmen",
-            SessionFolder::Selects => "Auswahl",
+            SessionFolder::Selects => "Selects",
             SessionFolder::Output => "Ausgabe",
             SessionFolder::Trash => "Papierkorb",
         }
@@ -236,20 +236,50 @@ fn relocate(image: &Path, target: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Copies an image and its sidecar into `dest`. Returns the new path. The copy is all or
-/// nothing: no half-written image (full disk, crash) and no image without its settings.
+/// Copies an image with its settings and XMP file into `dest`. Returns the new path. The copy
+/// is all or nothing: no half-written image (full disk, crash) and no image without its settings.
+/// The settings go where the copy keeps them (see `sidecar::copy_settings`): its sidecar file,
+/// or the catalog, which takes the copy in for them.
 pub fn copy_image(image: &Path, dest: &Path) -> Result<PathBuf> {
+    copy_image_as(image, dest, None)
+}
+
+/// [`copy_image`] under the name `stem` (plus the file's extension; `-2` … if it is taken).
+pub fn copy_image_as(image: &Path, dest: &Path, stem: Option<&str>) -> Result<PathBuf> {
     std::fs::create_dir_all(dest)?;
-    let target = free_target(dest, image.file_name().context("kein Dateiname")?);
-    // The sidecars first: the image itself appears last, and only once everything is there.
+    let name = match stem {
+        Some(stem) => {
+            let ext = image.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+            std::ffi::OsString::from(format!("{stem}{ext}"))
+        }
+        None => image.file_name().context("kein Dateiname")?.to_os_string(),
+    };
+    let target = free_target(dest, &name);
+    // The catalog needs the image to take it in; a sidecar file comes first, so that the image
+    // appears last, and only once everything is there.
+    let in_store = sidecar::kept_elsewhere(&target);
     let mut copied = Vec::new();
-    let pairs = sidecar::sidecar_files_for(image).into_iter().zip(sidecar::sidecar_files_for(&target));
-    let result = pairs.filter(|(from, _)| from.exists() && crate::xmp::owned(image, from)).chain([(image.to_path_buf(), target.clone())]).try_for_each(|(from, to)| {
-        crate::safe_file::copy(&from, &to)?;
-        copied.push(to);
-        anyhow::Ok(())
-    });
+    let settings = |copied: &mut Vec<PathBuf>| {
+        let r = sidecar::copy_settings(image, &target);
+        copied.extend(sidecar::sidecar_files_for(&target).into_iter().filter(|p| p.exists()));
+        r
+    };
+    let mut result = if in_store { Ok(()) } else { settings(&mut copied) };
+    if result.is_ok() {
+        let pairs = crate::xmp::files_for(image).into_iter().zip(crate::xmp::files_for(&target));
+        result = pairs.filter(|(from, _)| from.exists() && crate::xmp::owned(image, from)).chain([(image.to_path_buf(), target.clone())]).try_for_each(|(from, to)| {
+            crate::safe_file::copy(&from, &to)?;
+            copied.push(to);
+            anyhow::Ok(())
+        });
+    }
+    if result.is_ok() && in_store {
+        result = settings(&mut copied);
+    }
     if let Err(e) = result {
+        if in_store {
+            sidecar::forget(&target);
+        }
         for p in copied {
             let _ = std::fs::remove_file(p);
         }
@@ -304,10 +334,10 @@ mod tests {
         std::fs::create_dir_all(&src).unwrap();
         let a = src.join("a.ARW");
         std::fs::write(&a, b"raw").unwrap();
-        std::fs::write(sidecar::sidecar_path(&a), b"{}").unwrap();
+        std::fs::write(sidecar::sidecar_path(&a), br#"{"rating": 2}"#).unwrap();
         let first = copy_image(&a, &dest).unwrap();
         assert_eq!(std::fs::read(&first).unwrap(), b"raw");
-        assert!(sidecar::sidecar_path(&first).exists());
+        assert_eq!(sidecar::load(&first).rating, 2);
         assert_eq!(copy_image(&a, &dest).unwrap(), dest.join("a-2.ARW"));
         // Nothing but the copies (no temporary files) in the target folder.
         assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 4);
@@ -383,7 +413,7 @@ mod tests {
         std::fs::create_dir_all(&a).unwrap();
         let img = a.join("x.ARW");
         std::fs::write(&img, b"raw").unwrap();
-        std::fs::write(sidecar::sidecar_path(&img), b"{}").unwrap();
+        std::fs::write(sidecar::sidecar_path(&img), br#"{"rating": 2}"#).unwrap();
         // Clash in the destination: the moved file gets a suffix.
         std::fs::create_dir_all(&b).unwrap();
         std::fs::write(b.join("x.ARW"), b"other").unwrap();

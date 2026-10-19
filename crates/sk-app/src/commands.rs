@@ -57,6 +57,14 @@ fn in_session(a: &App) -> bool {
 fn can_trash(a: &App) -> bool {
     has_selection(a) && (a.session.is_some() || a.selected_paths().iter().all(|p| sk_core::variant::number(p) > 1))
 }
+/// Entf: in the grid the selected images go to the trash (as with Strg+Entf), otherwise the
+/// chosen spot, gradient or layer is deleted.
+fn can_delete_chosen(a: &App) -> bool {
+    if a.grid_view {
+        return can_trash(a);
+    }
+    a.selected_spot.is_some() || a.selected_gradient.is_some() || (a.tab == Tab::Layers && a.active_layer.is_some())
+}
 /// One export at a time, and only with a recipe switched on.
 fn can_export(a: &App) -> bool {
     has_selection(a) && a.export_progress.is_none() && a.recipes.iter().any(|r| r.enabled)
@@ -106,13 +114,14 @@ pub const COMMANDS: &[Command] = &[
         a.session_ui.start_new(&folder);
     }),
     cmd!("open-session", icon::FOLDER_OPEN, "Session öffnen …", "Datei", [CTRL_SHIFT => Key::O], "session", always, |a, _| a.open_session_dialog()),
+    cmd!("close-session", icon::SIGN_OUT, "Session schließen", "Datei", [CTRL => Key::W], "session katalog zurück verlassen", in_session, |a, _| a.close_session()),
     cmd!("export", icon::EXPORT, "Exportieren", "Datei", [CTRL => Key::D], "export ausgabe speichern verarbeiten", can_export, |a, _| a.export_selection()),
     // Bearbeiten
     cmd!("undo", icon::ARROW_U_UP_LEFT, "Rückgängig", "Bearbeiten", [CTRL => Key::Z], "undo", |a| a.can_undo(), |a, _| a.undo()),
     cmd!("redo", icon::ARROW_U_UP_RIGHT, "Wiederholen", "Bearbeiten", [CTRL => Key::Y, CTRL_SHIFT => Key::Z], "redo", |a| a.can_redo(), |a, _| a.redo()),
     cmd!("copy-adjustments", icon::COPY, "Anpassungen kopieren", "Bearbeiten", [CTRL_SHIFT => Key::C], "copy", has_image, |a, _| a.copy_adjustments()),
     cmd!("copy-adjustments-choose", icon::LIST_CHECKS, "Anpassungen auswählen und kopieren …", "Bearbeiten", [], "copy clipboard zwischenablage werkzeuge auswählen", has_image, |a, _| a.open_copy_dialog()),
-    cmd!("paste-adjustments", icon::CLIPBOARD_TEXT, "Anpassungen auf Auswahl anwenden", "Bearbeiten", [CTRL_SHIFT => Key::V], "paste einfügen", |a| a.clipboard.is_some() && !a.on_layer(), |a, _| a.paste_adjustments()),
+    cmd!("paste-adjustments", icon::CLIPBOARD_TEXT, "Anpassungen einfügen", "Bearbeiten", [CTRL_SHIFT => Key::V], "paste anwenden auswahl", |a| a.clipboard.is_some() && !a.on_layer(), |a, _| a.paste_adjustments()),
     cmd!("reset", icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", "Bearbeiten", [], "reset", image_tool, |a, _| a.reset_adjustments()),
     cmd!("select-all", icon::CHECK_SQUARE, "Alle auswählen", "Bearbeiten", [CTRL => Key::A], "select all", has_images, |a, _| a.select_all()),
     cmd!("gpu", icon::LIGHTNING, "Grafikkarte …", "Bearbeiten", [], "gpu grafikkarte ki beschleunigung directml zwischenspeicher", always, |a, _| a.show_gpu_dialog = true),
@@ -123,7 +132,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("finish-crop", icon::CHECK, "Zuschnitt bzw. Trapezkorrektur übernehmen", "Entwickeln", [NONE => Key::Enter], "crop fertig trapez anwenden", |a| a.crop_tool.is_some() || a.keystone_guides_active(), |a, _| a.finish_viewer_tool()),
     cmd!("straighten", icon::RULER, "Geraderichten (Linie ziehen)", "Entwickeln", [], "straighten horizont", image_tool, |a, _| a.toggle_straighten()),
     cmd!("auto-adjust", icon::MAGIC_WAND, "Automatisch anpassen", "Entwickeln", [CTRL => Key::L], "auto adjust automatisch belichtung weißabgleich tonwerte", |a| has_selection(a) && a.auto_progress.is_none() && !a.on_layer(), |a, _| a.auto_adjust_selection()),
-    cmd!("auto-upright", icon::PERSPECTIVE, "Automatisch geraderichten", "Entwickeln", [SHIFT => Key::A], "upright", image_tool, |a, _| a.auto_upright(sk_core::upright::UprightMode::Vertical)),
+    cmd!("auto-upright", icon::PERSPECTIVE, "Perspektive automatisch korrigieren", "Entwickeln", [SHIFT => Key::A], "upright geraderichten automatisch stürzende linien", image_tool, |a, _| a.auto_upright(sk_core::upright::UprightMode::Vertical)),
     cmd!("auto-wb", icon::MAGIC_WAND, "Weißabgleich automatisch", "Entwickeln", [], "auto wb white balance weißabgleich automatisch", image_tool, |a, _| {
         a.tab = Tab::Color;
         a.auto_white_balance();
@@ -169,7 +178,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("next", icon::CARET_RIGHT, "Nächstes Bild", "Foto", [NONE => Key::ArrowRight], "weiter next", has_images, |a, ctx| a.step(1, shift(ctx))),
     cmd!("row-up", icon::CARET_UP, "Bild darüber", "Foto", [NONE => Key::ArrowUp], "raster zeile hoch up", in_grid, |a, ctx| a.step_row(-1, shift(ctx))),
     cmd!("row-down", icon::CARET_DOWN, "Bild darunter", "Foto", [NONE => Key::ArrowDown], "raster zeile runter down", in_grid, |a, ctx| a.step_row(1, shift(ctx))),
-    cmd!("to-selects", icon::FOLDER_SIMPLE_STAR, "Nach „Auswahl“ verschieben", "Foto", [CTRL => Key::J], "selects session", in_session, |a, _| a.move_to_session_folder(sk_core::session::SessionFolder::Selects)),
+    cmd!("to-selects", icon::FOLDER_SIMPLE_STAR, "Nach „Selects“ verschieben", "Foto", [CTRL => Key::J], "selects session", in_session, |a, _| a.move_to_session_folder(sk_core::session::SessionFolder::Selects)),
     cmd!("trash", icon::TRASH, "In den Papierkorb", "Foto", [CTRL => Key::Delete, CTRL => Key::Backspace], "löschen delete", can_trash, |a, _| a.trash_selection()),
     // Ebenen und Retusche
     cmd!("tool-brush", icon::PAINT_BRUSH, "Pinsel", "Ebenen", [NONE => Key::B], "brush maske malen", has_image, |a, _| tool(a, LocalTool::Brush)),
@@ -181,7 +190,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("find-spots", icon::BROOM, "Staub und Flecken finden", "Retusche", [], "sensorstaub flecken unreinheiten pickel retusche reparieren", |a| image_tool(a) && a.spot_search.is_none(), |a, _| a.find_spots()),
     cmd!("tool-heal", icon::BANDAIDS, "Reparieren", "Retusche", [NONE => Key::H], "heal flecken", image_tool, |a, _| tool(a, LocalTool::Heal)),
     cmd!("tool-clone", icon::STAMP, "Klonen", "Retusche", [NONE => Key::S], "clone stempel", image_tool, |a, _| tool(a, LocalTool::Clone)),
-    cmd!("tool-remove", icon::SPARKLE, "Entfernen", "Retusche", [NONE => Key::X], "remove objekt", image_tool, |a, _| tool(a, LocalTool::Remove)),
+    cmd!("tool-remove", icon::SPARKLE, "Objekt entfernen", "Retusche", [NONE => Key::X], "entfernen remove objekt", image_tool, |a, _| tool(a, LocalTool::Remove)),
     cmd!("brush-smaller", icon::MINUS, "Pinsel kleiner", "Ebenen", [NONE => Key::OpenBracket], "größe", always, |a, _| brush_size(a, 1.0 / 1.2)),
     cmd!("brush-larger", icon::PLUS, "Pinsel größer", "Ebenen", [NONE => Key::CloseBracket], "größe", always, |a, _| brush_size(a, 1.2)),
     cmd!("show-mask", icon::EYE, "Maske anzeigen", "Ebenen", [NONE => Key::M], "mask", always, |a, _| {
@@ -194,7 +203,13 @@ pub const COMMANDS: &[Command] = &[
     cmd!("edit-background", icon::X, "Hintergrund bearbeiten", "Ebenen", [], "ebene abwählen global ganzes bild background", on_layer, |a, _| a.select_layer(None)),
     cmd!("layer-up", icon::ARROW_UP, "Ebene darüber bearbeiten", "Ebenen", [ALT => Key::ArrowUp], "nächste ebene wählen layer", has_layers, |a, _| a.step_layer(true)),
     cmd!("layer-down", icon::ARROW_DOWN, "Ebene darunter bearbeiten", "Ebenen", [ALT => Key::ArrowDown], "vorherige ebene wählen layer hintergrund", has_layers, |a, _| a.step_layer(false)),
-    cmd!("delete-spot", icon::TRASH, "Gewähltes löschen (Retuschepunkt, Verlauf oder Ebene)", "Retusche", [NONE => Key::Delete, NONE => Key::Backspace], "spot verlauf gradient ebene layer entfernen", |a| a.selected_spot.is_some() || a.selected_gradient.is_some() || (a.tab == Tab::Layers && a.active_layer.is_some()), |a, _| a.delete_selected_spot()),
+    cmd!("delete-spot", icon::TRASH, "Gewähltes löschen (im Raster: in den Papierkorb)", "Bearbeiten", [NONE => Key::Delete, NONE => Key::Backspace], "spot verlauf gradient ebene layer entfernen papierkorb trash", can_delete_chosen, |a, _| {
+        if a.grid_view {
+            a.trash_selection()
+        } else {
+            a.delete_selected_spot()
+        }
+    }),
     // Ansicht
     cmd!("grid", icon::SQUARES_FOUR, "Raster / Einzelbild umschalten", "Ansicht", [NONE => Key::G], "grid browser übersicht viewer", always, |a, _| a.grid_view = !a.grid_view),
     cmd!("filmstrip", icon::FILM_STRIP, "Filmstreifen ein/aus", "Ansicht", [], "filmstrip", always, |a, _| a.show_filmstrip = !a.show_filmstrip),

@@ -14,7 +14,7 @@ use crate::app::App;
 use crate::widgets::{image_count, slider_row};
 
 /// Title of the section in the Details panel.
-pub const NOISE_SECTION: &str = "Rauschen";
+pub const NOISE_SECTION: &str = "Rauschreduzierung";
 
 const JOB_LABEL: &str = "KI-Entrauschen";
 /// Images waiting for their denoised data.
@@ -155,7 +155,7 @@ impl App {
         if sk_core::ai_denoise::is_ready(path) { DenoiseState::Ready } else { DenoiseState::Waiting }
     }
 
-    /// The "Rauschen" section of the Details panel: KI-Entrauschen and the classic noise
+    /// The "Rauschreduzierung" section of the Details panel: KI-Entrauschen and the classic noise
     /// reduction (carried over to the other selected images with the button in its header, see
     /// `App::transfer_tool`); returns whether something changed.
     pub(crate) fn noise_section(&mut self, ui: &mut egui::Ui) -> bool {

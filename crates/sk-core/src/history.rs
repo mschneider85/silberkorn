@@ -153,7 +153,7 @@ pub fn changes(before: &Adjustments, after: &Adjustments) -> Vec<(&'static str, 
     push(a.black_white != b.black_white, "Schwarzweiß", None);
     push(a.layers != b.layers, "Ebenen", None);
     push(a.retouch != b.retouch, "Retusche", None);
-    push(a.removals != b.removals, "Entfernen", None);
+    push(a.removals != b.removals, "Objekt entfernen", None);
     let (l, m) = (&a.lens_blur, &b.lens_blur);
     push(l.amount == m.amount && l != m, "Objektivunschärfe", None);
     push(a.relight != b.relight, "Neu ausleuchten", None);

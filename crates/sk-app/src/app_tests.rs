@@ -120,6 +120,12 @@ impl Fixture {
         }
     }
 
+    /// Takes the photos into the catalog where they are (browsing does not).
+    fn index_photos(&mut self) {
+        let paths = sk_core::catalog::scan_folder(&self.dir.join("photos"), false);
+        self.app.workers.index(crate::workers::IndexJob { catalog: self.app.catalog_path(), paths, import: false, copy_to: None });
+    }
+
     fn photo(&self, name: &str) -> PathBuf {
         self.dir.join("photos").join(name).canonicalize().unwrap()
     }
@@ -130,6 +136,7 @@ impl Fixture {
 fn library_workflow() {
     let Some(mut f) = Fixture::new("library") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    f.index_photos();
     f.pump("Indexiert", |a| a.lists.total == 2 && a.entries.iter().all(|e| e.capture_date.is_some()));
     assert_eq!(f.app.entries.len(), 2);
     let a = f.photo("_DSC0009.dng");
@@ -569,6 +576,19 @@ fn session_workflow() {
     let b = capture.join("_DSC0010.dng");
     assert!(a.exists() && b.exists() && photos.join("_DSC0009.dng").exists());
     assert_eq!(sidecar::load(&a).rating, 3, "Sidecar wird mitkopiert");
+
+    // Importing again: the dialog finds the copies and does not choose them.
+    f.app.open_import(photos.clone(), true);
+    let start = Instant::now();
+    while f.app.import.as_ref().unwrap().checking() {
+        assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: Duplikate prüfen");
+        f.app.import.as_mut().unwrap().poll(&f.ctx);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let items = &f.app.import.as_ref().unwrap().items;
+    assert_eq!(items.len(), 2);
+    assert!(items.iter().all(|i| i.known == Some(true) && !i.chosen));
+    f.app.import = None;
 
     // Move to Selects: file and sidecar move, the database follows, the next image opens.
     f.app.open_folder(capture.clone());
@@ -1298,6 +1318,7 @@ fn skin_tone_pipette_sets_target() {
 fn variants_workflow() {
     let Some(mut f) = Fixture::new("variants") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    f.index_photos();
     f.pump("Indexiert", |a| a.lists.total == 2);
     let a = f.photo("_DSC0009.dng");
     f.app.edit(|adj| adj.exposure = 0.7);
@@ -1566,7 +1587,7 @@ fn auto_upright_sets_geometry_as_one_undo_step() {
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
     let undo = f.app.undo.len();
     f.app.auto_upright(sk_core::upright::UprightMode::Vertical);
-    assert!(f.app.status.starts_with("Automatisch geraderichten"), "{}", f.app.status);
+    assert!(f.app.status.starts_with("Perspektive automatisch korrigier"), "{}", f.app.status);
     let g = f.app.current.as_ref().unwrap().adjustments.geometry.clone();
     assert!(g.straighten.abs() <= 15.0 && g.keystone_h == 0.0);
     if g != Default::default() {
@@ -1745,6 +1766,7 @@ fn last_selected_image_is_selected_again_after_starting() {
 #[test]
 fn xmp_exchange() {
     let Some(mut f) = Fixture::new("xmp") else { return };
+    f.index_photos();
     f.pump("Indexiert", |a| a.lists.total == 2);
     let a = f.photo("_DSC0009.dng");
     let b = f.photo("_DSC0010.dng");
@@ -1768,6 +1790,7 @@ fn xmp_exchange() {
 fn stacks_collapse_and_expand() {
     use crate::stacks::StackAction;
     let Some(mut f) = Fixture::new("stacks") else { return };
+    f.index_photos();
     f.pump("Indexiert", |a| a.lists.total == 2 && a.entries.iter().all(|e| e.capture_date.is_some()));
     let a = f.photo("_DSC0009.dng");
     let b = f.photo("_DSC0010.dng");
@@ -1812,6 +1835,7 @@ fn stacks_collapse_and_expand() {
 #[test]
 fn hdr_merge_job_creates_and_selects_dng() {
     let Some(mut f) = Fixture::new("hdr") else { return };
+    f.index_photos();
     f.pump("Indexiert", |a| a.lists.total == 2);
     f.app.select_all();
     f.app.open_merge(crate::merge::MergeKind::Hdr);
@@ -1841,7 +1865,7 @@ fn remove_tool_fills_the_painted_area() {
     f.app.request_removal();
     assert!(f.app.inpaint_busy);
     // Shown in the viewer and the status bar while it runs.
-    assert!(f.app.activities().iter().any(|a| a.label == "Entfernen" && a.in_viewer));
+    assert!(f.app.activities().iter().any(|a| a.label == "Objekt entfernen" && a.in_viewer));
     f.pump("Entfernt", |a| !a.inpaint_busy);
     let cur = f.app.current.as_ref().unwrap();
     assert_eq!(cur.adjustments.removals.len(), 1, "{}", f.app.status);
@@ -1861,6 +1885,7 @@ fn culling_analysis_filters_and_sharpest_on_top() {
         return;
     }
     let Some(mut f) = Fixture::new("culling") else { return };
+    f.index_photos();
     f.pump("Indexiert", |a| a.lists.total == 2);
     f.app.analyze_view(false);
     f.pump("Analysiert", |a| a.jobs.is_empty());
@@ -1908,6 +1933,7 @@ fn dng_from_jpeg(jpeg: &Path, out: &Path, mirror: bool) {
 #[test]
 fn persons_merged_by_hand() {
     let Some(mut f) = Fixture::new("merge-persons") else { return };
+    f.index_photos();
     f.pump("Indexiert", |a| a.lists.total == 2);
     let (a, b) = (f.photo("_DSC0009.dng"), f.photo("_DSC0010.dng"));
     let face = |k: usize| sk_core::catalog::FaceRecord { bbox: [0.4, 0.3, 0.2, 0.25], embedding: (0..8).map(|i| if i == k { 1.0 } else { 0.0 }).collect(), eyes_closed: 0.0 };
@@ -1963,6 +1989,7 @@ fn faces_become_named_persons() {
     dng_from_jpeg(&faces.join("obama.jpg"), &photos.join("p2.dng"), true);
     dng_from_jpeg(&faces.join("dreis.jpg"), &photos.join("p3.dng"), false);
     f.app.open_folder(photos.clone());
+    f.index_photos();
     f.pump("Indexiert", |a| a.lists.total == 5);
     f.app.analyze_view(false);
     f.pump("Analysiert", |a| a.jobs.is_empty());
@@ -2523,6 +2550,9 @@ fn thumbnail_textures_are_limited() {
 #[test]
 fn sidecars_that_cant_be_read_or_saved() {
     let Some(mut f) = Fixture::new("unreadable") else { return };
+    // Sidecar files, as for images outside a session while it is open (the catalog would take
+    // these in and keep their settings).
+    f.app.settings_store.as_ref().unwrap().set_adopt(false);
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
     let b = f.photo("_DSC0010.dng");
 
@@ -3218,6 +3248,13 @@ fn commands_without_effect_are_unavailable() {
     f.app.create_session(&f.dir, "Shooting").unwrap();
     f.app.selection = [a].into_iter().collect();
     assert!(enabled(&f, "trash"));
+    // In the grid Entf trashes the selection like Strg+Entf; in the viewer it needs a spot.
+    f.app.selected_spot = None;
+    f.app.grid_view = false;
+    assert!(!enabled(&f, "delete-spot"));
+    f.app.grid_view = true;
+    assert!(enabled(&f, "delete-spot"));
+    f.app.grid_view = false;
     // Full screen shows the image: without one it can only be left.
     f.app.selection.clear();
     f.app.close_current();
@@ -3240,6 +3277,40 @@ fn about_card_blocks_shortcuts() {
     out.textures_delta.clear();
     assert!(!f.app.palette.open);
     assert_eq!(f.app.grid_view, grid);
+}
+
+/// Esc ends a tool first, then the views (before/after, split, output preview, 100 %, but not
+/// the softproof), then full screen.
+#[test]
+fn escape_leaves_tool_then_view_then_fullscreen() {
+    let Some(mut f) = Fixture::new("esc-views") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let esc = |f: &mut Fixture| {
+        let input = egui::RawInput {
+            events: vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
+            ..Default::default()
+        };
+        let app = &mut f.app;
+        let mut out = f.ctx.run_ui(input, |ui| app.shortcuts(ui.ctx()));
+        out.textures_delta.clear();
+    };
+    f.app.fullscreen = true;
+    f.app.toggle_split();
+    f.app.proof_view = true;
+    f.app.zoom = Some(2.0);
+    f.app.softproof.on = true;
+    f.app.picking_wb = true;
+    esc(&mut f);
+    assert!(!f.app.picking_wb);
+    assert!(f.app.split_view && f.app.proof_view && f.app.zoom.is_some(), "erst nur das Werkzeug");
+    esc(&mut f);
+    assert!(!f.app.split_view && !f.app.proof_view && f.app.zoom.is_none());
+    assert!(f.app.softproof.on && f.app.fullscreen);
+    f.app.show_before = true;
+    esc(&mut f);
+    assert!(!f.app.show_before && f.app.fullscreen);
+    esc(&mut f);
+    assert!(!f.app.fullscreen);
 }
 
 /// However often the crop frame is adjusted, the crop is one undo step.
@@ -3406,4 +3477,87 @@ fn undo_takes_back_a_rating() {
     f.app.redo();
     f.app.redo();
     assert_eq!(f.app.current.as_ref().unwrap().rating, 4);
+}
+
+#[test]
+fn catalog_import() {
+    use crate::import::{ImportOptions, Target, date_folder};
+    let Some(mut f) = Fixture::new("catalog-import") else { return };
+    let photos = f.dir.join("photos");
+    f.pump("Bild geladen", |a| a.current.is_some());
+    // Browsing a folder does not take it into the catalog.
+    assert_eq!(f.app.catalog.as_ref().unwrap().image_count().unwrap(), 0);
+    assert_eq!(f.app.entries.len(), 2);
+
+    // Copies into the catalog's picture folder, by capture date and renamed; the originals stay.
+    let library = f.dir.join("Bilder");
+    f.app.import_options = ImportOptions {
+        target: Target::Library,
+        library: Some(library.clone()),
+        by_date: true,
+        rename: true,
+        template: "{Jahr}{Monat}{Tag}_{Name}".into(),
+        ..Default::default()
+    };
+    f.app.import_folder(&photos);
+    f.pump("Import", |a| a.scope == Scope::LastImport && a.entries.len() == 2);
+    for name in ["_DSC0009", "_DSC0010"] {
+        let original = photos.join(format!("{name}.dng"));
+        let date = sk_core::raw::read_meta(&original).unwrap().info.date;
+        let day: String = date.as_deref().unwrap_or("").chars().take(10).filter(|c| c.is_ascii_digit()).collect();
+        let copy = library.join(date_folder(date.as_deref())).join(format!("{day}_{name}.dng"));
+        assert!(f.app.entries.iter().any(|e| e.path == copy), "{} fehlt: {:?}", copy.display(), f.app.entries.iter().map(|e| &e.path).collect::<Vec<_>>());
+        assert!(original.exists());
+    }
+
+    // Importing again: the dialog knows them (by the names they had), but not another picture of the same size and
+    // second (a burst of uncompressed raws).
+    std::fs::copy(photos.join("_DSC0009.dng"), photos.join("Serie.dng")).unwrap();
+    f.app.open_import(photos.clone(), true);
+    let start = Instant::now();
+    while f.app.import.as_ref().unwrap().checking() {
+        assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: Duplikate prüfen");
+        f.app.import.as_mut().unwrap().poll(&f.ctx);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let items = &f.app.import.as_ref().unwrap().items;
+    assert_eq!(items.len(), 3);
+    for i in items {
+        let burst = i.path.ends_with("Serie.dng");
+        assert_eq!((i.known, i.chosen), (Some(!burst), burst), "{}", i.path.display());
+    }
+}
+
+#[test]
+fn catalog_keeps_the_settings() {
+    use sk_core::session::SessionFolder;
+    let Some(mut f) = Fixture::new("catalog-settings") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let path = f.app.primary_path().unwrap();
+    // Viewing an image of a folder only browsed takes nothing in.
+    assert!(!f.app.catalog.as_ref().unwrap().contains(&path));
+
+    // The first edit takes it in; its settings go to the catalog, not beside the image, so a
+    // folder that can't be written to is no obstacle.
+    #[cfg(unix)]
+    let set_mode = |mode| {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(f.dir.join("photos"), std::fs::Permissions::from_mode(mode)).unwrap();
+    };
+    #[cfg(unix)]
+    set_mode(0o555);
+    f.app.set_rating(4);
+    #[cfg(unix)]
+    set_mode(0o755);
+    assert!(f.app.catalog.as_ref().unwrap().contains(&path));
+    assert_eq!(sidecar::load(&path).rating, 4);
+    assert!(!sidecar::sidecar_path(&path).exists());
+    assert!(f.app.unsaved.is_empty(), "{}", f.app.status);
+
+    // Copied into a session, the image takes them along into a sidecar file.
+    f.app.create_session(&f.dir, "Shooting").unwrap();
+    f.app.import_folder(&f.dir.join("photos"));
+    f.pump("Import", |a| a.scope == Scope::LastImport && a.entries.len() == 2);
+    let copy = f.app.session.as_ref().unwrap().folder(SessionFolder::Capture).join(path.file_name().unwrap());
+    assert_eq!(sidecar::read_sidecar_file(&copy).unwrap().map(|s| s.rating), Some(4));
 }

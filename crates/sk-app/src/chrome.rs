@@ -68,13 +68,9 @@ impl App {
     }
 
     pub fn import_folder_dialog(&mut self) {
-        let title = if self.session.is_some() { "Bilder in die Session importieren" } else { "Ordner in Katalog importieren" };
-        if let Some(dir) = rfd::FileDialog::new().set_title(title).set_directory(&self.folder).pick_folder() {
-            // A session copies the files into its Capture folder; the catalog indexes them where they are.
-            if self.session.is_none() {
-                self.open_folder(dir.clone());
-            }
-            self.import_folder(&dir);
+        let start = self.import_source.clone().unwrap_or_else(|| self.folder.clone());
+        if let Some(dir) = rfd::FileDialog::new().set_title("Quelle wählen").set_directory(&start).pick_folder() {
+            self.open_import(dir, true);
         }
     }
 
@@ -115,7 +111,7 @@ impl App {
         if w > 160.0 {
             let x = (bar.center().x - w / 2.0).max(menus_right + 24.0);
             let rect = Rect::from_min_size(pos2(x, bar.center().y - 11.0), vec2(w, 22.0));
-            let resp = ui.interact(rect, ui.id().with("search"), Sense::click()).on_hover_text("Befehle, Werkzeuge und Einstellungen suchen (Strg+K)");
+            let resp = ui.interact(rect, ui.id().with("search"), Sense::click()).on_hover_text("Befehlssuche: Befehl, Werkzeug oder Einstellung suchen (Strg+K)");
             let p = ui.painter();
             let fill = if resp.hovered() { Color32::from_rgb(48, 48, 53) } else { Color32::from_rgb(38, 38, 42) };
             p.rect(rect, 6.0, fill, Stroke::new(1.0, if resp.hovered() { Color32::from_rgb(70, 70, 77) } else { theme::BORDER }), StrokeKind::Inside);
@@ -186,7 +182,7 @@ impl App {
             self.hot_folder.on = watch;
             self.save_settings();
         }
-        let import = if self.session.is_some() { "In Session importieren …" } else { "Ordner in Katalog importieren …" };
+        let import = if self.session.is_some() { "Bilder in die Session importieren …" } else { "Bilder in den Katalog importieren …" };
         if item(ui, icon::FOLDER_PLUS, import, "", true) {
             self.import_folder_dialog();
         }
@@ -204,7 +200,7 @@ impl App {
         ui.separator();
         self.command_item(ui, "copy-adjustments");
         self.command_item(ui, "copy-adjustments-choose");
-        self.command_item_labeled(ui, "paste-adjustments", "Anpassungen anwenden");
+        self.command_item_labeled(ui, "paste-adjustments", "Anpassungen einfügen");
         self.command_item(ui, "reset");
         ui.separator();
         self.command_item(ui, "select-all");
@@ -279,12 +275,12 @@ impl App {
         self.command_item(ui, "auto-upright");
         ui.separator();
         self.command_item(ui, "auto-adjust");
-        self.command_item_labeled(ui, "wb-picker", "Weißabgleich aufnehmen");
+        self.command_item_labeled(ui, "wb-picker", "Weißabgleich-Pipette");
         self.command_item(ui, "denoise");
         ui.separator();
         self.merge_menu(ui);
         ui.separator();
-        let ref_text = if self.compare_ref.is_some() && self.compare_ref == self.primary_path() { "Referenzbild entfernen" } else { "Als Referenzbild festlegen" };
+        let ref_text = if self.compare_ref.is_some() && self.compare_ref == self.primary_path() { "Referenzbild entfernen" } else { "Referenzbild festlegen" };
         self.command_item_labeled(ui, "reference", ref_text);
         if self.compare_ref.is_some() && self.compare_ref != self.primary_path() && item(ui, icon::PUSH_PIN_SLASH, "Referenzbild entfernen", "", true) {
             self.compare_ref = None;
@@ -324,7 +320,7 @@ impl App {
         }
         self.command_item_labeled(ui, "zoom-100", "100 %");
         ui.separator();
-        if check(ui, self.show_before, "Vorher anzeigen", &shortcut("before")) {
+        if check(ui, self.show_before, "Vorher / Nachher", &shortcut("before")) {
             self.toggle_before();
         }
         if check(ui, self.split_view && !self.split_side, "Geteilter Vergleich", &shortcut("split")) {
@@ -371,7 +367,7 @@ impl App {
             }
         });
         ui.separator();
-        if check(ui, self.viewer_window.open, "Bild in eigenem Fenster (Zweitmonitor)", &shortcut("viewer-window")) {
+        if check(ui, self.viewer_window.open, "Bild in eigenem Fenster", &shortcut("viewer-window")) {
             self.toggle_viewer_window();
         }
         if check(ui, self.fullscreen, "Vollbild ohne Ablenkung", &shortcut("fullscreen")) {
@@ -380,7 +376,7 @@ impl App {
     }
 
     fn help_menu(&mut self, ui: &mut Ui) {
-        if item(ui, icon::MAGNIFYING_GLASS, "Befehl suchen …", "Strg+K", true) {
+        if item(ui, icon::MAGNIFYING_GLASS, "Befehlssuche …", "Strg+K", true) {
             self.palette.show();
         }
         self.command_item(ui, "shortcuts");
@@ -408,7 +404,7 @@ impl App {
             if tool(ui, icon::FOLDER_OPEN, &crate::commands::hint("Ordner öffnen", "open-folder"), false, true).clicked() {
                 self.open_folder_dialog();
             }
-            let import = if self.session.is_some() { "Bilder in die Session importieren" } else { "Ordner in den Katalog importieren" };
+            let import = if self.session.is_some() { "Bilder in die Session importieren …" } else { "Bilder in den Katalog importieren …" };
             if tool(ui, icon::FOLDER_PLUS, import, false, true).clicked() {
                 self.import_folder_dialog();
             }
@@ -453,7 +449,7 @@ impl App {
             if copy.secondary_clicked() {
                 self.open_copy_dialog();
             }
-            let paste_hover = image_hover(&crate::commands::hint("Anpassungen auf Auswahl anwenden", "paste-adjustments"));
+            let paste_hover = image_hover(&crate::commands::hint("Anpassungen einfügen", "paste-adjustments"));
             if tool(ui, icon::CLIPBOARD_TEXT, &paste_hover, false, self.clipboard.is_some() && !on_layer).clicked() {
                 self.paste_adjustments();
             }
@@ -599,7 +595,7 @@ impl App {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(4.0);
                 let b = Button::new(RichText::new(icon::MAGNIFYING_GLASS).size(14.0).color(theme::TEXT_DIM)).frame_when_inactive(false);
-                if ui.add(b).on_hover_text("Werkzeug oder Einstellung suchen (Strg+K)").clicked() {
+                if ui.add(b).on_hover_text("Befehlssuche: Befehl, Werkzeug oder Einstellung suchen (Strg+K)").clicked() {
                     self.palette.show();
                 }
             });
@@ -692,6 +688,7 @@ impl App {
 
     pub fn dialogs(&mut self, ctx: &egui::Context) {
         self.rename_dialog(ctx);
+        self.import_dialog(ctx);
         self.gpu_dialog(ctx);
         self.licenses_dialog(ctx);
         self.update_dialog(ctx);

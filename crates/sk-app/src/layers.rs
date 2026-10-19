@@ -53,7 +53,7 @@ impl LocalTool {
     /// Icon and name, from the tool tiles (one name per tool everywhere).
     pub fn label(self) -> String {
         let (icon, name, _) = self.tile();
-        let name = if self == LocalTool::ColorPick { "Farbe wählen" } else { name };
+        let name = if self == LocalTool::ColorPick { "Farbe aufnehmen" } else { name };
         format!("{icon}  {name}")
     }
 
@@ -1546,7 +1546,7 @@ impl App {
             "{} und {}: über eine Stelle malen. {}: die KI füllt die Stelle passend zur Umgebung.\n\n{} und {} oder Ziehen mit der rechten Maustaste: Pinselgröße und Härte.",
             hint("Reparieren", "tool-heal"),
             hint("Klonen", "tool-clone"),
-            hint("Entfernen", "tool-remove"),
+            hint("Objekt entfernen", "tool-remove"),
             shortcut_of("brush-smaller"),
             shortcut_of("brush-larger")
         );

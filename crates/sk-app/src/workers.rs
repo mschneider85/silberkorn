@@ -102,8 +102,8 @@ pub struct IndexJob {
     pub catalog: PathBuf,
     pub paths: Vec<PathBuf>,
     pub import: bool,
-    /// Copy the files into this folder first and index the copies (session import).
-    pub copy_to: Option<PathBuf>,
+    /// Copy the files there first and index the copies (see `import.rs`).
+    pub copy_to: Option<crate::import::CopyTo>,
 }
 
 /// An image loaded and rendered with its saved adjustments, ready to show without waiting.
@@ -400,9 +400,15 @@ impl Workers {
                     let total = job.paths.len();
                     let (mut indexed, mut failed) = (0, 0);
                     for (i, path) in job.paths.iter().enumerate() {
+                        let source = path;
                         // A broken file (even one that panics) fails alone; the rest of the import goes on.
                         let path = match &job.copy_to {
-                            Some(dest) => match crate::guard::catch(|| session::copy_image(path, dest)).and_then(|r| r.map_err(|e| format!("{e:#}"))) {
+                            Some(dest) => match crate::guard::catch(|| {
+                                let (folder, name) = dest.place_of(path, i as u32 + 1);
+                                session::copy_image_as(path, &folder, name.as_deref())
+                            })
+                            .and_then(|r| r.map_err(|e| format!("{e:#}")))
+                            {
                                 Ok(p) => p,
                                 Err(e) => {
                                     log::warn!("{e}");
@@ -412,6 +418,7 @@ impl Workers {
                             },
                             None => path.clone(),
                         };
+                        let file = path.clone();
                         // A file comes with its variants.
                         let images = if sk_core::variant::number(&path) == 1 { sk_core::variant::of_file(&path) } else { vec![path] };
                         for path in images {
@@ -425,6 +432,12 @@ impl Workers {
                                     }
                                 }
                             }
+                        }
+                        // The name it had where it came from: a copy renamed is still recognized.
+                        if job.import
+                            && let Some(name) = source.file_name()
+                        {
+                            let _ = catalog.set_original_name(&file, &name.to_string_lossy());
                         }
                         if i % 10 == 9 || i + 1 == total {
                             let _ = ev_tx.send(Event::IndexProgress { done: i + 1, total });

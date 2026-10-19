@@ -79,14 +79,14 @@ impl App {
 
     /// The snapshots of the open image, in the history tab and the side column alike: "+" saves
     /// the current state and lets it be named right away, a click applies one, a double click
-    /// renames it.
-    pub(crate) fn snapshot_section(&mut self, ui: &mut Ui) {
+    /// renames it. In the side column it starts closed, with their number in the header.
+    pub(crate) fn snapshot_section(&mut self, ui: &mut Ui, side: bool) {
         let mut action = None;
         let mut typed = None;
         let editing = self.snapshot_rename.clone();
         let Some(cur) = &self.current else { return };
         let help = "Ein Schnappschuss sichert den jetzigen Stand; ein Klick darauf stellt ihn wieder her.";
-        section_help(ui, "Schnappschüsse", help, None, |ui| {
+        let body = |ui: &mut Ui| {
             if ui.button(format!("{}  Schnappschuss", icon::PLUS)).on_hover_text("Den jetzigen Stand unter einem Namen sichern").clicked() {
                 action = Some(SnapshotAction::Add);
             }
@@ -136,7 +136,12 @@ impl App {
                     }
                 });
             }
-        });
+        };
+        if side {
+            crate::widgets::section_counted(ui, "Schnappschüsse", Some(help), cur.snapshots.len(), body);
+        } else {
+            section_help(ui, "Schnappschüsse", help, None, body);
+        }
 
         if typed.is_some() {
             self.snapshot_rename = typed;
@@ -169,7 +174,7 @@ impl App {
             crate::widgets::no_image(ui);
             return;
         }
-        self.snapshot_section(ui);
+        self.snapshot_section(ui, false);
         let mut jump = None;
         if let Some((steps, now)) = self.history_steps() {
             let help = "Klick springt zu diesem Stand; neue Änderungen verwerfen die Schritte darüber.";

@@ -103,6 +103,10 @@ impl App {
         self.close_current();
         let _ = catalog.remove_missing();
         self.catalog = Some(catalog);
+        // Images outside the session that are edited keep their sidecar files.
+        if let Some(s) = &self.settings_store {
+            s.set_adopt(false);
+        }
         self.remember_recent(&s.file);
         let (capture, root, name) = (s.folder(SessionFolder::Capture), s.root.clone(), s.name.clone());
         self.session = Some(s);
@@ -129,6 +133,9 @@ impl App {
         }
         self.close_current();
         self.session = None;
+        if let Some(s) = &self.settings_store {
+            s.set_adopt(true);
+        }
         self.catalog = match Catalog::open(&self.global_catalog) {
             Ok(c) => Some(c),
             Err(e) => {
@@ -399,14 +406,10 @@ impl App {
                 }
             });
         });
-        if self.session.is_some() {
-            if ui.add_enabled(self.trash_count() > 0, Button::new(format!("{}  Papierkorb leeren …", icon::TRASH))).clicked() {
-                self.request_empty_trash();
-            }
-            if ui.button(format!("{}  Session schließen", icon::SIGN_OUT)).on_hover_text("Zurück zum Katalog").clicked() {
-                self.close_session();
-            }
+        if self.session.is_some() && ui.add_enabled(self.trash_count() > 0, Button::new(format!("{}  Papierkorb leeren …", icon::TRASH))).clicked() {
+            self.request_empty_trash();
         }
+        self.command_item(ui, "close-session");
     }
 
     // ---------------------------------------------------------------- library tab
@@ -458,7 +461,7 @@ impl App {
                 if ui.button(format!("{}  Importieren …", icon::FOLDER_PLUS)).on_hover_text("Bilder in den Ordner „Aufnahmen“ kopieren").clicked() {
                     self.import_folder_dialog();
                 }
-                if ui.button(format!("{}  Schließen", icon::SIGN_OUT)).on_hover_text("Session schließen, zurück zum Katalog").clicked() {
+                if ui.button(format!("{}  Session schließen", icon::SIGN_OUT)).on_hover_text(crate::commands::hint("Zurück zum Katalog", "close-session")).clicked() {
                     close = true;
                 }
             });

@@ -90,7 +90,7 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Color, "Farbbalance", "color grading color balance farbräder tonung"),
     (Tab::Color, "Schwarzweiß", "black white monochrom sw"),
     (Tab::Details, "Schärfen", "sharpen schärfe"),
-    (Tab::Details, "Rauschen", "noise denoise ki ai entrauschen rauschreduzierung luminanz farbrauschen"),
+    (Tab::Details, "Rauschreduzierung", "rauschen noise denoise ki ai entrauschen rauschreduzierung luminanz farbrauschen"),
     (Tab::Details, "Klarheit", "clarity struktur"),
     (Tab::Details, "Dunst entfernen", "dehaze dunst nebel"),
     (Tab::Effects, "Leuchten", "glow orton weich strahlen lichter"),
@@ -100,7 +100,7 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Effects, "Atmosphäre", "atmosphere nebel dunst fog haze tiefe ki"),
     (Tab::Layers, "Maske", "pinsel radierer verlauf zauberpinsel motiv himmel tiefe helligkeitsbereich farbbereich eingrenzen brush luma range"),
     (Tab::Layers, "Anpassungen", "ebenen-anpassungen lokal belichtung"),
-    (Tab::Retouch, "Entfernen", "remove objekt retusche ki"),
+    (Tab::Retouch, "Objekt entfernen", "entfernen remove objekt retusche ki"),
     (Tab::Layers, "Ebenen", "layer maske lokal"),
     (Tab::Retouch, "Reparieren & Klonen", "heal clone stempel flecken staub"),
     (Tab::Metadata, "Keywords", "schlagworte stichworte tags"),
@@ -131,7 +131,7 @@ impl App {
         // Tools and their sections first: they are what one looks for most often.
         // On a layer, what only changes the whole image is disabled.
         for tab in Tab::ALL {
-            add(tab.icon(), tab.title(), "Werkzeug", &tab_shortcut(tab), self.tab_available(tab), "tab", Action::Tab(tab));
+            add(tab.icon(), tab.title(), "Tab", &tab_shortcut(tab), self.tab_available(tab), "tab", Action::Tab(tab));
         }
         for &(tab, title, keywords) in SECTIONS {
             add(tab.icon(), title, tab.title(), "", self.section_available(tab, title), keywords, Action::Section(tab, title));
@@ -143,7 +143,7 @@ impl App {
         }
 
         // Entries that only the palette offers.
-        let import = if self.session.is_some() { "In Session importieren …" } else { "Ordner in Katalog importieren …" };
+        let import = if self.session.is_some() { "Bilder in die Session importieren …" } else { "Bilder in den Katalog importieren …" };
         add(icon::FOLDER_PLUS, import, "Datei", "", true, "import", Run(|a, _| a.import_folder_dialog()));
         for gd in Guides::ALL {
             let label = if gd == Guides::Off { "Hilfslinien aus".to_string() } else { format!("Hilfslinien: {}", gd.label()) };
@@ -225,7 +225,7 @@ impl App {
                     ui.add_space(6.0);
                     ui.label(RichText::new(icon::MAGNIFYING_GLASS).size(17.0).color(theme::TEXT_DIM));
                     let edit = egui::TextEdit::singleline(&mut self.palette.query)
-                        .hint_text("Funktion oder Werkzeug suchen …")
+                        .hint_text("Befehl, Werkzeug oder Einstellung suchen …")
                         .font(egui::FontId::proportional(16.0))
                         .frame(egui::Frame::NONE)
                         .desired_width(f32::INFINITY)
@@ -335,7 +335,7 @@ fn command_row(ui: &Ui, rect: Rect, c: &Command, selected: bool) {
 
 /// Sections of AI functions (marked in the palette as in the tool tabs).
 fn is_ai_section(title: &str) -> bool {
-    matches!(title, "Entfernen" | "Gesichter & Sichtung") || sk_core::tools::Tool::ALL.iter().any(|t| t.is_ai() && t.label() == title)
+    matches!(title, "Objekt entfernen" | "Gesichter & Sichtung") || sk_core::tools::Tool::ALL.iter().any(|t| t.is_ai() && t.label() == title)
 }
 
 /// "Strg+1" … "Strg+0" for the tool tabs in rail order.

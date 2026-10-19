@@ -163,14 +163,14 @@ impl App {
                 let value = match name {
                     "Ebenen" => adj.layers.len().to_string(),
                     "Retusche" => adj.retouch.len().to_string(),
-                    "Entfernen" => adj.removals.len().to_string(),
+                    "Objekt entfernen" => adj.removals.len().to_string(),
                     _ => v.map(|v| if v > 0.0 { format!("+{}", number(v)) } else { number(v) }).unwrap_or_default(),
                 };
                 (name, value)
             })
             .collect();
         let mut open = None;
-        section(ui, "Bearbeitung", None, |ui| {
+        widgets::section_counted(ui, "Bearbeitung", None, rows.len(), |ui| {
             if rows.is_empty() {
                 widgets::hint(ui, "Unbearbeitet");
             }
@@ -202,7 +202,7 @@ impl App {
     /// Saved states of the image: the same list as in the history tab.
     fn side_snapshots(&mut self, ui: &mut Ui) {
         if self.current.is_some() {
-            self.snapshot_section(ui);
+            self.snapshot_section(ui, true);
         }
     }
 
@@ -215,7 +215,7 @@ impl App {
             (start..steps.len()).rev().map(|j| (j, if j == 0 { "Geöffnet".to_string() } else { describe(steps[j - 1], steps[j]) })).collect();
         let mut jump = None;
         let mut all = false;
-        section(ui, "Verlauf", None, |ui| {
+        widgets::section_counted(ui, "Verlauf", None, steps.len() - 1, |ui| {
             for (j, label) in rows {
                 let text = if j > now { RichText::new(label).color(theme::TEXT_FAINT).italics() } else { RichText::new(label) };
                 if ui.selectable_label(j == now, text).clicked() && j != now {
@@ -306,7 +306,7 @@ fn tool_of(name: &'static str) -> Option<(Tab, Option<&'static str>)> {
         "Objektivunschärfe" => (Tab::Effects, Some("Objektivunschärfe")),
         "Ebenen" => (Tab::Layers, None),
         "Retusche" => (Tab::Retouch, Some("Reparieren & Klonen")),
-        "Entfernen" => (Tab::Retouch, Some("Entfernen")),
+        "Objekt entfernen" => (Tab::Retouch, Some("Objekt entfernen")),
         _ => return None,
     };
     Some(t)

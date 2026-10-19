@@ -151,7 +151,7 @@ impl App {
                     app.request_removal();
                 }
             });
-            self.status = format!("Entfernen: lade KI-Modell ({} MB, einmalig) …", AiFeature::Inpaint.download_mb());
+            self.status = format!("Objekt entfernen: lade KI-Modell ({} MB, einmalig) …", AiFeature::Inpaint.download_mb());
             return;
         }
         let Some(cur) = &self.current else { return };
@@ -161,7 +161,7 @@ impl App {
         };
         self.inpaint_busy = true;
         self.removal_progress = 0.0;
-        self.status = "Entfernen …".into();
+        self.status = "Entferne …".into();
         self.workers.inpaint(InpaintJob {
             generation: self.generation(),
             path: cur.meta.path.clone(),
@@ -183,7 +183,7 @@ impl App {
                 self.edit(|a| a.removals.push(r));
                 self.status = "Entfernt".into();
             }
-            Err(e) => self.report_error(format!("Entfernen fehlgeschlagen: {e}")),
+            Err(e) => self.report_error(format!("Objekt entfernen fehlgeschlagen: {e}")),
         }
     }
 
@@ -197,12 +197,12 @@ impl App {
         // buttons only with something removed (shown, but disabled otherwise).
         let help = "Über das Störende malen; beim Loslassen füllt die KI die Stelle passend zur Umgebung.";
         let mut reset = false;
-        section_help_ai(ui, "Entfernen", help, Some(&mut || reset = true), |ui| {
+        section_help_ai(ui, "Objekt entfernen", help, Some(&mut || reset = true), |ui| {
             let brush = ui.add_enabled_ui(active, |ui| crate::layers::brush_controls(ui, &mut self.brushes.remove, Some(LocalTool::Remove), true));
             if brush.inner {
                 self.brushes_changed_at = Some(std::time::Instant::now());
             }
-            brush.response.on_disabled_hover_text(crate::commands::hint("Pinsel des Werkzeugs „Entfernen“", "tool-remove"));
+            brush.response.on_disabled_hover_text(crate::commands::hint("Pinsel des Werkzeugs „Objekt entfernen“", "tool-remove"));
             if let Some(p) = downloading {
                 crate::ai_models::download_progress(ui, AiFeature::Inpaint, p, self.job_cancel(None, Some(&AiFeature::Inpaint.job_label())));
             }

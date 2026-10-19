@@ -1509,7 +1509,8 @@ mod tests {
         )
     }
 
-    fn compare(name: &str, g: &Gpu, adj: &Adjustments, opts: RenderOptions, region: Option<Region>) {
+    /// `None` if the renderings match, else what differs.
+    fn compare(name: &str, g: &Gpu, adj: &Adjustments, opts: RenderOptions, region: Option<Region>) -> Option<String> {
         let (w, h) = (300, 200);
         let src = image(w, h);
         let p = Processor::with_options(&meta(w, h), adj, opts);
@@ -1521,8 +1522,8 @@ mod tests {
         let mean = diffs.iter().map(|d| *d as f64).sum::<f64>() / diffs.len() as f64;
         let off = diffs.iter().filter(|d| **d > 1).count() as f64 / diffs.len() as f64;
         eprintln!("{name}: max {max}, mittel {mean:.4}, >1: {:.3} %", off * 100.0);
-        assert!(max <= 4 && mean < 0.05 && off < 0.002, "{name}: max {max}, mittel {mean}, >1: {off}");
         assert_eq!(gpu.histogram.luma.iter().sum::<u32>(), (gpu.width * gpu.height) as u32, "{name}");
+        (max > 4 || mean >= 0.05 || off >= 0.002).then(|| format!("{name}: max {max}, mittel {mean}, >1: {off}"))
     }
 
     fn layer(adjustments: LayerAdjustments, mask: Mask) -> Layer {
@@ -1736,9 +1737,9 @@ mod tests {
                 None,
             ),
         ];
-        for (name, adj, opts, region) in cases {
-            compare(name, g, &adj, opts, region);
-        }
+        // All cases, so that one difference doesn't hide the others.
+        let failed: Vec<String> = cases.into_iter().filter_map(|(name, adj, opts, region)| compare(name, g, &adj, opts, region)).collect();
+        assert!(failed.is_empty(), "{}", failed.join("\n"));
     }
 
     #[test]

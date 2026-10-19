@@ -223,7 +223,11 @@ pub struct Album {
 /// Format of the databases written by this build (`PRAGMA user_version`; older databases are
 /// upgraded on opening, newer ones are refused). Raise it when an upgrade an older build
 /// can't cope with is added to [`Catalog::init`].
-pub const SCHEMA_VERSION: u32 = 1;
+/// 2: the catalog keeps the settings of its images (table `settings`, see [`CatalogStore`]); an
+/// older build would read and write the sidecar files instead. Session databases stay at
+/// [`SESSION_SCHEMA_VERSION`]: their images keep sidecar files, so older builds can open them.
+pub const SCHEMA_VERSION: u32 = 2;
+pub const SESSION_SCHEMA_VERSION: u32 = 1;
 
 pub struct Catalog {
     conn: Connection,
@@ -234,6 +238,41 @@ pub struct Catalog {
 
 pub fn default_catalog_path() -> PathBuf {
     crate::paths::data_dir().join("catalog.sqlite")
+}
+
+fn is_backup(p: &Path) -> bool {
+    p.extension().is_some_and(|e| e == "sqlite") && p.file_stem().and_then(|s| s.to_str()).is_some_and(|s| s.strip_prefix("catalog-").is_some_and(|d| days_of(d).is_some()))
+}
+
+/// `2026-10-18` for seconds since 1970 (UTC).
+fn date_of(secs: i64) -> String {
+    // Days to civil date (Howard Hinnant's algorithm).
+    let z = secs.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Days since 1970 of a date `2026-10-18` (inverse of [`date_of`]).
+fn days_of(date: &str) -> Option<i64> {
+    let mut parts = date.split('-').map(|p| p.parse::<i64>().ok());
+    let (y, m, d) = (parts.next()??, parts.next()??, parts.next()??);
+    if parts.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
 }
 
 fn now() -> i64 {
@@ -364,7 +403,11 @@ impl Catalog {
                  PRIMARY KEY (album_id, image_id)
              );
              CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
-             CREATE TABLE IF NOT EXISTS favorites (path TEXT PRIMARY KEY);",
+             CREATE TABLE IF NOT EXISTS favorites (path TEXT PRIMARY KEY);
+             -- Settings of the images (the record a sidecar file would hold), by raw file.
+             -- `capture_date` is the image's when they were stored: another picture later at the same
+             -- path (a memory card used again) doesn't get them.
+             CREATE TABLE IF NOT EXISTS settings (path TEXT PRIMARY KEY, record TEXT NOT NULL, capture_date TEXT);",
         )?;
         // Columns added later.
         let columns: Vec<String> =
@@ -389,10 +432,21 @@ impl Catalog {
             ("sharpness", "REAL"),
             ("face_count", "INTEGER NOT NULL DEFAULT 0"),
             ("eyes_closed", "INTEGER NOT NULL DEFAULT 0"),
+            // The file's name before the import renamed it (see `fingerprints`).
+            ("original_name", "TEXT"),
         ] {
             if !columns.iter().any(|c| c == name) {
                 conn.execute_batch(&format!("ALTER TABLE images ADD COLUMN {name} {def}"))?;
             }
+        }
+        // Settings tables of development builds lack the stamp.
+        let settings_columns: Vec<String> =
+            conn.prepare("SELECT name FROM pragma_table_info('settings')")?.query_map([], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+        if !settings_columns.iter().any(|c| c == "capture_date") {
+            conn.execute_batch(
+                "ALTER TABLE settings ADD COLUMN capture_date TEXT;
+                 UPDATE settings SET capture_date = (SELECT capture_date FROM images WHERE images.path = settings.path);",
+            )?;
         }
         // "Last import" (not in the oldest databases).
         if columns.iter().any(|c| c == "import_id") {
@@ -404,7 +458,8 @@ impl Catalog {
         if !person_columns.iter().any(|c| c == "manual") {
             conn.execute_batch("ALTER TABLE persons ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")?;
         }
-        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION}"))?;
+        let target = if base.is_some() { SESSION_SCHEMA_VERSION } else { SCHEMA_VERSION };
+        conn.execute_batch(&format!("PRAGMA user_version = {}", version.max(target)))?;
         let catalog = Self { conn, path, base };
         if catalog.base.is_some() {
             catalog.make_paths_relative()?;
@@ -443,6 +498,23 @@ impl Catalog {
         Ok(self.conn.execute_batch("COMMIT")?)
     }
 
+    /// Runs the writes of `f` all or none, so that readers never see an image without its
+    /// keywords. A savepoint, not a transaction: it also works inside [`Self::begin_batch`] and
+    /// the transactions of other methods.
+    fn atomic<T>(&self, f: impl FnOnce() -> Result<T>) -> Result<T> {
+        self.conn.execute_batch("SAVEPOINT atomic")?;
+        match f() {
+            Ok(v) => {
+                self.conn.execute_batch("RELEASE atomic")?;
+                Ok(v)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK TO atomic; RELEASE atomic");
+                Err(e)
+            }
+        }
+    }
+
     /// Reads metadata + sidecar of `path` and stores it.
     pub fn index_file(&self, path: &Path, import_id: i64) -> Result<i64> {
         let meta = raw::read_meta(path)?;
@@ -451,6 +523,13 @@ impl Catalog {
     }
 
     pub fn upsert(&self, meta: &RawMeta, sc: &Sidecar, import_id: i64) -> Result<i64> {
+        // A variant is in the stack of its file.
+        let stack = if crate::variant::number(&meta.path) > 1 { sidecar::load(&meta.path).stack } else { sc.stack.clone() };
+        self.upsert_stacked(meta, sc, import_id, stack)
+    }
+
+    /// [`Self::upsert`] with the stack given (not read from the settings).
+    fn upsert_stacked(&self, meta: &RawMeta, sc: &Sidecar, import_id: i64, stack: Option<Stack>) -> Result<i64> {
         let path = &meta.path;
         let (mtime, size) = file_stamp(path);
         let folder = self.folder_key(path);
@@ -465,38 +544,40 @@ impl Catalog {
                 .unwrap_or(0),
             _ => import_id,
         };
-        // A variant is in the stack of its file.
-        let stack = if crate::variant::number(path) > 1 { sidecar::load(path).stack } else { sc.stack.clone() };
-        // Keep the original import id when re-indexing a changed file.
-        let id: i64 = self.conn.query_row(
-            "INSERT INTO images (path, folder, name, capture_date, camera, lens, iso, rating, color_label, file_mtime, file_size, import_id, stack, stack_top)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
-             ON CONFLICT(path) DO UPDATE SET
-                 folder=excluded.folder, name=excluded.name, capture_date=excluded.capture_date,
-                 camera=excluded.camera, lens=excluded.lens, iso=excluded.iso, rating=excluded.rating,
-                 color_label=excluded.color_label, file_mtime=excluded.file_mtime, file_size=excluded.file_size,
-                 stack=excluded.stack, stack_top=excluded.stack_top
-             RETURNING id",
-            params![
-                self.key(path),
-                folder,
-                name,
-                info.date,
-                camera,
-                info.lens,
-                info.iso,
-                sc.rating,
-                label_to_str(sc.color_label),
-                mtime,
-                size,
-                import_id,
-                stack.as_ref().map(|s| s.id.clone()),
-                stack.as_ref().is_some_and(|s| s.top)
-            ],
-            |r| r.get(0),
-        )?;
-        self.write_keywords(id, &sc.keywords)?;
-        Ok(id)
+        // Keep the original import id when re-indexing a changed file (an image taken in when it
+        // was first edited, see `CatalogStore`, joins the import that takes it in later).
+        self.atomic(|| {
+            let id: i64 = self.conn.query_row(
+                "INSERT INTO images (path, folder, name, capture_date, camera, lens, iso, rating, color_label, file_mtime, file_size, import_id, stack, stack_top)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                 ON CONFLICT(path) DO UPDATE SET
+                     folder=excluded.folder, name=excluded.name, capture_date=excluded.capture_date,
+                     camera=excluded.camera, lens=excluded.lens, iso=excluded.iso, rating=excluded.rating,
+                     color_label=excluded.color_label, file_mtime=excluded.file_mtime, file_size=excluded.file_size,
+                     stack=excluded.stack, stack_top=excluded.stack_top,
+                     import_id=CASE WHEN images.import_id = 0 THEN excluded.import_id ELSE images.import_id END
+                 RETURNING id",
+                params![
+                    self.key(path),
+                    folder,
+                    name,
+                    info.date,
+                    camera,
+                    info.lens,
+                    info.iso,
+                    sc.rating,
+                    label_to_str(sc.color_label),
+                    mtime,
+                    size,
+                    import_id,
+                    stack.as_ref().map(|s| s.id.clone()),
+                    stack.as_ref().is_some_and(|s| s.top)
+                ],
+                |r| r.get(0),
+            )?;
+            self.write_keywords(id, &sc.keywords)?;
+            Ok(id)
+        })
     }
 
     fn write_keywords(&self, id: i64, keywords: &[String]) -> Result<()> {
@@ -512,11 +593,13 @@ impl Catalog {
         let id: Option<i64> =
             self.conn.query_row("SELECT id FROM images WHERE path = ?1", [self.key(path)], |r| r.get(0)).optional()?;
         if let Some(id) = id {
-            self.conn.execute(
-                "UPDATE images SET rating = ?2, color_label = ?3 WHERE id = ?1",
-                params![id, sc.rating, label_to_str(sc.color_label)],
-            )?;
-            self.write_keywords(id, &sc.keywords)?;
+            self.atomic(|| {
+                self.conn.execute(
+                    "UPDATE images SET rating = ?2, color_label = ?3 WHERE id = ?1",
+                    params![id, sc.rating, label_to_str(sc.color_label)],
+                )?;
+                self.write_keywords(id, &sc.keywords)
+            })?;
         }
         Ok(())
     }
@@ -541,8 +624,9 @@ impl Catalog {
             .prepare("SELECT id, path FROM images")?
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
             .collect::<rusqlite::Result<_>>()?;
-        let tx = self.conn.unchecked_transaction()?;
-        let mut n = 0;
+        // Checked before the transaction: reading the settings of variants may write (see
+        // `CatalogStore`), through another connection that would wait for this one.
+        let mut gone_ids = Vec::new();
         for (id, p) in paths {
             let path = self.resolve(&p);
             let (file, variant) = crate::variant::split(&path);
@@ -553,18 +637,23 @@ impl Catalog {
                 _ => false,
             };
             if gone {
-                self.conn.execute("DELETE FROM images WHERE id = ?1", [id])?;
-                n += 1;
+                gone_ids.push(id);
             }
         }
+        let tx = self.conn.unchecked_transaction()?;
+        for id in &gone_ids {
+            self.conn.execute("DELETE FROM images WHERE id = ?1", [id])?;
+        }
         tx.commit()?;
-        Ok(n)
+        Ok(gone_ids.len())
     }
 
     /// Follows a file that was moved or renamed, with its variants; album memberships and
     /// keywords are kept.
     pub fn rename_path(&self, from: &Path, to: &Path) -> Result<()> {
         if crate::variant::number(from) == 1 {
+            self.conn.execute("DELETE FROM settings WHERE path = ?1 AND path <> ?2", params![self.key(to), self.key(from)])?;
+            self.conn.execute("UPDATE settings SET path = ?2 WHERE path = ?1", params![self.key(from), self.key(to)])?;
             for (old, _) in self.variant_rows(from)? {
                 let n = crate::variant::number(&old);
                 self.rename_one(&old, &crate::variant::path_for(to, n))?;
@@ -606,6 +695,7 @@ impl Catalog {
     /// Removes an image; for a raw file also its variants.
     pub fn remove_path(&self, path: &Path) -> Result<()> {
         if crate::variant::number(path) == 1 {
+            self.conn.execute("DELETE FROM settings WHERE path = ?1", [self.key(path)])?;
             for (_, id) in self.variant_rows(path)? {
                 self.conn.execute("DELETE FROM images WHERE id = ?1", [id])?;
             }
@@ -614,10 +704,71 @@ impl Catalog {
         Ok(())
     }
 
+    /// Makes a backup in `dir` (`catalog-2026-10-18.sqlite`, a consistent copy also while the
+    /// catalog is in use) unless the newest one there is younger than `every` days; keeps the
+    /// `keep` newest. Returns the new backup, if one was made.
+    pub fn backup(&self, dir: &Path, every: u64, keep: usize) -> Result<Option<PathBuf>> {
+        let mut backups: Vec<PathBuf> = std::fs::read_dir(dir)
+            .map(|r| r.flatten().map(|e| e.path()).filter(|p| is_backup(p)).collect())
+            .unwrap_or_default();
+        // The names sort by date.
+        backups.sort();
+        let today = date_of(now());
+        let due = backups.last().and_then(|b| b.file_stem()).and_then(|s| s.to_str()).and_then(|s| s.strip_prefix("catalog-")).and_then(days_of).is_none_or(|last| {
+            days_of(&today).is_some_and(|t| t >= last + every as i64)
+        });
+        if !due {
+            return Ok(None);
+        }
+        std::fs::create_dir_all(dir)?;
+        let target = dir.join(format!("catalog-{today}.sqlite"));
+        let _ = std::fs::remove_file(&target);
+        self.conn.execute("VACUUM INTO ?1", [target.to_string_lossy()]).with_context(|| format!("Sicherung nach {} fehlgeschlagen", target.display()))?;
+        backups.push(target.clone());
+        backups.sort();
+        backups.dedup();
+        for old in backups.iter().rev().skip(keep) {
+            let _ = std::fs::remove_file(old);
+        }
+        Ok(Some(target))
+    }
+
+    /// Remembers the name an imported file had at its source (the import may rename the copy);
+    /// a later rename keeps it.
+    pub fn set_original_name(&self, path: &Path, name: &str) -> Result<()> {
+        self.conn.execute("UPDATE images SET original_name = ?2 WHERE path = ?1 AND original_name IS NULL", params![self.key(path), name])?;
+        Ok(())
+    }
+
+    /// Whether the raw file `path` is in the catalog.
+    pub fn contains(&self, path: &Path) -> bool {
+        self.image_id(&crate::variant::file_of(path)).ok().flatten().is_some()
+    }
+
+    /// The stored settings record of raw file `raw` (see [`CatalogStore`]).
+    /// The stored settings record of raw file `raw`: `None` if it is not in the catalog,
+    /// `Some(None)` if it has none yet. Settings stay when the image leaves the catalog through
+    /// a cleanup (the file may be back, or imported again); they count only for the same picture.
+    fn settings_lookup(&self, raw: &Path) -> Result<Option<Option<String>>> {
+        let mut stmt = self.conn.prepare_cached(
+            "SELECT CASE WHEN s.capture_date IS i.capture_date THEN s.record END
+             FROM images i LEFT JOIN settings s ON s.path = i.path WHERE i.path = ?1",
+        )?;
+        Ok(stmt.query_row([self.key(raw)], |r| r.get(0)).optional()?)
+    }
+
+    fn store_settings_record(&self, raw: &Path, record: &Sidecar) -> Result<()> {
+        self.conn.execute(
+            "INSERT OR REPLACE INTO settings(path, record, capture_date) VALUES (?1, ?2, (SELECT capture_date FROM images WHERE path = ?1))",
+            params![self.key(raw), sidecar::to_json(record)?],
+        )?;
+        Ok(())
+    }
+
     // ------------------------------------------------------------ faces and culling
 
     fn image_id(&self, path: &Path) -> Result<Option<i64>> {
-        Ok(self.conn.query_row("SELECT id FROM images WHERE path = ?1", [self.key(path)], |r| r.get(0)).optional()?)
+        Ok(self.conn.prepare_cached("SELECT id FROM images WHERE path = ?1")?.query_row([self.key(path)], |r| r.get(0)).optional()?)
     }
 
     /// Has the image been analysed (faces, sharpness)?
@@ -825,6 +976,15 @@ impl Catalog {
         Ok(())
     }
 
+    /// File size, capture date and name (the one before the import, see [`Self::set_original_name`])
+    /// of every image: the import recognizes copies of these files by them, as Lightroom does.
+    /// Size and second alone would also match the other frames of a burst of uncompressed raws.
+    pub fn fingerprints(&self) -> Result<std::collections::HashSet<Fingerprint>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT file_size, capture_date, COALESCE(original_name, name) FROM images WHERE file_size > 0")?;
+        let rows = stmt.query_map([], |r| Ok(Fingerprint { size: r.get::<_, i64>(0)? as u64, date: r.get(1)?, name: r.get(2)? }))?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+
     pub fn query(&self, scope: &Scope, filter: &Filter, sort: SortKey, descending: bool) -> Result<Vec<ImageRecord>> {
         let mut sql = String::from(
             "SELECT i.id, i.path, i.name, i.capture_date, i.camera, i.lens, i.iso, i.rating, i.color_label,
@@ -1030,6 +1190,135 @@ fn filter_sql(filter: &Filter, sql: &mut String, args: &mut Vec<Value>) {
     }
 }
 
+/// What the import recognizes a file by (see [`Catalog::fingerprints`]).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Fingerprint {
+    pub size: u64,
+    pub date: Option<String>,
+    pub name: String,
+}
+
+/// The catalog as the keeper of its images' settings (see `sidecar::Store`): they live in the
+/// database, not in sidecar files. A sidecar file found for an image is taken over once, the
+/// first time its settings are read, and left as it is. With `adopt`, an image not in the
+/// catalog is taken in where it is when its settings are first saved (editing an image of a
+/// folder that was only browsed).
+pub struct CatalogStore {
+    path: PathBuf,
+    /// Connections not in use: threads read at the same time (the database is in WAL mode).
+    idle: std::sync::Mutex<Vec<Catalog>>,
+    adopt: std::sync::atomic::AtomicBool,
+    /// Only images below this folder are taken in (tests, which run several catalogs at once).
+    scope: Option<PathBuf>,
+}
+
+impl CatalogStore {
+    pub fn open(path: &Path, scope: Option<PathBuf>) -> Result<Self> {
+        let first = Catalog::open(path)?;
+        Ok(Self { path: path.to_path_buf(), idle: std::sync::Mutex::new(vec![first]), adopt: Default::default(), scope })
+    }
+
+    pub fn set_adopt(&self, adopt: bool) {
+        self.adopt.store(adopt, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether an image not in the catalog is taken in when its settings are saved.
+    fn adopts(&self, raw: &Path) -> bool {
+        self.adopt.load(std::sync::atomic::Ordering::Relaxed) && self.scope.as_ref().is_none_or(|s| raw.starts_with(s))
+    }
+
+    /// A connection for this thread, back to the idle ones when dropped.
+    fn catalog(&self) -> Result<Lease<'_>> {
+        let idle = self.idle.lock().unwrap_or_else(|e| e.into_inner()).pop();
+        let catalog = match idle {
+            Some(c) => c,
+            None => Catalog::open(&self.path)?,
+        };
+        Ok(Lease { store: self, catalog: Some(catalog) })
+    }
+
+    /// Takes `raw` into the catalog where it is, with the settings `record` (its variants too).
+    fn adopt(&self, raw: &Path, record: &Sidecar) -> Result<()> {
+        let meta = raw::read_meta(raw)?;
+        let c = self.catalog()?;
+        let own = Sidecar { variants: Vec::new(), ..record.clone() };
+        c.upsert_stacked(&meta, &own, 0, own.stack.clone())?;
+        for v in &record.variants {
+            let mut m = meta.clone();
+            m.path = crate::variant::path_for(raw, v.id);
+            let stack = record.stack.as_ref().map(|s| Stack { id: s.id.clone(), top: false });
+            c.upsert_stacked(&m, &Sidecar { stack: stack.clone(), ..Default::default() }, 0, stack)?;
+            c.sync_sidecar(&m.path, &sidecar::load_variant_of(record, v.id))?;
+        }
+        c.store_settings_record(raw, record)
+    }
+}
+
+impl sidecar::Store for CatalogStore {
+    fn read(&self, raw: &Path) -> Option<Result<Option<Sidecar>>> {
+        let c = match self.catalog() {
+            Ok(c) => c,
+            Err(e) => return Some(Err(e)),
+        };
+        Some(match c.settings_lookup(raw) {
+            Ok(None) => return None,
+            Ok(Some(Some(text))) => sidecar::from_json(&text).map(Some),
+            // First read: take over the sidecar file, if any.
+            Ok(Some(None)) => sidecar::read_sidecar_file(raw).and_then(|file| {
+                c.store_settings_record(raw, &file.clone().unwrap_or_default())?;
+                Ok(file)
+            }),
+            Err(e) => Err(e),
+        })
+    }
+
+    fn write(&self, raw: &Path, record: &Sidecar) -> Option<Result<()>> {
+        let c = match self.catalog() {
+            Ok(c) => c,
+            Err(e) => return Some(Err(e)),
+        };
+        if c.contains(raw) {
+            return Some(c.store_settings_record(raw, record));
+        }
+        drop(c);
+        self.adopts(raw).then(|| self.adopt(raw, record))
+    }
+
+    fn keeps(&self, raw: &Path) -> bool {
+        self.adopts(raw) || self.catalog().is_ok_and(|c| c.contains(raw))
+    }
+
+    fn forget(&self, raw: &Path) {
+        if let Ok(c) = self.catalog() {
+            let _ = c.remove_path(raw);
+        }
+    }
+}
+
+/// A connection of a [`CatalogStore`] in use.
+struct Lease<'a> {
+    store: &'a CatalogStore,
+    catalog: Option<Catalog>,
+}
+
+impl std::ops::Deref for Lease<'_> {
+    type Target = Catalog;
+
+    fn deref(&self) -> &Catalog {
+        self.catalog.as_ref().expect("until dropped")
+    }
+}
+
+impl Drop for Lease<'_> {
+    fn drop(&mut self) {
+        let mut idle = self.store.idle.lock().unwrap_or_else(|e| e.into_inner());
+        // More than this many threads at once are rare; the rest open again when needed.
+        if idle.len() < 8 {
+            idle.extend(self.catalog.take());
+        }
+    }
+}
+
 /// Lists raw files in `folder` (optionally recursive), sorted. Links to folders (also Windows
 /// junctions) are not followed: emptying the trash deletes what this finds, and a link loop
 /// would list the same files again and again.
@@ -1106,6 +1395,10 @@ mod tests {
         let err = Catalog::open(&path).err().unwrap();
         assert!(format!("{err:#}").contains("neueren Silberkorn-Version"));
         assert_eq!(version(&path), SCHEMA_VERSION + 1);
+        // Sessions keep sidecar files: older builds can still open them.
+        let session = dir.join("s.sksession");
+        drop(Catalog::open(&session).unwrap());
+        assert_eq!(version(&session), SESSION_SCHEMA_VERSION);
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -1127,6 +1420,87 @@ mod tests {
         std::fs::remove_dir_all(dir).ok();
     }
 
+    #[test]
+    fn dates() {
+        assert_eq!(date_of(0), "1970-01-01");
+        assert_eq!(date_of(1_792_281_600), "2026-10-18");
+        assert_eq!(days_of("2026-10-18"), Some(1_792_281_600 / 86_400));
+        assert_eq!(days_of("2024-02-29").map(|d| date_of(d * 86_400)).as_deref(), Some("2024-02-29"));
+        assert_eq!(days_of("kaputt"), None);
+    }
+
+    #[test]
+    fn backups() {
+        let dir = std::env::temp_dir().join(format!("sk-backup-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let c = Catalog::open(&dir.join("catalog.sqlite")).unwrap();
+        c.upsert(&meta("/p/a.ARW", "2024:01:01 10:00:00", "L"), &Sidecar::default(), 0).unwrap();
+        let backups = dir.join("Sicherungen");
+        for old in ["2020-01-01", "2020-02-01", "2020-03-01"] {
+            std::fs::create_dir_all(&backups).unwrap();
+            std::fs::write(backups.join(format!("catalog-{old}.sqlite")), b"").unwrap();
+        }
+        let made = c.backup(&backups, 7, 2).unwrap().unwrap();
+        assert_eq!(Catalog::open(&made).unwrap().image_count().unwrap(), 1);
+        // Too soon for the next; only the newest two are kept.
+        assert_eq!(c.backup(&backups, 7, 2).unwrap(), None);
+        let left: Vec<_> = std::fs::read_dir(&backups).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left.len(), 2, "{left:?}");
+        assert!(backups.join("catalog-2020-03-01.sqlite").exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn store_keeps_the_settings() {
+        let dir = std::env::temp_dir().join(format!("sk-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("a.ARW");
+        std::fs::write(&img, b"x").unwrap();
+        sidecar::save(&img, &Sidecar { rating: 3, ..Default::default() }).unwrap();
+        let file_rating = || sidecar::read_sidecar_file(&img).unwrap().unwrap().rating;
+
+        let db = dir.join("catalog.sqlite");
+        let store: std::sync::Arc<dyn sidecar::Store> = std::sync::Arc::new(CatalogStore::open(&db, None).unwrap());
+        sidecar::add_store(&store);
+        // Not in the catalog: the sidecar file counts, and saving goes there.
+        sidecar::save(&img, &Sidecar { rating: 4, ..Default::default() }).unwrap();
+        assert_eq!(file_rating(), 4);
+
+        // In the catalog: the file is taken over once, then the catalog keeps the settings.
+        let c = Catalog::open(&db).unwrap();
+        c.upsert(&meta(img.to_str().unwrap(), "2024:01:01 10:00:00", "L"), &Sidecar::default(), 0).unwrap();
+        assert_eq!(sidecar::load(&img).rating, 4);
+        sidecar::save(&img, &Sidecar { rating: 5, ..Default::default() }).unwrap();
+        assert_eq!(sidecar::load(&img).rating, 5);
+        assert_eq!(file_rating(), 4, "die Datei bleibt, wie sie war");
+        let v = sidecar::add_variant(&img, &Sidecar { rating: 1, ..Default::default() }).unwrap();
+        assert_eq!(sidecar::load(&v).rating, 1);
+        assert!(sidecar::read_sidecar_file(&img).unwrap().unwrap().variants.is_empty());
+
+        // The settings follow a rename and go with the image.
+        let moved = dir.join("b.ARW");
+        c.rename_path(&img, &moved).unwrap();
+        assert_eq!(sidecar::load(&moved).rating, 5);
+        assert_eq!(sidecar::load(&crate::variant::path_for(&moved, 2)).rating, 1);
+
+        // A cleanup while the file is away keeps them for its return; another picture later at
+        // the same path doesn't get them.
+        std::fs::write(&moved, b"x").unwrap();
+        std::fs::remove_file(&moved).unwrap();
+        assert_eq!(c.remove_missing().unwrap(), 1);
+        std::fs::write(&moved, b"x").unwrap();
+        c.upsert(&meta(moved.to_str().unwrap(), "2024:01:01 10:00:00", "L"), &Sidecar::default(), 0).unwrap();
+        assert_eq!(sidecar::load(&moved).rating, 5);
+        c.upsert(&meta(moved.to_str().unwrap(), "2025:06:01 08:00:00", "L"), &Sidecar::default(), 0).unwrap();
+        assert_eq!(sidecar::load(&moved).rating, 0);
+
+        c.remove_path(&moved).unwrap();
+        assert_eq!(sidecar::load(&moved), Sidecar::default());
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     fn catalog() -> Catalog {
         let c = Catalog::open_in_memory().unwrap();
         let imp = c.begin_import().unwrap();
@@ -1140,6 +1514,27 @@ mod tests {
         c.upsert(&meta("/p/a/a.ARW", "2021:05:01", "FE 85mm"), &sc(5, ColorLabel::None, &["Portrait"]), imp).unwrap();
         c.upsert(&meta("/p/a/sub/c.ARW", "2019:07:07", "FE 35mm"), &sc(0, ColorLabel::Red, &[]), imp).unwrap();
         c
+    }
+
+    #[test]
+    fn image_and_keywords_are_written_together() {
+        let c = catalog();
+        let keywords = |c: &Catalog| c.conn.query_row("SELECT count(*) FROM keywords", [], |r| r.get::<_, i64>(0)).unwrap();
+        let failing = |c: &Catalog| {
+            c.atomic(|| -> Result<()> {
+                c.conn.execute("DELETE FROM keywords", [])?;
+                anyhow::bail!("Fehler mittendrin")
+            })
+        };
+        assert_eq!(keywords(&c), 3);
+        assert!(failing(&c).is_err());
+        assert_eq!(keywords(&c), 3);
+        // Inside a batch as well, and the batch goes on.
+        c.begin_batch().unwrap();
+        assert!(failing(&c).is_err());
+        c.sync_sidecar(Path::new("/p/a/a.ARW"), &Sidecar { keywords: vec!["Neu".into(), "Studio".into()], ..Default::default() }).unwrap();
+        c.end_batch().unwrap();
+        assert_eq!(keywords(&c), 4);
     }
 
     fn names(v: Vec<ImageRecord>) -> Vec<String> {
@@ -1430,5 +1825,75 @@ mod tests {
         assert_eq!(subfolder_pattern("/f/a_b", '/'), "/f/a\\_b/%");
         assert_eq!(subfolder_pattern("C:\\Fotos", '\\'), "C:\\\\Fotos\\\\%");
         assert_eq!(subfolder_pattern("C:\\", '\\'), "C:\\\\%");
+    }
+}
+
+#[cfg(test)]
+mod bench_store {
+    use super::*;
+    use std::time::Instant;
+
+    /// How fast settings are read from the catalog compared to sidecar files, with several
+    /// threads: `cargo test --release -p sk-core bench_store -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn bench_store_contention() {
+        let dir = std::env::temp_dir().join(format!("sk-bench-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let n = 2000;
+        let files: Vec<PathBuf> = (0..n).map(|i| dir.join(format!("img{i:04}.ARW"))).collect();
+        let mut adj = Sidecar::default();
+        adj.adjustments.exposure = 0.5;
+        adj.rating = 3;
+        for f in &files {
+            std::fs::write(f, b"x").unwrap();
+            sidecar::save(f, &adj).unwrap();
+        }
+        let run = |label: &str| {
+            use rayon::prelude::*;
+            for threads in [1usize, 4, 8] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                let t = Instant::now();
+                for _ in 0..3 {
+                    pool.install(|| files.par_iter().for_each(|f| assert_eq!(sidecar::load(f).rating, 3)));
+                }
+                let per = t.elapsed().as_secs_f64() / (3 * n) as f64 * 1e6;
+                println!("{label:>10} {threads} Threads: {per:.1} µs je Lesen");
+            }
+        };
+        run("Dateien");
+        let db = dir.join("catalog.sqlite");
+        let store: std::sync::Arc<dyn sidecar::Store> = std::sync::Arc::new(CatalogStore::open(&db, None).unwrap());
+        sidecar::add_store(&store);
+        let c = Catalog::open(&db).unwrap();
+        c.begin_batch().unwrap();
+        for f in &files {
+            c.upsert(&tests_meta(f), &Sidecar::default(), 0).unwrap();
+        }
+        c.end_batch().unwrap();
+        // First reads take the files over.
+        let t = Instant::now();
+        for f in &files {
+            sidecar::load(f);
+        }
+        println!("Übernahme: {:.1} µs je Bild", t.elapsed().as_secs_f64() / n as f64 * 1e6);
+        run("Katalog");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn tests_meta(p: &Path) -> RawMeta {
+        let id = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+        RawMeta {
+            path: p.to_path_buf(),
+            info: Default::default(),
+            color: crate::color::CameraColor::new(id),
+            as_shot_wb: [1.0; 3],
+            orientation: crate::image::Orientation::Normal,
+            hdr: false,
+            lens: None,
+            lens_corrected: false,
+        }
     }
 }

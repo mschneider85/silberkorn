@@ -58,7 +58,7 @@ const RAWNIND_ARCHIVE: &str = "https://github.com/darktable-org/darktable-ai/rel
 
 /// Object removal: MI-GAN (Picsart), inpainting at 512 px.
 pub const INPAINT: ModelInfo = ModelInfo {
-    label: "Entfernen (MI-GAN)",
+    label: "Objekt entfernen (MI-GAN)",
     file: "migan.onnx",
     url: "https://huggingface.co/andraniksargsyan/migan/resolve/406830d0fa60666da0071c342ad2fbc8f30c5c64/migan.onnx",
     bytes: 29_546_882,

@@ -71,7 +71,7 @@ impl App {
         let adj = &cur.adjustments;
         let src = (cur.preview.width, cur.preview.height);
         let Some(g) = sk_core::upright::solve(&segments, &adj.geometry, &adj.lens, cur.meta.lens.as_ref(), adj.rotation, src, mode) else {
-            self.status = "Automatisch geraderichten: keine geraden Kanten gefunden".into();
+            self.status = "Perspektive automatisch korrigieren: keine geraden Kanten gefunden".into();
             return;
         };
         let keystone = if g.keystone_v != 0.0 || g.keystone_h != 0.0 {
@@ -79,7 +79,7 @@ impl App {
         } else {
             String::new()
         };
-        self.status = format!("Automatisch geraderichten: {:.1}°{keystone}", g.straighten);
+        self.status = format!("Perspektive automatisch korrigiert: {:.1}°{keystone}", g.straighten);
         self.edit(|a| a.geometry = g);
         self.commit_and_save();
     }

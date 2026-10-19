@@ -1,6 +1,9 @@
-//! Per-image sidecar files (`<image>.sk.json`; older `<image>.crs.json` files are still read) holding adjustments and metadata.
+//! Per-image settings: adjustments and metadata. They live in sidecar files (`<image>.sk.json`;
+//! older `<image>.crs.json` files are still read), unless a [`Store`] keeps them: the catalog
+//! keeps those of its images in its database.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock, Weak};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -146,6 +149,55 @@ impl Variant {
     }
 }
 
+/// Keeps the settings of some images instead of their sidecar files (see `catalog::CatalogStore`).
+/// A record is what a raw file's sidecar file holds: its own settings and its variants'.
+pub trait Store: Send + Sync {
+    /// The record of raw file `raw`: `None` if this store doesn't keep it, else as [`read_file`]
+    /// gives it (`Ok(None)` for none yet).
+    fn read(&self, raw: &Path) -> Option<Result<Option<Sidecar>>>;
+    /// Stores the record of `raw`; `None` if this store doesn't keep it.
+    fn write(&self, raw: &Path, record: &Sidecar) -> Option<Result<()>>;
+    /// Whether [`Store::write`] would keep the record of `raw`.
+    fn keeps(&self, raw: &Path) -> bool;
+    /// Forgets `raw` (a copy taken in whose copying then failed).
+    fn forget(&self, raw: &Path);
+}
+
+/// The stores in use; the files keep everything else.
+static STORES: RwLock<Vec<Weak<dyn Store>>> = RwLock::new(Vec::new());
+
+/// Uses `store` until it is dropped.
+pub fn add_store(store: &Arc<dyn Store>) {
+    let mut stores = STORES.write().unwrap_or_else(|e| e.into_inner());
+    stores.retain(|s| s.strong_count() > 0);
+    stores.push(Arc::downgrade(store));
+}
+
+fn stores() -> Vec<Arc<dyn Store>> {
+    STORES.read().unwrap_or_else(|e| e.into_inner()).iter().filter_map(Weak::upgrade).collect()
+}
+
+/// The record of raw file `raw` from the store keeping it, if one does.
+fn stored(raw: &Path) -> Option<Result<Option<Sidecar>>> {
+    // Never taken for a damaged file (see `load_for_update`): that would replace the stored
+    // record with the defaults.
+    stores().iter().find_map(|s| s.read(raw)).map(|record| record.map(|r| r.map(normalized)).map_err(|e| anyhow::anyhow!("{e:#}")))
+}
+
+/// Whether a store, not a sidecar file, keeps (or would keep) the settings of `image`.
+pub fn kept_elsewhere(image: &Path) -> bool {
+    let raw = crate::variant::file_of(image);
+    stores().iter().any(|s| s.keeps(&raw))
+}
+
+/// Makes the stores forget `image` (see [`Store::forget`]).
+pub fn forget(image: &Path) {
+    let raw = crate::variant::file_of(image);
+    for s in stores() {
+        s.forget(&raw);
+    }
+}
+
 /// Sidecar file of an image; variants share the one of their raw file.
 pub fn sidecar_path(image: &Path) -> PathBuf {
     let image = &crate::variant::file_of(image);
@@ -214,6 +266,11 @@ fn is_damaged(e: &anyhow::Error) -> bool {
     e.chain().any(|c| c.is::<serde_json::Error>())
 }
 
+/// The settings of variant `n` (2 or more) in a raw file's record.
+pub fn load_variant_of(record: &Sidecar, n: u32) -> Sidecar {
+    variant_of(record, n)
+}
+
 /// Variant `n` (2 or more) of a raw file's sidecar.
 fn variant_of(file: &Sidecar, n: u32) -> Sidecar {
     Sidecar {
@@ -280,12 +337,19 @@ fn load_file(image: &Path) -> Sidecar {
     read_file(image).ok().flatten().unwrap_or_default()
 }
 
-/// The sidecar file of an image: `None` if there is none, an error if it can't be read.
+/// The record of an image (its raw file's): `None` if there is none, an error if it can't be read.
 fn read_file(image: &Path) -> Result<Option<Sidecar>> {
+    let raw = crate::variant::file_of(image);
+    stored(&raw).unwrap_or_else(|| read_sidecar_file(&raw))
+}
+
+/// The sidecar file of an image itself, whatever keeps its settings: `None` if there is none,
+/// an error if it can't be read.
+pub fn read_sidecar_file(image: &Path) -> Result<Option<Sidecar>> {
     for path in json_files_for(image) {
         match std::fs::read_to_string(&path) {
             Ok(text) => {
-                let mut sc: Sidecar = match serde_json::from_str(&text) {
+                let sc: Sidecar = match serde_json::from_str(&text) {
                     Ok(sc) => sc,
                     // A newer Silberkorn may use values this build doesn't know: not damaged.
                     Err(_) if newer_version(&text) => anyhow::bail!(
@@ -294,23 +358,77 @@ fn read_file(image: &Path) -> Result<Option<Sidecar>> {
                     ),
                     Err(e) => return Err(e).with_context(|| format!("{} ist beschädigt", path.display())),
                 };
-                sc.adjustments = sc.adjustments.normalized();
-                for v in &mut sc.variants {
-                    v.adjustments = std::mem::take(&mut v.adjustments).normalized();
-                    for s in &mut v.snapshots {
-                        s.adjustments = std::mem::take(&mut s.adjustments).normalized();
-                    }
-                }
-                for s in &mut sc.snapshots {
-                    s.adjustments = std::mem::take(&mut s.adjustments).normalized();
-                }
-                return Ok(Some(sc));
+                return Ok(Some(normalized(sc)));
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e).with_context(|| format!("{} kann nicht gelesen werden", path.display())),
         }
     }
     Ok(None)
+}
+
+fn normalized(mut sc: Sidecar) -> Sidecar {
+    sc.adjustments = sc.adjustments.normalized();
+    for v in &mut sc.variants {
+        v.adjustments = std::mem::take(&mut v.adjustments).normalized();
+        for s in &mut v.snapshots {
+            s.adjustments = std::mem::take(&mut s.adjustments).normalized();
+        }
+    }
+    for s in &mut sc.snapshots {
+        s.adjustments = std::mem::take(&mut s.adjustments).normalized();
+    }
+    sc
+}
+
+/// A record as a [`Store`] keeps it (as a sidecar file holds it).
+pub fn to_json(record: &Sidecar) -> Result<String> {
+    Ok(serde_json::to_string(&Sidecar { version: VERSION, ..record.clone() })?)
+}
+
+/// Inverse of [`to_json`]; an error for a record of a newer Silberkorn (see [`VERSION`]).
+pub fn from_json(text: &str) -> Result<Sidecar> {
+    match serde_json::from_str(text) {
+        Ok(sc) => Ok(sc),
+        Err(_) if newer_version(text) => anyhow::bail!("Die Einstellungen wurden von einer neueren Silberkorn-Version gespeichert. Bitte Silberkorn aktualisieren."),
+        Err(e) => Err(e).context("Einstellungen beschädigt"),
+    }
+}
+
+/// The whole record of an image's raw file (its settings and its variants'), to take along
+/// when the file is copied (see [`write_record`]).
+pub fn read_record(image: &Path) -> Result<Sidecar> {
+    load_for_update(image)
+}
+
+/// Gives the copy `to` of an image the settings of `from` (wherever each keeps them). A sidecar
+/// file this build can't read (damaged, or from a newer Silberkorn) is copied as it is.
+pub fn copy_settings(from: &Path, to: &Path) -> Result<()> {
+    let raw = crate::variant::file_of(from);
+    let record = match stored(&raw) {
+        // A store that can't be read is an error: its sidecar file, if any, is outdated.
+        Some(record) => record?,
+        None => match read_sidecar_file(&raw) {
+            Ok(record) if record.as_ref().is_none_or(|r| r.version <= VERSION) => record,
+            _ => {
+                for (a, b) in json_files_for(from).into_iter().zip(json_files_for(to)) {
+                    if a.exists() {
+                        crate::safe_file::copy(&a, &b)?;
+                    }
+                }
+                return Ok(());
+            }
+        },
+    };
+    match record {
+        Some(record) if (Sidecar { version: 0, ..record.clone() }) != Sidecar::default() => write_file(to, &record),
+        _ => Ok(()),
+    }
+}
+
+/// Stores a whole record (see [`read_record`]).
+pub fn write_record(image: &Path, record: &Sidecar) -> Result<()> {
+    write_file(image, record)
 }
 
 /// Whether `text` is a sidecar with a format version above [`VERSION`].
@@ -441,6 +559,12 @@ pub fn remove_variant(variant: &Path) -> Result<()> {
 }
 
 fn write_file(image: &Path, sidecar: &Sidecar) -> Result<()> {
+    let raw = crate::variant::file_of(image);
+    for store in stores() {
+        if let Some(written) = store.write(&raw, sidecar) {
+            return written;
+        }
+    }
     let path = sidecar_path(image);
     if (Sidecar { version: 0, ..sidecar.clone() }) == Sidecar::default() {
         // Nothing to store; remove a stale file if present.

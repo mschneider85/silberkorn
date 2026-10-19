@@ -25,6 +25,7 @@ mod guard;
 mod guides;
 mod history;
 mod hot_folder;
+mod import;
 mod jobs;
 mod layer_target;
 mod layers;

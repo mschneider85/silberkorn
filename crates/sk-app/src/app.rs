@@ -320,6 +320,8 @@ struct Settings {
     watch_folder: bool,
     /// While watching, new pictures are not opened.
     watch_no_open: bool,
+    /// Choices of the catalog import.
+    import: crate::import::ImportOptions,
 }
 
 /// Thumbnail textures kept at most (see `App::trim_thumbs`).
@@ -371,6 +373,9 @@ pub struct App {
     pub(crate) catalog: Option<Catalog>,
     /// Database used when no session is open.
     pub(crate) global_catalog: PathBuf,
+    /// Keeps the settings of the catalog's images (see `catalog::CatalogStore`); in the catalog
+    /// it takes in an image of a folder that was only browsed when it is first edited.
+    pub(crate) settings_store: Option<Arc<sk_core::catalog::CatalogStore>>,
     pub session: Option<Session>,
     pub recent_sessions: Vec<PathBuf>,
     pub session_ui: SessionUi,
@@ -620,6 +625,10 @@ pub struct App {
     /// Variant waiting for confirmation of its deletion.
     pub confirm_delete_variant: Option<Vec<PathBuf>>,
     pub rename: Option<crate::rename::RenameDialog>,
+    pub import: Option<crate::import::ImportDialog>,
+    /// Folder last imported from into a session (where choosing the next source starts).
+    pub import_source: Option<PathBuf>,
+    pub import_options: crate::import::ImportOptions,
     /// Image to select once its folder or session is shown after starting (the last one).
     pub(crate) restore_image: Option<PathBuf>,
     /// Snapshot being renamed in the history tab, with the text typed so far.
@@ -803,11 +812,39 @@ impl App {
             Ok(c) => (Some(c), settings_error.unwrap_or_default()),
             Err(e) => (None, format!("Katalog nicht verfügbar: {e:#}")),
         };
+        // The catalog keeps the settings of its images. Tests (one process, many apps) take in
+        // only their own images.
+        let scope = (!opts.persist_settings).then(|| catalog_path.parent().map(Path::to_path_buf)).flatten();
+        let settings_store = match sk_core::catalog::CatalogStore::open(&catalog_path, scope) {
+            Ok(s) => {
+                let s = Arc::new(s);
+                s.set_adopt(true);
+                sk_core::sidecar::add_store(&(s.clone() as Arc<dyn sk_core::sidecar::Store>));
+                Some(s)
+            }
+            Err(e) => {
+                log::error!("Katalog nicht verfügbar: {e:#}");
+                None
+            }
+        };
+        // A backup of the catalog every week; the last five are kept (not in tests).
+        if opts.persist_settings {
+            let path = catalog_path.clone();
+            std::thread::spawn(move || {
+                let dir = path.parent().map(|d| d.join("Sicherungen")).unwrap_or_else(|| PathBuf::from("Sicherungen"));
+                match Catalog::open(&path).and_then(|c| c.backup(&dir, 7, 5)) {
+                    Ok(Some(b)) => log::info!("Katalog gesichert: {}", b.display()),
+                    Ok(None) => {}
+                    Err(e) => log::warn!("Katalog-Sicherung fehlgeschlagen: {e:#}"),
+                }
+            });
+        }
         let mut app = Self {
             workers: Workers::spawn(ctx.clone()),
             persist_settings: opts.persist_settings,
             catalog,
             global_catalog: catalog_path,
+            settings_store,
             session: None,
             recent_sessions: settings.recent_sessions.into_iter().filter(|p| p.exists()).collect(),
             session_ui: SessionUi::default(),
@@ -995,6 +1032,9 @@ impl App {
             auto_mix: None,
             confirm_delete_variant: None,
             rename: None,
+            import: None,
+            import_source: None,
+            import_options: settings.import.clone(),
             restore_image: settings.last_image.clone(),
             snapshot_rename: None,
             debug_loupe: std::env::var("SILBERKORN_LOUPE").ok().and_then(|v| {
@@ -1126,6 +1166,7 @@ impl App {
             update_skipped: self.updates.skipped.clone(),
             watch_folder: self.hot_folder.on,
             watch_no_open: !self.hot_folder.open_new,
+            import: self.import_options.clone(),
         };
         if let Some(dir) = path.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -1334,7 +1375,10 @@ impl App {
             as_shot_temp_tint,
             unreadable,
         });
-        if looked {
+        // Not for an image of a folder only browsed: that would take it into the catalog (export
+        // gives a never edited image the look by itself).
+        let browsed = self.session.is_none() && self.catalog.as_ref().is_some_and(|c| !c.contains(&self.current.as_ref().expect("set").meta.path));
+        if looked && !browsed {
             // Saved right away, so that export and thumbnails see it too.
             self.sidecar_dirty = true;
             self.commit_and_save();
@@ -2549,12 +2593,28 @@ impl App {
         self.command_shortcuts(ctx);
         let pressed = |k: Key, m: Modifiers| ctx.input_mut(|i| i.consume_key(m, k));
         if pressed(Key::Escape, Modifiers::NONE) {
-            // Esc first ends a tool; with none active it leaves full screen.
-            if !self.viewer_tool_active() && self.fullscreen {
+            // Esc first ends a tool, then a view, then full screen.
+            if self.viewer_tool_active() {
+                self.cancel_viewer_tools();
+            } else if !self.leave_view() && self.fullscreen {
                 self.toggle_fullscreen(ctx);
             }
-            self.cancel_viewer_tools();
         }
+    }
+
+    /// Esc: back from before/after, the split views, the output preview and 100 % to the plain
+    /// view. Softproof and print preview stay on, they're set up to be kept. False if none was on.
+    pub(crate) fn leave_view(&mut self) -> bool {
+        let on = self.show_before || self.split_view || self.proof_view || (self.zoom.is_some() && !self.print.zoom);
+        if self.show_before {
+            self.toggle_before();
+        }
+        self.set_split(None);
+        self.proof_view = false;
+        if !self.print.zoom {
+            self.zoom_fit();
+        }
+        on
     }
 
     // ---------------------------------------------------------------- layout
@@ -2705,6 +2765,9 @@ impl App {
             if std::env::var_os("SILBERKORN_SIDE").is_some() {
                 self.toggle_side_by_side();
             }
+            if let Some(source) = std::env::var_os("SILBERKORN_IMPORT") {
+                self.open_import(PathBuf::from(source), true);
+            }
             if let Ok(template) = std::env::var("SILBERKORN_RENAME") {
                 self.select_all();
                 self.open_rename();
@@ -2784,6 +2847,14 @@ impl App {
         }
         // Wait for the proof (it needs the full resolution).
         if self.proof_view && !self.proof.as_ref().is_some_and(|p| p.version == self.edit_version) {
+            if let Some((_, Some(t))) = &mut self.screenshot {
+                *t = now;
+            }
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            return;
+        }
+        // Wait for the import dialog's check.
+        if self.import.as_ref().is_some_and(|d| d.checking()) {
             if let Some((_, Some(t))) = &mut self.screenshot {
                 *t = now;
             }

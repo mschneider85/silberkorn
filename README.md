@@ -144,7 +144,7 @@ Pinselstrichen, linearen und radialen Verläufen, „Füllen“ und „Invertier
 statt des ganzen Bildes: Belichtung, Kontrast, Helligkeit, Lichter, Tiefen, Weiß, Schwarz, Temperatur und
 Tönung (relativ zum Hintergrund), Sättigung, Dynamik, die Bänder des Farbeditors, die Farbbalance,
 Klarheit, Struktur und Dunst entfernen. Was nur aufs ganze Bild wirkt, ist im Ebenenmodus deaktiviert:
-die Werkzeuge Tonwerte, Kurven, Schärfen, Rauschen usw. (zugeklappt, „nur ganzes Bild“), die Tabs
+die Werkzeuge Tonwerte, Kurven, Schärfen, Rauschreduzierung usw. (zugeklappt, „nur ganzes Bild“), die Tabs
 Objektiv, Effekte, Retusche und Stile sowie Zuschneiden, Drehen, Weißabgleich-Pipette, Automatisch
 anpassen und Einfügen. Ein blauer Punkt in der Tab-Leiste markiert die Tabs, die auf die Ebene wirken.
 Woran man gerade arbeitet, zeigt:
@@ -205,7 +205,7 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
   den Decoder (etwa 0,2 s). tract rechnet nur dessen 256er-Maske, Silberkorn skaliert sie selbst hoch und
   verfeinert die Kanten am Bild. Jeder Klick ist ein Rückgängig-Schritt.
 - **Helligkeitsbereich** und **Farbbereich** (mit Pipette, unter „Maske“ → „Eingrenzen“) beschränken jede Maske.
-- **Stilpinsel** (+ unter der Ebenenliste → „Neue Ebene mit Stilpinsel“): Pinsel-Presets (Aufhellen, Abdunkeln, Wärmer, Haut glätten, Dunst entfernen, …).
+- **Stilpinsel** (+ unter der Ebenenliste → „Neue Ebene mit Stilpinsel“): Stilpinsel (Aufhellen, Abdunkeln, Wärmer, Haut glätten, Dunst entfernen, …).
 
 ### KI-Werkzeuge: Entrauschen und Entfernen
 
@@ -237,7 +237,7 @@ Statusleiste mit Fortschritt an; Export, Zusammenfügen und Entrauschen lassen s
 abbrechen, und beim Beenden fragt Silberkorn nach, solange sie laufen; worauf man im Bild wartet (Maske, Entfernen, Angleichen),
 erscheint zusätzlich oben im Bild.
 
-- **KI-Entrauschen** (Tab „Details“, Abschnitt „Rauschen“; das Übertragen-Symbol im Kopf des Abschnitts gilt für die Auswahl): RawNIND (UtNet2, Benoit
+- **KI-Entrauschen** (Tab „Details“, Abschnitt „Rauschreduzierung“; das Übertragen-Symbol im Kopf des Abschnitts gilt für die Auswahl): RawNIND (UtNet2, Benoit
   Brummer, UCLouvain) in der Fassung von darktable (darktable-ai 5.6.0). Die Gewichte stehen unter
   **GPL-3.0**; sie werden nicht mitgeliefert, sondern wie die anderen Modelle beim Start geladen (etwa 57 MB,
   per Teil-Download nur die beiden ONNX-Dateien aus dem Archiv).
@@ -253,7 +253,7 @@ erscheint zusätzlich oben im Bild.
   in die RAW-Daten: nicht-destruktiv, rückgängig zu machen, gilt für Vorschau, Export und
   Thumbnails. Fehlt es beim Export, wird es dort berechnet – nie wird stillschweigend ohne
   exportiert. Kommandozeile: `cargo run --release -p sk-ai --example denoise -- <raw> <ordner> [stärke] [--linear]`
-- **Entfernen** (X, Tab „Retusche“): Über Störendes malen; beim Loslassen füllt MI-GAN
+- **Objekt entfernen** (X, Tab „Retusche“): Über Störendes malen; beim Loslassen füllt MI-GAN
   (Picsart, MIT, 30 MB) die Stelle passend zur Umgebung. Gefüllt wird in voller Auflösung, bei
   größeren Markierungen in mehreren 512er-Fenstern nacheinander; erst sehr große Flächen werden
   verkleinert berechnet. Das Ergebnis ist ein kleiner Flicken mit weicher Kante im Sidecar (Feld
@@ -509,12 +509,12 @@ genau ausgerichtet sind, Esc bricht ab. Wer verschobene Linien liegen lässt und
 LSD-Prinzip) und bestimmt Drehung und Perspektive so, dass sie waagerecht bzw. senkrecht stehen.
 Bewertet wird jede Lösung über die echte Geometrie-Kette, einschließlich Objektivkorrektur.
 
-- **Automatisch** (Umschalt+A, Entwickeln → „Automatisch geraderichten“): Drehung und stürzende Linien.
-- Im Menü daneben **Senkrechte und waagerechte Kanten:** zusätzlich die horizontale Perspektive, etwa
+- **Auto** (Umschalt+A, Entwickeln → „Perspektive automatisch korrigieren“): Drehung und stürzende Linien.
+- Im Menü daneben **Vertikale und horizontale Kanten:** zusätzlich die horizontale Perspektive, etwa
   für eine schräg fotografierte Fassade.
 - **Auto** im Abschnitt Drehung: nur Horizont und Kanten waagerecht, die Perspektive bleibt unverändert.
 
-Waagerechte zählen bis 8° Abweichung, Senkrechte bis 15°; deutlich schräge Kanten wie Dächer
+Horizontale zählen bis 8° Abweichung, vertikale bis 15°; deutlich schräge Kanten wie Dächer
 oder Wege bleiben unberücksichtigt. Die Perspektive wird nur korrigiert, wenn mehrere passende Kanten über
 das Bild verteilt sind. Das Ergebnis ist ein
 Rückgängig-Schritt und lässt sich mit den Reglern nachjustieren.
@@ -697,7 +697,7 @@ Eine Session ist ein in sich geschlossener Projektordner mit eigener Datenbank:
 Hochzeit Müller/
   Hochzeit Müller.sksession   Session-Datenbank (Alben, Favoriten, Index)
   Capture/                    „Aufnahmen“ – neue Bilder
-  Selects/                    „Auswahl“ – die Auswahl
+  Selects/                    „Selects“ – die ausgewählten Bilder
   Output/                     „Ausgabe“ – verarbeitete Dateien
   Trash/                      „Papierkorb“ – bis er geleert wird
   Silberkorn/Cache/           Vorschaubilder der Session
@@ -708,7 +708,7 @@ Hochzeit Müller/
   Menü, und die zuletzt offene Session wird beim Start wieder geöffnet. Eine Session lässt sich
   auch als Programmargument übergeben (`silberkorn "Hochzeit Müller"`).
 - **Importieren** kopiert RAWs samt Sidecars in „Aufnahmen“ (die Originale bleiben liegen).
-- **Strg+J** verschiebt die Auswahl nach „Auswahl“, **Strg+Entf** in den Papierkorb; per
+- **Strg+J** verschiebt die Auswahl nach „Selects“, **Strg+Entf** (im Raster auch Entf) in den Papierkorb; per
   Rechtsklick auf ein Vorschaubild oder im Menü „Foto“ geht es auch nach „Aufnahmen“, in
   einen Favoriten oder einen beliebigen Ordner. Sidecars wandern mit, bei Namensgleichheit
   wird `-2`, `-3` … angehängt.
@@ -751,7 +751,7 @@ beziehen sich aber nur auf die Bilder der Session.
   Keyword; Sortierung nach Name, Aufnahmedatum oder Bewertung.
 - **Keywords** im Tab „Metadaten“ (mit Vorschlägen aus dem Katalog); Bewertung, Label und
   Keywords wirken auf die ganze Auswahl.
-- **Stile:** Anpassungen als Preset speichern (`~/.config/silberkorn/styles`) und auf die Auswahl anwenden.
+- **Stile:** Anpassungen als Stil speichern (`~/.config/silberkorn/styles`) und auf die Auswahl anwenden.
   Der Tab „Stile“ zeigt Filmsimulationen und eigene Stile als **Vorschauen**: jeder Stil auf das
   aktuelle Bild angewendet, im Hintergrund klein gerechnet und nach jeder abgeschlossenen Änderung neu.
   Klick wendet ihn auf die Auswahl an, der Zeiger zeigt ihn groß im Bild,
@@ -824,10 +824,10 @@ die Leertaste und die Tasten der Schnellbearbeitung.
 | 6 / 7 / 8 / 9 | Farb-Label Rot / Gelb / Grün / Blau |
 | G | Raster ↔ Einzelbild |
 | Strg+Z / Strg+Y | Rückgängig / Wiederholen |
-| Strg+Umschalt+C / V | Anpassungen kopieren / auf Auswahl anwenden |
+| Strg+Umschalt+C / V | Anpassungen kopieren / einfügen |
 | Strg+D | Auswahl exportieren |
 | Strg+N / Strg+Umschalt+O | neue Session / Session öffnen |
-| Strg+J / Strg+Entf | nach „Auswahl“ / in den Papierkorb verschieben (Session) |
+| Strg+J / Strg+Entf | nach „Selects“ / in den Papierkorb verschieben (Session; im Raster auch Entf) |
 | Strg+A | alle auswählen · Strg/Umschalt+Klick, Umschalt+Pfeiltaste: Mehrfachauswahl |
 | Strg+[ / Strg+] | drehen |
 | Y | Vorher/Nachher |
@@ -836,6 +836,7 @@ die Leertaste und die Tasten der Schnellbearbeitung.
 | W | Weißabgleich-Pipette |
 | Z / Doppelklick | Einpassen ↔ 100 % · Mausrad: zoomen · Ziehen: verschieben |
 | C / Enter / Esc | Zuschnitt-Werkzeug / übernehmen / abbrechen |
+| Esc | beendet der Reihe nach Werkzeug, Ansicht (Vorher/Nachher, Vergleich, Ausgabevorschau, 100 %) und Vollbild |
 | B / N / L / R | Pinsel / Radierer / linearer / radialer Verlauf |
 | H / S | Reparieren / Klonen · Entf: Punkt löschen |
 | X | Entfernen (KI-Funktion) |

@@ -111,7 +111,7 @@ impl Tool {
             Tool::Levels => "Tonwerte",
             Tool::Curves => "Gradationskurve",
             Tool::Sharpening => "Schärfen",
-            Tool::NoiseReduction => "Rauschen",
+            Tool::NoiseReduction => "Rauschreduzierung",
             Tool::Clarity => "Klarheit",
             Tool::Dehaze => "Dunst entfernen",
             Tool::Vignette => "Vignette",

@@ -316,8 +316,8 @@ impl App {
             changed |= slider_row(ui, "Verzeichnung", &mut l.distortion, -100.0..=100.0, 0.0, 0);
             changed |= crate::widgets::slider_row_with(ui, "Fisheye", &mut l.fisheye, 0.0..=220.0, 0.0, 0, crate::widgets::SliderOpts { suffix: "°", ..Default::default() });
             crate::widgets::hint(ui, "Fisheye: Bildwinkel über die Diagonale (meist 180°), rechnet in ein normales Weitwinkelbild um");
-            changed |= slider_row(ui, "CA Rot/Cyan", &mut l.ca_red, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "CA Blau/Gelb", &mut l.ca_blue, -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Farbsaum Rot/Cyan", &mut l.ca_red, -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Farbsaum Blau/Gelb", &mut l.ca_blue, -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Farbsaum Lila", &mut l.defringe_purple, 0.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Farbsaum Grün", &mut l.defringe_green, 0.0..=100.0, 0.0, 0);
             ui.label(
@@ -415,15 +415,15 @@ impl App {
                 // Each button stays together with its menu arrow when the row wraps.
                 ui.horizontal(|ui| {
                     let tip = crate::commands::hint("Stürzende Linien automatisch korrigieren, die Drehung wird mit ausgerichtet", "auto-upright");
-                    if ui.button(format!("{}  Automatisch", icon::PERSPECTIVE)).on_hover_text(tip).clicked() {
+                    if ui.button(format!("{}  Auto", icon::MAGIC_WAND)).on_hover_text(tip).clicked() {
                         upright = Some(UprightMode::Vertical);
                     }
                     ui.menu_button(icon::CARET_DOWN, |ui| {
                         ui.label(RichText::new("Automatisch ausrichten:").weak());
                         let vertical_tip = crate::commands::hint("Stürzende Linien werden parallel", "auto-upright");
                         for (mode, label, tip) in [
-                            (UprightMode::Vertical, "Senkrechte Kanten", vertical_tip.as_str()),
-                            (UprightMode::Full, "Senkrechte und waagerechte Kanten", "Auch die horizontale Perspektive wird korrigiert"),
+                            (UprightMode::Vertical, "Vertikale Kanten", vertical_tip.as_str()),
+                            (UprightMode::Full, "Vertikale und horizontale Kanten", "Auch die horizontale Perspektive wird korrigiert"),
                         ] {
                             if ui.button(label).on_hover_text(tip).clicked() {
                                 upright = Some(mode);
@@ -436,7 +436,7 @@ impl App {
                 });
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
-                    let tip = "Linien an Kanten legen, die senkrecht oder waagerecht sein sollen";
+                    let tip = "Linien an Kanten legen, die vertikal oder horizontal sein sollen";
                     let label = format!("{}  Linien ziehen", icon::LINE_SEGMENTS);
                     if ui.add(egui::Button::new(label).selected(guide_mode.is_some())).on_hover_text(tip).clicked() {
                         guides = Some(guide_mode.is_none().then_some(guide_pref));
@@ -444,9 +444,9 @@ impl App {
                     ui.menu_button(icon::CARET_DOWN, |ui| {
                         ui.label(RichText::new("Linien für:").weak());
                         for (mode, label, tip) in [
-                            (GuideMode::Vertical, "Senkrechte Kanten", "Zwei Linien an Kanten legen, die senkrecht sein sollen"),
-                            (GuideMode::Horizontal, "Waagerechte Kanten", "Zwei Linien an Kanten legen, die waagerecht sein sollen"),
-                            (GuideMode::Both, "Beides", "Je zwei Linien für senkrechte und waagerechte Kanten"),
+                            (GuideMode::Vertical, "Vertikale Kanten", "Zwei Linien an Kanten legen, die vertikal sein sollen"),
+                            (GuideMode::Horizontal, "Horizontale Kanten", "Zwei Linien an Kanten legen, die horizontal sein sollen"),
+                            (GuideMode::Both, "Vertikale und horizontale Kanten", "Je zwei Linien für vertikale und horizontale Kanten"),
                         ] {
                             if ui.radio(guide_mode.unwrap_or(guide_pref) == mode, label).on_hover_text(tip).clicked() {
                                 guides = Some(Some(mode));
@@ -851,7 +851,7 @@ impl App {
                 ui.label(RichText::new("Automatisch anpassen setzt:").weak());
                 ui.checkbox(&mut opts.white_balance, "Weißabgleich");
                 ui.checkbox(&mut opts.exposure, "Belichtung");
-                ui.checkbox(&mut opts.tone, "Lichter, Schatten, Weiß und Schwarz");
+                ui.checkbox(&mut opts.tone, "Lichter, Tiefen, Weiß und Schwarz");
                 ui.checkbox(&mut opts.contrast, "Kontrast");
                 ui.checkbox(&mut opts.vibrance, "Dynamik");
             })

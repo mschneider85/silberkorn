@@ -28,7 +28,7 @@ pub fn section_help(ui: &mut Ui, title: &str, help: &str, reset: Option<&mut dyn
 
 /// [`section_help`] of an AI function: marked with the yellow sparkle after the title.
 pub fn section_help_ai(ui: &mut Ui, title: &str, help: &str, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
-    section_inner(ui, title, true, Some(help), None, true, reset, body);
+    section_inner(ui, title, true, Some(help), None, true, None, reset, body);
 }
 
 /// Hover text of the AI mark.
@@ -53,7 +53,13 @@ pub fn section_full(
     reset: Option<&mut dyn FnMut()>,
     body: impl FnOnce(&mut Ui),
 ) {
-    section_inner(ui, title, default_open, help, None, false, reset, body);
+    section_inner(ui, title, default_open, help, None, false, None, reset, body);
+}
+
+/// A section that starts closed and shows in its header how many entries it holds
+/// ("Bearbeitung (3)"; nothing for none).
+pub fn section_counted(ui: &mut Ui, title: &str, help: Option<&str>, count: usize, body: impl FnOnce(&mut Ui)) {
+    section_inner(ui, title, false, help, None, false, Some(count), None, body);
 }
 
 fn copy_targets_id() -> egui::Id {
@@ -156,12 +162,12 @@ pub fn take_copy_clicked(ctx: &egui::Context) -> Option<sk_core::tools::Tool> {
 /// [`section`] of a develop tool: titled after it, with a button in the header that carries
 /// its settings over to the other selected images.
 pub fn tool_section(ui: &mut Ui, tool: sk_core::tools::Tool, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
-    section_inner(ui, tool.label(), true, None, Some(tool), tool.is_ai(), reset, body);
+    section_inner(ui, tool.label(), true, None, Some(tool), tool.is_ai(), None, reset, body);
 }
 
 /// [`tool_section`] with an explanation behind an info icon in the header.
 pub fn tool_section_help(ui: &mut Ui, tool: sk_core::tools::Tool, help: &str, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
-    section_inner(ui, tool.label(), true, Some(help), Some(tool), tool.is_ai(), reset, body);
+    section_inner(ui, tool.label(), true, Some(help), Some(tool), tool.is_ai(), None, reset, body);
 }
 
 /// Sections of functions that not everyone uses: closed until opened (then they stay open).
@@ -186,6 +192,7 @@ fn section_inner(
     help: Option<&str>,
     copy: Option<sk_core::tools::Tool>,
     ai: bool,
+    count: Option<usize>,
     reset: Option<&mut dyn FnMut()>,
     body: impl FnOnce(&mut Ui),
 ) {
@@ -196,10 +203,11 @@ fn section_inner(
         image_only_header(ui, title);
         return;
     }
-    // Specialized sections start closed; their state is kept under a key of its own, so that
-    // they also close once where they had been open before (every section used to start open).
+    // Specialized and counted sections start closed; their state is kept under a key of its own,
+    // so that they also close once where they had been open before (every section used to start
+    // open).
     let special = SPECIALIZED.contains(&title);
-    let id = if special { ui.make_persistent_id((title, "eingeklappt")) } else { ui.make_persistent_id(title) };
+    let id = if special || count.is_some() { ui.make_persistent_id((title, "eingeklappt")) } else { ui.make_persistent_id(title) };
     let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(id, default_open && !special));
     let reveal = ui.data(|d| d.get_temp::<String>(reveal_id())).is_some_and(|t| t == title);
     let flash_id = id.with("flash");
@@ -237,6 +245,11 @@ fn section_inner(
     let galley = painter.layout_no_wrap(title.to_string(), egui::FontId::proportional(13.5), title_color);
     let mut title_w = galley.size().x;
     painter.galley(pos2(inner.left() + 6.0, inner.center().y - galley.size().y / 2.0), galley, title_color);
+    if let Some(n) = count.filter(|n| *n > 0) {
+        let galley = painter.layout_no_wrap(format!("({n})"), egui::FontId::proportional(12.5), theme::TEXT_DIM);
+        painter.galley(pos2(inner.left() + 6.0 + title_w + 5.0, inner.center().y - galley.size().y / 2.0), galley.clone(), theme::TEXT_DIM);
+        title_w += 5.0 + galley.size().x;
+    }
     if ai {
         let r = Rect::from_center_size(pos2(inner.left() + 6.0 + title_w + 12.0, inner.center().y), vec2(16.0, 20.0));
         ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, theme::icon::SPARKLE, egui::FontId::proportional(13.0), theme::AI);

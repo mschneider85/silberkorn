@@ -65,7 +65,7 @@ fn record_from_sidecar(path: PathBuf, sc: Sidecar) -> ImageRecord {
 }
 
 pub fn scope_label(scope: &Scope, lists: &CatalogLists, session: Option<&sk_core::session::Session>) -> String {
-    // Session folders are shown by their label ("Auswahl" rather than "Selects").
+    // Session folders are shown by their label ("Aufnahmen" rather than "Capture").
     if let (Scope::Folder { path, recursive: false }, Some(s)) = (scope, session)
         && let Some(f) = s.folder_of(path).filter(|f| s.folder(*f) == *path)
     {
@@ -120,10 +120,10 @@ impl App {
         }
         self.save_settings();
         self.open_scope(Scope::Folder { path: folder.clone(), recursive: false });
-        // Index silently so that dates, cameras and search work for this folder;
-        // in a session only its own folders belong in its database.
+        // A session's own folders are its database: indexed silently, so that dates, cameras
+        // and search work. The catalog only holds what was imported.
         let paths = catalog::scan_folder(&folder, false);
-        let belongs = self.session.as_ref().is_none_or(|s| folder.starts_with(&s.root));
+        let belongs = self.session.as_ref().is_some_and(|s| folder.starts_with(&s.root));
         if !paths.is_empty() && belongs {
             self.workers.index(IndexJob { catalog: self.catalog_path(), paths, import: false, copy_to: None });
         }
@@ -147,20 +147,22 @@ impl App {
     }
 
     /// Imports a folder tree (shown as "last import"). In a session the files are copied
-    /// into its Capture folder, unless they already are inside the session.
+    /// into its Capture folder, unless they already are inside the session; the catalog does
+    /// what its import dialog was last set to.
+    #[cfg(test)]
     pub fn import_folder(&mut self, folder: &Path) {
-        let paths = catalog::scan_folder(folder, true);
+        let copy_to = self.import_copy_to(folder);
+        self.import_files(catalog::scan_folder(folder, true), copy_to);
+    }
+
+    /// Imports `paths`, copying them first with `copy_to` (see `import.rs`).
+    pub fn import_files(&mut self, paths: Vec<PathBuf>, copy_to: Option<crate::import::CopyTo>) {
         if paths.is_empty() {
             self.status = "Keine RAW-Dateien gefunden".into();
             return;
         }
-        let copy_to = self
-            .session
-            .as_ref()
-            .filter(|s| !folder.starts_with(&s.root))
-            .map(|s| s.folder(sk_core::session::SessionFolder::Capture));
         self.status = match &copy_to {
-            Some(_) => format!("Kopiere {} in die Session …", crate::widgets::image_count(paths.len())),
+            Some(_) => format!("Kopiere {} …", crate::widgets::image_count(paths.len())),
             None => format!("Importiere {} …", crate::widgets::image_count(paths.len())),
         };
         self.workers.index(IndexJob { catalog: self.catalog_path(), paths, import: true, copy_to });
@@ -169,7 +171,12 @@ impl App {
     /// Re-reads the entries of the current scope, keeping selection by path.
     pub fn reload_entries(&mut self) {
         let mut records = match &self.scope {
-            Scope::Folder { path, recursive: false } => {
+            // In the catalog also a tree with subfolders that wasn't imported (read from the
+            // file system: slow for a large tree, so only then).
+            Scope::Folder { path, recursive }
+                if !*recursive
+                    || (self.session.is_none() && self.catalog.as_ref().is_some_and(|c| c.query(&self.scope, &Filter::default(), SortKey::Name, false).is_ok_and(|r| r.is_empty()))) =>
+            {
                 // The file system is authoritative; the catalog adds metadata where indexed.
                 let indexed: HashMap<PathBuf, ImageRecord> = self
                     .catalog
@@ -179,7 +186,7 @@ impl App {
                     .into_iter()
                     .map(|r| (r.path.clone(), r))
                     .collect();
-                sidecar::load_all(&catalog::scan_folder(path, false))
+                sidecar::load_all(&catalog::scan_folder(path, *recursive))
                     .into_iter()
                     .map(|(p, sc)| indexed.get(&p).cloned().unwrap_or_else(|| record_from_sidecar(p, sc)))
                     .collect()
@@ -476,7 +483,7 @@ impl App {
             entry(ui, Scope::LastImport, format!("{}  Letzter Import", crate::theme::icon::CLOCK_COUNTER_CLOCKWISE));
             ui.horizontal(|ui| {
                 if self.session.is_none()
-                    && ui.button(format!("{}  Ordner importieren", crate::theme::icon::DOWNLOAD_SIMPLE)).on_hover_text("Aktuellen Ordner inkl. Unterordnern in den Katalog aufnehmen").clicked()
+                    && ui.button(format!("{}  Importieren …", crate::theme::icon::DOWNLOAD_SIMPLE)).on_hover_text("Bilder dieses Ordners und seiner Unterordner in den Katalog aufnehmen").clicked()
                 {
                     do_import = true;
                 }
@@ -491,7 +498,7 @@ impl App {
 
         if do_import {
             let folder = self.folder.clone();
-            self.import_folder(&folder);
+            self.open_import(folder, true);
         }
         // Filtering is used most, so it comes right after the catalog.
         let mut refilter = false;
@@ -621,6 +628,7 @@ impl App {
                         if smart {
                             let _ = c.create_album(&name, Some(&self.filter));
                         } else if let Ok(id) = c.create_album(&name, None) {
+                            index_missing(c, &selected);
                             let _ = c.add_to_album(id, &selected);
                         }
                         self.library_ui.new_album.clear();
@@ -633,6 +641,7 @@ impl App {
                     }
                     AlbumAction::Delete(id, name) => self.pending_deletion = Some(crate::deletion::Deletion::Album(id, name)),
                     AlbumAction::AddSelection(id) => {
+                        index_missing(c, &selected);
                         let n = c.add_to_album(id, &selected).unwrap_or(0);
                         self.status = format!("{} zum Album hinzugefügt", crate::widgets::image_count(n));
                     }
@@ -849,6 +858,19 @@ fn style_rows(ui: &mut Ui, list: &[(Style, bool, String)]) -> crate::style_grid:
         }
     }
     (clicked, hovered, delete)
+}
+
+/// Takes images of a folder that was only browsed into the catalog, where they are: an album
+/// holds catalog images.
+fn index_missing(c: &sk_core::catalog::Catalog, paths: &[PathBuf]) {
+    // A variant comes in with its file (it has no file of its own to read).
+    for file in sk_core::variant::files_of(paths) {
+        for p in sk_core::variant::of_file(&file) {
+            if c.needs_index(&p).unwrap_or(true) {
+                let _ = crate::guard::catch(|| c.index_file(&p, 0));
+            }
+        }
+    }
 }
 
 pub fn sort_records(records: &mut [ImageRecord], key: SortKey, desc: bool) {

@@ -1454,10 +1454,10 @@ fn defringe_pixel(p: [f32; 3], mean: f32, mean_sq: f32, [purple, green]: [f32; 2
     if cr == 0.0 && cb == 0.0 {
         return p;
     }
-    let edge = smoothstep(0.008, 0.035, (mean_sq - mean * mean).max(0.0).sqrt());
+    let edge = smoothstep(0.015, 0.06, (mean_sq - mean * mean).max(0.0).sqrt());
     // Hue in the color difference plane: magenta at 45°, blue at 95°, cyan at 160°, green at 225°.
     let hue = cb.atan2(cr).to_degrees().rem_euclid(360.0);
-    let k = (edge * (purple * hue_band(hue, 20.0, 125.0, 20.0) + green * hue_band(hue, 195.0, 250.0, 20.0))).min(1.0);
+    let k = (edge * (purple * hue_band(hue, 25.0, 115.0, 20.0) + green * hue_band(hue, 195.0, 250.0, 20.0))).min(1.0);
     p.map(|v| v + (y - v) * k)
 }
 
