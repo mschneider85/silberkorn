@@ -1,11 +1,13 @@
 # Builds the Windows program and its installer for a version tag (e.g. v0.2.0) and publishes both
-# as a GitHub release.
+# as a GitHub release. Started by hand (Actions → Release → Run workflow), it builds the same from the
+# chosen branch and only keeps the files as an artifact of the run: to try the build before a release.
 # The app's update check reads these releases and runs the installer (see crates/sk-core/src/update.rs).
 name: Release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,14 +18,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Tag und Version im Cargo.toml müssen übereinstimmen
+      - name: Version (beim Tag muss sie zum Cargo.toml passen)
         shell: bash
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
-          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "v$version" != "$GITHUB_REF_NAME" ]; then
             echo "::error::Tag $GITHUB_REF_NAME passt nicht zur Version $version in Cargo.toml"
             exit 1
           fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -38,7 +41,7 @@ jobs:
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
           New-Item -ItemType Directory out | Out-Null
-          & $iscc "/DVersion=$($env:GITHUB_REF_NAME.TrimStart('v'))" "/DExe=$env:GITHUB_WORKSPACE\target\dist\silberkorn.exe" "/O$env:GITHUB_WORKSPACE\out" installer\silberkorn.iss
+          & $iscc "/DVersion=$env:VERSION" "/DExe=$env:GITHUB_WORKSPACE\target\dist\silberkorn.exe" "/O$env:GITHUB_WORKSPACE\out" installer\silberkorn.iss
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       - name: Programmdatei und Prüfsummen
@@ -48,7 +51,23 @@ jobs:
           cd out
           for f in *.exe; do sha256sum "$f" > "$f.sha256"; done
 
+      - name: Ohne Zusatz-DLLs (crt-static, siehe .cargo/config.toml)
+        shell: pwsh
+        run: |
+          $dumpbin = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -find "VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" | Select-Object -First 1
+          $deps = & $dumpbin /dependents target\dist\silberkorn.exe
+          $deps
+          if ($deps -match 'VCRUNTIME|MSVCP|api-ms-win-crt') { Write-Error "Die C-Laufzeit ist nicht eingebunden"; exit 1 }
+
+      - name: Dateien des Testlaufs aufheben
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: silberkorn-test
+          path: out/
+
       - name: Release veröffentlichen
+        if: github.event_name == 'push'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
