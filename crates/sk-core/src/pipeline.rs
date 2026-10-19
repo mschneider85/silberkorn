@@ -774,7 +774,7 @@ impl Processor {
     fn retouch_relevant(&self) -> serde_json::Value {
         serde_json::json!({
             "g": self.adj.geometry, "l": self.adj.lens, "r": self.adj.rotation, "ic": self.opts.ignore_crop,
-            "rt": self.adj.retouch, "rm": self.adj.removals.iter().map(|r| (r.id, r.rect)).collect::<Vec<_>>(),
+            "rt": self.adj.retouch, "rm": self.adj.removals.iter().map(|r| (r.id, r.rect, r.opacity)).collect::<Vec<_>>(),
         })
     }
 
@@ -1944,6 +1944,7 @@ mod tests {
             target: [0.3, 0.3],
             source: [0.6, 0.6],
             path: vec![],
+            strokes: Vec::new(),
             radius: 0.05,
             feather: 0.5,
             opacity: 1.0,
@@ -2522,6 +2523,7 @@ mod tests {
             feather: 0.3,
             opacity: 1.0,
             path: Vec::new(),
+            strokes: Vec::new(),
         });
         let base = Processor::new(&meta(), &plain()).render(&src, None, None);
         let r = Processor::new(&meta(), &adj).render(&src, None, None);

@@ -380,9 +380,10 @@ fn ring_mean(src: &LinearImage, c: (f32, f32), r0: f32, r1: f32) -> [f32; 3] {
 /// A segment of an area's center line in source pixels, with its box grown by the radius.
 type Segment = ((f32, f32), (f32, f32), (f32, f32, f32, f32));
 
-struct PreparedSpot {
-    /// The area's segments in source pixels (a round spot is one of zero length), each with
-    /// its bounding box grown by the radius, (x0, y0, x1, y1): a pixel only needs the few
+/// Polylines with a radius, for the distance of a pixel from the nearest of them.
+struct Shape {
+    /// The segments in source pixels (a single point is one of zero length), each with its
+    /// bounding box grown by the radius, (x0, y0, x1, y1): a pixel only needs the few
     /// segments whose box contains it.
     segments: Vec<Segment>,
     /// Grid over `bounds` with cells of `cell` pixels, listing the segments whose box
@@ -390,8 +391,61 @@ struct PreparedSpot {
     grid: Vec<Vec<u32>>,
     grid_w: usize,
     cell: f32,
-    /// Bounding box of the area including the radius: (x0, y0, x1, y1).
+    /// Bounding box including the radius: (x0, y0, x1, y1).
     bounds: (f32, f32, f32, f32),
+}
+
+impl Shape {
+    /// `None` without lines.
+    fn new(lines: &[Line], r: f32) -> Option<Self> {
+        let points = || lines.iter().flatten();
+        points().next()?;
+        let bounds = points().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |b, p| (b.0.min(p.0 - r), b.1.min(p.1 - r), b.2.max(p.0 + r), b.3.max(p.1 + r)));
+        let segments: Vec<Segment> = lines
+            .iter()
+            .flat_map(|pts| if pts.len() == 1 { vec![(pts[0], pts[0])] } else { pts.windows(2).map(|w| (w[0], w[1])).collect() })
+            .map(|(a, b)| (a, b, (a.0.min(b.0) - r, a.1.min(b.1) - r, a.0.max(b.0) + r, a.1.max(b.1) + r)))
+            .collect();
+        let cell = (2.0 * r).max(4.0);
+        let grid_w = ((bounds.2 - bounds.0) / cell).ceil().max(1.0) as usize;
+        let grid_h = ((bounds.3 - bounds.1) / cell).ceil().max(1.0) as usize;
+        let mut grid = vec![Vec::new(); grid_w * grid_h];
+        let to_cell = |v: f32, o: f32, n: usize| (((v - o) / cell).max(0.0) as usize).min(n - 1);
+        for (i, (_, _, (x0, y0, x1, y1))) in segments.iter().enumerate() {
+            for gy in to_cell(*y0, bounds.1, grid_h)..=to_cell(*y1, bounds.1, grid_h) {
+                for gx in to_cell(*x0, bounds.0, grid_w)..=to_cell(*x1, bounds.0, grid_w) {
+                    grid[gy * grid_w + gx].push(i as u32);
+                }
+            }
+        }
+        Some(Self { segments, grid, grid_w, cell, bounds })
+    }
+
+    /// Distance of `p` from the nearest line (`f32::MAX` when farther than the radius).
+    fn distance(&self, p: (f32, f32)) -> f32 {
+        let (x0, y0, x1, y1) = self.bounds;
+        if p.0 < x0 || p.0 > x1 || p.1 < y0 || p.1 > y1 {
+            return f32::MAX;
+        }
+        let gx = ((p.0 - x0) / self.cell) as usize;
+        let gy = ((p.1 - y0) / self.cell) as usize;
+        let Some(list) = self.grid.get(gy * self.grid_w + gx.min(self.grid_w - 1)) else { return f32::MAX };
+        let mut best = f32::MAX;
+        for &(a, b, (x0, y0, x1, y1)) in list.iter().map(|&i| &self.segments[i as usize]) {
+            if p.0 < x0 || p.0 > x1 || p.1 < y0 || p.1 > y1 {
+                continue;
+            }
+            let q = closest_on_segment(p, a, b);
+            best = best.min((p.0 - q.0).powi(2) + (p.1 - q.1).powi(2));
+        }
+        if best == f32::MAX { best } else { best.sqrt() }
+    }
+}
+
+struct PreparedSpot {
+    /// The area, and what strokes took away from it.
+    area: Shape,
+    erased: Option<Shape>,
     offset: (f32, f32),
     r: f32,
     inner: f32,
@@ -610,24 +664,6 @@ impl HealField {
     }
 }
 
-impl PreparedSpot {
-    /// Distance of `p` from the area's center line (`f32::MAX` when farther than the radius).
-    fn distance(&self, p: (f32, f32)) -> f32 {
-        let gx = ((p.0 - self.bounds.0) / self.cell) as usize;
-        let gy = ((p.1 - self.bounds.1) / self.cell) as usize;
-        let Some(list) = self.grid.get(gy * self.grid_w + gx.min(self.grid_w - 1)) else { return f32::MAX };
-        let mut best = f32::MAX;
-        for &(a, b, (x0, y0, x1, y1)) in list.iter().map(|&i| &self.segments[i as usize]) {
-            if p.0 < x0 || p.0 > x1 || p.1 < y0 || p.1 > y1 {
-                continue;
-            }
-            let q = closest_on_segment(p, a, b);
-            best = best.min((p.0 - q.0).powi(2) + (p.1 - q.1).powi(2));
-        }
-        if best == f32::MAX { best } else { best.sqrt() }
-    }
-}
-
 fn closest_on_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> (f32, f32) {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let len2 = dx * dx + dy * dy;
@@ -638,9 +674,19 @@ fn closest_on_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> (f32, f32)
     (a.0 + dx * t, a.1 + dy * t)
 }
 
-/// The area's points (target, then the path) in source pixels.
-fn spot_points(s: &Spot, sw: f32, sh: f32) -> Vec<(f32, f32)> {
-    std::iter::once(&s.target).chain(&s.path).map(|p| (p[0] * sw - 0.5, p[1] * sh - 0.5)).collect()
+type Line = Vec<(f32, f32)>;
+
+/// The area's lines in source pixels: the first one starts at the target; then the lines
+/// that took parts away.
+fn spot_lines(s: &Spot, sw: f32, sh: f32) -> (Vec<Line>, Vec<Line>) {
+    let px = |p: &[f32; 2]| (p[0] * sw - 0.5, p[1] * sh - 0.5);
+    let mut area = vec![std::iter::once(&s.target).chain(&s.path).map(px).collect::<Vec<_>>()];
+    let mut erased = Vec::new();
+    for st in s.strokes.iter().filter(|st| !st.points.is_empty()) {
+        let line = st.points.iter().map(px).collect();
+        if st.erase { erased.push(line) } else { area.push(line) }
+    }
+    (area, erased)
 }
 
 /// Applies heal/clone areas to a resampled region (camera space).
@@ -653,38 +699,22 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
     let prepared: Vec<PreparedSpot> = spots
         .iter()
         .map(|s| {
-            let points = spot_points(s, sw, sh);
-            let target = points[0];
+            let (lines, erased_lines) = spot_lines(s, sw, sh);
+            let target = lines[0][0];
             let source = (s.source[0] * sw - 0.5, s.source[1] * sh - 0.5);
             let offset = (source.0 - target.0, source.1 - target.1);
             let r = (s.radius * long).max(1.0);
-            let bounds = points.iter().fold((f32::MAX, f32::MAX, f32::MIN, f32::MIN), |b, p| (b.0.min(p.0 - r), b.1.min(p.1 - r), b.2.max(p.0 + r), b.3.max(p.1 + r)));
-            let pairs: Vec<((f32, f32), (f32, f32))> = if points.len() == 1 { vec![(points[0], points[0])] } else { points.windows(2).map(|w| (w[0], w[1])).collect() };
-            let segments: Vec<_> = pairs.into_iter().map(|(a, b)| (a, b, (a.0.min(b.0) - r, a.1.min(b.1) - r, a.0.max(b.0) + r, a.1.max(b.1) + r))).collect();
-            let cell = (2.0 * r).max(4.0);
-            let grid_w = ((bounds.2 - bounds.0) / cell).ceil().max(1.0) as usize;
-            let grid_h = ((bounds.3 - bounds.1) / cell).ceil().max(1.0) as usize;
-            let mut grid = vec![Vec::new(); grid_w * grid_h];
-            let to_cell = |v: f32, o: f32, n: usize| (((v - o) / cell).max(0.0) as usize).min(n - 1);
-            for (i, (_, _, (x0, y0, x1, y1))) in segments.iter().enumerate() {
-                for gy in to_cell(*y0, bounds.1, grid_h)..=to_cell(*y1, bounds.1, grid_h) {
-                    for gx in to_cell(*x0, bounds.0, grid_w)..=to_cell(*x1, bounds.0, grid_w) {
-                        grid[gy * grid_w + gx].push(i as u32);
-                    }
-                }
-            }
+            let area = Shape::new(&lines, r).expect("the target is a point");
+            let bounds = area.bounds;
             // Heal: take texture from the source but brightness/color from the target's
             // surroundings, matched along the whole edge and blended smoothly inwards.
-            let heal = (s.mode == SpotMode::Heal).then(|| cached_heal(src, &segments, offset, r));
+            let heal = (s.mode == SpotMode::Heal).then(|| cached_heal(src, &area.segments, offset, r));
             let shifted = (bounds.0 + offset.0, bounds.1 + offset.1, bounds.2 + offset.0, bounds.3 + offset.1);
             let clone_gain = (s.mode != SpotMode::Heal && geo.has_vignetting()).then(|| GainGrid::new(geo, shifted));
             let output = output_box(geo, bounds);
             PreparedSpot {
-                segments,
-                grid,
-                grid_w,
-                cell,
-                bounds,
+                area,
+                erased: Shape::new(&erased_lines, r),
                 offset,
                 r,
                 inner: r * (1.0 - s.feather.clamp(0.0, 1.0)),
@@ -714,15 +744,18 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
                     let ([_, g, _], gain) = geo.map(ox, oy);
                     (g[0], g[1], gain)
                 });
-                let (x0, y0, x1, y1) = s.bounds;
-                if sx < x0 || sx > x1 || sy < y0 || sy > y1 {
-                    continue;
-                }
-                let d = s.distance((sx, sy));
+                let d = s.area.distance((sx, sy));
                 if d >= s.r {
                     continue;
                 }
-                let w = (1.0 - smoothstep(s.inner, s.r, d)) * s.opacity;
+                let mut w = (1.0 - smoothstep(s.inner, s.r, d)) * s.opacity;
+                // Taken away again: with the same soft edge.
+                if let Some(e) = &s.erased {
+                    w *= smoothstep(s.inner, s.r, e.distance((sx, sy)));
+                    if w <= 0.0 {
+                        continue;
+                    }
+                }
                 let v = bilinear(src, sx + s.offset.0, sy + s.offset.1);
                 // The source pixels lack the vignetting correction: heal matches the target's
                 // uncorrected surroundings and then gets the target's correction, clone keeps the
@@ -949,7 +982,7 @@ pub fn apply_removals(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, re
                     continue;
                 }
                 let q = p.sample((u - x) / w * p.w as f32, (v - y) / h * p.h as f32);
-                let q3 = q[3];
+                let q3 = q[3] * r.opacity.clamp(0.0, 1.0);
                 for (v, q) in px.iter_mut().zip(q) {
                     *v += (q * vig - *v) * q3;
                 }
@@ -1086,7 +1119,7 @@ mod tests {
         let geo = GeoMap::new(&Default::default(), &Default::default(), None, 0, w, h, false);
         let region = Region { x: 0, y: 0, w, h };
         let mut img = geo.resample(&src, region);
-        let spot = Spot { mode: SpotMode::Clone, target: [0.25, 0.5], source: [0.75, 0.5], radius: 0.1, feather: 0.2, opacity: 1.0, path: Vec::new() };
+        let spot = Spot { mode: SpotMode::Clone, target: [0.25, 0.5], source: [0.75, 0.5], radius: 0.1, feather: 0.2, opacity: 1.0, path: Vec::new(), strokes: Vec::new() };
         apply_retouch(&mut img, &src, &geo, region, &[spot]);
         assert!(img.data[10 * w + 10][0] > 0.7);
         assert!(img.data[10 * w + 2][0] < 0.15);
@@ -1106,7 +1139,7 @@ mod tests {
         let around = 0.2 * geo.map(8.5, 8.5).1;
         let center = resampled.data[30 * w + 40][0];
         assert!(around > center * 1.1, "Ecke {around}, Mitte {center}");
-        let spot = |mode, source: [f32; 2]| Spot { mode, target: [8.5 / 80.0, 8.5 / 60.0], source, radius: 0.04, feather: 0.2, opacity: 1.0, path: Vec::new() };
+        let spot = |mode, source: [f32; 2]| Spot { mode, target: [8.5 / 80.0, 8.5 / 60.0], source, radius: 0.04, feather: 0.2, opacity: 1.0, path: Vec::new(), strokes: Vec::new() };
         let mut img = resampled.clone();
         apply_retouch(&mut img, &src, &geo, region, &[spot(SpotMode::Heal, [40.5 / 80.0, 30.5 / 60.0])]);
         let v = img.data[8 * w + 8][0];
@@ -1140,7 +1173,7 @@ mod tests {
         let geo = GeoMap::new(&Default::default(), &Default::default(), None, 0, w, h, false);
         let region = Region { x: 0, y: 0, w, h };
         let mut img = geo.resample(&src, region);
-        let spot = Spot { mode: SpotMode::Heal, target: [15.5 / 60.0, 15.5 / 30.0], source: [45.5 / 60.0, 15.5 / 30.0], radius: 0.06, feather: 0.3, opacity: 1.0, path: Vec::new() };
+        let spot = Spot { mode: SpotMode::Heal, target: [15.5 / 60.0, 15.5 / 30.0], source: [45.5 / 60.0, 15.5 / 30.0], radius: 0.06, feather: 0.3, opacity: 1.0, path: Vec::new(), strokes: Vec::new() };
         apply_retouch(&mut img, &src, &geo, region, &[spot]);
         let v = img.data[15 * w + 15][0];
         assert!((v - 0.1).abs() < 0.03, "healed value {v}");
@@ -1169,7 +1202,7 @@ mod tests {
         let geo = GeoMap::new(&Default::default(), &Default::default(), None, 0, w, h, false);
         let region = Region { x: 0, y: 0, w, h };
         let mut img = geo.resample(&src, region);
-        let spot = Spot { mode: SpotMode::Heal, target: [30.5 / 120.0, 30.5 / 60.0], source: [90.5 / 120.0, 30.5 / 60.0], radius: 10.0 / 120.0, feather: 0.1, opacity: 1.0, path: Vec::new() };
+        let spot = Spot { mode: SpotMode::Heal, target: [30.5 / 120.0, 30.5 / 60.0], source: [90.5 / 120.0, 30.5 / 60.0], radius: 10.0 / 120.0, feather: 0.1, opacity: 1.0, path: Vec::new(), strokes: Vec::new() };
         apply_retouch(&mut img, &src, &geo, region, &[spot]);
         // Average over a 2x2 block to cancel the checkerboard texture.
         let at = |x: usize| (img.data[30 * w + x][0] + img.data[30 * w + x + 1][0] + img.data[31 * w + x][0] + img.data[31 * w + x + 1][0]) / 4.0;
@@ -1195,6 +1228,7 @@ mod tests {
             target: [5.5 / w as f32, y],
             source: [45.5 / w as f32, y],
             path: vec![[15.5 / w as f32, y], [25.5 / w as f32, y]],
+            strokes: Vec::new(),
             radius: 3.0 / w as f32,
             feather: 0.0,
             opacity: 1.0,
@@ -1205,6 +1239,67 @@ mod tests {
             assert!(at(x, 20) > 0.7, "x={x}: {}", at(x, 20));
         }
         assert!(at(15, 30) < 0.2 && at(33, 20) < 0.2, "außerhalb unverändert");
+    }
+
+    /// Strokes painted onto an area afterwards add to it with the same source offset, or take
+    /// part of it away again.
+    #[test]
+    fn painted_strokes_extend_and_shrink_an_area() {
+        use crate::params::SpotStroke;
+        let (w, h) = (80usize, 40usize);
+        let data = (0..w * h).map(|i| if i % w < 40 { [0.1f32; 3] } else { [0.8; 3] }).collect();
+        let src = LinearImage::new(w, h, data);
+        let geo = GeoMap::new(&Default::default(), &Default::default(), None, 0, w, h, false);
+        let region = Region { x: 0, y: 0, w, h };
+        let p = |x: f32, y: f32| [(x + 0.5) / w as f32, (y + 0.5) / h as f32];
+        let spot = Spot {
+            mode: SpotMode::Clone,
+            target: p(5.0, 10.0),
+            source: p(45.0, 10.0),
+            path: vec![p(25.0, 10.0)],
+            strokes: vec![
+                // Down from the middle of the line, then across below it.
+                SpotStroke { points: vec![p(15.0, 10.0), p(15.0, 30.0)], erase: false },
+                // The left end taken away.
+                SpotStroke { points: vec![p(5.0, 10.0), p(8.0, 10.0)], erase: true },
+            ],
+            radius: 3.0 / w as f32,
+            feather: 0.0,
+            opacity: 1.0,
+        };
+        let mut img = src.clone();
+        apply_retouch(&mut img, &src, &geo, region, &[spot]);
+        let at = |x: usize, y: usize| img.data[y * w + x][0];
+        assert!(at(20, 10) > 0.7 && at(15, 25) > 0.7, "Linie und Erweiterung kopiert");
+        assert!(at(6, 10) < 0.2, "weggenommen: {}", at(6, 10));
+        assert!(at(25, 25) < 0.2, "außerhalb unverändert");
+    }
+
+    /// A removal shows its patch with its opacity.
+    #[test]
+    fn removal_opacity_blends_the_patch() {
+        let (w, h) = (40usize, 40usize);
+        let src = LinearImage::new(w, h, vec![[0.1f32; 3]; w * h]);
+        let geo = GeoMap::new(&Default::default(), &Default::default(), None, 0, w, h, false);
+        let region = Region { x: 0, y: 0, w, h };
+        let patch = Patch { w: 8, h: 8, rgba: vec![[0.9, 0.9, 0.9, 1.0]; 64] };
+        let removal = |opacity| crate::params::Removal {
+            id: 7_000_001,
+            rect: [0.25, 0.25, 0.5, 0.5],
+            patch: Arc::new(patch.encode(1.0)),
+            scale: 1.0,
+            opacity,
+            ..Default::default()
+        };
+        let at = |opacity| {
+            let mut img = src.clone();
+            apply_removals(&mut img, &src, &geo, region, &[removal(opacity)]);
+            (img.data[20 * w + 20][0], img.data[2 * w + 2][0])
+        };
+        let (full, outside) = at(1.0);
+        assert!((full - 0.9).abs() < 0.01 && (outside - 0.1).abs() < 1e-6, "{full} {outside}");
+        assert!((at(0.5).0 - 0.5).abs() < 0.01, "{}", at(0.5).0);
+        assert!((at(0.0).0 - 0.1).abs() < 1e-6);
     }
 
     #[test]

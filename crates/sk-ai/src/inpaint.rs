@@ -275,6 +275,7 @@ fn finish(work: Work, full: &LinearImage, wb: [f32; 3], opacity: f32) -> Result<
         rect: [(rx + bx0 as f32 * sx) / fw, (ry + by0 as f32 * sy) / fh, cw as f32 * sx / fw, ch as f32 * sy / fh],
         patch: Arc::new(patch.encode(scale)),
         scale,
+        ..Default::default()
     })
 }
 

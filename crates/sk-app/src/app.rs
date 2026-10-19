@@ -520,6 +520,12 @@ pub struct App {
     /// Guide for automatic masking in the viewer (generation, guide).
     pub(crate) auto_guide: Option<(u64, Arc<sk_core::brush::AutoGuide>)>,
     pub selected_spot: Option<usize>,
+    /// The chosen area of the remove tool (index into `Adjustments::removals`).
+    pub selected_removal: Option<usize>,
+    /// What painting does to a chosen retouch or removal area (see `AreaPaint`).
+    pub area_paint: crate::layers::AreaPaint,
+    /// How the stroke being painted acts, fixed when it starts (with Shift or Alt).
+    pub(crate) stroke_paint: crate::layers::AreaPaint,
     pub show_mask: bool,
     /// The mask is shown while the pointer is over the layer bar above the tools.
     pub peek_mask: bool,
@@ -539,6 +545,9 @@ pub struct App {
     pub magic_tolerance: f32,
     /// Strokes of the remove tool not yet filled (or being filled).
     pub remove_strokes: Vec<sk_core::params::BrushStroke>,
+    /// The removal (its id) that `remove_strokes` replace once filled: it is being extended
+    /// or made smaller.
+    pub(crate) remove_replaces: Option<u64>,
     pub inpaint_busy: bool,
     pub removal_progress: f32,
     pub show_gpu_dialog: bool,
@@ -972,6 +981,9 @@ impl App {
             remove_overlay: None,
             auto_guide: None,
             selected_spot: None,
+            selected_removal: None,
+            area_paint: Default::default(),
+            stroke_paint: Default::default(),
             show_mask: false,
             peek_mask: false,
             rendered_mask_overlay: None,
@@ -989,6 +1001,7 @@ impl App {
             spot_cancel: None,
             spot_sensitivity: 0.5,
             remove_strokes: Vec::new(),
+            remove_replaces: None,
             inpaint_busy: false,
             removal_progress: 0.0,
             show_gpu_dialog: false,
@@ -1404,12 +1417,14 @@ impl App {
         self.straighten_tool = None;
         self.active_layer = None;
         self.selected_spot = None;
+        self.selected_removal = None;
         self.before_texture = None;
         self.before_key = None;
         self.local_drag = Default::default();
         self.snapshot_rename = None;
         // Areas painted for removal belong to the previous image.
         self.remove_strokes.clear();
+        self.remove_replaces = None;
         self.remove_overlay = None;
         self.current = Some(Current {
             meta,
@@ -1926,6 +1941,7 @@ impl App {
         self.active_layer = active.and_then(|id| self.layer_index(id));
         self.selected_gradient = None;
         self.selected_spot = None;
+        self.selected_removal = None;
         self.object_session = None;
         // A drag still under way (undo with the mouse held) must not go on with an old index.
         self.local_drag = Default::default();
@@ -2443,7 +2459,7 @@ impl App {
                     self.select_created();
                 }
                 Event::JobProgress { id, progress } => self.job_progress(id, progress),
-                Event::Removal { generation, result } => self.removal_done(generation, result),
+                Event::Removal { generation, replaces, result } => self.removal_done(generation, replaces, result),
                 Event::RemovalProgress { generation, progress } => {
                     if generation == self.generation {
                         self.removal_progress = progress;

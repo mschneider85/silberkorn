@@ -65,7 +65,7 @@ fn can_delete_chosen(a: &App) -> bool {
     if a.grid_view {
         return can_trash(a);
     }
-    a.selected_spot.is_some() || a.selected_gradient.is_some() || (a.tab == Tab::Layers && a.active_layer.is_some())
+    a.selected_spot.is_some() || a.selected_removal.is_some() || a.selected_gradient.is_some() || (a.tab == Tab::Layers && a.active_layer.is_some())
 }
 /// One export at a time, and only with a recipe switched on.
 fn can_export(a: &App) -> bool {

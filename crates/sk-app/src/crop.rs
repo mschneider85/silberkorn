@@ -281,6 +281,7 @@ impl App {
         self.straighten_tool = None;
         // Its pins are gone with the tool (heal and clone keep it, see `set_local_tool`).
         self.selected_spot = None;
+        self.selected_removal = None;
         self.picking_wb = false;
         self.picking_skin = false;
         self.picking_focus = false;

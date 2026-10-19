@@ -133,6 +133,7 @@ pub fn heal_spots(src: &LinearImage, found: &[Found], existing: &[crate::params:
             target: f.center,
             source: crate::mask::auto_source(src, f.center, f.radius),
             path: Vec::new(),
+            strokes: Vec::new(),
             radius: f.radius,
             feather: 0.5,
             opacity: 1.0,

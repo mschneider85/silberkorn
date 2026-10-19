@@ -369,6 +369,18 @@ fn drag(f: &mut Fixture, a: egui::Pos2, b: egui::Pos2, steps: usize) {
     viewer_frame(f, vec![]);
 }
 
+/// [`drag`] with modifier keys held.
+fn drag_with(f: &mut Fixture, a: egui::Pos2, b: egui::Pos2, steps: usize, modifiers: egui::Modifiers) {
+    viewer_frame_with(f, vec![egui::Event::PointerMoved(a)], modifiers);
+    viewer_frame_with(f, vec![press(a, true)], modifiers);
+    for i in 1..=steps {
+        let p = a + (b - a) * (i as f32 / steps as f32);
+        viewer_frame_with(f, vec![egui::Event::PointerMoved(p)], modifiers);
+    }
+    viewer_frame_with(f, vec![press(b, false)], modifiers);
+    viewer_frame_with(f, vec![], egui::Modifiers::NONE);
+}
+
 #[test]
 fn viewer_tools_brush_heal_crop() {
     let Some(mut f) = Fixture::new("viewer") else { return };
@@ -1808,6 +1820,87 @@ fn folder_loads_in_the_background_and_late_results_are_dropped() {
     f.open_folder(photos);
     assert_eq!(f.app.entries.len(), 2);
     assert!(f.app.primary_path().is_some(), "das erste Bild ist gewählt");
+}
+
+/// A chosen retouch area grows with Shift and shrinks with Alt (or as chosen in the panel);
+/// without a modifier a new area is painted.
+#[test]
+fn painting_extends_and_shrinks_the_chosen_retouch_area() {
+    let Some(mut f) = Fixture::new("spot-extend") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    viewer_frame(&mut f, vec![]);
+    let c = egui::pos2(600.0, 400.0);
+    let spots = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.retouch.clone();
+    f.app.set_local_tool(crate::layers::LocalTool::Clone);
+    drag(&mut f, c, c + egui::vec2(100.0, 0.0), 6);
+    assert_eq!(spots(&f).len(), 1);
+    assert_eq!(f.app.selected_spot, Some(0));
+
+    drag_with(&mut f, c + egui::vec2(50.0, 0.0), c + egui::vec2(50.0, 120.0), 6, egui::Modifiers::SHIFT);
+    let s = spots(&f);
+    assert_eq!(s.len(), 1, "erweitert statt neu");
+    assert_eq!(s[0].strokes.len(), 1);
+    assert!(!s[0].strokes[0].erase && s[0].strokes[0].points.len() >= 3);
+    drag_with(&mut f, c + egui::vec2(90.0, 0.0), c + egui::vec2(110.0, 0.0), 3, egui::Modifiers::ALT);
+    assert!(spots(&f)[0].strokes[1].erase);
+
+    // As chosen in the panel, without a key.
+    f.app.area_paint = crate::layers::AreaPaint::Extend;
+    drag(&mut f, c + egui::vec2(0.0, 60.0), c + egui::vec2(-60.0, 60.0), 4);
+    assert_eq!(spots(&f)[0].strokes.len(), 3);
+
+    // Moving the area moves what was painted onto it.
+    let before = spots(&f)[0].strokes[0].points[0];
+    drag(&mut f, c, c + egui::vec2(-40.0, 0.0), 4);
+    let after = spots(&f)[0].strokes[0].points[0];
+    assert!(after[0] < before[0] - 0.01 && (after[1] - before[1]).abs() < 1e-4, "{before:?} -> {after:?}");
+
+    // A new area again with "Neu".
+    f.app.area_paint = crate::layers::AreaPaint::New;
+    drag(&mut f, c + egui::vec2(-200.0, -150.0), c + egui::vec2(-150.0, -150.0), 3);
+    assert_eq!(spots(&f).len(), 2);
+}
+
+/// A removed area can be chosen, extended (filled anew in its place, keeping its opacity) and
+/// deleted on its own.
+#[test]
+fn removed_areas_can_be_extended_and_deleted() {
+    if !sk_ai::models::available(&sk_ai::models::INPAINT) {
+        return;
+    }
+    let Some(mut f) = Fixture::new("remove-extend") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    viewer_frame(&mut f, vec![]);
+    let c = egui::pos2(600.0, 400.0);
+    let removals = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.removals.clone();
+    f.app.set_local_tool(crate::layers::LocalTool::Remove);
+    drag(&mut f, c, c + egui::vec2(40.0, 0.0), 3);
+    f.pump("Entfernt", |a| !a.inpaint_busy);
+    assert_eq!(removals(&f).len(), 1, "{}", f.app.status);
+    assert_eq!(f.app.selected_removal, Some(0));
+    let first = removals(&f)[0].clone();
+    f.app.edit(|a| a.removals[0].opacity = 0.6);
+
+    drag_with(&mut f, c + egui::vec2(40.0, 20.0), c + egui::vec2(40.0, 60.0), 3, egui::Modifiers::SHIFT);
+    assert_eq!(f.app.remove_replaces, Some(first.id));
+    assert_eq!(f.app.remove_strokes.len(), first.strokes.len() + 1);
+    f.pump("Neu gefüllt", |a| !a.inpaint_busy);
+    let r = removals(&f);
+    assert_eq!(r.len(), 1, "an seiner Stelle");
+    assert_ne!(r[0].id, first.id);
+    assert_eq!(r[0].strokes.len(), first.strokes.len() + 1);
+    assert_eq!(r[0].opacity, 0.6);
+    assert!(r[0].rect[3] > first.rect[3], "größer: {:?} {:?}", r[0].rect, first.rect);
+    assert!(f.app.remove_replaces.is_none());
+
+    // Entf deletes the chosen one only.
+    drag(&mut f, c + egui::vec2(-200.0, -100.0), c + egui::vec2(-180.0, -100.0), 2);
+    f.pump("Zweiter Bereich", |a| !a.inpaint_busy);
+    assert_eq!(removals(&f).len(), 2);
+    f.app.selected_removal = Some(0);
+    f.app.delete_selected_spot();
+    assert_eq!(removals(&f).len(), 1);
+    assert_ne!(removals(&f)[0].id, r[0].id);
 }
 
 #[test]
@@ -3699,7 +3792,7 @@ fn delete_in_layer_tab_ignores_hidden_spot() {
     use sk_core::params::{Spot, SpotMode};
     let Some(mut f) = Fixture::new("delete-hidden-spot") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
-    let spot = Spot { mode: SpotMode::Heal, target: [0.3, 0.3], source: [0.6, 0.6], path: Vec::new(), radius: 0.02, feather: 0.5, opacity: 1.0 };
+    let spot = Spot { mode: SpotMode::Heal, target: [0.3, 0.3], source: [0.6, 0.6], path: Vec::new(), strokes: Vec::new(), radius: 0.02, feather: 0.5, opacity: 1.0 };
     f.app.edit(|a| a.retouch.push(spot));
     f.app.set_local_tool(LocalTool::Heal);
     f.app.selected_spot = Some(0);

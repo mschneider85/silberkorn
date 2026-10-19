@@ -87,8 +87,8 @@ pub enum Event {
     ThumbFocus { path: PathBuf, size: [usize; 2], sharpness: Arc<Vec<u8>> },
     /// Progress (0..1) of a generative removal.
     RemovalProgress { generation: u64, progress: f32 },
-    /// Result of a generative removal (see `remove.rs`).
-    Removal { generation: u64, result: Result<sk_core::params::Removal, String> },
+    /// Result of a generative removal (see `remove.rs`); `replaces` as in [`InpaintJob`].
+    Removal { generation: u64, replaces: Option<u64>, result: Result<sk_core::params::Removal, String> },
     /// Progress (0..1) of a background job (see `jobs.rs`).
     JobProgress { id: u64, progress: f32 },
     /// A background job finished: the files it created, or why it failed.
@@ -272,6 +272,8 @@ pub struct InpaintJob {
     pub full: Option<Arc<LinearImage>>,
     pub wb: [f32; 3],
     pub strokes: Vec<sk_core::params::BrushStroke>,
+    /// The removal (its id) the result takes the place of, when one is extended or made smaller.
+    pub replaces: Option<u64>,
 }
 
 /// The current image with each style applied, small (see `style_grid`); replaces earlier jobs.
@@ -1096,7 +1098,7 @@ impl Workers {
                         ctx.request_repaint();
                     };
                     let result = crate::guard::catch(|| crate::remove::compute(&job, &mut model, &progress)).and_then(|r| r);
-                    let _ = ev_tx.send(Event::Removal { generation: job.generation, result });
+                    let _ = ev_tx.send(Event::Removal { generation: job.generation, replaces: job.replaces, result });
                     ctx.request_repaint();
                 }
             });

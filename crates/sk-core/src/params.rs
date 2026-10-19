@@ -342,7 +342,7 @@ pub struct Adjustments {
 
 /// Something removed from the image: the strokes that marked it and the generated content
 /// shown there (see `mask::apply_removals`), in normalized source coordinates.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Removal {
     /// Identifies the generated content (for caches).
@@ -353,6 +353,14 @@ pub struct Removal {
     /// Camera RGB (divided by `scale`) and coverage as a 16-bit RGBA PNG, base64 encoded.
     pub patch: std::sync::Arc<String>,
     pub scale: f32,
+    /// 0..1
+    pub opacity: f32,
+}
+
+impl Default for Removal {
+    fn default() -> Self {
+        Self { id: 0, strokes: Vec::new(), rect: [0.0; 4], patch: Default::default(), scale: 0.0, opacity: 1.0 }
+    }
 }
 
 /// Adjustments of a local layer, as deltas added to the background values; the curves act on
@@ -689,6 +697,10 @@ impl Default for Layer {
     }
 }
 
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
 fn is_zero(v: &u32) -> bool {
     *v == 0
 }
@@ -712,6 +724,10 @@ pub struct Spot {
     /// Further points of a painted stroke after `target`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub path: Vec<[f32; 2]>,
+    /// Strokes painted onto the area afterwards, with its radius and source offset: they add
+    /// to it or take away from it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub strokes: Vec<SpotStroke>,
     /// Radius relative to the long image edge.
     pub radius: f32,
     /// 0..1
@@ -719,6 +735,14 @@ pub struct Spot {
     /// 0..1
     #[serde(default = "one")]
     pub opacity: f32,
+}
+
+/// A stroke that extends a retouch area or (`erase`) takes part of it away.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SpotStroke {
+    pub points: Vec<[f32; 2]>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub erase: bool,
 }
 
 /// Crop rectangle, normalized (0..1) to the rotated and straightened frame.

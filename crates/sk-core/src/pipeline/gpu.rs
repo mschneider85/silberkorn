@@ -1465,7 +1465,7 @@ mod tests {
         let (w, h) = (200, 150);
         let src = image(w, h);
         let mut adj = Adjustments {
-            retouch: vec![Spot { mode: SpotMode::Clone, target: [0.3, 0.3], source: [0.6, 0.6], path: vec![], radius: 0.05, feather: 0.5, opacity: 1.0 }],
+            retouch: vec![Spot { mode: SpotMode::Clone, target: [0.3, 0.3], source: [0.6, 0.6], path: vec![], strokes: vec![], radius: 0.05, feather: 0.5, opacity: 1.0 }],
             ..Default::default()
         };
         let cache = StageCache::default();
@@ -1810,7 +1810,7 @@ mod tests {
             (
                 "Klonen",
                 Adjustments {
-                    retouch: vec![Spot { mode: SpotMode::Clone, target: [0.3, 0.3], source: [0.6, 0.6], path: vec![], radius: 0.05, feather: 0.5, opacity: 1.0 }],
+                    retouch: vec![Spot { mode: SpotMode::Clone, target: [0.3, 0.3], source: [0.6, 0.6], path: vec![], strokes: vec![], radius: 0.05, feather: 0.5, opacity: 1.0 }],
                     ..plain.clone()
                 },
                 Default::default(),

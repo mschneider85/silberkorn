@@ -2,7 +2,7 @@
 //! (heal/clone spots), including the viewer interaction.
 
 use sk_core::mask;
-use sk_core::params::{BrushStroke, Layer, LayerAdjustments, Mask, Spot, SpotMode};
+use sk_core::params::{BrushStroke, Layer, LayerAdjustments, Mask, Spot, SpotMode, SpotStroke};
 use sk_core::pipeline::Processor;
 use sk_core::tools::Tool;
 use egui::{Color32, Pos2, Rect, Response, RichText, Stroke, Ui, Vec2, pos2, vec2};
@@ -29,6 +29,18 @@ pub enum LocalTool {
     ColorPick,
     /// Generative removal (see `remove.rs`).
     Remove,
+}
+
+/// What painting does with Reparieren, Klonen and Entfernen while an area is chosen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AreaPaint {
+    /// A new area (as without a chosen one).
+    #[default]
+    New,
+    /// Adds to the chosen area (Shift while painting).
+    Extend,
+    /// Takes part of the chosen area away (Alt while painting).
+    Shrink,
 }
 
 /// Style brushes: brush presets with predefined layer adjustments.
@@ -397,10 +409,13 @@ impl App {
     pub fn set_local_tool(&mut self, tool: LocalTool) {
         let new = if self.local_tool == Some(tool) { None } else { Some(tool) };
         // The chosen retouch area stays chosen only while its pins are shown (heal, clone).
-        let spot = self.selected_spot;
+        let (spot, removal) = (self.selected_spot, self.selected_removal);
         self.end_viewer_tools();
         if matches!(new, Some(LocalTool::Heal | LocalTool::Clone)) {
             self.selected_spot = spot;
+        }
+        if new == Some(LocalTool::Remove) {
+            self.selected_removal = removal;
         }
         self.local_tool = new;
         self.object_session = None;
@@ -662,29 +677,36 @@ impl App {
     }
 
     /// Heal and clone, painted like a brush: the stroke becomes a retouch area whose source is
-    /// chosen automatically. The pins move an area (white) or its source (yellow).
+    /// chosen automatically. The pins move an area (white) or its source (yellow). With an area
+    /// chosen, Shift paints onto it and Alt takes part of it away (see [`AreaPaint`]).
     fn spot_interaction(&mut self, ui: &mut Ui, response: &Response, img_rect: Rect, scale: f32, tool: LocalTool) {
         let Some(cur) = &self.current else { return };
         let spots = cur.adjustments.retouch.clone();
         let painter = ui.painter_at(response.rect);
         let Some(map) = self.uv_mapper(img_rect, scale) else { return };
-        // Screen geometry of each area: its points, the offset to the source and the radius.
-        let shown: Vec<Option<(Vec<Pos2>, Vec2, f32)>> = spots
+        // Screen geometry of each area: its lines (the first starts at the target), the lines
+        // taken away, the offset to the source and the radius.
+        let screen = |pts: &mut dyn Iterator<Item = &[f32; 2]>| pts.map(|p| map.map(*p)).collect::<Vec<Pos2>>();
+        type Shown = (Vec<Vec<Pos2>>, Vec<Vec<Pos2>>, Vec2, f32);
+        let shown: Vec<Shown> = spots
             .iter()
             .map(|s| {
-                let pts: Vec<Pos2> = std::iter::once(&s.target).chain(&s.path).map(|p| map.map(*p)).collect();
-                let offset = map.map(s.source) - pts[0];
-                Some((pts, offset, self.radius_screen(s.radius, scale)))
+                let mut lines = vec![screen(&mut std::iter::once(&s.target).chain(&s.path))];
+                let mut erased = Vec::new();
+                for st in s.strokes.iter().filter(|st| !st.points.is_empty()) {
+                    if st.erase { erased.push(screen(&mut st.points.iter())) } else { lines.push(screen(&mut st.points.iter())) }
+                }
+                let offset = map.map(s.source) - lines[0][0];
+                (lines, erased, offset, self.radius_screen(s.radius, scale))
             })
             .collect();
-        let selected = self.selected_spot;
+        let selected = self.selected_spot.filter(|i| *i < spots.len());
         let pin_hit = |p: Pos2| -> Option<(usize, bool)> {
-            for (i, area) in shown.iter().enumerate().rev() {
-                let Some((pts, offset, _)) = area else { continue };
-                if selected == Some(i) && (p - (pts[0] + *offset)).length() < PIN_HIT {
+            for (i, (lines, _, offset, _)) in shown.iter().enumerate().rev() {
+                if selected == Some(i) && (p - (lines[0][0] + *offset)).length() < PIN_HIT {
                     return Some((i, true));
                 }
-                if (p - pts[0]).length() < PIN_HIT {
+                if (p - lines[0][0]).length() < PIN_HIT {
                     return Some((i, false));
                 }
             }
@@ -693,19 +715,32 @@ impl App {
         // Over a pin the cursor shows that it can be grabbed; elsewhere the brush outline.
         let moving = matches!(self.local_drag, LocalDrag::Spot(..));
         let hovered_pin = response.hover_pos().and_then(|p| pin_hit(p));
-        for (i, area) in shown.iter().enumerate() {
-            let Some((pts, offset, r)) = area else { continue };
+        for (i, (lines, erased, offset, r)) in shown.iter().enumerate() {
             let sel = selected == Some(i);
-            paint_area(&painter, pts, *r, if sel { Color32::WHITE } else { Color32::from_white_alpha(150) });
-            if sel {
-                let src: Vec<Pos2> = pts.iter().map(|p| *p + *offset).collect();
-                paint_area(&painter, &src, *r, crate::theme::GUIDE);
-                painter.line_segment([pts[0], pts[0] + *offset], Stroke::new(1.0, crate::theme::GUIDE));
-                pin(&painter, pts[0] + *offset, crate::theme::GUIDE, hovered_pin == Some((i, true)));
+            for line in lines {
+                paint_area(&painter, line, *r, if sel { Color32::WHITE } else { Color32::from_white_alpha(150) });
             }
-            pin(&painter, pts[0], if sel { Color32::WHITE } else { Color32::from_white_alpha(170) }, hovered_pin == Some((i, false)));
+            if sel {
+                for line in erased {
+                    paint_area(&painter, line, *r, ERASED);
+                }
+                for line in lines {
+                    let src: Vec<Pos2> = line.iter().map(|p| *p + *offset).collect();
+                    paint_area(&painter, &src, *r, crate::theme::GUIDE);
+                }
+                painter.line_segment([lines[0][0], lines[0][0] + *offset], Stroke::new(1.0, crate::theme::GUIDE));
+                pin(&painter, lines[0][0] + *offset, crate::theme::GUIDE, hovered_pin == Some((i, true)));
+            }
+            pin(&painter, lines[0][0], if sel { Color32::WHITE } else { Color32::from_white_alpha(170) }, hovered_pin == Some((i, false)));
         }
-        let b = self.brushes.spot.clone();
+        // Painting onto the chosen area goes with its size.
+        let mode = if matches!(self.local_drag, LocalDrag::Paint(..)) { self.stroke_paint } else { self.stroke_mode(ui, selected.is_some()) };
+        let mut b = self.brushes.spot.clone();
+        if mode != AreaPaint::New
+            && let Some(i) = selected
+        {
+            b.size = shown[i].3;
+        }
         if moving {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         } else if hovered_pin.is_some() {
@@ -717,8 +752,10 @@ impl App {
         if let Some(p) = pressed_on(ui, response) {
             if let Some((i, is_source)) = pin_hit(p) {
                 self.selected_spot = Some(i);
+                self.selected_removal = None;
                 self.local_drag = LocalDrag::Spot(i, is_source);
             } else if let Some(uv) = self.screen_to_uv(p, img_rect, scale) {
+                self.stroke_paint = mode;
                 self.local_drag = LocalDrag::Paint(vec![uv], p);
             }
         }
@@ -734,7 +771,8 @@ impl App {
                     } else {
                         // The whole area moves; it keeps taking from the same relative place.
                         let d = [uv[0] - s.target[0], uv[1] - s.target[1]];
-                        for q in std::iter::once(&mut s.target).chain(s.path.iter_mut()).chain(std::iter::once(&mut s.source)) {
+                        let added = s.strokes.iter_mut().flat_map(|st| st.points.iter_mut());
+                        for q in std::iter::once(&mut s.target).chain(s.path.iter_mut()).chain(added).chain(std::iter::once(&mut s.source)) {
                             *q = [q[0] + d[0], q[1] + d[1]];
                         }
                     }
@@ -743,16 +781,45 @@ impl App {
         }
         let preview = self.extend_paint(ui, response, img_rect, scale, (b.size * 0.3).max(3.0));
         if !preview.is_empty() {
-            paint_area(&painter, &preview, b.size, Color32::WHITE);
+            paint_area(&painter, &preview, b.size, if self.stroke_paint == AreaPaint::Shrink { ERASED } else { Color32::WHITE });
         }
         if let Some(pts) = self.finished_paint(ui) {
-            let radius = self.radius_norm(b.size, scale);
-            let source = self.current.as_ref().map_or(pts[0], |c| mask::auto_source_area(&c.preview, &pts, radius));
-            let mode = if tool == LocalTool::Heal { SpotMode::Heal } else { SpotMode::Clone };
-            let (feather, opacity) = (1.0 - b.hardness.clamp(0.0, 1.0), b.opacity);
-            let spot = Spot { mode, target: pts[0], source, path: pts[1..].to_vec(), radius, feather, opacity };
-            self.edit(|a| a.retouch.push(spot));
-            self.selected_spot = self.current.as_ref().map(|c| c.adjustments.retouch.len() - 1);
+            match (self.stroke_paint, selected) {
+                (AreaPaint::Extend | AreaPaint::Shrink, Some(i)) => {
+                    let erase = self.stroke_paint == AreaPaint::Shrink;
+                    self.edit(|a| {
+                        if let Some(s) = a.retouch.get_mut(i) {
+                            s.strokes.push(SpotStroke { points: pts, erase });
+                        }
+                    });
+                }
+                _ => {
+                    let radius = self.radius_norm(b.size, scale);
+                    let source = self.current.as_ref().map_or(pts[0], |c| mask::auto_source_area(&c.preview, &pts, radius));
+                    let mode = if tool == LocalTool::Heal { SpotMode::Heal } else { SpotMode::Clone };
+                    let (feather, opacity) = (1.0 - b.hardness.clamp(0.0, 1.0), b.opacity);
+                    let spot = Spot { mode, target: pts[0], source, path: pts[1..].to_vec(), strokes: Vec::new(), radius, feather, opacity };
+                    self.edit(|a| a.retouch.push(spot));
+                    self.selected_spot = self.current.as_ref().map(|c| c.adjustments.retouch.len() - 1);
+                    self.selected_removal = None;
+                }
+            }
+        }
+    }
+
+    /// How a stroke starting now acts: on a chosen area (`chosen`) Shift extends it and Alt
+    /// takes part of it away; otherwise as chosen in the panel.
+    pub(crate) fn stroke_mode(&self, ui: &Ui, chosen: bool) -> AreaPaint {
+        if !chosen {
+            return AreaPaint::New;
+        }
+        let m = ui.input(|i| i.modifiers);
+        if m.alt {
+            AreaPaint::Shrink
+        } else if m.shift {
+            AreaPaint::Extend
+        } else {
+            self.area_paint
         }
     }
 
@@ -1055,7 +1122,7 @@ impl App {
         let spots = &mut cur.adjustments.retouch;
         use crate::commands::hint;
         let help = format!(
-            "Mit {} oder {} über eine Stelle malen. Pins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · {}\n\nStaub und Flecken finden: repariert kleine dunkle Flecken auf ruhigen Flächen, etwa Sensorstaub.",
+            "Mit {} oder {} über eine Stelle malen. Pins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · {}\n\nGewählten Bereich ändern: mit Umschalt dazumalen, mit Alt wegnehmen.\n\nStaub und Flecken finden: repariert kleine dunkle Flecken auf ruhigen Flächen, etwa Sensorstaub.",
             hint("Reparieren", "tool-heal"),
             hint("Klonen", "tool-clone"),
             hint("Löschen", "delete-spot")
@@ -1063,6 +1130,7 @@ impl App {
         let searching = self.spot_search.is_some();
         let spot_cancel = self.spot_cancel.clone();
         let sensitivity = &mut self.spot_sensitivity;
+        let area_paint = &mut self.area_paint;
         let mut reset_spots = false;
         crate::widgets::section_help(ui, "Reparieren & Klonen", &help, Some(&mut || reset_spots = true), |ui| {
             ui.horizontal(|ui| {
@@ -1105,7 +1173,7 @@ impl App {
                 });
             }
             // The settings of the chosen area; without one they are shown, but disabled.
-            let mut placeholder = Spot { mode: SpotMode::Heal, target: [0.0; 2], source: [0.0; 2], path: Vec::new(), radius: 0.0, feather: 0.4, opacity: 1.0 };
+            let mut placeholder = Spot { mode: SpotMode::Heal, target: [0.0; 2], source: [0.0; 2], path: Vec::new(), strokes: Vec::new(), radius: 0.0, feather: 0.4, opacity: 1.0 };
             let chosen = selected.and_then(|i| spots.get_mut(i));
             let has = chosen.is_some();
             let s = chosen.unwrap_or(&mut placeholder);
@@ -1128,6 +1196,7 @@ impl App {
                         s.feather = feather / 100.0;
                         changed = true;
                     }
+                    area_paint_row(ui, area_paint, has);
                     ui.horizontal(|ui| {
                         if ui.button(format!("{}  Neue Quelle", crate::theme::icon::MAGIC_WAND)).on_hover_text("Quelle erneut automatisch wählen").clicked() {
                             act = Some(Act::NewSource);
@@ -1163,6 +1232,7 @@ impl App {
         match act {
             Some(Act::Select(i)) => {
                 self.selected_spot = Some(i);
+                self.selected_removal = None;
                 // The pins are shown with the heal and clone tools.
                 if !matches!(self.local_tool, Some(LocalTool::Heal | LocalTool::Clone)) {
                     let heal = self.current.as_ref().and_then(|c| c.adjustments.retouch.get(i)).is_some_and(|s| s.mode == SpotMode::Heal);
@@ -1174,7 +1244,8 @@ impl App {
                 let Some(i) = self.selected_spot else { return };
                 let Some(cur) = self.current.as_ref() else { return };
                 let Some(s) = cur.adjustments.retouch.get(i) else { return };
-                let pts: Vec<[f32; 2]> = std::iter::once(s.target).chain(s.path.iter().copied()).collect();
+                let added = s.strokes.iter().filter(|st| !st.erase).flat_map(|st| st.points.iter().copied());
+                let pts: Vec<[f32; 2]> = std::iter::once(s.target).chain(s.path.iter().copied()).chain(added).collect();
                 let source = mask::auto_source_area(&cur.preview, &pts, s.radius);
                 self.edit(|a| a.retouch[i].source = source);
             }
@@ -1242,10 +1313,14 @@ impl App {
         }
     }
 
-    /// Entf: deletes what is chosen – a gradient, a retouch area, or else the chosen layer in
-    /// the layer tab. All of it can be undone.
+    /// Entf: deletes what is chosen – a gradient, a retouch or removal area, or else the chosen
+    /// layer in the layer tab. All of it can be undone.
     pub fn delete_selected_spot(&mut self) {
         if self.delete_selected_gradient() {
+            return;
+        }
+        if self.selected_removal.is_some() && (self.tab == Tab::Retouch || self.local_tool == Some(LocalTool::Remove)) {
+            self.delete_selected_removal();
             return;
         }
         // A retouch area only while it can be seen (retouch tab or its tools), otherwise an
@@ -1844,6 +1919,22 @@ fn layer_summary(l: &Layer) -> String {
     parts.join(" · ")
 }
 
+/// Outline of what a stroke takes away from a retouch or removal area.
+pub(crate) const ERASED: Color32 = Color32::from_rgb(235, 90, 90);
+
+/// What painting does with a chosen area: a new one, extend it or make it smaller.
+pub(crate) fn area_paint_row(ui: &mut Ui, mode: &mut AreaPaint, chosen: bool) {
+    crate::widgets::field(ui, "Malen", |ui| {
+        ui.selectable_value(mode, AreaPaint::New, "Neu").on_hover_text("Ein neuer Bereich");
+        ui.add_enabled_ui(chosen, |ui| {
+            ui.selectable_value(mode, AreaPaint::Extend, "Erweitern").on_hover_text("Zum gewählten Bereich hinzufügen · Umschalt beim Malen");
+            ui.selectable_value(mode, AreaPaint::Shrink, "Verkleinern").on_hover_text("Vom gewählten Bereich wegnehmen · Alt beim Malen");
+        })
+        .response
+        .on_disabled_hover_text("Erst einen Bereich wählen");
+    });
+}
+
 /// Brush outline: the size, and inside it where the hard core ends.
 pub fn brush_cursor(painter: &egui::Painter, p: Pos2, b: &BrushSettings) {
     painter.circle_stroke(p, b.size, Stroke::new(2.5, Color32::from_black_alpha(120)));
@@ -1857,7 +1948,7 @@ pub fn brush_cursor(painter: &egui::Painter, p: Pos2, b: &BrushSettings) {
 const BRUSH_ADJUST_HARDNESS_SPAN: f32 = 200.0;
 
 /// Pointer distance (screen points) within which a pin of a retouch area is grabbed.
-const PIN_HIT: f32 = 9.0;
+pub(crate) const PIN_HIT: f32 = 9.0;
 
 /// Pointer positions of this frame while dragging, in order: every movement the system
 /// reported, not only where the pointer ended up (at one point per frame a fast circle comes
@@ -1882,7 +1973,7 @@ pub(crate) fn pressed_on(ui: &Ui, response: &Response) -> Option<Pos2> {
 /// Outline of a painted area: the edge of the round-capped band of radius `r` along `pts`
 /// (a circle for one point). Only the outer edge is drawn, so strokes that go back and forth
 /// stay one clean shape; a dark halo keeps it visible on any image.
-fn paint_area(painter: &egui::Painter, pts: &[Pos2], r: f32, color: Color32) {
+pub(crate) fn paint_area(painter: &egui::Painter, pts: &[Pos2], r: f32, color: Color32) {
     let pieces = cached_outline(painter.ctx(), pts, r);
     for s in pieces.iter() {
         painter.line_segment(*s, Stroke::new(3.0, Color32::from_black_alpha(110)));
@@ -1994,7 +2085,7 @@ fn closest_on_segment(p: Pos2, a: Pos2, b: Pos2) -> Pos2 {
 }
 
 /// Pin of a retouch area (grab it to move the area or its source); larger under the mouse.
-fn pin(painter: &egui::Painter, p: Pos2, color: Color32, hovered: bool) {
+pub(crate) fn pin(painter: &egui::Painter, p: Pos2, color: Color32, hovered: bool) {
     let r = if hovered { 6.0 } else { 4.0 };
     painter.circle_filled(p, r + 1.5, Color32::from_black_alpha(120));
     painter.circle_filled(p, r, color);

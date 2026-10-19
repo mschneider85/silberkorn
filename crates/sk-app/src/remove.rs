@@ -6,18 +6,46 @@ use std::sync::Arc;
 use egui::{Color32, Rect, Response, Ui};
 use sk_ai::models;
 use sk_core::brush::AutoGuide;
-use sk_core::params::{BrushStroke, WbMode};
+use sk_core::params::{BrushStroke, Removal, WbMode};
 
 use crate::ai_models::AiFeature;
 use crate::app::App;
-use crate::layers::{LocalDrag, LocalTool};
-use crate::widgets::section_help_ai;
+use crate::layers::{AreaPaint, LocalDrag, LocalTool};
+use crate::widgets::{section_help_ai, slider_row};
 use crate::workers::InpaintJob;
 
 impl App {
-    /// Viewer interaction of the remove tool: painting the strokes, then the request.
+    /// Viewer interaction of the remove tool: painting the strokes, then the request. The
+    /// areas removed so far are outlined; a click on a pin chooses one, which Shift then
+    /// extends and Alt makes smaller (filled anew as a whole).
     pub(crate) fn remove_interaction(&mut self, ui: &mut Ui, response: &Response, img_rect: Rect, scale: f32) {
         let painter = ui.painter_at(response.rect);
+        let Some(map) = self.uv_mapper(img_rect, scale) else { return };
+        let removals = self.current.as_ref().map(|c| c.adjustments.removals.clone()).unwrap_or_default();
+        let selected = self.selected_removal.filter(|i| *i < removals.len());
+        // Each area as its strokes on screen: (points, radius, taken away); the pin on the first.
+        let shown: Vec<Vec<(Vec<egui::Pos2>, f32, bool)>> = removals
+            .iter()
+            .map(|r| r.strokes.iter().filter(|s| !s.points.is_empty()).map(|s| (s.points.iter().map(|p| map.map(*p)).collect(), self.radius_screen(s.radius, scale), s.erase)).collect())
+            .collect();
+        let pin_at = |i: usize| shown[i].iter().find(|(_, _, erase)| !erase).map(|(pts, ..)| pts[0]);
+        let pin_hit = |p: egui::Pos2| (0..shown.len()).rev().find(|i| pin_at(*i).is_some_and(|q| (p - q).length() < crate::layers::PIN_HIT));
+        let hovered_pin = response.hover_pos().and_then(pin_hit).filter(|_| self.remove_strokes.is_empty());
+        // While an area is filled anew, its strokes show in red instead.
+        let replacing = self.remove_replaces.and_then(|id| removals.iter().position(|r| r.id == id));
+        for (i, strokes) in shown.iter().enumerate().filter(|(i, _)| Some(*i) != replacing) {
+            let sel = selected == Some(i);
+            for (pts, r, erase) in strokes {
+                if *erase && sel {
+                    crate::layers::paint_area(&painter, pts, *r, crate::layers::ERASED);
+                } else if !erase {
+                    crate::layers::paint_area(&painter, pts, *r, if sel { Color32::WHITE } else { Color32::from_white_alpha(150) });
+                }
+            }
+            if let Some(p) = pin_at(i) {
+                crate::layers::pin(&painter, p, if sel { Color32::WHITE } else { Color32::from_white_alpha(170) }, hovered_pin == Some(i));
+            }
+        }
         // The marked area in red, as it will be removed (soft edge, opacity, automatic masking).
         self.draw_remove_overlay(ui, &painter, img_rect, scale);
         if self.inpaint_busy {
@@ -25,21 +53,36 @@ impl App {
             return;
         }
         let b = self.brushes.remove.clone();
-        if let Some(p) = response.hover_pos().filter(|_| !self.adjusting_brush()) {
+        if hovered_pin.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        } else if let Some(p) = response.hover_pos().filter(|_| !self.adjusting_brush()) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
             crate::layers::brush_cursor(&painter, p, &b);
         }
         // Only the left button paints; the right one changes the brush. From the press on, like
         // the brush: a click marks a dab, and the start of the stroke isn't lost.
-        if let Some(p) = crate::layers::pressed_on(ui, response)
-            && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
-        {
+        if let Some(p) = crate::layers::pressed_on(ui, response) {
+            if let Some(i) = pin_hit(p).filter(|_| self.remove_strokes.is_empty()) {
+                self.selected_removal = Some(i);
+                self.selected_spot = None;
+                return;
+            }
+            let Some(uv) = self.screen_to_uv(p, img_rect, scale) else { return };
+            let mode = self.stroke_mode(ui, selected.is_some());
+            // Onto a chosen area: its strokes and this one are filled anew together.
+            if mode != AreaPaint::New
+                && self.remove_strokes.is_empty()
+                && let Some(r) = selected.map(|i| &removals[i])
+            {
+                self.remove_strokes = r.strokes.clone();
+                self.remove_replaces = Some(r.id);
+            }
             self.remove_strokes.push(BrushStroke {
                 points: vec![uv],
                 radius: self.radius_norm(b.size, scale),
                 hardness: b.hardness,
                 flow: b.flow,
-                erase: false,
+                erase: mode == AreaPaint::Shrink,
                 opacity: b.opacity,
                 auto_mask: b.auto_mask,
                 build_up: true,
@@ -169,68 +212,141 @@ impl App {
             wb,
             // Kept on screen until the result arrives.
             strokes: self.remove_strokes.clone(),
+            replaces: self.remove_replaces,
         });
     }
 
-    pub(crate) fn removal_done(&mut self, generation: u64, result: Result<sk_core::params::Removal, String>) {
+    pub(crate) fn removal_done(&mut self, generation: u64, replaces: Option<u64>, result: Result<sk_core::params::Removal, String>) {
         self.inpaint_busy = false;
         self.remove_strokes.clear();
+        self.remove_replaces = None;
         if generation != self.generation() {
             return;
         }
         match result {
             Ok(r) => {
-                self.edit(|a| a.removals.push(r));
-                self.status = "Entfernt".into();
+                // An area filled anew keeps its place and opacity (unless it was deleted meanwhile).
+                let at = replaces.and_then(|id| self.current.as_ref()?.adjustments.removals.iter().position(|old| old.id == id));
+                match at {
+                    Some(i) => self.edit(|a| a.removals[i] = Removal { opacity: a.removals[i].opacity, ..r }),
+                    None => self.edit(|a| a.removals.push(r)),
+                }
+                self.selected_removal = at.or_else(|| self.current.as_ref().map(|c| c.adjustments.removals.len() - 1));
+                self.selected_spot = None;
+                self.status = if at.is_some() { "Bereich neu gefüllt".into() } else { "Entfernt".into() };
             }
             Err(e) => self.report_error(format!("Objekt entfernen fehlgeschlagen: {e}")),
         }
     }
 
-    /// Section in the layers tab.
+    /// Section in the retouch tab: the brush, the areas removed and the chosen one's settings.
     pub(crate) fn remove_section(&mut self, ui: &mut Ui) {
-        let n = self.current.as_ref().map_or(0, |c| c.adjustments.removals.len());
-        let mut clear: Option<bool> = None;
+        enum Act {
+            Select(usize),
+            Delete(usize),
+            Clear,
+        }
+        let mut act = None;
+        let mut changed = false;
         let downloading = self.ai_download_progress(AiFeature::Inpaint);
         let active = self.local_tool == Some(LocalTool::Remove);
+        let selected = self.selected_removal;
         // Always there, like the other sections: the brush only works while the tool is on, the
         // buttons only with something removed (shown, but disabled otherwise).
-        let help = "Über das Störende malen; beim Loslassen füllt die KI die Stelle passend zur Umgebung.";
+        let help = "Über das Störende malen; beim Loslassen füllt die KI die Stelle passend zur Umgebung.\n\nGewählten Bereich ändern: mit Umschalt dazumalen, mit Alt wegnehmen; er wird dann neu gefüllt.";
         let mut reset = false;
+        let cancel = self.job_cancel(None, Some(&AiFeature::Inpaint.job_label()));
+        let mut no_image = Vec::new();
+        let removals = self.current.as_mut().map_or(&mut no_image, |c| &mut c.adjustments.removals);
+        let (brushes, area_paint, changed_at) = (&mut self.brushes.remove, &mut self.area_paint, &mut self.brushes_changed_at);
         section_help_ai(ui, "Objekt entfernen", help, Some(&mut || reset = true), |ui| {
-            let brush = ui.add_enabled_ui(active, |ui| crate::layers::brush_controls(ui, &mut self.brushes.remove, Some(LocalTool::Remove), true));
+            let brush = ui.add_enabled_ui(active, |ui| crate::layers::brush_controls(ui, brushes, Some(LocalTool::Remove), true));
             if brush.inner {
-                self.brushes_changed_at = Some(std::time::Instant::now());
+                *changed_at = Some(std::time::Instant::now());
             }
             brush.response.on_disabled_hover_text(crate::commands::hint("Pinsel des Werkzeugs „Objekt entfernen“", "tool-remove"));
             if let Some(p) = downloading {
-                crate::ai_models::download_progress(ui, AiFeature::Inpaint, p, self.job_cancel(None, Some(&AiFeature::Inpaint.job_label())));
+                crate::ai_models::download_progress(ui, AiFeature::Inpaint, p, cancel);
             }
-            ui.horizontal(|ui| {
-                ui.label(match n {
-                    0 => "Noch nichts entfernt".to_string(),
-                    1 => "1 Bereich entfernt".to_string(),
-                    _ => format!("{n} Bereiche entfernt"),
-                });
-                ui.add_enabled_ui(n > 0, |ui| {
-                    if ui.small_button("Letzten zurücknehmen").clicked() {
-                        clear = Some(false);
+            ui.add_space(4.0);
+            if removals.is_empty() {
+                crate::widgets::hint(ui, "Noch nichts entfernt.");
+            }
+            for i in 0..removals.len() {
+                let text = format!("{}  Entfernen {}", crate::theme::icon::SPARKLE, i + 1);
+                let w = ui.available_width();
+                let r = ui.add_sized([w, 24.0], egui::Button::selectable(selected == Some(i), text));
+                if r.clicked() {
+                    act = Some(Act::Select(i));
+                }
+                r.context_menu(|ui| {
+                    if ui.button(format!("{}  Löschen", crate::theme::icon::TRASH)).clicked() {
+                        act = Some(Act::Delete(i));
                     }
-                    if ui.small_button("Alle löschen").on_hover_text("Alle entfernten Bereiche wiederherstellen").clicked() {
-                        clear = Some(true);
-                    }
                 });
+            }
+            // The settings of the chosen area; without one they are shown, but disabled.
+            let mut placeholder = Removal::default();
+            let chosen = selected.and_then(|i| removals.get_mut(i));
+            let has = chosen.is_some();
+            let r = chosen.unwrap_or(&mut placeholder);
+            ui.scope(|ui| {
+                if !has {
+                    ui.disable();
+                }
+                ui.add_space(6.0);
+                let mut opacity = r.opacity * 100.0;
+                if slider_row(ui, "Deckkraft", &mut opacity, 0.0..=100.0, 100.0, 0) {
+                    r.opacity = opacity / 100.0;
+                    changed = true;
+                }
+                crate::layers::area_paint_row(ui, area_paint, has);
+                if ui.button(format!("{}  Löschen", crate::theme::icon::TRASH)).on_hover_text(crate::commands::shortcut_of("delete-spot")).clicked()
+                    && let Some(i) = selected
+                {
+                    act = Some(Act::Delete(i));
+                }
             });
+            ui.add_space(4.0);
+            if ui.add_enabled(!removals.is_empty(), egui::Button::new(format!("{}  Alle löschen", crate::theme::icon::TRASH))).on_hover_text("Alle entfernten Bereiche wiederherstellen").clicked() {
+                act = Some(Act::Clear);
+            }
         });
         if reset {
-            clear = Some(true);
+            act = Some(Act::Clear);
         }
-        match clear {
-            Some(true) => self.edit(|a| a.removals.clear()),
-            Some(false) => self.edit(|a| {
-                a.removals.pop();
-            }),
+        if changed {
+            self.request_render();
+        }
+        match act {
+            Some(Act::Select(i)) => {
+                self.selected_removal = Some(i);
+                self.selected_spot = None;
+                // The outlines are shown with the tool.
+                if self.local_tool != Some(LocalTool::Remove) {
+                    self.set_local_tool(LocalTool::Remove);
+                }
+            }
+            Some(Act::Delete(i)) => {
+                self.selected_removal = Some(i);
+                self.delete_selected_removal();
+            }
+            Some(Act::Clear) => {
+                self.selected_removal = None;
+                self.edit(|a| a.removals.clear());
+            }
             None => {}
+        }
+    }
+
+    /// Deletes the chosen removal area (undoable).
+    pub fn delete_selected_removal(&mut self) {
+        if let Some(i) = self.selected_removal.take() {
+            self.edit(|a| {
+                if i < a.removals.len() {
+                    a.removals.remove(i);
+                }
+            });
         }
     }
 }
