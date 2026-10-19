@@ -132,7 +132,7 @@ impl Tool {
     /// How far the tool also works on a local layer (`LayerAdjustments`).
     pub fn layer_support(self) -> LayerSupport {
         match self {
-            Tool::Color | Tool::ColorBalance | Tool::Exposure | Tool::HighlightsShadows | Tool::Clarity | Tool::Dehaze => LayerSupport::Full,
+            Tool::Color | Tool::ColorBalance | Tool::Exposure | Tool::HighlightsShadows | Tool::Curves | Tool::Clarity | Tool::Dehaze => LayerSupport::Full,
             // Temperature and tint relative to the background; the color editor's bands, not its
             // ranges of one's own.
             Tool::WhiteBalance | Tool::ColorEditor => LayerSupport::Partial,

@@ -158,6 +158,16 @@ impl CurveChannel {
             CurveChannel::Blue => "Blau",
         }
     }
+
+    pub fn curve_mut(self, c: &mut sk_core::params::Curves) -> &mut sk_core::params::Curve {
+        match self {
+            CurveChannel::Rgb => &mut c.rgb,
+            CurveChannel::Luma => &mut c.luma,
+            CurveChannel::Red => &mut c.red,
+            CurveChannel::Green => &mut c.green,
+            CurveChannel::Blue => &mut c.blue,
+        }
+    }
 }
 
 /// The image open in the viewer.

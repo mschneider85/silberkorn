@@ -254,6 +254,12 @@ pub struct Curves {
     pub luma: Curve,
 }
 
+impl Curves {
+    pub fn is_identity(&self) -> bool {
+        [&self.rgb, &self.red, &self.green, &self.blue, &self.luma].iter().all(|c| c.is_identity())
+    }
+}
+
 /// Process versions of the renderer: edits keep the look
 /// they were made with, also when a later Silberkorn renders differently.
 ///
@@ -349,8 +355,9 @@ pub struct Removal {
     pub scale: f32,
 }
 
-/// Adjustments of a local layer, as deltas added to the background values.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, Default)]
+/// Adjustments of a local layer, as deltas added to the background values; the curves act on
+/// the result of the background's (see `pipeline`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct LayerAdjustments {
     /// EV
@@ -380,6 +387,8 @@ pub struct LayerAdjustments {
     /// Color wheels, added to those of the color balance (as offsets, see `ColorWheel::offset`).
     #[serde(skip_serializing_if = "ColorBalance::is_neutral")]
     pub color_balance: ColorBalance,
+    #[serde(skip_serializing_if = "Curves::is_identity")]
+    pub curves: Curves,
 }
 
 fn bands_neutral(b: &[HslBand; 8]) -> bool {
@@ -387,32 +396,13 @@ fn bands_neutral(b: &[HslBand; 8]) -> bool {
 }
 
 impl LayerAdjustments {
-    /// No change (as `default()`, for constants).
-    pub const NEUTRAL: Self = {
-        let band = HslBand { hue: 0.0, saturation: 0.0, lightness: 0.0 };
-        let wheel = ColorWheel { hue: 0.0, amount: 0.0, lightness: 0.0 };
-        Self {
-            exposure: 0.0,
-            contrast: 0.0,
-            brightness: 0.0,
-            saturation: 0.0,
-            highlights: 0.0,
-            shadows: 0.0,
-            clarity: 0.0,
-            structure: 0.0,
-            temperature: 0.0,
-            tint: 0.0,
-            dehaze: 0.0,
-            whites: 0.0,
-            blacks: 0.0,
-            vibrance: 0.0,
-            color_bands: [band; 8],
-            color_balance: ColorBalance { master: wheel, shadows: wheel, midtones: wheel, highlights: wheel },
-        }
-    };
-
     pub fn is_neutral(&self) -> bool {
         *self == LayerAdjustments::default()
+    }
+
+    /// No deltas to the background values (curves aside).
+    pub fn deltas_neutral(&self) -> bool {
+        LayerAdjustments { curves: Curves::default(), ..self.clone() }.is_neutral()
     }
 }
 

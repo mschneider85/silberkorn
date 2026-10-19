@@ -142,9 +142,10 @@ Pinselstrichen, linearen und radialen Verläufen, „Füllen“ und „Invertier
 **Ebenenmodus:** Ist eine Ebene gewählt, ändern die Regler in Belichtung, Farbe und Details diese Ebene
 statt des ganzen Bildes: Belichtung, Kontrast, Helligkeit, Lichter, Tiefen, Weiß, Schwarz, Temperatur und
 Tönung (relativ zum Hintergrund), Sättigung, Dynamik, die Bänder des Farbeditors, die Farbbalance,
-Klarheit, Struktur und Dunst entfernen. Was nur aufs ganze Bild wirkt, ist im Ebenenmodus deaktiviert:
-die Werkzeuge Tonwerte, Kurven, Schärfen, Rauschreduzierung usw. (zugeklappt, „nur ganzes Bild“), die Tabs
-Objektiv, Effekte, Retusche und Stile sowie Zuschneiden, Drehen, Weißabgleich-Pipette, Automatisch
+Klarheit, Struktur und Dunst entfernen, außerdem die Gradationskurve (alle Kanäle und Luma). Die Kurve
+einer Ebene wirkt auf das Ergebnis des Hintergrunds und wird mit Maske × Deckkraft eingeblendet.
+Was nur aufs ganze Bild wirkt, ist im Ebenenmodus deaktiviert: die Werkzeuge Tonwerte, Schärfen,
+Rauschreduzierung usw. (zugeklappt, „nur ganzes Bild“), die Tabs Objektiv, Effekte, Retusche und Stile sowie Zuschneiden, Drehen, Weißabgleich-Pipette, Automatisch
 anpassen und Einfügen. Ein blauer Punkt in der Tab-Leiste markiert die Tabs, die auf die Ebene wirken.
 Woran man gerade arbeitet, zeigt:
 - eine Leiste oben in Belichtung, Farbe und Details: „Hintergrund“ oder blau „Ebene „…““, mit

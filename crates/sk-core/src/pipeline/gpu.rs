@@ -407,6 +407,8 @@ struct LayerGpu {
     bands: [f32; 24],
     /// Color balance offsets per wheel (`ColorWheel::offset`).
     balance: [f32; 12],
+    /// Offsets of the layer's curve tables: red, green, blue, luma (`NO_LUT`: none).
+    curve: [u32; 4],
 }
 
 const NO_LUT: u32 = u32::MAX;
@@ -841,6 +843,15 @@ impl Processor {
         let lut_curve = self.tone_luts.camera.as_ref().or(self.tone_luts.curve.as_ref()).map_or(NO_LUT, |c| push(c));
         let lut_out = [push(&self.lut[0]), push(&self.lut[1]), push(&self.lut[2])];
         let lut_luma = self.luma_lut.as_ref().map_or(NO_LUT, |l| push(l));
+        let layer_curves: Vec<[u32; 4]> = self
+            .layers
+            .iter()
+            .map(|l| {
+                let Some(c) = &l.curve else { return [NO_LUT; 4] };
+                let [r, g, b] = c.channels.as_ref().map_or([NO_LUT; 3], |t| [push(&t[0]), push(&t[1]), push(&t[2])]);
+                [r, g, b, c.luma.as_ref().map_or(NO_LUT, |t| push(t))]
+            })
+            .collect();
         let luts = g.upload(&luts);
 
         // Layers and their masks.
@@ -848,8 +859,9 @@ impl Processor {
         let mut masks: Vec<(Arc<Buffer>, usize)> = Vec::new();
         let mut layers: Vec<LayerGpu> = Vec::new();
         let mut mask_len = 0usize;
-        for l in &self.layers {
+        for (l, curve) in self.layers.iter().zip(layer_curves) {
             let mut lg = LayerGpu::zeroed();
+            lg.curve = curve;
             if !l.mask.is_empty() {
                 let bm = cached_bitmap(&l.mask, aspect, Some(src));
                 lg.mask_off = mask_len as u32;
@@ -869,7 +881,7 @@ impl Processor {
                 lg.has_color = 1;
                 lg.color = [c.hue, c.width, c.falloff, c.min_chroma];
             }
-            lg.neutral = l.adj.is_neutral() as u32;
+            lg.neutral = !l.adds as u32;
             lg.opacity = l.opacity;
             let a = &l.adj;
             lg.adj = [
@@ -1714,6 +1726,26 @@ mod tests {
                         ),
                     ],
                     ..plain.clone()
+                },
+                Default::default(),
+                None,
+            ),
+            (
+                // Curves of a layer on the result: alone, and together with deltas.
+                "Ebenen mit Kurven",
+                {
+                    let mut a = plain.clone();
+                    a.curves.rgb = Curve { points: vec![[0.0, 0.0], [0.5, 0.55], [1.0, 1.0]] };
+                    let mut only = LayerAdjustments::default();
+                    only.curves.rgb = Curve { points: vec![[0.0, 0.0], [0.3, 0.2], [1.0, 1.0]] };
+                    only.curves.blue = Curve { points: vec![[0.0, 0.05], [0.5, 0.6], [1.0, 1.0]] };
+                    let mut both = LayerAdjustments { exposure: 0.4, ..Default::default() };
+                    both.curves.luma = Curve { points: vec![[0.0, 0.0], [0.4, 0.55], [1.0, 1.0]] };
+                    a.layers = vec![
+                        layer(only, radial.clone()),
+                        layer(both, Mask { fill: true, luma_range: Some(LumaRange { low: 0.2, high: 0.7, falloff: 0.1, invert: false }), ..Default::default() }),
+                    ];
+                    a
                 },
                 Default::default(),
                 None,

@@ -132,6 +132,11 @@ struct Layer {
     vibrance: f32,
     bands: array<f32, 24>,
     balance: array<f32, 12>,
+    // Offsets of the layer's curve tables (NO_LUT: none), as long as the output curves.
+    curve_r: u32,
+    curve_g: u32,
+    curve_b: u32,
+    curve_luma: u32,
 }
 
 @group(0) @binding(0) var<storage, read> P: Params;
@@ -197,9 +202,13 @@ fn encode(rgb: vec3<f32>) -> vec3<f32> {
     if P.lut_luma == NO_LUT {
         return e;
     }
-    // Luma curve (apply_luma_curve): luminance along the curve, hue and saturation kept.
+    return luma_curve(P.lut_luma, e);
+}
+
+// Luma curve (apply_luma_curve): luminance along the curve, hue and saturation kept.
+fn luma_curve(off: u32, e: vec3<f32>) -> vec3<f32> {
     let y = clamp(dot(e, LUMA), 0.0, 1.0);
-    let y2 = lut_lookup(P.lut_luma, P.lut_out_len, y);
+    let y2 = lut_lookup(off, P.lut_out_len, y);
     if y < 1e-5 {
         return vec3<f32>(y2);
     }
@@ -210,6 +219,18 @@ fn encode(rgb: vec3<f32>) -> vec3<f32> {
         o = o + (vec3<f32>(y2) - o) * t;
     }
     return clamp(o, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// A layer's curves (LayerCurve::apply).
+fn layer_curve(l: Layer, e: vec3<f32>) -> vec3<f32> {
+    var o = e;
+    if l.curve_r != NO_LUT {
+        o = vec3<f32>(lut_lookup(l.curve_r, P.lut_out_len, e.x), lut_lookup(l.curve_g, P.lut_out_len, e.y), lut_lookup(l.curve_b, P.lut_out_len, e.z));
+    }
+    if l.curve_luma != NO_LUT {
+        o = luma_curve(l.curve_luma, o);
+    }
+    return o;
 }
 
 // ------------------------------------------------------------------ tone
@@ -604,6 +625,18 @@ fn range_weight(l: Layer, disp: vec3<f32>) -> f32 {
     return w;
 }
 
+// Mask weight of a layer before its ranges and opacity.
+fn mask_weight(l: Layer, u: f32, v: f32) -> f32 {
+    var wgt = 0.0;
+    if l.has_bitmap != 0u {
+        wgt = mask_sample(l, u, v);
+    }
+    if l.invert != 0u {
+        wgt = 1.0 - wgt;
+    }
+    return wgt;
+}
+
 fn add_layer(tp: ptr<function, Tone>, l: Layer, w: f32) {
     (*tp).exposure_ev += l.exposure * w;
     (*tp).contrast += l.contrast * w;
@@ -662,18 +695,13 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let v = (sp.y + 0.5) / P.src_h;
     var tp = base;
     var any_layer = false;
+    var curved = false;
     var overlay = 0.0;
     var have_base = false;
     var base_disp = vec3<f32>(0.0);
     for (var li = 0u; li < P.n_layers; li++) {
         let l = layers[li];
-        var wgt = 0.0;
-        if l.has_bitmap != 0u {
-            wgt = mask_sample(l, u, v);
-        }
-        if l.invert != 0u {
-            wgt = 1.0 - wgt;
-        }
+        var wgt = mask_weight(l, u, v);
         if wgt > 0.0 && (l.has_luma != 0u || l.has_color != 0u) {
             if !have_base {
                 base_disp = color(tone(haze(p, dark, base.dehaze), has_ev, ev, det, base), base);
@@ -689,18 +717,44 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             add_layer(&tp, l, wgt);
             any_layer = true;
         }
+        if wgt > 0.0 && (l.curve_r != NO_LUT || l.curve_luma != NO_LUT) {
+            curved = true;
+        }
     }
-    if !any_layer {
+    var e: vec3<f32>;
+    if any_layer {
+        e = encode(color(tone(haze(p, dark, tp.dehaze), has_ev, ev, det, tp), tp));
+        if tp.brightness != 0.0 {
+            let g = exp2(-tp.brightness / 100.0 * 0.6);
+            e = pow(max(e, vec3<f32>(0.0)), vec3<f32>(g));
+        }
+    } else {
         if !have_base {
             base_disp = color(tone(haze(p, dark, base.dehaze), has_ev, ev, det, base), base);
+            have_base = true;
         }
-        out[i] = vec4<f32>(encode(base_disp), overlay);
-        return;
+        e = encode(base_disp);
     }
-    var e = encode(color(tone(haze(p, dark, tp.dehaze), has_ev, ev, det, tp), tp));
-    if tp.brightness != 0.0 {
-        let g = exp2(-tp.brightness / 100.0 * 0.6);
-        e = pow(max(e, vec3<f32>(0.0)), vec3<f32>(g));
+    // The layers' curves on the result, each blended in by its mask.
+    if curved {
+        for (var li = 0u; li < P.n_layers; li++) {
+            let l = layers[li];
+            if l.curve_r == NO_LUT && l.curve_luma == NO_LUT {
+                continue;
+            }
+            var wgt = mask_weight(l, u, v);
+            if wgt > 0.0 && (l.has_luma != 0u || l.has_color != 0u) {
+                if !have_base {
+                    base_disp = color(tone(haze(p, dark, base.dehaze), has_ev, ev, det, base), base);
+                    have_base = true;
+                }
+                wgt *= range_weight(l, base_disp);
+            }
+            wgt *= l.opacity;
+            if wgt > 0.0 {
+                e = mix(e, layer_curve(l, e), wgt);
+            }
+        }
     }
     out[i] = vec4<f32>(e, overlay);
 }

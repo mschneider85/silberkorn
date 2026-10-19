@@ -11,7 +11,7 @@ pub struct Target {
 
 impl Target {
     pub fn new(adj: &Adjustments, active: Option<usize>) -> Self {
-        Self { layer: active.and_then(|i| adj.layers.get(i).map(|l| (i, l.adjustments))) }
+        Self { layer: active.and_then(|i| adj.layers.get(i).map(|l| (i, l.adjustments.clone()))) }
     }
 
     pub fn is_layer(&self) -> bool {

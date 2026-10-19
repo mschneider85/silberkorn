@@ -168,8 +168,14 @@ impl App {
             changed = true;
         }
 
+        // The curves of the background or of the chosen layer (on the layer's result).
+        let mut t = Target::new(adj, self.active_layer);
         let mut reset_curve = false;
         let channel = &mut self.curve_channel;
+        let curves = match t.layer_mut() {
+            Some(l) => &mut l.curves,
+            None => &mut adj.curves,
+        };
         widgets::tool_section(ui, sk_core::tools::Tool::Curves, Some(&mut || reset_curve = true), |ui| {
             ui.horizontal(|ui| {
                 for ch in CurveChannel::ALL {
@@ -179,25 +185,21 @@ impl App {
                     }
                 }
             });
-            let (curve, color, bins): (&mut Curve, Color32, Option<&[u32]>) = match channel {
-                CurveChannel::Rgb => (&mut adj.curves.rgb, Color32::from_gray(230), self.histogram.as_ref().map(|h| h.luma.as_slice())),
-                CurveChannel::Luma => (&mut adj.curves.luma, Color32::from_rgb(235, 220, 185), self.histogram.as_ref().map(|h| h.luma.as_slice())),
-                CurveChannel::Red => (&mut adj.curves.red, Color32::from_rgb(240, 80, 80), self.histogram.as_ref().map(|h| h.r.as_slice())),
-                CurveChannel::Green => (&mut adj.curves.green, Color32::from_rgb(80, 210, 80), self.histogram.as_ref().map(|h| h.g.as_slice())),
-                CurveChannel::Blue => (&mut adj.curves.blue, Color32::from_rgb(90, 130, 250), self.histogram.as_ref().map(|h| h.b.as_slice())),
+            let h = self.histogram.as_ref();
+            let (color, bins): (Color32, Option<&[u32]>) = match channel {
+                CurveChannel::Rgb => (Color32::from_gray(230), h.map(|h| h.luma.as_slice())),
+                CurveChannel::Luma => (Color32::from_rgb(235, 220, 185), h.map(|h| h.luma.as_slice())),
+                CurveChannel::Red => (Color32::from_rgb(240, 80, 80), h.map(|h| h.r.as_slice())),
+                CurveChannel::Green => (Color32::from_rgb(80, 210, 80), h.map(|h| h.g.as_slice())),
+                CurveChannel::Blue => (Color32::from_rgb(90, 130, 250), h.map(|h| h.b.as_slice())),
             };
-            changed |= widgets::curve_editor(ui, curve, color, bins);
+            changed |= widgets::curve_editor(ui, channel.curve_mut(curves), color, bins);
         });
         if reset_curve {
-            match self.curve_channel {
-                CurveChannel::Rgb => adj.curves.rgb = Curve::default(),
-                CurveChannel::Luma => adj.curves.luma = Curve::default(),
-                CurveChannel::Red => adj.curves.red = Curve::default(),
-                CurveChannel::Green => adj.curves.green = Curve::default(),
-                CurveChannel::Blue => adj.curves.blue = Curve::default(),
-            }
+            *self.curve_channel.curve_mut(curves) = Curve::default();
             changed = true;
         }
+        t.store(adj);
 
         if changed {
             self.request_render();

@@ -3224,6 +3224,7 @@ fn layer_mode_leaves_out_whole_image_tabs_and_commands() {
     assert!(f.app.status.contains("ganze Bild"));
     assert!(!f.app.section_available(Tab::Exposure, "Tonwerte"));
     assert!(f.app.section_available(Tab::Exposure, "Belichtung"));
+    assert!(f.app.section_available(Tab::Exposure, "Gradationskurve"));
 }
 
 /// M shows the mask also after a click on a slider (which keeps the keyboard focus).
@@ -3252,7 +3253,15 @@ fn every_tool_says_whether_it_works_on_layers() {
     for t in Tool::ALL {
         let on_layer = matches!(
             t,
-            Tool::Exposure | Tool::HighlightsShadows | Tool::WhiteBalance | Tool::Color | Tool::ColorEditor | Tool::ColorBalance | Tool::Clarity | Tool::Dehaze
+            Tool::Exposure
+                | Tool::HighlightsShadows
+                | Tool::Curves
+                | Tool::WhiteBalance
+                | Tool::Color
+                | Tool::ColorEditor
+                | Tool::ColorBalance
+                | Tool::Clarity
+                | Tool::Dehaze
         );
         assert_eq!(t.layer_support() != LayerSupport::None, on_layer, "{t:?}");
     }

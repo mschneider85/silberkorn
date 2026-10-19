@@ -10,7 +10,7 @@ use egui::{Color32, Pos2, Rect, Response, RichText, Stroke, Ui, Vec2, pos2, vec2
 use crate::theme::{self, icon};
 
 use crate::ai_models::AiFeature;
-use crate::app::{App, Tab};
+use crate::app::{App, CurveChannel, Tab};
 use crate::widgets::{RAIL_LUMA, SliderOpts, hue_rail, slider_row, slider_row_with, subheading};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,22 +32,22 @@ pub enum LocalTool {
 }
 
 /// Style brushes: brush presets with predefined layer adjustments.
-pub const STYLE_BRUSHES: &[(&str, LayerAdjustments)] = &[
-    ("Aufhellen", LayerAdjustments { exposure: 0.7, ..ZERO }),
-    ("Abdunkeln", LayerAdjustments { exposure: -0.7, ..ZERO }),
-    ("Wärmer", LayerAdjustments { temperature: 40.0, ..ZERO }),
-    ("Kühler", LayerAdjustments { temperature: -40.0, ..ZERO }),
-    ("Mehr Farbe", LayerAdjustments { saturation: 40.0, ..ZERO }),
-    ("Entsättigen", LayerAdjustments { saturation: -70.0, ..ZERO }),
-    ("Details betonen", LayerAdjustments { clarity: 40.0, structure: 50.0, ..ZERO }),
-    ("Haut glätten", LayerAdjustments { clarity: -40.0, structure: -60.0, ..ZERO }),
-    ("Lichter zurückholen", LayerAdjustments { highlights: 70.0, ..ZERO }),
-    ("Tiefen aufhellen", LayerAdjustments { shadows: 70.0, ..ZERO }),
-    ("Dunst entfernen", LayerAdjustments { dehaze: 60.0, ..ZERO }),
-    ("Augen aufhellen", LayerAdjustments { exposure: 0.4, clarity: 20.0, saturation: 10.0, ..ZERO }),
-];
-
-const ZERO: LayerAdjustments = LayerAdjustments::NEUTRAL;
+pub fn style_brushes() -> [(&'static str, LayerAdjustments); 12] {
+    [
+        ("Aufhellen", LayerAdjustments { exposure: 0.7, ..Default::default() }),
+        ("Abdunkeln", LayerAdjustments { exposure: -0.7, ..Default::default() }),
+        ("Wärmer", LayerAdjustments { temperature: 40.0, ..Default::default() }),
+        ("Kühler", LayerAdjustments { temperature: -40.0, ..Default::default() }),
+        ("Mehr Farbe", LayerAdjustments { saturation: 40.0, ..Default::default() }),
+        ("Entsättigen", LayerAdjustments { saturation: -70.0, ..Default::default() }),
+        ("Details betonen", LayerAdjustments { clarity: 40.0, structure: 50.0, ..Default::default() }),
+        ("Haut glätten", LayerAdjustments { clarity: -40.0, structure: -60.0, ..Default::default() }),
+        ("Lichter zurückholen", LayerAdjustments { highlights: 70.0, ..Default::default() }),
+        ("Tiefen aufhellen", LayerAdjustments { shadows: 70.0, ..Default::default() }),
+        ("Dunst entfernen", LayerAdjustments { dehaze: 60.0, ..Default::default() }),
+        ("Augen aufhellen", LayerAdjustments { exposure: 0.4, clarity: 20.0, saturation: 10.0, ..Default::default() }),
+    ]
+}
 
 impl LocalTool {
     /// Icon and name, from the tool tiles (one name per tool everywhere).
@@ -1401,7 +1401,7 @@ impl App {
                         action = Some(LayerAction::Add);
                     }
                     ui.menu_button("Neue Ebene mit Stilpinsel", |ui| {
-                        for (k, (name, _)) in STYLE_BRUSHES.iter().enumerate() {
+                        for (k, (name, _)) in style_brushes().iter().enumerate() {
                             if ui.button(*name).clicked() {
                                 action = Some(LayerAction::AddStyle(k));
                             }
@@ -1684,8 +1684,8 @@ impl App {
                 }
             }
             Some(LayerAction::AddStyle(k)) => {
-                if let Some((name, adj)) = STYLE_BRUSHES.get(k) {
-                    self.add_style_brush(name, *adj);
+                if let Some((name, adj)) = style_brushes().into_iter().nth(k) {
+                    self.add_style_brush(name, adj);
                 }
             }
             Some(LayerAction::Toggle(i)) => {
@@ -1712,7 +1712,7 @@ pub(crate) struct Rename {
 pub(crate) enum LayerAction {
     Select(Option<usize>),
     Add,
-    /// New layer with the adjustments of a style brush (index into [`STYLE_BRUSHES`]).
+    /// New layer with the adjustments of a style brush (index into [`style_brushes`]).
     AddStyle(usize),
     Toggle(usize),
     Delete(usize),
@@ -1721,7 +1721,7 @@ pub(crate) enum LayerAction {
 /// The tab with a tool that works on layers.
 fn tab_of(tool: Tool) -> Tab {
     match tool {
-        Tool::Exposure | Tool::HighlightsShadows => Tab::Exposure,
+        Tool::Exposure | Tool::HighlightsShadows | Tool::Curves => Tab::Exposure,
         Tool::Clarity | Tool::Dehaze => Tab::Details,
         _ => Tab::Color,
     }
@@ -1733,6 +1733,7 @@ enum ChangeKey {
     Field(usize),
     Band(usize),
     Wheel(usize),
+    Curve(CurveChannel),
 }
 
 impl ChangeKey {
@@ -1741,6 +1742,7 @@ impl ChangeKey {
             ChangeKey::Field(i) => *(LAYER_FIELDS[i].2)(a) = 0.0,
             ChangeKey::Band(i) => a.color_bands[i] = Default::default(),
             ChangeKey::Wheel(i) => *wheels(a)[i].1 = Default::default(),
+            ChangeKey::Curve(ch) => *ch.curve_mut(&mut a.curves) = Default::default(),
         }
     }
 }
@@ -1779,7 +1781,7 @@ fn wheels(a: &mut LayerAdjustments) -> [(&'static str, &mut sk_core::params::Col
 
 /// What a layer changes, in the order of the tools.
 fn layer_changes(a: &LayerAdjustments) -> Vec<Change> {
-    let mut a = *a;
+    let mut a = a.clone();
     let mut out = Vec::new();
     for (i, (label, tool, field, decimals)) in LAYER_FIELDS.iter().enumerate() {
         let v = *field(&mut a);
@@ -1799,6 +1801,13 @@ fn layer_changes(a: &LayerAdjustments) -> Vec<Change> {
         if *w != Default::default() {
             let value = format!("{:.0} %", w.amount);
             out.push(Change { label: format!("Farbbalance · {name}"), value, tool: Tool::ColorBalance, key: ChangeKey::Wheel(i) });
+        }
+    }
+    for ch in CurveChannel::ALL {
+        let curve = ch.curve_mut(&mut a.curves);
+        if !curve.is_identity() {
+            let value = format!("{} Punkte", curve.points.len());
+            out.push(Change { label: format!("Gradationskurve · {}", ch.label()), value, tool: Tool::Curves, key: ChangeKey::Curve(ch) });
         }
     }
     out
@@ -2004,14 +2013,21 @@ mod tests {
         let mut a = LayerAdjustments { exposure: 0.4, whites: -12.0, ..Default::default() };
         a.color_bands[5].saturation = 30.0;
         a.color_balance.shadows.amount = 25.0;
+        a.curves.luma.points = vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]];
         let changes = layer_changes(&a);
         let labels: Vec<String> = changes.iter().map(|c| format!("{} {}", c.label, c.value)).collect();
-        assert_eq!(labels, ["Belichtung +0.40", "Weiß -12", "Farbeditor · Blau +0° +30 +0", "Farbbalance · Schatten 25 %"]);
+        assert_eq!(
+            labels,
+            ["Belichtung +0.40", "Weiß -12", "Farbeditor · Blau +0° +30 +0", "Farbbalance · Schatten 25 %", "Gradationskurve · Luma 3 Punkte"]
+        );
         assert_eq!(tab_of(changes[2].tool), Tab::Color);
+        assert_eq!(tab_of(changes[4].tool), Tab::Exposure);
         changes[0].key.reset(&mut a);
         changes[3].key.reset(&mut a);
+        changes[4].key.reset(&mut a);
         assert_eq!(a.exposure, 0.0);
         assert!(a.color_balance.is_neutral());
+        assert!(a.curves.is_identity());
         assert_eq!(layer_changes(&a).len(), 2);
     }
 

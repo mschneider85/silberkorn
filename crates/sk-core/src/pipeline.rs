@@ -339,6 +339,52 @@ struct PreparedLayer {
     mask: Mask,
     opacity: f32,
     adj: LayerAdjustments,
+    /// `adj` changes the tone or color parameters (not only the curves).
+    adds: bool,
+    curve: Option<LayerCurve>,
+}
+
+impl PreparedLayer {
+    fn new(index: usize, mask: Mask, opacity: f32, adj: LayerAdjustments) -> Self {
+        Self { index, mask, opacity, adds: !adj.deltas_neutral(), curve: LayerCurve::new(&adj.curves), adj }
+    }
+}
+
+/// A layer's curves as tables: the RGB curve followed by the channel's, then the luma curve
+/// (as the background's curves in `encode`).
+struct LayerCurve {
+    channels: Option<[Vec<f32>; 3]>,
+    luma: Option<Vec<f32>>,
+}
+
+impl LayerCurve {
+    /// `None` for straight lines.
+    fn new(c: &crate::params::Curves) -> Option<Self> {
+        if c.is_identity() {
+            return None;
+        }
+        let rgb_same = [&c.rgb, &c.red, &c.green, &c.blue].iter().all(|c| c.is_identity());
+        let channels = (!rgb_same).then(|| {
+            let master = c.rgb.build_lut(LUT_SIZE);
+            [&c.red, &c.green, &c.blue].map(|ch| {
+                let lut = ch.build_lut(LUT_SIZE);
+                (0..LUT_SIZE).map(|i| lut_lookup(&lut, lut_lookup(&master, i as f32 / (LUT_SIZE - 1) as f32))).collect()
+            })
+        });
+        let luma = (!c.luma.is_identity()).then(|| c.luma.build_lut(LUT_SIZE));
+        Some(Self { channels, luma })
+    }
+
+    fn apply(&self, e: [f32; 3]) -> [f32; 3] {
+        let e = match &self.channels {
+            Some(t) => [lut_lookup(&t[0], e[0]), lut_lookup(&t[1], e[1]), lut_lookup(&t[2], e[2])],
+            None => e,
+        };
+        match &self.luma {
+            Some(lut) => apply_luma_curve(lut, e),
+            None => e,
+        }
+    }
 }
 
 /// `PreparedLayer::index` of the layers made from tools (not in `Adjustments::layers`).
@@ -355,11 +401,8 @@ fn depth_layers(meta: &RawMeta, adj: &Adjustments) -> Vec<PreparedLayer> {
 
 fn depth_layers_with(map: &Arc<crate::depth::DepthMap>, adj: &Adjustments) -> Vec<PreparedLayer> {
     let (rl, at) = (&adj.relight, &adj.atmosphere);
-    let layer = |range: &crate::params::DepthRange, adj: LayerAdjustments| PreparedLayer {
-        index: TOOL_LAYER,
-        mask: Mask { ai: Some(crate::depth::range_mask_cached(map, range)), ..Default::default() },
-        opacity: 1.0,
-        adj,
+    let layer = |range: &crate::params::DepthRange, adj: LayerAdjustments| {
+        PreparedLayer::new(TOOL_LAYER, Mask { ai: Some(crate::depth::range_mask_cached(map, range)), ..Default::default() }, 1.0, adj)
     };
     let mut out = Vec::new();
     if !rl.is_off() {
@@ -436,7 +479,7 @@ impl Processor {
                 .iter()
                 .enumerate()
                 .filter(|(i, l)| l.enabled && l.opacity > 0.0 && (!l.adjustments.is_neutral() || opts.mask_overlay == Some(*i)))
-                .map(|(index, l)| PreparedLayer { index, mask: l.mask.clone(), opacity: l.opacity / 100.0, adj: l.adjustments }),
+                .map(|(index, l)| PreparedLayer::new(index, l.mask.clone(), l.opacity / 100.0, l.adjustments.clone())),
         );
         let color_active = adj.saturation != 0.0
             || adj.vibrance != 0.0
@@ -1052,11 +1095,9 @@ impl Processor {
                 return (self.encode(base_disp()), 0.0);
             }
             let [u, v] = uv.as_ref().expect("with layers")[i];
-            let mut tp = self.base;
-            let mut any = false;
-            let mut overlay = 0.0;
             let mut base_cache: Option<[f32; 3]> = None;
-            for (li, layer) in self.layers.iter().enumerate() {
+            // Mask weight of a layer at this pixel, times its opacity.
+            let weight = |li: usize, layer: &PreparedLayer, base_cache: &mut Option<[f32; 3]>| {
                 let mut wgt = bitmaps[li].as_ref().map_or(0.0, |b| b.sample(u, v));
                 if layer.mask.invert {
                     wgt = 1.0 - wgt;
@@ -1065,23 +1106,44 @@ impl Processor {
                     let bd = *base_cache.get_or_insert_with(base_disp);
                     wgt *= self.range_weight(&layer.mask, bd);
                 }
-                wgt *= layer.opacity;
+                wgt * layer.opacity
+            };
+            let mut tp = self.base;
+            let mut any = false;
+            let mut curved = false;
+            let mut overlay = 0.0;
+            for (li, layer) in self.layers.iter().enumerate() {
+                let wgt = weight(li, layer, &mut base_cache);
                 if Some(li) == overlay_layer {
                     overlay = wgt;
                 }
-                if wgt > 0.0 && !layer.adj.is_neutral() {
+                if wgt > 0.0 && layer.adds {
                     tp.add(&layer.adj, wgt);
                     any = true;
                 }
+                curved |= wgt > 0.0 && layer.curve.is_some();
             }
-            if !any {
-                let bd = base_cache.unwrap_or_else(base_disp);
-                return (self.encode(bd), overlay);
-            }
-            let mut e = self.encode(self.color(self.tone(haze(p, tp.dehaze), ev, det, &tp), &tp));
-            if tp.brightness != 0.0 {
-                let g = 2f32.powf(-tp.brightness / 100.0 * 0.6);
-                e = e.map(|v| v.max(0.0).powf(g));
+            let mut e = if any {
+                let mut e = self.encode(self.color(self.tone(haze(p, tp.dehaze), ev, det, &tp), &tp));
+                if tp.brightness != 0.0 {
+                    let g = 2f32.powf(-tp.brightness / 100.0 * 0.6);
+                    e = e.map(|v| v.max(0.0).powf(g));
+                }
+                e
+            } else {
+                self.encode(base_cache.unwrap_or_else(base_disp))
+            };
+            // The layers' curves on the result, each blended in by its mask.
+            if curved {
+                for (li, layer) in self.layers.iter().enumerate() {
+                    if let Some(c) = &layer.curve {
+                        let wgt = weight(li, layer, &mut base_cache);
+                        if wgt > 0.0 {
+                            let to = c.apply(e);
+                            e = std::array::from_fn(|k| e[k] + (to[k] - e[k]) * wgt);
+                        }
+                    }
+                }
             }
             (e, overlay)
         };
@@ -2336,10 +2398,45 @@ mod tests {
         for (global, local) in cases {
             let want = Processor::new(&meta(), &global).render(&src, None, None);
             let mut adj = plain();
-            adj.layers.push(layer(filled.clone(), local));
+            adj.layers.push(layer(filled.clone(), local.clone()));
             let got = Processor::new(&meta(), &adj).render(&src, None, None);
             assert!(max_diff(&want, &got) <= 1, "{local:?}: {}", max_diff(&want, &got));
             assert!(max_diff(&want, &Processor::new(&meta(), &plain()).render(&src, None, None)) > 3, "{local:?} has no effect");
+        }
+    }
+
+    /// A layer's curves act on the result like the background's curves, blended by the mask.
+    #[test]
+    fn layer_curves_equal_global_curves_and_follow_the_mask() {
+        use crate::params::{Curve, Curves};
+        let src = colorful();
+        let curves = Curves {
+            rgb: Curve { points: vec![[0.0, 0.0], [0.4, 0.3], [1.0, 1.0]] },
+            red: Curve { points: vec![[0.0, 0.03], [0.6, 0.7], [1.0, 1.0]] },
+            luma: Curve { points: vec![[0.0, 0.0], [0.5, 0.6], [1.0, 1.0]] },
+            ..Default::default()
+        };
+        let want = Processor::new(&meta(), &Adjustments { curves: curves.clone(), ..plain() }).render(&src, None, None);
+        let curved = LayerAdjustments { curves, ..Default::default() };
+        assert!(!curved.is_neutral() && curved.deltas_neutral());
+        let mut adj = plain();
+        adj.layers.push(layer(Mask { fill: true, ..Default::default() }, curved.clone()));
+        let got = Processor::new(&meta(), &adj).render(&src, None, None);
+        assert!(max_diff(&want, &got) <= 1, "{}", max_diff(&want, &got));
+        let none = Processor::new(&meta(), &plain()).render(&src, None, None);
+        assert!(max_diff(&want, &none) > 3, "Kurve ohne Wirkung");
+        // Inverted fill: no part of the image is in the mask.
+        adj.layers[0].mask.invert = true;
+        assert_eq!(max_diff(&none, &Processor::new(&meta(), &adj).render(&src, None, None)), 0);
+        // Half opacity: about halfway (blended in the working space, which the output
+        // conversion mixes, so not exactly per channel).
+        adj.layers[0].mask.invert = false;
+        adj.layers[0].opacity = 50.0;
+        let half = Processor::new(&meta(), &adj).render(&src, None, None);
+        let mean = |a: &Rendered, b: &Rendered| a.rgba.iter().zip(&b.rgba).map(|(x, y)| (*x as f64 - *y as f64).abs()).sum::<f64>() / a.rgba.len() as f64;
+        let whole = mean(&none, &want);
+        for d in [mean(&half, &none), mean(&half, &want)] {
+            assert!(d > whole * 0.3 && d < whole * 0.7, "{d} von {whole}");
         }
     }
 
