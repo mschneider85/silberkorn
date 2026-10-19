@@ -1271,7 +1271,8 @@ impl Processor {
             .data
             .par_iter()
             .map(|p| {
-                let lin = p.map(srgb_decode);
+                // From the table (interpolated: exact enough for 16 bits); the pixels stay in 0..1.
+                let lin = p.map(|v| lut_lookup(&DISPLAY_DECODE, v));
                 let out = mat_vec(&m, lin);
                 let out = if map { crate::color::gamut_map(out, dot(lin, LUMA)) } else { out };
                 // NaN survives `clamp`: no such value reaches an exported file.
@@ -1399,7 +1400,7 @@ fn median_radius(r_hdr: f32) -> usize {
 
 /// Size of the direct display tables.
 const DISPLAY_LUT: usize = 16384;
-/// sRGB-encoded 0..1 -> linear, indexed by [`display_index`].
+/// sRGB-encoded 0..1 -> linear, indexed by [`display_index`] (or interpolated by `lut_lookup`).
 static DISPLAY_DECODE: std::sync::LazyLock<Vec<f32>> =
     std::sync::LazyLock::new(|| (0..DISPLAY_LUT).map(|i| srgb_decode(i as f32 / (DISPLAY_LUT - 1) as f32)).collect());
 /// Linear 0..1 -> sRGB-encoded 8-bit, indexed by [`display_index`].
@@ -1791,6 +1792,16 @@ mod tests {
 
     fn px(p: &Processor, v: [f32; 3]) -> [f32; 3] {
         p.encode(p.color(p.tone(p.to_working(v), None, [0.0; 2], &p.base), &p.base))
+    }
+
+    /// The decoding table, interpolated, is exact enough for 16-bit files.
+    #[test]
+    fn interpolated_decode_table_matches_srgb_decode() {
+        for i in 0..=100_000 {
+            let v = i as f32 / 100_000.0;
+            let (table, exact) = (lut_lookup(&DISPLAY_DECODE, v), srgb_decode(v));
+            assert!((table - exact).abs() < 1e-6, "{v}: {table} vs {exact}");
+        }
     }
 
     #[test]
