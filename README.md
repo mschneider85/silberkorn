@@ -20,16 +20,37 @@ fällt die App automatisch auf OpenGL zurück; erzwingen mit `SILBERKORN_RENDERE
 
 ### Windows
 
-Aus WSL/Linux für Windows bauen (einmalig `rustup target add x86_64-pc-windows-gnu` und mingw-w64,
-z. B. `sudo apt install gcc-mingw-w64-x86-64`):
+Die Releases baut GitHub Actions unter Windows mit der MSVC-Toolchain (`.github/workflows/release.yml`).
+Lokal geht dasselbe Ziel aus WSL/Linux mit [cargo-xwin](https://github.com/rust-cross/cargo-xwin), das
+die Windows-SDK- und CRT-Dateien von Microsoft beim ersten Bauen lädt. Einmalig einrichten:
 
 ```bash
-cargo build --release -p sk-app --target x86_64-pc-windows-gnu
+rustup target add x86_64-pc-windows-msvc
+cargo install --locked cargo-xwin
+sudo apt install clang lld
+# Die Werkzeuge unter den Namen, die cargo-xwin erwartet. lld-link ruft Rusts eigenes lld auf:
+# das lld 10 von Ubuntu 20.04 ist für die aktuelle CRT zu alt.
+mkdir -p ~/.local/xwin-bin
+ln -sf "$(command -v clang)" ~/.local/xwin-bin/clang-cl
+ln -sf /usr/lib/llvm-10/bin/llvm-lib /usr/lib/llvm-10/bin/llvm-rc ~/.local/xwin-bin/
+lld="$(rustc --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld"
+printf '#!/bin/sh\ncase "$1" in -flavor) exec "%s" "$@";; *) exec "%s" -flavor link "$@";; esac\n' "$lld" "$lld" > ~/.local/xwin-bin/lld-link
+chmod +x ~/.local/xwin-bin/lld-link
 ```
 
-Ergebnis: `target/x86_64-pc-windows-gnu/release/silberkorn.exe` – eine einzelne Datei ohne
-zusätzliche DLLs. Unter Windows nativ geht auch `cargo build --release -p sk-app` mit der MSVC-Toolchain.
-Einstellungen und Stile liegen dann in `%APPDATA%\silberkorn`, Katalog, Modelle, Lensfun-Profile und
+Bauen (`CL` braucht clang-cl für die SSE4.1-/AVX2-Teile von libwebp; solche lokalen Builds laufen
+deshalb nur auf Prozessoren mit AVX2, die Releases überall):
+
+```bash
+PATH=~/.local/xwin-bin:$PATH CL="-msse4.1 -mavx2" cargo xwin build --release -p sk-app --target x86_64-pc-windows-msvc
+```
+
+Ergebnis: `target/x86_64-pc-windows-msvc/release/silberkorn.exe`. Sie braucht die Visual-C++-Laufzeit
+(`VCRUNTIME140.dll`), wie die Releases. Unter Windows nativ geht `cargo build --release -p sk-app`.
+Zum Messen von Geschwindigkeit immer diesen Weg nehmen: mingw-Builds (`x86_64-pc-windows-gnu`) nutzen die
+alte msvcrt, deren Mathe-Funktionen 4–8× langsamer sind als in den Releases.
+
+Einstellungen und Stile liegen unter Windows in `%APPDATA%\silberkorn`, Katalog, Modelle, Lensfun-Profile und
 Thumbnails in `%LOCALAPPDATA%\silberkorn`.
 
 Kleinere Datei (z. B. zum Weitergeben): `--profile dist` statt `--release` baut mit LTO, Ergebnis unter
