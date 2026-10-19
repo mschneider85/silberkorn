@@ -448,10 +448,10 @@ pub fn fast_cbrt(x: f32) -> f32 {
     y.copysign(x)
 }
 
-// The functions below give `f32` results as precise as the system's, but much faster where its
-// libm is slow (msvcrt in the Windows build: `powf` 84 ns there against 11 ns with glibc). They
-// work in f64, from the exponent bits and a short series, and give the same result on every
-// system.
+// The functions below give `f32` results as precise as the system's, and fast on every system
+// (msvcrt in the Windows build is slow: `powf` 84 ns there against 9 ns with glibc). They work
+// in f64 with tables made at compile time and short series, as glibc does, and give the same
+// result everywhere.
 
 /// 2^x.
 #[inline]
@@ -486,8 +486,50 @@ pub fn fast_powf(x: f32, y: f32) -> f32 {
     exp2_f64(y as f64 * log2_f64(x as f64)) as f32
 }
 
-/// 2^x for the range of `f32` results: the nearest integer power from the exponent bits, the
-/// rest (|f| ≤ 0.35 after scaling by ln 2) by its Taylor series (error below 1e-11).
+/// Steps of the tables: 2^(j/64) and the mantissa in 64 parts.
+const TABLE_BITS: u32 = 6;
+const TABLE: usize = 1 << TABLE_BITS;
+
+/// 2^(j/64), by the Taylor series of e^(t ln 2) (compile time only).
+static EXP2_TABLE: [f64; TABLE] = {
+    let mut table = [0.0; TABLE];
+    let mut j = 0;
+    while j < TABLE {
+        let t = j as f64 / TABLE as f64 * std::f64::consts::LN_2;
+        let (mut term, mut sum, mut n) = (1.0, 1.0, 1);
+        while n < 30 {
+            term = term * t / n as f64;
+            sum += term;
+            n += 1;
+        }
+        table[j] = sum;
+        j += 1;
+    }
+    table
+};
+
+/// For each 64th of the mantissa range 1..2: 1/c and log2(c) of a point c in it (1 for the
+/// first, so that log2(1) is exactly 0), by the series of atanh (compile time only).
+static LOG2_TABLE: [(f64, f64); TABLE] = {
+    let mut table = [(0.0, 0.0); TABLE];
+    let mut i = 0;
+    while i < TABLE {
+        let c = if i == 0 { 1.0 } else { 1.0 + (i as f64 + 0.5) / TABLE as f64 };
+        let s = (c - 1.0) / (c + 1.0);
+        let (mut term, mut sum, mut k) = (s, 0.0, 1);
+        while k < 61 {
+            sum += term / k as f64;
+            term *= s * s;
+            k += 2;
+        }
+        table[i] = (1.0 / c, 2.0 * sum * std::f64::consts::LOG2_E);
+        i += 1;
+    }
+    table
+};
+
+/// 2^x for the range of `f32` results: x = k/64 + r with |r| ≤ 1/128; 2^(k/64) from the table
+/// and the exponent bits, 2^r by its series (error below 1e-10, far below `f32`'s).
 #[inline]
 fn exp2_f64(x: f64) -> f64 {
     if x.is_nan() {
@@ -499,17 +541,19 @@ fn exp2_f64(x: f64) -> f64 {
     if x < -200.0 {
         return 0.0;
     }
-    let i = x.round();
-    let f = (x - i) * std::f64::consts::LN_2;
-    let e = 1.0
-        + f * (1.0
-            + f * (1.0 / 2.0
-                + f * (1.0 / 6.0 + f * (1.0 / 24.0 + f * (1.0 / 120.0 + f * (1.0 / 720.0 + f * (1.0 / 5040.0 + f * (1.0 / 40320.0 + f / 362880.0))))))));
-    e * f64::from_bits(((i as i64 + 1023) as u64) << 52)
+    // Rounded to the nearest integer by the addition (1.5 · 2^52 has no fraction bits left).
+    const ROUND: f64 = 6_755_399_441_055_744.0;
+    let kd = x * TABLE as f64;
+    let k = (kd + ROUND) - ROUND;
+    let t = (kd - k) / TABLE as f64 * std::f64::consts::LN_2;
+    let p = 1.0 + t * (1.0 + t * (1.0 / 2.0 + t * (1.0 / 6.0)));
+    let k = k as i64;
+    let scale = EXP2_TABLE[(k & (TABLE as i64 - 1)) as usize].to_bits().wrapping_add(((k >> TABLE_BITS) as u64) << 52);
+    f64::from_bits(scale) * p
 }
 
-/// log2(x): the exponent from the bits, the mantissa (scaled into √½..√2) by the series of
-/// atanh (error below 1e-10).
+/// log2(x): the exponent from the bits, the mantissa m as c · (1 + r) with c from the table
+/// (|r| < 1/64), log2(1 + r) by its series (error below 1e-9, far below `f32`'s).
 #[inline]
 fn log2_f64(x: f64) -> f64 {
     if x.is_nan() || x < 0.0 {
@@ -523,16 +567,12 @@ fn log2_f64(x: f64) -> f64 {
     }
     // Every f32 value, subnormal ones too, is a normal f64.
     let bits = x.to_bits();
-    let mut e = ((bits >> 52) & 0x7ff) as i64 - 1023;
-    let mut m = f64::from_bits((bits & 0x000f_ffff_ffff_ffff) | 0x3ff0_0000_0000_0000);
-    if m > std::f64::consts::SQRT_2 {
-        m *= 0.5;
-        e += 1;
-    }
-    let s = (m - 1.0) / (m + 1.0);
-    let s2 = s * s;
-    let ln_m = 2.0 * s * (1.0 + s2 * (1.0 / 3.0 + s2 * (1.0 / 5.0 + s2 * (1.0 / 7.0 + s2 * (1.0 / 9.0 + s2 / 11.0)))));
-    e as f64 + ln_m * std::f64::consts::LOG2_E
+    let e = ((bits >> 52) & 0x7ff) as i64 - 1023;
+    let m = f64::from_bits((bits & 0x000f_ffff_ffff_ffff) | 0x3ff0_0000_0000_0000);
+    let (inv_c, log2_c) = LOG2_TABLE[((bits >> (52 - TABLE_BITS)) & (TABLE as u64 - 1)) as usize];
+    let r = m * inv_c - 1.0;
+    let ln_1p = r * (1.0 - r * (1.0 / 2.0 - r * (1.0 / 3.0 - r * (1.0 / 4.0))));
+    e as f64 + log2_c + ln_1p * std::f64::consts::LOG2_E
 }
 
 #[cfg(test)]
