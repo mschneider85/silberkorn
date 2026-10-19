@@ -13,7 +13,7 @@ use wgpu::Buffer;
 use super::*;
 use crate::color::mat_inv;
 use crate::geometry::GeoGpu;
-use crate::gpu::{Encoder, Gpu, Kernel};
+use crate::gpu::{Encoder, Fallback, Gpu, Kernel};
 use crate::mask::apply_removals;
 
 macro_rules! kernel {
@@ -703,7 +703,7 @@ impl Processor {
         let (w, h) = (plan.ext.w, plan.ext.h);
         let n = w * h;
         let log_l = ops.img_planes(IMG_LOG_LUMA, working, n).0;
-        let sub = ((plan.r_hdr.min(plan.r_clarity) / 8.0) as usize).clamp(1, 8);
+        let sub = plan.guided_sub;
         let ev = plan.hdr_active.then(|| {
             let base = match super::median_radius(plan.r_hdr) {
                 r if r > 0 && self.adj.process_3() => ops.median(&log_l, w, h, r),
@@ -755,12 +755,21 @@ impl Processor {
     }
 
     /// Everything up to the encoded result (with mask overlay weight in w) of `plan.ext`.
-    fn develop_gpu(&self, ops: &mut Ops, src: &LinearImage, plan: &Plan, cache: Option<&StageCache>, global_dark: Option<&DarkChannel>) -> Result<Buffer> {
+    /// `early`: the early stages of `plan.ext`, when already computed.
+    fn develop_gpu(
+        &self,
+        ops: &mut Ops,
+        src: &LinearImage,
+        plan: &Plan,
+        cache: Option<&StageCache>,
+        global_dark: Option<&DarkChannel>,
+        early: Option<Arc<Buffer>>,
+    ) -> Result<Buffer> {
         let g = ops.g;
         let ext = plan.ext;
         let n = ext.w * ext.h;
         if n as u64 * 16 > g.max_binding {
-            bail!("Ausschnitt {}x{} zu groß für die Grafikkarte", ext.w, ext.h);
+            return Err(Fallback(format!("Ausschnitt {}x{} zu groß für die Grafikkarte", ext.w, ext.h)).into());
         }
         let stage_key = self.stage_key(src, ext);
         // A part of the image whose whole is in the cache (painting renders only what the brush
@@ -768,7 +777,7 @@ impl Processor {
         let full_w = plan.full.0;
         let whole_key = cache.filter(|_| plan.partial() && global_dark.is_none()).map(|_| self.stage_key(src, Region { x: 0, y: 0, w: full_w, h: plan.full.1 }));
         let whole = cache.zip(whole_key).and_then(|(c, k)| c.gpu.lock().unwrap().early.as_ref().filter(|(ck, _)| *ck == k).map(|(_, b)| b.clone()));
-        let cached = cache.and_then(|c| c.gpu.lock().unwrap().early.as_ref().filter(|(k, _)| *k == stage_key).map(|(_, b)| b.clone()));
+        let cached = early.or_else(|| cache.and_then(|c| c.gpu.lock().unwrap().early.as_ref().filter(|(k, _)| *k == stage_key).map(|(_, b)| b.clone())));
         let working = match (&whole, cached) {
             (Some(full), _) => {
                 let b = ops.image(n);
@@ -801,8 +810,9 @@ impl Processor {
                 (Some(full), _) => Some(Arc::new(full.crop(ops, full_w, ext))),
                 (None, Some(l)) if global_dark.is_none() => Some(l),
                 _ => {
-                    // A part of the image: haze measured on the whole, or the tiles differ.
-                    let airlight = (plan.dehaze_active && plan.partial()).then(|| self.whole_airlight(src));
+                    // Haze measured on the whole (the same for every part), unless the tiles
+                    // bring it with the global dark channel.
+                    let airlight = (plan.dehaze_active && global_dark.is_none()).then(|| self.whole_airlight(src));
                     let l = Arc::new(self.local_gpu(ops, &working, plan, global_dark, airlight)?);
                     if let Some(c) = cache.filter(|_| global_dark.is_none()) {
                         ops.keep(&l.buf);
@@ -1101,8 +1111,10 @@ impl Processor {
     pub(super) fn render_gpu(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Result<Rendered> {
         let r = self.render_gpu_inner(g, src, region, cache);
         // Buffers are cached while the work is recorded: after a failure some may never have
-        // been computed (an invalid command buffer runs none of its work).
-        if r.is_err()
+        // been computed (an invalid command buffer runs none of its work). A fallback that
+        // isn't the card's fault keeps them.
+        if let Err(e) = &r
+            && e.downcast_ref::<Fallback>().is_none()
             && let Some(c) = cache
         {
             *c.gpu.lock().unwrap_or_else(|e| e.into_inner()) = Cache::default();
@@ -1112,9 +1124,9 @@ impl Processor {
 
     fn render_gpu_inner(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Result<Rendered> {
         g.checked(|| {
-            let plan = self.plan(src, region, 1);
+            let plan = self.plan(src, region);
             let mut ops = Ops::new(g);
-            let developed = self.develop_gpu(&mut ops, src, &plan, cache, None)?;
+            let developed = self.develop_gpu(&mut ops, src, &plan, cache, None, None)?;
             let (r, ext) = (plan.region, plan.ext);
             let has_mask = self.opts.mask_overlay.is_some_and(|i| self.layers.iter().any(|l| l.index == i));
             if self.opts.softproof.is_some() {
@@ -1160,7 +1172,8 @@ impl Processor {
             if g.inject_incomplete.swap(false, std::sync::atomic::Ordering::Relaxed) {
                 rgba[3] = 0;
             }
-            check_display(g, &rgba)?;
+            // A part of the image may well be black (a keystone corner, a night sky).
+            check_display(g, &rgba, plan.region.w < plan.full.0 || plan.region.h < plan.full.1)?;
             let histogram = Histogram { r: h[0..256].to_vec(), g: h[256..512].to_vec(), b: h[512..768].to_vec(), luma: h[768..1024].to_vec() };
             Ok(Rendered { width: r.w, height: r.h, rgba, histogram, full_size: plan.full })
         })
@@ -1168,7 +1181,7 @@ impl Processor {
 
     pub(super) fn process_gpu(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, space: OutputSpace) -> Result<LinearImage> {
         g.checked(|| {
-            let whole = self.plan(src, region, 1);
+            let whole = self.plan(src, region);
             let r = whole.region;
             let ext_px = whole.ext.w * whole.ext.h;
             let tiles: Vec<Region> = if ext_px <= MAX_PIXELS && ext_px as u64 * 16 <= g.max_binding {
@@ -1184,29 +1197,32 @@ impl Processor {
                     })
                     .collect()
             };
-            // Tiles start on multiples of the largest subsampling of the fast guided filter,
-            // so that its grid is the same as for the whole image.
-            let align = if tiles.len() > 1 { 8 } else { 1 };
             // Dehaze needs the dark channel and airlight of the whole image.
+            let mut last_early = None;
             let dark = if tiles.len() > 1 && whole.dehaze_active {
                 let pool = DarkPool::new(g, whole.full, super::dark_step(whole.full));
-                for t in &tiles {
-                    let plan = self.plan(src, Some(*t), align);
+                for (i, t) in tiles.iter().enumerate() {
+                    let plan = self.plan(src, Some(*t));
                     let mut ops = Ops::new(g);
                     let working = self.early_gpu(&mut ops, src, &plan, None);
                     let own = Region { x: t.x - plan.ext.x, y: t.y - plan.ext.y, w: t.w, h: t.h };
                     pool.add(&mut ops, &working, plan.ext, own, (plan.ext.x, plan.ext.y));
                     ops.flush();
+                    // The last tile is developed first, without its early stages again.
+                    if i + 1 == tiles.len() {
+                        ops.keep(&working);
+                        last_early = Some(Arc::new(working));
+                    }
                 }
-                Some(pool.finish(g, None)?)
+                Some(pool.finish(g, Some(self.whole_airlight(src)))?)
             } else {
                 None
             };
             let mut out = vec![[0.0f32; 3]; r.w * r.h];
-            for t in &tiles {
-                let plan = self.plan(src, Some(*t), align);
+            for t in tiles.iter().rev() {
+                let plan = self.plan(src, Some(*t));
                 let mut ops = Ops::new(g);
-                let developed = self.develop_gpu(&mut ops, src, &plan, None, dark.as_ref())?;
+                let developed = self.develop_gpu(&mut ops, src, &plan, None, dark.as_ref(), last_early.take())?;
                 let data = self.output_gpu(&mut ops, &developed, &plan, Some(space))?;
                 for (y, row) in data.chunks(t.w).enumerate() {
                     let start = (t.y - r.y + y) * r.w + t.x - r.x;
@@ -1226,14 +1242,14 @@ impl Processor {
 
 /// Every displayed pixel is written with alpha 255 into a buffer that starts out zeroed: any
 /// other alpha means the card didn't finish the work (driver problem), and it is taken out of
-/// use. An all-black result is suspicious too; it is redone on the CPU once, without blaming
-/// the card (the image may simply be black).
-fn check_display(g: &Gpu, rgba: &[u8]) -> Result<()> {
+/// use. An all-black whole image is suspicious too; it is redone on the CPU once, without
+/// blaming the card (the image may simply be black).
+fn check_display(g: &Gpu, rgba: &[u8], partial: bool) -> Result<()> {
     if rgba.chunks_exact(4).any(|p| p[3] != 255) {
         g.fail("Grafikkarte lieferte ein unvollständiges Bild");
         bail!("Grafikkarte: unvollständiges Bild");
     }
-    if rgba.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]) {
+    if !partial && rgba.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]) {
         bail!("Grafikkarte: schwarzes Bild, wird auf dem Prozessor geprüft");
     }
     Ok(())
@@ -1248,7 +1264,7 @@ fn check_output(g: &Gpu, data: &[[f32; 4]]) -> Result<()> {
         bail!("Grafikkarte: unvollständiges Ergebnis");
     }
     if data.iter().any(|p| !p[..3].iter().all(|v| v.is_finite())) {
-        bail!("Grafikkarte: ungültige Werte im Ergebnis, wird auf dem Prozessor gerechnet");
+        return Err(Fallback("Grafikkarte: ungültige Werte im Ergebnis, wird auf dem Prozessor gerechnet".into()).into());
     }
     Ok(())
 }
@@ -1338,6 +1354,31 @@ mod tests {
         assert!(p.render_gpu(&g, &src, None, Some(&cache)).is_err());
         let c = cache.gpu.lock().unwrap();
         assert!(c.source.is_none() && c.early.is_none() && c.local.is_none());
+    }
+
+    #[test]
+    fn black_part_and_too_large_part_keep_the_stage_cache() {
+        let Some(mut g) = Gpu::new_for_test() else { return };
+        let (w, h) = (120, 80);
+        // Black left half (a keystone corner, a night sky).
+        let src = LinearImage::new(w, h, (0..w * h).map(|i| if i % w < 60 { [0.0; 3] } else { [0.3; 3] }).collect());
+        let p = Processor::new(&meta(w, h), &Adjustments::default());
+        let cache = StageCache::default();
+        assert!(p.render_gpu(&g, &src, None, Some(&cache)).is_ok());
+        let black = p.render_gpu(&g, &src, Some(Region { x: 0, y: 0, w: 40, h: 30 }), Some(&cache)).expect("schwarzer Ausschnitt auf der Grafikkarte");
+        assert!(black.rgba.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]));
+        assert!(cache.gpu.lock().unwrap().early.is_some(), "Cache bleibt");
+        // A part too large for the card goes to the CPU, without emptying the cache.
+        let small = Region { x: 70, y: 40, w: 20, h: 20 };
+        let ext = p.plan(&src, Some(small)).ext;
+        g.max_binding = (ext.w * ext.h * 16) as u64;
+        if let Err(e) = p.render_gpu(&g, &src, Some(small), Some(&cache)) {
+            panic!("{ext:?}: {e:#}");
+        }
+        let Err(e) = p.render_gpu(&g, &src, None, Some(&cache)) else { panic!("zu groß") };
+        assert!(e.downcast_ref::<Fallback>().is_some(), "{e:#}");
+        assert!(cache.gpu.lock().unwrap().early.is_some(), "Cache bleibt");
+        assert!(g.problem().is_none());
     }
 
     fn painted_scene() -> Adjustments {
@@ -1671,6 +1712,20 @@ mod tests {
                             LayerAdjustments { contrast: 40.0, tint: -30.0, ..Default::default() },
                             Mask { fill: true, color_range: Some(ColorRange::default()), invert: true, ..Default::default() },
                         ),
+                    ],
+                    ..plain.clone()
+                },
+                Default::default(),
+                None,
+            ),
+            (
+                // Summed contrast far below -100: the warp's exponent is floored.
+                "Ebenen, Kontrast summiert",
+                Adjustments {
+                    contrast: -100.0,
+                    layers: vec![
+                        layer(LayerAdjustments { contrast: -100.0, ..Default::default() }, Mask { fill: true, ..Default::default() }),
+                        layer(LayerAdjustments { contrast: -100.0, ..Default::default() }, radial.clone()),
                     ],
                     ..plain.clone()
                 },

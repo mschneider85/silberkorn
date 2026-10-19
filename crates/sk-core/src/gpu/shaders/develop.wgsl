@@ -242,8 +242,13 @@ fn base_curve(x: f32) -> f32 {
     }
 }
 
+// Floored like on the CPU: summed layer contrast must not flatten or invert the tones.
+fn contrast_exponent(contrast: f32) -> f32 {
+    return max(1.0 + contrast / 100.0 * 0.5, 0.2);
+}
+
 fn contrast_and_base_curve(contrast: f32, v0: f32) -> f32 {
-    let e = 1.0 + contrast / 100.0 * 0.5;
+    let e = contrast_exponent(contrast);
     var v = v0;
     if e != 1.0 {
         v = MID_GREY * pow(max(v / MID_GREY, 0.0), e);
@@ -287,7 +292,7 @@ fn tone(rgb0: vec3<f32>, has_ev: bool, local_ev: f32, detail: vec2<f32>, tp: Ton
 fn tone_curve(tp: Tone, v: f32) -> f32 {
     // The camera's curve: a table without contrast, which warps its input instead.
     if P.base_curve == 3u {
-        let e = 1.0 + tp.contrast / 100.0 * 0.5;
+        let e = contrast_exponent(tp.contrast);
         var w = v;
         if e != 1.0 {
             w = MID_GREY * pow(max(v / MID_GREY, 0.0), e);

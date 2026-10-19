@@ -19,6 +19,19 @@ use anyhow::{Result, anyhow};
 /// Helpers shared by all kernels (prepended to every shader).
 const COMMON: &str = include_str!("shaders/common.wgsl");
 
+/// A rendering the CPU redoes although the card worked (a part too large for it, values from
+/// the image data): unlike a failure, it leaves the buffers cached on the card valid.
+#[derive(Debug)]
+pub(crate) struct Fallback(pub String);
+
+impl std::fmt::Display for Fallback {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Fallback {}
+
 pub struct Gpu {
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,

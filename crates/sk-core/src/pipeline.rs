@@ -94,6 +94,8 @@ struct Plan {
     margin: usize,
     /// Source resolution relative to the sensor.
     scale: f32,
+    /// Subsampling of the fast guided filter (HDR, clarity).
+    guided_sub: usize,
     r_hdr: f32,
     r_clarity: f32,
     r_structure: f32,
@@ -696,15 +698,16 @@ impl Processor {
 
     // ------------------------------------------------------------ image stages
 
-    /// Airlight (the haze's brightness) of the whole image, for renderings of a part of it:
-    /// estimated from a small copy, cached per image and settings.
+    /// Airlight (the haze's brightness) of the whole image, for every rendering (parts, tiles
+    /// and the whole alike, so that they match): estimated from a small copy, cached per image
+    /// and settings.
     fn whole_airlight(&self, src: &LinearImage) -> [f32; 3] {
         static CACHE: Mutex<Vec<(u64, [f32; 3])>> = Mutex::new(Vec::new());
         let key = self.stage_key(src, Region { x: 0, y: 0, w: 0, h: 0 });
         if let Some((_, a)) = CACHE.lock().unwrap().iter().find(|(k, _)| *k == key) {
             return *a;
         }
-        let level = (src.width.max(src.height) / 768).max(1);
+        let level = src.width.max(src.height).div_ceil(768).max(1);
         let small;
         let img = if level > 1 {
             small = src.box_downscaled(level);
@@ -712,7 +715,7 @@ impl Processor {
         } else {
             src
         };
-        let plan = self.plan(img, None, 1);
+        let plan = self.plan(img, None);
         let working = self.early_stages(img, &plan.geo, plan.ext, plan.scale, None);
         let a = gpu::airlight_of(working.data.iter().step_by(7).copied().collect());
         let mut cache = CACHE.lock().unwrap();
@@ -836,9 +839,8 @@ impl Processor {
         });
     }
 
-    /// Regions, radii and active local operators of a rendering. `align` rounds the start of
-    /// the processed region down to a multiple (for tiles that match the whole image).
-    fn plan(&self, src: &LinearImage, region: Option<Region>, align: usize) -> Plan {
+    /// Regions, radii and active local operators of a rendering.
+    fn plan(&self, src: &LinearImage, region: Option<Region>) -> Plan {
         let geo = self.geomap(src.width, src.height);
         let full = (geo.out_w, geo.out_h);
         let region = region.unwrap_or(Region { x: 0, y: 0, w: full.0, h: full.1 });
@@ -853,42 +855,56 @@ impl Processor {
         let structure_active = d.structure != 0.0 || any_layer(&|l| l.structure != 0.0);
         let dehaze_active = d.dehaze != 0.0 || any_layer(&|l| l.dehaze != 0.0);
 
-        // Margin for neighborhood operations, so that tiles match the full rendering.
+        // Margin for neighborhood operations, so that tiles match the full rendering. The
+        // stages run one after another, so their reaches add up: defringe and noise reduction,
+        // then the local operators (side by side on the same image, the widest counts), then
+        // sharpening and glow.
         let r_hdr = (long_edge * 0.02).max(2.0);
         let r_clarity = (long_edge * 0.03).max(3.0);
         let r_structure = (3.0 * scale).max(1.0);
         let mut margin: f32 = 0.0;
-        if hdr_active {
-            margin = margin.max(r_hdr * 2.0);
-        }
-        if clarity_active {
-            margin = margin.max(r_clarity * 2.0);
-        }
-        if structure_active {
-            margin = margin.max(r_structure * 4.0);
-        }
-        if d.sharpen_amount > 0.0 {
-            margin = margin.max(d.sharpen_radius * scale * 4.0 + 2.0);
+        if defringe_amounts(&self.adj.lens).is_some() {
+            margin += defringe_sigma(scale) * 3.0 + 4.0;
         }
         if d.nr_luma > 0.0 || d.nr_color > 0.0 {
-            margin = margin.max(20.0 * scale + 4.0);
+            margin += 20.0 * scale + 4.0;
         }
-        if defringe_amounts(&self.adj.lens).is_some() {
-            margin = margin.max(defringe_sigma(scale) * 3.0 + 4.0);
+        let mut local: f32 = 0.0;
+        if hdr_active {
+            let median = if self.adj.process_3() { median_radius(r_hdr) } else { 0 };
+            local = local.max(r_hdr * 2.0 + median as f32);
+        }
+        if clarity_active {
+            local = local.max(r_clarity * 2.0);
+        }
+        if structure_active {
+            local = local.max(r_structure * 4.0);
         }
         if dehaze_active {
-            margin = margin.max(long_edge / 64.0);
+            local = local.max(long_edge / 64.0);
+        }
+        margin += local;
+        if d.sharpen_amount > 0.0 {
+            margin += d.sharpen_radius * scale * 4.0 + 2.0;
         }
         if d.glow_amount > 0.0 {
-            margin = margin.max(glow_sigma(d, long_edge) * 3.0 + 2.0);
+            margin += glow_sigma(d, long_edge) * 3.0 + 2.0;
         }
         let m = margin.ceil() as usize;
-        // The dark channel's blocks are counted from the region's start: it starts on the
-        // block grid of the whole image, so that its blocks are the same.
-        let align = if dehaze_active { lcm(align, dark_step(full)) } else { align };
+        // Parts start on the grid of the whole image: the fast guided filter's subsampling
+        // blocks and the dark channel's blocks are counted from the start, so that they are
+        // the same as for the whole image.
+        let guided_sub = ((r_hdr.min(r_clarity) / 8.0) as usize).clamp(1, 8);
+        let mut align = 1;
+        if hdr_active || clarity_active {
+            align = guided_sub;
+        }
+        if dehaze_active {
+            align = lcm(align, dark_step(full));
+        }
         let (x0, y0) = (region.x.saturating_sub(m) / align * align, region.y.saturating_sub(m) / align * align);
         let ext = Region { x: x0, y: y0, w: (region.x + region.w + m).min(full.0) - x0, h: (region.y + region.h + m).min(full.1) - y0 };
-        Plan { geo, full, region, ext, margin: m, scale, r_hdr, r_clarity, r_structure, hdr_active, clarity_active, structure_active, dehaze_active }
+        Plan { geo, full, region, ext, margin: m, scale, guided_sub, r_hdr, r_clarity, r_structure, hdr_active, clarity_active, structure_active, dehaze_active }
     }
 
     /// Processes `region` (default: whole output) into encoded working RGB (sRGB transfer).
@@ -899,9 +915,9 @@ impl Processor {
         region: Option<Region>,
         cache: Option<&StageCache>,
     ) -> (LinearImage, (usize, usize), Option<Vec<f32>>) {
-        let plan = self.plan(src, region, 1);
+        let plan = self.plan(src, region);
         let partial = plan.partial();
-        let Plan { geo, full, region, ext, scale, r_hdr, r_clarity, r_structure, hdr_active, clarity_active, structure_active, dehaze_active, .. } = plan;
+        let Plan { geo, full, region, ext, scale, guided_sub, r_hdr, r_clarity, r_structure, hdr_active, clarity_active, structure_active, dehaze_active, .. } = plan;
         let d = &self.adj.detail;
 
         // A part of the image whose whole is in the cache (painting renders only what the brush
@@ -942,7 +958,7 @@ impl Processor {
             });
             let compute = || {
                 let log_l = Plane::new(w, h, working.data.par_iter().map(|p| dot(*p, LUMA).max(1e-6).log2() - MID_GREY.log2()).collect());
-                let sub = ((r_hdr.min(r_clarity) / 8.0) as usize).clamp(1, 8);
+                let sub = guided_sub;
                 LocalPlanes {
                     hdr_base: hdr_active.then(|| match median_radius(r_hdr) {
                         r if r > 0 && self.adj.process_3() => fast_guided_filter(&median_hv(&log_l, r), r_hdr as usize, 0.5, sub),
@@ -956,9 +972,8 @@ impl Processor {
                         let base = gaussian_blur(&log_l, r_structure);
                         log_l.zip(&base, |a, b| (a - b).clamp(-2.0, 2.0))
                     }),
-                    // A part of the image: haze measured on the whole, or the tiles differ.
-                    dehaze: dehaze_active
-                        .then(|| Arc::new(DarkChannel::new(&working, dark_step(full), partial.then(|| self.whole_airlight(src))))),
+                    // Haze measured on the whole, the same for every part and the whole rendering.
+                    dehaze: dehaze_active.then(|| Arc::new(DarkChannel::new(&working, dark_step(full), Some(self.whole_airlight(src))))),
                     dark_origin: (0, 0),
                 }
             };
@@ -1488,8 +1503,15 @@ fn contrast_and_base_curve_unclipped(kind: BaseCurve, contrast: f32, v: f32) -> 
 /// Contrast around mid grey (before the base curve).
 #[inline]
 fn contrast_warp(contrast: f32, v: f32) -> f32 {
-    let e = 1.0 + contrast / 100.0 * 0.5;
+    let e = contrast_exponent(contrast);
     if e != 1.0 { MID_GREY * (v.max(0.0) / MID_GREY).powf(e) } else { v }
+}
+
+/// Exponent of the contrast warp. Background and layer contrast add up, so the sum can
+/// leave -100..100; the floor keeps tones ordered (at e <= 0 they would flatten or invert).
+#[inline]
+fn contrast_exponent(contrast: f32) -> f32 {
+    (1.0 + contrast / 100.0 * 0.5).max(0.2)
 }
 
 /// EV range and resolution of the HDR tables (the weights are saturated beyond it).
@@ -2048,6 +2070,55 @@ mod tests {
     }
 
     #[test]
+    fn dehaze_uses_one_airlight_for_parts_and_whole() {
+        // Sparse bright specks: at full resolution they set the airlight, in the small copy
+        // they average away. Parts and the whole must use the same estimate anyway.
+        let (w, h) = (2048, 96);
+        let src = LinearImage::new(
+            w,
+            h,
+            (0..w * h).map(|i| if i % 97 == 0 { [3.0; 3] } else { [0.3 + 0.05 * ((i % w / 8 + i / w / 8) % 2) as f32; 3] }).collect(),
+        );
+        let adj = Adjustments { detail: Detail { dehaze: 60.0, ..Default::default() }, ..Default::default() };
+        let p = Processor::new(&meta(), &adj);
+        let full = p.render_cpu(&src, None, None);
+        let region = Region { x: 600, y: 30, w: 40, h: 30 };
+        let part = p.render_cpu(&src, Some(region), None);
+        assert!(max_region_diff(&part, &full, region) <= 1, "{}", max_region_diff(&part, &full, region));
+    }
+
+    /// The stages run one after another, so their reaches add up; and the fast guided filter's
+    /// blocks (3 px here) are counted from the whole image's origin.
+    #[test]
+    fn parts_match_whole_with_chained_neighborhood_ops() {
+        let (w, h) = (1300, 72);
+        let src = LinearImage::new(
+            w,
+            h,
+            (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    let v = 0.03 + 0.4 * ((x / 5 + y / 7) % 2) as f32 + 0.2 * crate::detail::hash_noise(x as i64, y as i64, 5).abs();
+                    [v, v * 0.9, v * 0.7]
+                })
+                .collect(),
+        );
+        let adj = Adjustments {
+            shadows: 50.0,
+            highlights: -40.0,
+            detail: Detail { clarity: 60.0, sharpen_amount: 150.0, sharpen_radius: 1.0, nr_luma: 40.0, nr_color: 40.0, ..Default::default() },
+            ..Default::default()
+        };
+        let p = Processor::new(&meta(), &adj);
+        assert_eq!(p.plan(&src, None).guided_sub, 3);
+        let full = p.render_cpu(&src, None, None);
+        for region in [Region { x: 601, y: 20, w: 37, h: 31 }, Region { x: 1000, y: 0, w: 50, h: 72 }] {
+            let part = p.render_cpu(&src, Some(region), None);
+            assert!(max_region_diff(&part, &full, region) <= 1, "{region:?}: {}", max_region_diff(&part, &full, region));
+        }
+    }
+
+    #[test]
     fn stage_cache_gives_identical_results() {
         let src = LinearImage::new(32, 24, (0..768).map(|i| [(i % 32) as f32 / 40.0; 3]).collect());
         let cache = StageCache::default();
@@ -2199,6 +2270,24 @@ mod tests {
         let local = Processor::new(&meta(), &adj).render(&src, None, None);
         let max_diff = global.rgba.iter().zip(&local.rgba).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
         assert!(max_diff <= 1, "{max_diff}");
+    }
+
+    #[test]
+    fn summed_layer_contrast_keeps_tones_ordered() {
+        // Background -100 plus two filled layers at -100: the sum (-300) must not flatten or invert.
+        let src = LinearImage::new(16, 1, (0..16).map(|i| [0.005 * 1.5f32.powi(i); 3]).collect());
+        let mut adj = Adjustments { contrast: -100.0, ..plain() };
+        for _ in 0..2 {
+            adj.layers.push(layer(Mask { fill: true, ..Default::default() }, LayerAdjustments { contrast: -100.0, ..Default::default() }));
+        }
+        let out = Processor::new(&meta(), &adj).render(&src, None, None);
+        let g: Vec<u8> = out.rgba.chunks(4).map(|p| p[1]).collect();
+        assert!(g.windows(2).all(|w| w[0] <= w[1]), "{g:?}");
+        assert!(g[15] > g[0] + 20, "{g:?}");
+        for c in [-300.0, -200.0, -160.0, 100.0] {
+            let (a, b) = (contrast_warp(c, 0.05), contrast_warp(c, 0.5));
+            assert!(a.is_finite() && b.is_finite() && a < b, "{c}: {a} {b}");
+        }
     }
 
     /// A colorful test image: hues around the circle, from dark to bright.
