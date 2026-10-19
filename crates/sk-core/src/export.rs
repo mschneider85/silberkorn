@@ -227,7 +227,8 @@ pub fn export_many(image: &Path, adj: &Adjustments, recipes: &[ExportRecipe], co
 
 /// [`export_many`], where `written` holds the files written so far in this batch: an output whose
 /// name is among them gets `-2`, `-3` … instead of replacing it (same file names from two folders,
-/// a name template that gives a burst the same name).
+/// a name template that gives a burst the same name). Names differing only in case count as the
+/// same: Windows and macOS would write the same file.
 pub fn export_many_with(
     image: &Path,
     adj: &Adjustments,
@@ -278,18 +279,23 @@ fn write_output(f: &NameFields, out: &crate::image::LinearImage, recipe: &Export
         std::fs::create_dir_all(dir).with_context(|| format!("Kann Ordner {} nicht anlegen", dir.display()))?;
     }
     crate::safe_file::write_nosync(&path, bytes)?;
-    written.insert(path.clone());
+    written.insert(batch_key(&path));
     Ok(path)
+}
+
+/// `path` as the batch remembers it: case doesn't tell files apart on Windows and macOS.
+fn batch_key(path: &Path) -> PathBuf {
+    PathBuf::from(path.to_string_lossy().to_lowercase())
 }
 
 /// `path`, or `name-2.ext`, `name-3.ext` … if this batch already wrote a file of that name.
 fn unused_in_batch(path: PathBuf, written: &HashSet<PathBuf>) -> PathBuf {
-    if !written.contains(&path) {
+    if !written.contains(&batch_key(&path)) {
         return path;
     }
     let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
     let ext = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
-    (2..).map(|n| path.with_file_name(format!("{stem}-{n}{ext}"))).find(|p| !written.contains(p)).expect("unbounded")
+    (2..).map(|n| path.with_file_name(format!("{stem}-{n}{ext}"))).find(|p| !written.contains(&batch_key(p))).expect("unbounded")
 }
 
 /// The processed image (output space, encoded 0..1) at the recipe's size, with its watermark.
@@ -524,11 +530,12 @@ mod tests {
     fn names_are_unique_within_a_batch() {
         let mut written = HashSet::new();
         let a = unused_in_batch(PathBuf::from("/o/IMG_1.jpg"), &written);
-        written.insert(a.clone());
+        written.insert(batch_key(&a));
         let b = unused_in_batch(PathBuf::from("/o/IMG_1.jpg"), &written);
-        written.insert(b.clone());
-        let c = unused_in_batch(PathBuf::from("/o/IMG_1.jpg"), &written);
-        assert_eq!((a, b, c), (PathBuf::from("/o/IMG_1.jpg"), PathBuf::from("/o/IMG_1-2.jpg"), PathBuf::from("/o/IMG_1-3.jpg")));
+        written.insert(batch_key(&b));
+        // Another folder's `img_1.ARW`: Windows and macOS would overwrite the first file.
+        let c = unused_in_batch(PathBuf::from("/o/img_1.jpg"), &written);
+        assert_eq!((a, b, c), (PathBuf::from("/o/IMG_1.jpg"), PathBuf::from("/o/IMG_1-2.jpg"), PathBuf::from("/o/img_1-3.jpg")));
     }
 
     #[test]

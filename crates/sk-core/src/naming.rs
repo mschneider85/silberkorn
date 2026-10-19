@@ -78,7 +78,15 @@ pub fn expand(template: &str, f: &NameFields) -> String {
 /// leading and trailing dots and spaces go.
 pub fn sanitize(name: &str) -> String {
     let s: String = name.chars().map(|c| if c.is_control() || r#"<>:"/\|?*"#.contains(c) { '_' } else { c }).collect();
-    s.trim_matches(|c: char| c == '.' || c.is_whitespace()).to_string()
+    let s = s.trim_matches(|c: char| c == '.' || c.is_whitespace());
+    if is_reserved(s) { format!("_{s}") } else { s.to_string() }
+}
+
+/// Whether Windows reserves `name` for a device (`CON`, `NUL`, `COM1` …), also with an extension.
+pub fn is_reserved(name: &str) -> bool {
+    let base = name.split('.').next().unwrap_or_default().trim_end().to_ascii_uppercase();
+    let numbered = |prefix: &str| base.len() == 4 && base.starts_with(prefix) && matches!(base.as_bytes()[3], b'1'..=b'9');
+    matches!(base.as_str(), "CON" | "PRN" | "AUX" | "NUL") || numbered("COM") || numbered("LPT")
 }
 
 #[cfg(test)]
@@ -114,5 +122,9 @@ mod tests {
         let f = NameFields { image: Path::new("/x/a.ARW"), capture: None, counter: 1, session: "Kunde: A/B?" };
         assert_eq!(expand("{Session}", &f), "Kunde_ A_B_");
         assert_eq!(sanitize(" ..Bild. "), "Bild");
+        assert_eq!(expand("{Session}", &NameFields { session: "nul", ..f }), "_nul");
+        assert_eq!(sanitize("COM1.tar"), "_COM1.tar");
+        assert_eq!(sanitize("Console"), "Console");
+        assert_eq!(sanitize("COM0"), "COM0");
     }
 }

@@ -96,6 +96,9 @@ pub fn validate_name(name: &str) -> Result<()> {
     if name.ends_with('.') {
         bail!("Der Name darf nicht mit einem Punkt enden");
     }
+    if crate::naming::is_reserved(name) {
+        bail!("„{name}“ ist unter Windows reserviert");
+    }
     Ok(())
 }
 
@@ -401,7 +404,7 @@ mod tests {
     #[test]
     fn names() {
         assert!(validate_name("Shooting 2026-10").is_ok());
-        for bad in ["", "  ", "..", "a/b", "a\\b", "a:b", "x."] {
+        for bad in ["", "  ", "..", "a/b", "a\\b", "a:b", "x.", "CON", "nul.txt", "Com3"] {
             assert!(validate_name(bad).is_err(), "{bad}");
         }
     }

@@ -25,7 +25,8 @@ pub fn styles_dir() -> PathBuf {
 
 fn file_name(name: &str) -> String {
     let clean: String = name.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect();
-    format!("{}.json", clean.trim())
+    let clean = clean.trim();
+    if crate::naming::is_reserved(clean) { format!("_{clean}.json") } else { format!("{clean}.json") }
 }
 
 pub fn list_in(dir: &Path) -> Vec<Style> {
@@ -309,6 +310,12 @@ mod tests {
         delete_in(&dir, &s.name).unwrap();
         assert!(list_in(&dir).is_empty());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn reserved_windows_names_get_a_prefix() {
+        assert_eq!(file_name("Aux"), "_Aux.json");
+        assert_eq!(file_name("Auxiliar"), "Auxiliar.json");
     }
 
     #[test]
