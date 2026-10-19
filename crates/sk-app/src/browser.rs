@@ -90,6 +90,8 @@ impl App {
                 format!("Fehler: {e}")
             } else if self.loading.is_some() {
                 "Lade …".into()
+            } else if self.folder_loading && self.entries.is_empty() {
+                "Lade Ordner …".into()
             } else if self.entries.is_empty() {
                 // An empty folder of the session is not the start: say what is (not) in it.
                 match self.empty_session_folder() {
@@ -1134,7 +1136,8 @@ impl App {
         // Stretch the cells so the rows fill the width.
         let w = ((rect.width() - 24.0 + gap) / cols as f32 - gap).max(60.0);
         let cell = vec2(w, (w * 0.78 + 24.0).round());
-        if visible.is_empty() {
+        // While a folder loads, the status bar says so.
+        if visible.is_empty() && !self.folder_loading {
             let r = ui.available_rect_before_wrap();
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r.shrink2(vec2(0.0, r.height() * 0.25))));
             widgets::empty_state(&mut child, theme::icon::IMAGES, "Keine Bilder in dieser Ansicht", "Filter lockern oder in der Bibliothek einen anderen Ordner wählen");

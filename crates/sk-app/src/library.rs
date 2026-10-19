@@ -129,11 +129,41 @@ impl App {
         }
     }
 
+    /// Shows `scope`. A folder is read in the background ("Lade Ordner"); until it arrives,
+    /// the browser keeps showing what it showed.
     pub fn open_scope(&mut self, scope: Scope) {
         self.commit_and_save();
         self.scope = scope;
-        self.reload_entries();
-        // After starting: the image that was selected last time, if it is shown here.
+        self.scope_run += 1;
+        match self.scope_on_disk() {
+            Some((path, recursive)) => {
+                self.folder_loading = true;
+                self.workers.load_folder(self.scope_run, path, recursive);
+                // Albums and favorites at once (another session's, say), not with the folder.
+                self.refresh_catalog_lists();
+            }
+            None => {
+                self.folder_loading = false;
+                self.reload_entries();
+                self.select_in_scope();
+            }
+        }
+    }
+
+    /// The folder of `open_scope` was read (`run` tells for which scope).
+    pub(crate) fn folder_loaded(&mut self, run: u64, files: Vec<(PathBuf, Sidecar)>) {
+        if run != self.scope_run {
+            return;
+        }
+        self.folder_loading = false;
+        let records = self.with_catalog_details(files);
+        self.set_entries(records);
+        self.select_in_scope();
+    }
+
+    /// Keeps the open image if the scope shows it, else opens the one selected last time
+    /// (after starting) or the first.
+    fn select_in_scope(&mut self) {
         let restore = self.restore_image.take().and_then(|p| self.index_of(&p)).filter(|i| self.visible.contains(i));
         let first = restore.or_else(|| self.visible.first().copied());
         let keep = self.current_path().is_some_and(|p| self.index_of(&p).is_some_and(|i| self.visible.contains(&i)));
@@ -170,33 +200,47 @@ impl App {
 
     /// Re-reads the entries of the current scope, keeping selection by path.
     pub fn reload_entries(&mut self) {
-        let mut records = match &self.scope {
+        let records = match self.scope_on_disk() {
+            Some((path, recursive)) => self.with_catalog_details(sidecar::load_all(&catalog::scan_folder(&path, recursive))),
+            None => self
+                .catalog
+                .as_ref()
+                .and_then(|c| c.query(&self.scope, &Filter::default(), SortKey::Name, false).ok())
+                .unwrap_or_default(),
+        };
+        self.set_entries(records);
+    }
+
+    /// The folder and subfolder switch if the scope is read from the file system rather than
+    /// the catalog.
+    fn scope_on_disk(&self) -> Option<(PathBuf, bool)> {
+        match &self.scope {
             // In the catalog also a tree with subfolders that wasn't imported (read from the
             // file system: slow for a large tree, so only then).
             Scope::Folder { path, recursive }
                 if !*recursive
                     || (self.session.is_none() && self.catalog.as_ref().is_some_and(|c| c.query(&self.scope, &Filter::default(), SortKey::Name, false).is_ok_and(|r| r.is_empty()))) =>
             {
-                // The file system is authoritative; the catalog adds metadata where indexed.
-                let indexed: HashMap<PathBuf, ImageRecord> = self
-                    .catalog
-                    .as_ref()
-                    .and_then(|c| c.query(&self.scope, &Filter::default(), SortKey::Name, false).ok())
-                    .unwrap_or_default()
-                    .into_iter()
-                    .map(|r| (r.path.clone(), r))
-                    .collect();
-                sidecar::load_all(&catalog::scan_folder(path, *recursive))
-                    .into_iter()
-                    .map(|(p, sc)| indexed.get(&p).cloned().unwrap_or_else(|| record_from_sidecar(p, sc)))
-                    .collect()
+                Some((path.clone(), *recursive))
             }
-            scope => self
-                .catalog
-                .as_ref()
-                .and_then(|c| c.query(scope, &Filter::default(), SortKey::Name, false).ok())
-                .unwrap_or_default(),
-        };
+            _ => None,
+        }
+    }
+
+    /// The file system is authoritative; the catalog adds metadata where indexed.
+    fn with_catalog_details(&self, files: Vec<(PathBuf, Sidecar)>) -> Vec<ImageRecord> {
+        let indexed: HashMap<PathBuf, ImageRecord> = self
+            .catalog
+            .as_ref()
+            .and_then(|c| c.query(&self.scope, &Filter::default(), SortKey::Name, false).ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| (r.path.clone(), r))
+            .collect();
+        files.into_iter().map(|(p, sc)| indexed.get(&p).cloned().unwrap_or_else(|| record_from_sidecar(p, sc))).collect()
+    }
+
+    fn set_entries(&mut self, mut records: Vec<ImageRecord>) {
         sort_records(&mut records, self.sort, self.sort_desc);
         self.entries = records;
         self.forget_unlisted_thumbs();

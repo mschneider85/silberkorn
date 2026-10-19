@@ -573,6 +573,10 @@ pub struct App {
     /// Number of the running (or last) auto adjustment and look match: results of a run
     /// cancelled or replaced meanwhile carry another one and are dropped.
     pub(crate) auto_run: u64,
+    /// Counts the scopes opened; a folder read for an earlier one is dropped.
+    pub(crate) scope_run: u64,
+    /// The folder of the scope is being read (see `open_scope`).
+    pub(crate) folder_loading: bool,
     pub(crate) look_run: u64,
     pub(crate) clipboard: Option<crate::clipboard::Clipboard>,
     pub(crate) copy_dialog: crate::clipboard::CopyDialog,
@@ -998,6 +1002,8 @@ impl App {
             batch_step: None,
             batch_result: false,
             auto_run: 0,
+            scope_run: 0,
+            folder_loading: false,
             look_run: 0,
             redo: Vec::new(),
             clipboard: None,
@@ -2404,6 +2410,7 @@ impl App {
                         self.thumb_focus.insert(path, crate::focus::FocusMap::new(size, sharpness));
                     }
                 }
+                Event::FolderLoaded { run, files } => self.folder_loaded(run, files),
                 Event::IndexProgress { done, total } => {
                     self.index_progress = (done < total).then_some((done, total));
                 }
@@ -2796,7 +2803,7 @@ impl App {
     fn debug_screenshot(&mut self, ctx: &egui::Context) {
         let Some((_, shown_at)) = &mut self.screenshot else { return };
         let now = ctx.input(|i| i.time);
-        let empty = self.entries.is_empty() && self.loading.is_none();
+        let empty = self.entries.is_empty() && self.loading.is_none() && !self.folder_loading;
         if (self.texture.is_some() || self.grid_view || empty) && shown_at.is_none() {
             *shown_at = Some(now);
             // Optional tool states for screenshots.

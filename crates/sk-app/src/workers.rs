@@ -93,6 +93,8 @@ pub enum Event {
     JobProgress { id: u64, progress: f32 },
     /// A background job finished: the files it created, or why it failed.
     JobDone { id: u64, label: String, result: Result<Vec<PathBuf>, String> },
+    /// The images of a folder with their sidecars, read for the browser (see `App::open_scope`).
+    FolderLoaded { run: u64, files: Vec<(PathBuf, sidecar::Sidecar)> },
     /// `catalog` identifies the database, so that results for a closed session can be ignored.
     IndexDone { catalog: PathBuf, indexed: usize, failed: usize, import: bool },
 }
@@ -311,6 +313,8 @@ pub struct Workers {
     auto_tx: Sender<AutoJob>,
     inpaint_tx: Sender<InpaintJob>,
     style_tx: Sender<StyleThumbJob>,
+    /// Run, folder, with subfolders.
+    folder_tx: Sender<(u64, PathBuf, bool)>,
     activity: Activity,
     pub draft_speed: DraftSpeed,
 }
@@ -969,6 +973,19 @@ impl Workers {
             });
         }
 
+        let (folder_tx, folder_rx) = channel::<(u64, PathBuf, bool)>();
+        {
+            let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
+            crate::guard::spawn("Ordner lesen", move || {
+                // Only the latest folder: those clicked through meanwhile are no longer shown.
+                while let Some((run, folder, recursive)) = recv_latest(&folder_rx) {
+                    let files = sidecar::load_all(&sk_core::catalog::scan_folder(&folder, recursive));
+                    let _ = ev_tx.send(Event::FolderLoaded { run, files });
+                    ctx.request_repaint();
+                }
+            });
+        }
+
         let (detail_tx, detail_rx) = channel::<Vec<DetailJob>>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
@@ -1147,6 +1164,7 @@ impl Workers {
             proof_tx,
             compare_tx,
             style_tx,
+            folder_tx,
             detail_tx,
             focus_tx,
             thumb_focus_tx,
@@ -1217,6 +1235,11 @@ impl Workers {
 
     pub fn style_thumbs(&self, job: StyleThumbJob) {
         let _ = self.style_tx.send(job);
+    }
+
+    /// Reads a folder's images for the browser (see [`Event::FolderLoaded`]).
+    pub fn load_folder(&self, run: u64, folder: PathBuf, recursive: bool) {
+        let _ = self.folder_tx.send((run, folder, recursive));
     }
 
     pub fn look(&self, request: crate::look_worker::LookRequest) {

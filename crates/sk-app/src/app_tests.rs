@@ -106,7 +106,15 @@ impl Fixture {
                 persist_settings: false,
             },
         );
-        Some(Self { _cleanup: Cleanup(dir.clone()), dir, ctx, app })
+        let mut f = Self { _cleanup: Cleanup(dir.clone()), dir, ctx, app };
+        f.pump("Ordner geladen", |a| !a.folder_loading);
+        Some(f)
+    }
+
+    /// Opens a folder and waits until it is read (see `App::open_scope`).
+    fn open_folder(&mut self, folder: PathBuf) {
+        self.app.open_folder(folder);
+        self.pump("Ordner geladen", |a| !a.folder_loading);
     }
 
     fn pump(&mut self, what: &str, done: impl Fn(&App) -> bool) {
@@ -591,7 +599,7 @@ fn session_workflow() {
     f.app.import = None;
 
     // Move to Selects: file and sidecar move, the database follows, the next image opens.
-    f.app.open_folder(capture.clone());
+    f.open_folder(capture.clone());
     f.app.selection = [a.clone()].into_iter().collect();
     f.app.move_to_session_folder(SessionFolder::Selects);
     let a2 = s.folder(SessionFolder::Selects).join("_DSC0009.dng");
@@ -604,10 +612,10 @@ fn session_workflow() {
     assert_eq!(cat.query(&selects, &Filter::default(), SortKey::Name, false).unwrap().len(), 1);
 
     // An empty folder of the session shows what it is, not the start screen.
-    f.app.open_folder(s.folder(SessionFolder::Trash));
+    f.open_folder(s.folder(SessionFolder::Trash));
     assert!(f.app.entries.is_empty());
     assert_eq!(f.app.empty_session_folder().map(|(_, t, _)| t).as_deref(), Some("Der Papierkorb ist leer"));
-    f.app.open_folder(capture.clone());
+    f.open_folder(capture.clone());
 
     // Favorites live in the session.
     let fav = s.root.join("Kunde");
@@ -672,7 +680,7 @@ fn session_workflow() {
     let a4 = again.join("Selects").join("_DSC0009.dng");
     assert!(sk_core::cache::load(&a4, &adj, Some(&again)).is_some(), "Cache wandert mit");
     f.app.open_session(&again);
-    f.app.open_folder(again.clone());
+    f.open_folder(again.clone());
     assert!(!f.app.subdirs.contains(&f.app.session.as_ref().unwrap().root.join("Silberkorn")));
     assert!(f.app.subdirs.iter().any(|d| d.ends_with("Selects")));
 }
@@ -1773,11 +1781,33 @@ fn last_selected_image_is_selected_again_after_starting() {
     f.app.restore_image = Some(b.clone());
     let folder = f.dir.join("photos").canonicalize().unwrap();
     f.app.close_current();
-    f.app.open_folder(folder.clone());
+    f.open_folder(folder.clone());
     assert_eq!(f.app.primary_path(), Some(b.clone()));
     f.pump("B geladen", |app| app.current_path().as_ref() == Some(&b));
     // Only once: opening the folder later starts with the current image as usual.
     assert!(f.app.restore_image.is_none());
+}
+
+#[test]
+fn folder_loads_in_the_background_and_late_results_are_dropped() {
+    let Some(mut f) = Fixture::new("folder-load") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let photos = f.dir.join("photos").canonicalize().unwrap();
+    let empty = f.dir.join("leer");
+    std::fs::create_dir_all(&empty).unwrap();
+    f.app.open_folder(photos.clone());
+    let stale = f.app.scope_run;
+    assert!(f.app.folder_loading);
+    assert!(f.app.activities().iter().any(|a| a.label == "Lade Ordner"));
+    // Clicked on before the first folder arrived: only the second one is shown.
+    f.open_folder(empty.canonicalize().unwrap());
+    assert!(f.app.entries.is_empty() && f.app.current.is_none());
+    f.app.workers.inject(crate::workers::Event::FolderLoaded { run: stale, files: sidecar::load_all(&sk_core::catalog::scan_folder(&photos, false)) });
+    f.app.handle_events(&f.ctx);
+    assert!(f.app.entries.is_empty(), "veraltetes Ergebnis verworfen");
+    f.open_folder(photos);
+    assert_eq!(f.app.entries.len(), 2);
+    assert!(f.app.primary_path().is_some(), "das erste Bild ist gewählt");
 }
 
 #[test]
@@ -2005,7 +2035,7 @@ fn faces_become_named_persons() {
     dng_from_jpeg(&faces.join("obama.jpg"), &photos.join("p1.dng"), false);
     dng_from_jpeg(&faces.join("obama.jpg"), &photos.join("p2.dng"), true);
     dng_from_jpeg(&faces.join("dreis.jpg"), &photos.join("p3.dng"), false);
-    f.app.open_folder(photos.clone());
+    f.open_folder(photos.clone());
     f.index_photos();
     f.pump("Indexiert", |a| a.lists.total == 5);
     f.app.analyze_view(false);
@@ -2889,7 +2919,7 @@ fn filmstrip_starts_at_the_image_from_the_grid() {
             std::fs::copy(&source, &target).unwrap();
         }
     }
-    f.app.open_folder(photos);
+    f.open_folder(photos);
     assert!(f.app.visible.len() >= 32);
     let mut frame = eframe::Frame::_new_kittest();
     let mut t = 10.0;

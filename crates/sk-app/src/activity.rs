@@ -49,6 +49,9 @@ impl App {
                 cancel: self.export_cancel.clone(),
             });
         }
+        if self.folder_loading {
+            v.push(Activity { label: "Lade Ordner".into(), progress: None, in_viewer: false, cancel: None });
+        }
         if let Some((done, total)) = self.index_progress {
             v.push(Activity { label: format!("Indexiere {done} / {total}"), progress: Some(done as f32 / total.max(1) as f32), in_viewer: false, cancel: None });
         }
