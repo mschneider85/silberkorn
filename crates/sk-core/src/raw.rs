@@ -72,7 +72,22 @@ struct Decoded {
 
 /// The raw file last decoded by [`load_preview_and_keep`], until [`load_full`] takes it: by the
 /// image's path and the identity of its file (a changed file is decoded again).
+#[cfg(not(test))]
 static KEPT: std::sync::Mutex<Option<(String, Decoded)>> = std::sync::Mutex::new(None);
+
+// Tests run at the same time and would take each other's: there one per thread.
+#[cfg(test)]
+thread_local! {
+    static KEPT: std::sync::Mutex<Option<(String, Decoded)>> = const { std::sync::Mutex::new(None) };
+}
+
+/// [`KEPT`], to read or change.
+fn kept<R>(f: impl FnOnce(&mut Option<(String, Decoded)>) -> R) -> R {
+    #[cfg(not(test))]
+    return f(&mut KEPT.lock().unwrap());
+    #[cfg(test)]
+    KEPT.with(|k| f(&mut k.lock().unwrap()))
+}
 
 /// Raw data larger than this is not kept (float or multi-channel files).
 const KEEP_MAX_BYTES: usize = 256 << 20;
@@ -261,7 +276,7 @@ pub fn load_preview_and_keep(path: &Path, max_edge: usize) -> Result<(RawMeta, L
         RawImageData::Float(d) => d.len() * 4,
     };
     let key = kept_key(path).filter(|_| bytes <= KEEP_MAX_BYTES);
-    *KEPT.lock().unwrap() = key.map(|k| (k, decoded.clone()));
+    kept(|k| *k = key.map(|k| (k, decoded.clone())));
     preview_of(decoded, max_edge)
 }
 
@@ -294,13 +309,11 @@ fn rgb_area(d: &[f32], width: usize, height: usize, area: Option<Rect>) -> Resul
 
 /// Full-resolution demosaic (PPG) in camera space, oriented.
 pub fn load_full(path: &Path) -> Result<(RawMeta, LinearImage)> {
-    let kept = {
-        let mut kept = KEPT.lock().unwrap();
-        match (kept.as_ref(), kept_key(path)) {
-            (Some((k, _)), Some(key)) if *k == key => kept.take().map(|(_, d)| d),
-            _ => None,
-        }
-    };
+    let key = kept_key(path);
+    let kept = kept(|kept| match (kept.as_ref(), key) {
+        (Some((k, _)), Some(key)) if *k == key => kept.take().map(|(_, d)| d),
+        _ => None,
+    });
     let Decoded { raw, meta } = match kept {
         Some(d) => d,
         None => decode(path)?,
@@ -638,9 +651,9 @@ mod tests {
         }
         let (_, small) = load_preview_and_keep(&path, 256).unwrap();
         assert_eq!(small.width.max(small.height), 256);
-        assert!(KEPT.lock().unwrap().is_some());
+        assert!(super::kept(|k| k.is_some()));
         let (_, kept) = load_full(&path).unwrap();
-        assert!(KEPT.lock().unwrap().is_none());
+        assert!(super::kept(|k| k.is_none()));
         let (_, fresh) = load_full(&path).unwrap();
         assert_eq!((kept.width, kept.height), (fresh.width, fresh.height));
         assert!(kept.data == fresh.data);
