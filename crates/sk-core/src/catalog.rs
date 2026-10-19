@@ -407,7 +407,10 @@ impl Catalog {
              -- Settings of the images (the record a sidecar file would hold), by raw file.
              -- `capture_date` is the image's when they were stored: another picture later at the same
              -- path (a memory card used again) doesn't get them.
-             CREATE TABLE IF NOT EXISTS settings (path TEXT PRIMARY KEY, record TEXT NOT NULL, capture_date TEXT);",
+             CREATE TABLE IF NOT EXISTS settings (path TEXT PRIMARY KEY, record TEXT NOT NULL, capture_date TEXT);
+             -- Records of other pictures that were at the path, moved aside instead of replaced
+             -- (the date may only have been corrected): never lost.
+             CREATE TABLE IF NOT EXISTS settings_aside (path TEXT NOT NULL, record TEXT NOT NULL, capture_date TEXT, moved INTEGER NOT NULL);",
         )?;
         // Columns added later.
         let columns: Vec<String> =
@@ -547,6 +550,13 @@ impl Catalog {
         // Keep the original import id when re-indexing a changed file (an image taken in when it
         // was first edited, see `CatalogStore`, joins the import that takes it in later).
         self.atomic(|| {
+            // The same file indexed again with another date (its camera clock corrected): its
+            // settings stay. Recognized by the size, which a new picture hardly ever has too.
+            self.conn.execute(
+                "UPDATE settings SET capture_date = ?2 WHERE path = ?1 AND EXISTS
+                     (SELECT 1 FROM images i WHERE i.path = ?1 AND i.file_size = ?3 AND i.capture_date IS settings.capture_date)",
+                params![self.key(path), info.date, size],
+            )?;
             let id: i64 = self.conn.query_row(
                 "INSERT INTO images (path, folder, name, capture_date, camera, lens, iso, rating, color_label, file_mtime, file_size, import_id, stack, stack_top)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
@@ -651,15 +661,19 @@ impl Catalog {
     /// Follows a file that was moved or renamed, with its variants; album memberships and
     /// keywords are kept.
     pub fn rename_path(&self, from: &Path, to: &Path) -> Result<()> {
-        if crate::variant::number(from) == 1 {
-            self.conn.execute("DELETE FROM settings WHERE path = ?1 AND path <> ?2", params![self.key(to), self.key(from)])?;
-            self.conn.execute("UPDATE settings SET path = ?2 WHERE path = ?1", params![self.key(from), self.key(to)])?;
-            for (old, _) in self.variant_rows(from)? {
-                let n = crate::variant::number(&old);
-                self.rename_one(&old, &crate::variant::path_for(to, n))?;
+        self.atomic(|| {
+            if crate::variant::number(from) == 1 {
+                let (from_key, to_key) = (self.key(from), self.key(to));
+                self.conn.execute("DELETE FROM settings WHERE path = ?1 AND path <> ?2", params![to_key, from_key])?;
+                self.conn.execute("UPDATE settings SET path = ?2 WHERE path = ?1", params![from_key, to_key])?;
+                self.conn.execute("UPDATE settings_aside SET path = ?2 WHERE path = ?1", params![from_key, to_key])?;
+                for (old, _) in self.variant_rows(from)? {
+                    let n = crate::variant::number(&old);
+                    self.rename_one(&old, &crate::variant::path_for(to, n))?;
+                }
             }
-        }
-        self.rename_one(from, to)
+            self.rename_one(from, to)
+        })
     }
 
     /// Bounds of the stored paths of the variants of `file` ("file#..."): as a range, so that
@@ -694,14 +708,16 @@ impl Catalog {
 
     /// Removes an image; for a raw file also its variants.
     pub fn remove_path(&self, path: &Path) -> Result<()> {
-        if crate::variant::number(path) == 1 {
-            self.conn.execute("DELETE FROM settings WHERE path = ?1", [self.key(path)])?;
-            for (_, id) in self.variant_rows(path)? {
-                self.conn.execute("DELETE FROM images WHERE id = ?1", [id])?;
+        self.atomic(|| {
+            if crate::variant::number(path) == 1 {
+                self.conn.execute("DELETE FROM settings WHERE path = ?1", [self.key(path)])?;
+                for (_, id) in self.variant_rows(path)? {
+                    self.conn.execute("DELETE FROM images WHERE id = ?1", [id])?;
+                }
             }
-        }
-        self.conn.execute("DELETE FROM images WHERE path = ?1", [self.key(path)])?;
-        Ok(())
+            self.conn.execute("DELETE FROM images WHERE path = ?1", [self.key(path)])?;
+            Ok(())
+        })
     }
 
     /// Makes a backup in `dir` (`catalog-2026-10-18.sqlite`, a consistent copy also while the
@@ -745,7 +761,6 @@ impl Catalog {
         self.image_id(&crate::variant::file_of(path)).ok().flatten().is_some()
     }
 
-    /// The stored settings record of raw file `raw` (see [`CatalogStore`]).
     /// The stored settings record of raw file `raw`: `None` if it is not in the catalog,
     /// `Some(None)` if it has none yet. Settings stay when the image leaves the catalog through
     /// a cleanup (the file may be back, or imported again); they count only for the same picture.
@@ -757,12 +772,33 @@ impl Catalog {
         Ok(stmt.query_row([self.key(raw)], |r| r.get(0)).optional()?)
     }
 
-    fn store_settings_record(&self, raw: &Path, record: &Sidecar) -> Result<()> {
-        self.conn.execute(
-            "INSERT OR REPLACE INTO settings(path, record, capture_date) VALUES (?1, ?2, (SELECT capture_date FROM images WHERE path = ?1))",
-            params![self.key(raw), sidecar::to_json(record)?],
-        )?;
-        Ok(())
+    /// Stores the settings record of raw file `raw`. One of another picture (see
+    /// [`Self::settings_lookup`]) is moved aside, never replaced. With `first` (taking over the
+    /// sidecar file on the first read), a record of this picture stored meanwhile by another
+    /// thread stays; returns whether `record` was stored.
+    fn store_settings_record(&self, raw: &Path, record: &Sidecar, first: bool) -> Result<bool> {
+        let key = self.key(raw);
+        let json = sidecar::to_json(record)?;
+        self.atomic(|| {
+            let aside = self.conn.execute(
+                "INSERT INTO settings_aside(path, record, capture_date, moved)
+                 SELECT path, record, capture_date, ?2 FROM settings
+                 WHERE path = ?1 AND capture_date IS NOT (SELECT capture_date FROM images WHERE path = ?1)",
+                params![key, now()],
+            )?;
+            if aside > 0 {
+                log::warn!("Einstellungen eines anderen Bildes unter {} beiseitegelegt", raw.display());
+            }
+            let condition = if first { " WHERE settings.capture_date IS NOT excluded.capture_date" } else { "" };
+            let stored = self.conn.execute(
+                &format!(
+                    "INSERT INTO settings(path, record, capture_date) VALUES (?1, ?2, (SELECT capture_date FROM images WHERE path = ?1))
+                     ON CONFLICT(path) DO UPDATE SET record = excluded.record, capture_date = excluded.capture_date{condition}"
+                ),
+                params![key, json],
+            )?;
+            Ok(stored > 0)
+        })
     }
 
     // ------------------------------------------------------------ faces and culling
@@ -881,15 +917,18 @@ impl Catalog {
     /// Returns the images of the person (to update their keywords).
     pub fn name_person(&self, id: i64, name: &str) -> Result<Vec<PathBuf>> {
         let name = name.trim();
-        let other: Option<i64> = self
-            .conn
-            .query_row("SELECT id FROM persons WHERE id <> ?1 AND name = ?2 COLLATE NOCASE", params![id, name], |r| r.get(0))
-            .optional()?;
-        if let Some(o) = other {
-            self.conn.execute("UPDATE faces SET person_id = ?1 WHERE person_id = ?2", params![id, o])?;
-            self.conn.execute("DELETE FROM persons WHERE id = ?1", [o])?;
-        }
-        self.conn.execute("UPDATE persons SET name = ?2 WHERE id = ?1", params![id, (!name.is_empty()).then_some(name)])?;
+        self.atomic(|| {
+            let other: Option<i64> = self
+                .conn
+                .query_row("SELECT id FROM persons WHERE id <> ?1 AND name = ?2 COLLATE NOCASE", params![id, name], |r| r.get(0))
+                .optional()?;
+            if let Some(o) = other {
+                self.conn.execute("UPDATE faces SET person_id = ?1 WHERE person_id = ?2", params![id, o])?;
+                self.conn.execute("DELETE FROM persons WHERE id = ?1", [o])?;
+            }
+            self.conn.execute("UPDATE persons SET name = ?2 WHERE id = ?1", params![id, (!name.is_empty()).then_some(name)])?;
+            Ok(())
+        })?;
         self.person_images(id)
     }
 
@@ -1181,9 +1220,9 @@ fn filter_sql(filter: &Filter, sql: &mut String, args: &mut Vec<Value>) {
         args.push(Value::Text(k.clone()));
     }
     for term in filter.text.split_whitespace() {
-        *sql += " AND (i.name LIKE ? OR i.camera LIKE ? OR i.lens LIKE ?
-                   OR EXISTS (SELECT 1 FROM keywords k WHERE k.image_id = i.id AND k.keyword LIKE ?))";
-        let like = format!("%{term}%");
+        *sql += " AND (i.name LIKE ? ESCAPE '\\' OR i.camera LIKE ? ESCAPE '\\' OR i.lens LIKE ? ESCAPE '\\'
+                   OR EXISTS (SELECT 1 FROM keywords k WHERE k.image_id = i.id AND k.keyword LIKE ? ESCAPE '\\'))";
+        let like = format!("%{}%", like_escape(term));
         for _ in 0..4 {
             args.push(Value::Text(like.clone()));
         }
@@ -1250,7 +1289,7 @@ impl CatalogStore {
             c.upsert_stacked(&m, &Sidecar { stack: stack.clone(), ..Default::default() }, 0, stack)?;
             c.sync_sidecar(&m.path, &sidecar::load_variant_of(record, v.id))?;
         }
-        c.store_settings_record(raw, record)
+        c.store_settings_record(raw, record, false).map(drop)
     }
 }
 
@@ -1263,10 +1302,24 @@ impl sidecar::Store for CatalogStore {
         Some(match c.settings_lookup(raw) {
             Ok(None) => return None,
             Ok(Some(Some(text))) => sidecar::from_json(&text).map(Some),
-            // First read: take over the sidecar file, if any.
-            Ok(Some(None)) => sidecar::read_sidecar_file(raw).and_then(|file| {
-                c.store_settings_record(raw, &file.clone().unwrap_or_default())?;
-                Ok(file)
+            // First read: take over the sidecar file, if any. A damaged one is kept as `.bak`
+            // and counts as none (as when saving it): else the image could never be saved.
+            Ok(Some(None)) => match sidecar::read_sidecar_file(raw) {
+                Err(e) if sidecar::is_damaged(&e) => {
+                    log::warn!("{e:#}");
+                    sidecar::back_up_damaged(raw).map(|()| None)
+                }
+                file => file,
+            }
+            .and_then(|file| {
+                if c.store_settings_record(raw, &file.clone().unwrap_or_default(), true)? {
+                    return Ok(file);
+                }
+                // Another thread was first: its record counts.
+                match c.settings_lookup(raw)? {
+                    Some(Some(text)) => sidecar::from_json(&text).map(Some),
+                    _ => Ok(file),
+                }
             }),
             Err(e) => Err(e),
         })
@@ -1278,7 +1331,7 @@ impl sidecar::Store for CatalogStore {
             Err(e) => return Some(Err(e)),
         };
         if c.contains(raw) {
-            return Some(c.store_settings_record(raw, record));
+            return Some(c.store_settings_record(raw, record, false).map(drop));
         }
         drop(c);
         self.adopts(raw).then(|| self.adopt(raw, record))
@@ -1350,9 +1403,13 @@ pub fn scan_folder(folder: &Path, recursive: bool) -> Vec<PathBuf> {
 /// LIKE pattern (escape character `\`) for everything below `folder`. The separator is
 /// escaped too: on Windows it is `\`, which would otherwise escape the `%`.
 fn subfolder_pattern(folder: &str, sep: char) -> String {
-    let escape = |s: &str| s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
     let folder = folder.strip_suffix(sep).unwrap_or(folder);
-    format!("{}{}%", escape(folder), escape(&sep.to_string()))
+    format!("{}{}%", like_escape(folder), like_escape(&sep.to_string()))
+}
+
+/// `s` matched literally in a LIKE pattern (escape character `\`).
+fn like_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_")
 }
 
 #[cfg(test)]
@@ -1492,13 +1549,85 @@ mod tests {
         std::fs::write(&moved, b"x").unwrap();
         c.upsert(&meta(moved.to_str().unwrap(), "2024:01:01 10:00:00", "L"), &Sidecar::default(), 0).unwrap();
         assert_eq!(sidecar::load(&moved).rating, 5);
+        // The camera clock corrected (same file): they stay.
+        c.upsert(&meta(moved.to_str().unwrap(), "2024:01:01 11:00:00", "L"), &Sidecar::default(), 0).unwrap();
+        assert_eq!(sidecar::load(&moved).rating, 5);
+        // Another picture (other size): it starts afresh, the old record is moved aside.
+        std::fs::write(&moved, b"xy").unwrap();
         c.upsert(&meta(moved.to_str().unwrap(), "2025:06:01 08:00:00", "L"), &Sidecar::default(), 0).unwrap();
         assert_eq!(sidecar::load(&moved).rating, 0);
+        sidecar::save(&moved, &Sidecar { rating: 2, ..Default::default() }).unwrap();
+        assert_eq!(sidecar::load(&moved).rating, 2);
+        let aside: Vec<String> = c.conn.prepare("SELECT record FROM settings_aside").unwrap().query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect();
+        assert_eq!(aside.len(), 1);
+        assert_eq!(sidecar::from_json(&aside[0]).unwrap().rating, 5);
 
         c.remove_path(&moved).unwrap();
         assert_eq!(sidecar::load(&moved), Sidecar::default());
         drop(store);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn damaged_sidecar_is_taken_over_as_none() {
+        let dir = std::env::temp_dir().join(format!("sk-store-damaged-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("d.ARW");
+        std::fs::write(&img, b"x").unwrap();
+        std::fs::write(sidecar::sidecar_path(&img), "{ kaputt").unwrap();
+        let db = dir.join("catalog.sqlite");
+        let store: std::sync::Arc<dyn sidecar::Store> = std::sync::Arc::new(CatalogStore::open(&db, None).unwrap());
+        sidecar::add_store(&store);
+        let c = Catalog::open(&db).unwrap();
+        c.upsert(&meta(img.to_str().unwrap(), "2024:01:01 10:00:00", "L"), &Sidecar::default(), 0).unwrap();
+        sidecar::save(&img, &Sidecar { rating: 4, ..Default::default() }).unwrap();
+        assert_eq!(sidecar::load(&img).rating, 4);
+        let mut bak = sidecar::sidecar_path(&img).into_os_string();
+        bak.push(".bak");
+        assert_eq!(std::fs::read_to_string(bak).unwrap(), "{ kaputt");
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn variants_saved_at_once_keep_every_change_in_the_catalog() {
+        use rayon::prelude::*;
+        let dir = std::env::temp_dir().join(format!("sk-store-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("r.ARW");
+        std::fs::write(&img, b"x").unwrap();
+        sidecar::save(&img, &Sidecar { rating: 1, ..Default::default() }).unwrap();
+        for _ in 2..=12 {
+            sidecar::add_variant(&img, &Sidecar::default()).unwrap();
+        }
+        let db = dir.join("catalog.sqlite");
+        let store: std::sync::Arc<dyn sidecar::Store> = std::sync::Arc::new(CatalogStore::open(&db, None).unwrap());
+        sidecar::add_store(&store);
+        let c = Catalog::open(&db).unwrap();
+        c.upsert(&meta(img.to_str().unwrap(), "2024:01:01 10:00:00", "L"), &Sidecar::default(), 0).unwrap();
+        // The first reads (taking the file over) race with the saves.
+        let all = crate::variant::of_file(&img);
+        assert_eq!(all.len(), 12);
+        all.par_iter().for_each(|p| {
+            let _ = sidecar::load(p);
+            sidecar::save(p, &Sidecar { rating: 3, ..Default::default() }).unwrap();
+        });
+        assert!(all.iter().all(|p| sidecar::load(p).rating == 3));
+        drop(store);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_terms_match_literally() {
+        let c = catalog();
+        let f = Filter { text: "_".into(), ..Default::default() };
+        assert!(c.query(&Scope::All, &f, SortKey::Name, false).unwrap().is_empty());
+        let f = Filter { text: "%".into(), ..Default::default() };
+        assert!(c.query(&Scope::All, &f, SortKey::Name, false).unwrap().is_empty());
+        let f = Filter { text: "35mm".into(), ..Default::default() };
+        assert_eq!(c.query(&Scope::All, &f, SortKey::Name, false).unwrap().len(), 2);
     }
 
     fn catalog() -> Catalog {

@@ -3,7 +3,7 @@
 //! keeps those of its images in its database.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, RwLock, Weak};
+use std::sync::{Arc, Condvar, Mutex, RwLock, Weak};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -262,7 +262,7 @@ fn from_file(image: &Path, file: Sidecar) -> Sidecar {
 }
 
 /// Whether a [`read_file`] error means the file is damaged (not unreadable or newer).
-fn is_damaged(e: &anyhow::Error) -> bool {
+pub(crate) fn is_damaged(e: &anyhow::Error) -> bool {
     e.chain().any(|c| c.is::<serde_json::Error>())
 }
 
@@ -316,6 +316,7 @@ fn with_xmp(image: &Path, mut sc: Sidecar) -> Sidecar {
 
 /// Reads the image's XMP file again on the next load, even if it is older than the last save.
 pub fn reread_xmp(image: &Path) -> Result<()> {
+    let _lock = lock_record(image);
     let mut file = load_for_update(image)?;
     if file.xmp_mtime.take().is_some() {
         write_file(image, &file)?;
@@ -327,6 +328,7 @@ pub fn reread_xmp(image: &Path) -> Result<()> {
 /// writing is off).
 pub fn write_xmp(image: &Path) -> Result<()> {
     let sc = load(image);
+    let _lock = lock_record(image);
     let mut file = load_for_update(image)?;
     file.xmp_mtime = crate::xmp::write(image, sc.rating, sc.color_label, &sc.keywords)?;
     (file.rating, file.color_label, file.keywords) = (sc.rating, sc.color_label, sc.keywords);
@@ -398,6 +400,7 @@ pub fn from_json(text: &str) -> Result<Sidecar> {
 /// The whole record of an image's raw file (its settings and its variants'), to take along
 /// when the file is copied (see [`write_record`]).
 pub fn read_record(image: &Path) -> Result<Sidecar> {
+    let _lock = lock_record(image);
     load_for_update(image)
 }
 
@@ -421,13 +424,17 @@ pub fn copy_settings(from: &Path, to: &Path) -> Result<()> {
         },
     };
     match record {
-        Some(record) if (Sidecar { version: 0, ..record.clone() }) != Sidecar::default() => write_file(to, &record),
+        Some(record) if (Sidecar { version: 0, ..record.clone() }) != Sidecar::default() => {
+            let _lock = lock_record(to);
+            write_file(to, &record)
+        }
         _ => Ok(()),
     }
 }
 
 /// Stores a whole record (see [`read_record`]).
 pub fn write_record(image: &Path, record: &Sidecar) -> Result<()> {
+    let _lock = lock_record(image);
     write_file(image, record)
 }
 
@@ -444,9 +451,55 @@ pub fn variant_ids(raw: &Path) -> Result<Vec<u32>> {
     Ok(read_file(raw)?.map(|sc| sc.variants.iter().map(|v| v.id).collect()).unwrap_or_default())
 }
 
-/// The sidecar file before changing it. One that can't be parsed is kept as `.bak` (it may hold
-/// the settings of all variants) instead of being overwritten without notice; one from a newer
-/// Silberkorn is an error (see [`VERSION`]).
+/// Raw files whose record is being changed (see [`lock_record`]).
+static LOCKED: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+static UNLOCKED: Condvar = Condvar::new();
+
+/// Holds the record of a raw file for one read-modify-write (see [`lock_record`]).
+struct RecordLock(PathBuf);
+
+/// Waits until no other thread changes the record of `image`'s raw file, then holds it until
+/// dropped: variants share one record, and saving several at once (rating all variants) would
+/// otherwise lose all but one change. Not reentrant.
+fn lock_record(image: &Path) -> RecordLock {
+    let raw = crate::variant::file_of(image);
+    let mut locked = LOCKED.lock().unwrap_or_else(|e| e.into_inner());
+    while locked.contains(&raw) {
+        locked = UNLOCKED.wait(locked).unwrap_or_else(|e| e.into_inner());
+    }
+    locked.push(raw.clone());
+    RecordLock(raw)
+}
+
+impl Drop for RecordLock {
+    fn drop(&mut self) {
+        let mut locked = LOCKED.lock().unwrap_or_else(|e| e.into_inner());
+        locked.retain(|p| *p != self.0);
+        UNLOCKED.notify_all();
+    }
+}
+
+/// Keeps the damaged sidecar files of `image` as `.bak` (they may hold the settings of all
+/// variants), so that they aren't read or overwritten again.
+pub(crate) fn back_up_damaged(image: &Path) -> Result<()> {
+    for path in json_files_for(image).into_iter().filter(|p| p.exists()) {
+        // Never replaces an earlier backup.
+        let backup = (1..)
+            .map(|n| {
+                let mut b = path.clone().into_os_string();
+                b.push(if n == 1 { ".bak".to_string() } else { format!(".{n}.bak") });
+                PathBuf::from(b)
+            })
+            .find(|b| !b.exists())
+            .expect("free backup name");
+        std::fs::rename(&path, &backup).with_context(|| format!("{} kann nicht gesichert werden", path.display()))?;
+    }
+    Ok(())
+}
+
+/// The sidecar file before changing it (under [`lock_record`]). One that can't be parsed is
+/// kept as `.bak` (see [`back_up_damaged`]) instead of being overwritten without notice; one
+/// from a newer Silberkorn is an error (see [`VERSION`]).
 fn load_for_update(image: &Path) -> Result<Sidecar> {
     match read_file(image) {
         Ok(Some(sc)) if sc.version > VERSION => anyhow::bail!(
@@ -455,18 +508,7 @@ fn load_for_update(image: &Path) -> Result<Sidecar> {
         ),
         Ok(sc) => Ok(sc.unwrap_or_default()),
         Err(e) if is_damaged(&e) => {
-            for path in json_files_for(image).into_iter().filter(|p| p.exists()) {
-                // Never replaces an earlier backup.
-                let backup = (1..)
-                    .map(|n| {
-                        let mut b = path.clone().into_os_string();
-                        b.push(if n == 1 { ".bak".to_string() } else { format!(".{n}.bak") });
-                        PathBuf::from(b)
-                    })
-                    .find(|b| !b.exists())
-                    .expect("free backup name");
-                std::fs::rename(&path, &backup).with_context(|| format!("{} kann nicht gesichert werden", path.display()))?;
-            }
+            back_up_damaged(image)?;
             Ok(Sidecar::default())
         }
         Err(e) => Err(e),
@@ -477,6 +519,7 @@ fn load_for_update(image: &Path) -> Result<Sidecar> {
 /// are kept as they are (they change only through [`add_variant`], [`remove_variant`] and
 /// [`set_snapshots`]).
 pub fn save(image: &Path, sidecar: &Sidecar) -> Result<()> {
+    let _lock = lock_record(image);
     let mut file = load_for_update(image)?;
     match crate::variant::number(image) {
         1 => {
@@ -516,6 +559,7 @@ pub fn save(image: &Path, sidecar: &Sidecar) -> Result<()> {
 
 /// Replaces the snapshots of an image or variant.
 pub fn set_snapshots(image: &Path, snapshots: Vec<Snapshot>) -> Result<()> {
+    let _lock = lock_record(image);
     let mut file = load_for_update(image)?;
     match crate::variant::number(image) {
         1 => file.snapshots = snapshots,
@@ -529,6 +573,7 @@ pub fn set_snapshots(image: &Path, snapshots: Vec<Snapshot>) -> Result<()> {
 
 /// Sets or removes the stack of an image's file.
 pub fn set_stack(image: &Path, stack: Option<Stack>) -> Result<()> {
+    let _lock = lock_record(image);
     let mut file = load_for_update(image)?;
     if file.stack != stack {
         file.stack = stack;
@@ -539,6 +584,7 @@ pub fn set_stack(image: &Path, stack: Option<Stack>) -> Result<()> {
 
 /// Adds a variant with these settings to an image; returns its path.
 pub fn add_variant(image: &Path, settings: &Sidecar) -> Result<PathBuf> {
+    let _lock = lock_record(image);
     let raw = crate::variant::file_of(image);
     let mut file = load_for_update(&raw)?;
     let id = file.variants.iter().map(|v| v.id).max().unwrap_or(1).max(1) + 1;
@@ -553,6 +599,7 @@ pub fn remove_variant(variant: &Path) -> Result<()> {
     if n < 2 {
         anyhow::bail!("Die erste Variante gehört zur Datei selbst");
     }
+    let _lock = lock_record(variant);
     let mut file = load_for_update(variant)?;
     file.variants.retain(|v| v.id != n);
     write_file(variant, &file)
@@ -636,6 +683,23 @@ mod tests {
         assert_eq!(load(&img).snapshots, vec![snap("Farbe", 0.5)]);
         assert_eq!(load(&v2).snapshots, vec![snap("SW", -0.3)]);
         assert_eq!((load(&img).rating, load(&v2).rating), (4, 2));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn variants_saved_at_once_keep_every_change() {
+        use rayon::prelude::*;
+        let dir = std::env::temp_dir().join(format!("sk-race-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("r.ARW");
+        let mut all = vec![img.clone()];
+        for _ in 0..15 {
+            all.push(add_variant(&img, &Sidecar::default()).unwrap());
+        }
+        for round in 1..=3u8 {
+            all.par_iter().for_each(|p| save(p, &Sidecar { rating: round, ..Default::default() }).unwrap());
+            assert!(all.iter().all(|p| load(p).rating == round), "Runde {round}");
+        }
         std::fs::remove_dir_all(dir).ok();
     }
 
