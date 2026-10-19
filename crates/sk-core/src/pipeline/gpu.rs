@@ -1353,6 +1353,25 @@ mod tests {
         assert!(g.problem().is_some());
     }
 
+    /// Running out of video memory is not a defect: that rendering fails (and the CPU takes
+    /// over), but the card stays in use. (Where even the device doesn't fit into the budget, as
+    /// on Vulkan, there is nothing to check; it must just not panic.)
+    #[test]
+    fn out_of_memory_keeps_the_card() {
+        let Some(g) = Gpu::new_starved_for_test() else { return };
+        let (w, h) = (1200, 800);
+        let src = image(w, h);
+        let p = Processor::new(&meta(w, h), &Adjustments::default());
+        match p.render_gpu(&g, &src, None, None) {
+            // Without a budget from the driver (no VK_EXT_memory_budget) nothing is refused.
+            Ok(_) => eprintln!("kein Speicherbudget, Test übersprungen"),
+            Err(e) => {
+                assert!(format!("{e:#}").contains("Grafikspeicher voll"), "{e:#}");
+                assert_eq!(g.problem(), None);
+            }
+        }
+    }
+
     #[test]
     fn failed_render_empties_the_stage_cache() {
         let Some(g) = Gpu::new_for_test() else { return };
@@ -1835,7 +1854,12 @@ mod tests {
         };
         let p = Processor::new(&meta(w, h), &adj);
         let cpu = p.process_cpu(&src, None, OutputSpace::AdobeRgb);
-        let gpu = p.process_gpu(g, &src, None, OutputSpace::AdobeRgb).unwrap();
+        let gpu = match p.process_gpu(g, &src, None, OutputSpace::AdobeRgb) {
+            Ok(gpu) => gpu,
+            // Beyond the memory budget the system grants (other programs use the card too).
+            Err(e) if format!("{e:#}").contains("Grafikspeicher voll") => return eprintln!("{e:#}, Test übersprungen"),
+            Err(e) => panic!("{e:#}"),
+        };
         assert_eq!((gpu.width, gpu.height), (cpu.width, cpu.height));
         let mut max = 0.0f32;
         let mut sum = 0.0f64;

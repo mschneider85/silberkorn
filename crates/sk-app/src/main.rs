@@ -100,7 +100,7 @@ static ALLOC: GuardedAlloc = GuardedAlloc;
 fn main() -> eframe::Result {
     guard::install_hook();
     // Warnings and errors also into silberkorn.log: the Windows release has no console.
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,wgpu_core=error,wgpu_hal=error,naga=error"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,silberkorn=info,sk_core=info,wgpu_core=error,wgpu_hal=error,naga=error"))
         .target(env_logger::Target::Pipe(guard::log_target()))
         .init();
     if guard::mark_running() {
@@ -113,7 +113,7 @@ fn main() -> eframe::Result {
 
     let run = |renderer: eframe::Renderer| {
         let (folder, session) = (folder.clone(), session.clone());
-        let options = eframe::NativeOptions {
+        let mut options = eframe::NativeOptions {
             renderer,
             viewport: egui::ViewportBuilder::default()
                 .with_title("Silberkorn")
@@ -125,21 +125,73 @@ fn main() -> eframe::Result {
                 .with_decorations(false),
             ..Default::default()
         };
+        // The window's adapter is chosen like the pipeline's (see `sk_core::gpu::rank`), not by
+        // wgpu's power preference, which would take Intel's crashing Vulkan driver on Windows.
+        if let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup {
+            setup.native_adapter_selector = Some(std::sync::Arc::new(|adapters, surface| {
+                adapters
+                    .iter()
+                    .filter(|a| surface.is_none_or(|s| a.is_surface_supported(s)))
+                    // The first of equally ranked ones, as in the pipeline.
+                    .min_by_key(|a| std::cmp::Reverse(sk_core::gpu::rank(&a.get_info())))
+                    .cloned()
+                    .ok_or_else(|| "keine Grafikkarte für das Fenster".to_string())
+            }));
+        }
         eframe::run_native("Silberkorn", options, Box::new(move |cc| {
+            log_renderer(cc);
+            if let Some(rs) = &cc.wgpu_render_state {
+                rs.device.set_device_lost_callback(|reason, message| {
+                    if reason == eframe::wgpu::DeviceLostReason::Unknown {
+                        log::warn!("Grafikgerät der Anzeige verloren: {message}");
+                        guard::set_display_lost();
+                    }
+                });
+            }
             let opts = app::AppOptions { start_folder: folder, session, ..Default::default() };
             Ok(Box::new(app::App::new(&cc.egui_ctx, opts)))
         }))
     };
 
-    // wgpu is the primary renderer; fall back to OpenGL if no suitable GPU adapter is available.
-    let prefer_glow = std::env::var("SILBERKORN_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("glow"));
-    if prefer_glow {
-        return run(eframe::Renderer::Glow);
+    let started = std::time::Instant::now();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // wgpu is the primary renderer; fall back to OpenGL if no suitable GPU adapter is available.
+        let prefer_glow = std::env::var("SILBERKORN_RENDERER").is_ok_and(|v| v.eq_ignore_ascii_case("glow"));
+        if prefer_glow {
+            return run(eframe::Renderer::Glow);
+        }
+        run(eframe::Renderer::Wgpu).or_else(|e| {
+            log::warn!("wgpu nicht verfügbar ({e}), verwende OpenGL");
+            run(eframe::Renderer::Glow)
+        })
+    }));
+    match result {
+        Ok(result) => result,
+        // The window's device is gone (see `guard::set_display_lost`): start anew, unless that
+        // happens right after starting, which would only repeat itself.
+        Err(_) if guard::display_lost() && started.elapsed() > std::time::Duration::from_secs(30) => {
+            log::warn!("Silberkorn startet neu");
+            guard::mark_clean_exit();
+            if let Err(e) = std::process::Command::new(std::env::current_exe().unwrap_or_default()).args(std::env::args_os().skip(1)).spawn() {
+                log::error!("Neustart fehlgeschlagen: {e}");
+            }
+            Ok(())
+        }
+        Err(panic) => std::panic::resume_unwind(panic),
     }
-    run(eframe::Renderer::Wgpu).or_else(|e| {
-        log::warn!("wgpu nicht verfügbar ({e}), verwende OpenGL");
-        run(eframe::Renderer::Glow)
-    })
+}
+
+/// Writes to the log what the window is drawn with, for problems that only some machines show.
+fn log_renderer(cc: &eframe::CreationContext) {
+    if let Some(rs) = &cc.wgpu_render_state {
+        let i = rs.adapter.get_info();
+        log::info!("Anzeige: wgpu, {} ({:?}, Treiber {} {})", i.name, i.backend, i.driver, i.driver_info);
+    } else if let Some(gl) = &cc.gl {
+        use eframe::glow::HasContext;
+        // SAFETY: plain queries on the current context.
+        let (renderer, version) = unsafe { (gl.get_parameter_string(eframe::glow::RENDERER), gl.get_parameter_string(eframe::glow::VERSION)) };
+        log::info!("Anzeige: OpenGL, {renderer} ({version})");
+    }
 }
 
 #[cfg(test)]

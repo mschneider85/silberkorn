@@ -767,6 +767,10 @@ pub struct App {
     pub(crate) zoom_fit_pct: Option<f32>,
     /// Physical pixels per UI point (Windows display scaling), for true 100 % viewing.
     pub(crate) pixels_per_point: f32,
+    /// Window size and scale as last written to the log, and a newer state waiting to settle.
+    logged_geometry: (String, Option<(String, Instant)>),
+    /// Saved after the window's graphics device was lost, before the restart (see `guard`).
+    saved_for_restart: bool,
     /// Largest texture side the GPU takes: a view rendering must fit into one texture.
     pub(crate) max_texture_side: usize,
     /// Debug aid: `SILBERKORN_SCREENSHOT=<file.png>` saves a screenshot once the first image is shown, then quits.
@@ -1057,6 +1061,8 @@ impl App {
             zoom_pct: None,
             zoom_fit_pct: None,
             pixels_per_point: 1.0,
+            logged_geometry: Default::default(),
+            saved_for_restart: false,
             // egui's assumption until the viewer is first shown.
             max_texture_side: 2048,
             sidecar_dirty: false,
@@ -1592,6 +1598,39 @@ impl App {
         if let Some(hwnd) = self.native_window {
             crate::window_placement::set_animations(hwnd, enabled);
             self.animations_off = !enabled;
+        }
+    }
+
+    /// Writes window size and scale to the log once they have rested for a moment after a change
+    /// (for clicks landing beside their target on some machines; not every step of a resize).
+    fn log_geometry(&mut self, ctx: &egui::Context) {
+        let area = ctx.content_rect().size();
+        let now = ctx.input(|i| {
+            let v = i.viewport();
+            let size = |r: Option<egui::Rect>| r.map_or("?".into(), |r| format!("{:.0}×{:.0}", r.width(), r.height()));
+            format!(
+                "Fenster: Skalierung {:.3} (System {:?}), Fläche {:.0}×{:.0}, innen {}, außen {}, Monitor {:?}, maximiert {:?}",
+                i.pixels_per_point,
+                v.native_pixels_per_point,
+                area.x,
+                area.y,
+                size(v.inner_rect),
+                size(v.outer_rect),
+                v.monitor_size,
+                v.maximized,
+            )
+        });
+        let (logged, pending) = &mut self.logged_geometry;
+        if now == *logged {
+            *pending = None;
+        } else if pending.as_ref().is_none_or(|(p, _)| *p != now) {
+            *pending = Some((now, Instant::now()));
+            ctx.request_repaint_after(Duration::from_millis(600));
+        } else if pending.as_ref().is_some_and(|(_, since)| since.elapsed() >= Duration::from_millis(500)) {
+            *logged = pending.take().unwrap().0;
+            log::info!("{logged} (in Punkten)");
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(100));
         }
     }
 
@@ -3010,10 +3049,18 @@ fn merge_ai(old: Option<sk_core::params::AiMask>, new: sk_ai::MaskImage) -> sk_c
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        // Drawing this frame will fail and the app starts anew: save what `on_exit` would.
+        if crate::guard::display_lost() && !self.saved_for_restart {
+            self.saved_for_restart = true;
+            self.end_viewer_tools();
+            self.commit_and_save();
+            self.save_settings();
+        }
         self.native_window = crate::window_placement::native_handle(frame);
         self.finish_leaving_fullscreen(&ctx);
         self.restore_window_animations();
         self.pixels_per_point = ctx.pixels_per_point();
+        self.log_geometry(&ctx);
         if self.viewer_detached() && !self.viewer_window_shown {
             self.monitors = crate::viewer_window::monitors(frame, self.pixels_per_point);
         }

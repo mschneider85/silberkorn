@@ -26,6 +26,19 @@ static CRASH_LOG: OnceLock<File> = OnceLock::new();
 /// The last session ended without closing the app (see [`mark_running`]).
 static PREVIOUS_CRASH: AtomicBool = AtomicBool::new(false);
 
+/// The window's graphics device was lost (driver reset, waking from hibernation, video memory
+/// exhausted). egui-wgpu can't go on with it and panics on its next frame; `main` then starts
+/// the app anew instead of ending it.
+static DISPLAY_LOST: AtomicBool = AtomicBool::new(false);
+
+pub fn set_display_lost() {
+    DISPLAY_LOST.store(true, Ordering::Relaxed);
+}
+
+pub fn display_lost() -> bool {
+    DISPLAY_LOST.load(Ordering::Relaxed)
+}
+
 /// Logs every panic (with thread, location and backtrace) and remembers it for [`take_panics`];
 /// the default output on stderr stays.
 pub fn install_hook() {

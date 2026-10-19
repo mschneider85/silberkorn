@@ -108,6 +108,12 @@ impl Pool {
     }
 }
 
+thread_local! {
+    /// A buffer couldn't be created for lack of video memory in this thread's current
+    /// [`Gpu::checked`] (error scopes are per thread too).
+    static OUT_OF_MEMORY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Longest wait for results; a healthy card needs a fraction of it even for large exports.
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
@@ -121,7 +127,7 @@ fn device() -> Option<&'static Gpu> {
         if env_setting().as_deref() == Some("0") {
             return None;
         }
-        match Gpu::new(env_setting().as_deref() == Some("software")) {
+        match Gpu::new(env_setting().as_deref() == Some("software"), None) {
             Ok(g) => {
                 log::info!("Grafikkarte für die Entwicklung: {}", g.name);
                 Some(g)
@@ -168,8 +174,17 @@ pub fn problem() -> Option<String> {
     GPU.get().and_then(|g| g.as_ref()).and_then(Gpu::problem)
 }
 
-/// Ranks adapters: real graphics cards first, native APIs before OpenGL.
-fn rank(info: &wgpu::AdapterInfo) -> u32 {
+/// Ranks adapters: real graphics cards first, native APIs before OpenGL. Also used for the
+/// adapter the window is drawn with.
+///
+/// Intel's Vulkan driver on Windows crashes on device creation (UHD Graphics, driver
+/// 31.0.101.2137, access violation in igvk64.dll), so Intel takes DX12 there. Elsewhere Vulkan
+/// stays first among equals (on NVIDIA both compute about equally fast).
+pub fn rank(info: &wgpu::AdapterInfo) -> u32 {
+    rank_on(info, cfg!(windows))
+}
+
+fn rank_on(info: &wgpu::AdapterInfo, windows: bool) -> u32 {
     let kind = match info.device_type {
         wgpu::DeviceType::DiscreteGpu => 40,
         wgpu::DeviceType::IntegratedGpu => 30,
@@ -177,7 +192,9 @@ fn rank(info: &wgpu::AdapterInfo) -> u32 {
         wgpu::DeviceType::Other => 10,
         wgpu::DeviceType::Cpu => 0,
     };
+    let intel_on_windows = windows && info.vendor == 0x8086;
     let api = match info.backend {
+        wgpu::Backend::Vulkan if intel_on_windows => 1,
         wgpu::Backend::Vulkan | wgpu::Backend::Dx12 | wgpu::Backend::Metal => 2,
         _ => 0,
     };
@@ -185,8 +202,20 @@ fn rank(info: &wgpu::AdapterInfo) -> u32 {
 }
 
 impl Gpu {
-    fn new(allow_software: bool) -> Result<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    fn new(allow_software: bool, budget_percent: Option<u8>) -> Result<Self> {
+        // When video memory doesn't even allow the device, Vulkan's wgpu-hal panics while
+        // dropping the half-made one ("buckets are not empty") instead of returning an error.
+        std::panic::catch_unwind(|| Self::create(allow_software, budget_percent))
+            .unwrap_or_else(|_| Err(anyhow!("Grafikkarte ließ sich nicht einrichten (zu wenig Grafikspeicher?)")))
+    }
+
+    fn create(allow_software: bool, budget_percent: Option<u8>) -> Result<Self> {
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle_from_env();
+        // Only for tests: wgpu's budget applies per memory heap, and on NVIDIA (Vulkan) the small
+        // heap the CPU writes uploads into is soon beyond it. A refused `queue.write_buffer`
+        // then takes the whole device as lost.
+        desc.memory_budget_thresholds.for_resource_creation = budget_percent;
+        let instance = wgpu::Instance::new(desc);
         let mut adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
         adapters.retain(|a| {
             let info = a.get_info();
@@ -227,8 +256,12 @@ impl Gpu {
         })
     }
 
-    /// Takes the device out of use for the rest of the session.
+    /// Takes the device out of use for the rest of the session. Not when video memory ran out
+    /// (the incomplete result comes from that): [`Gpu::checked`] only redoes that rendering.
     pub(crate) fn fail(&self, reason: impl Into<String>) {
+        if OUT_OF_MEMORY.get() {
+            return;
+        }
         let reason = reason.into();
         let mut broken = self.broken.lock().unwrap_or_else(|e| e.into_inner());
         if broken.is_none() {
@@ -248,7 +281,17 @@ impl Gpu {
         if env_setting().as_deref() == Some("0") {
             return None;
         }
-        Self::new(true).ok()
+        Self::new(true, None).ok()
+    }
+
+    /// Like [`Self::new_for_test`] with almost no video memory for new buffers (where the
+    /// driver reports a budget).
+    #[cfg(test)]
+    pub(crate) fn new_starved_for_test() -> Option<Self> {
+        if env_setting().as_deref() == Some("0") {
+            return None;
+        }
+        Self::new(true, Some(1)).ok()
     }
 
     /// Compiles kernels ahead of their first use.
@@ -309,12 +352,22 @@ impl Gpu {
 
     /// A storage buffer of `bytes` (at least 16).
     pub(crate) fn buffer(&self, bytes: u64) -> wgpu::Buffer {
-        self.device.create_buffer(&wgpu::BufferDescriptor {
+        self.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: bytes.max(16).next_multiple_of(4),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         })
+    }
+
+    /// Creates a buffer and notes when video memory ran out (the buffer is invalid then).
+    fn create_buffer(&self, desc: &wgpu::BufferDescriptor) -> wgpu::Buffer {
+        let scope = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let b = self.device.create_buffer(desc);
+        if pollster::block_on(scope.pop()).is_some() {
+            OUT_OF_MEMORY.set(true);
+        }
+        b
     }
 
     /// A storage buffer holding `data` (padded to at least 16 bytes).
@@ -360,7 +413,7 @@ impl Gpu {
             return Ok(std::array::from_fn(|_| Vec::new()));
         }
         let staging = self.pool().take(total, true).unwrap_or_else(|| {
-            self.device.create_buffer(&wgpu::BufferDescriptor {
+            self.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("readback"),
                 size: total,
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
@@ -396,11 +449,18 @@ impl Gpu {
     /// work of `f` must not overlap with other threads on OpenGL, so it runs exclusively there.
     pub(crate) fn checked<R>(&self, f: impl FnOnce() -> Result<R>) -> Result<R> {
         let _serial = self.serial.as_ref().map(|m| m.lock().unwrap_or_else(|e| e.into_inner()));
+        OUT_OF_MEMORY.set(false);
         let oom = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let r = f();
         let v = pollster::block_on(validation.pop());
         let o = pollster::block_on(oom.pop());
+        if OUT_OF_MEMORY.replace(false) {
+            // Free what the pool holds for the next attempt; this rendering runs on the CPU.
+            *self.pool() = Pool::default();
+            log::warn!("Grafikspeicher voll, dieses Bild wird auf dem Prozessor berechnet");
+            return Err(anyhow!("Grafikkarte: Grafikspeicher voll"));
+        }
         if let Some(e) = v.or(o) {
             return Err(anyhow!("Grafikkarte: {e}"));
         }
@@ -469,5 +529,43 @@ impl Encoder<'_> {
 
     pub(crate) fn submit(self) {
         self.gpu.queue.submit([self.enc.finish()]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::rank_on;
+
+    fn adapter(vendor: u32, device_type: wgpu::DeviceType, backend: wgpu::Backend) -> wgpu::AdapterInfo {
+        wgpu::AdapterInfo {
+            name: String::new(),
+            vendor,
+            device: 0,
+            device_type,
+            device_pci_bus_id: String::new(),
+            driver: String::new(),
+            driver_info: String::new(),
+            backend,
+            subgroup_min_size: 0,
+            subgroup_max_size: 0,
+            transient_saves_memory: None,
+            limit_bucket: None,
+        }
+    }
+
+    /// Intel under Windows takes DX12 (its Vulkan driver crashes); others keep Vulkan first.
+    #[test]
+    fn intel_avoids_vulkan_on_windows() {
+        use wgpu::{Backend::*, DeviceType::*};
+        let intel_vk = adapter(0x8086, IntegratedGpu, Vulkan);
+        let intel_dx = adapter(0x8086, IntegratedGpu, Dx12);
+        let intel_gl = adapter(0x8086, IntegratedGpu, Gl);
+        assert!(rank_on(&intel_dx, true) > rank_on(&intel_vk, true));
+        assert!(rank_on(&intel_vk, true) > rank_on(&intel_gl, true));
+        assert_eq!(rank_on(&intel_dx, false), rank_on(&intel_vk, false));
+        let nvidia_vk = adapter(0x10DE, DiscreteGpu, Vulkan);
+        let nvidia_dx = adapter(0x10DE, DiscreteGpu, Dx12);
+        assert_eq!(rank_on(&nvidia_dx, true), rank_on(&nvidia_vk, true));
+        assert!(rank_on(&nvidia_vk, true) > rank_on(&intel_dx, true));
     }
 }
