@@ -9,6 +9,7 @@ use sk_core::pipeline::{Processor, StageCache};
 use sk_core::raw;
 
 fn main() -> anyhow::Result<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let path = std::env::args().nth(1).expect("usage: bench <raw>");
     let (meta, preview) = raw::load_preview(std::path::Path::new(&path), 2048)?;
     let (w, h) = (preview.width, preview.height);
@@ -51,6 +52,10 @@ fn main() -> anyhow::Result<()> {
             let _ = p.render(&preview, None, Some(&cache));
             println!("{name} (Grafikkarte): {cold:?} (mit Cache: {:?})", t.elapsed());
         }
+    }
+    // A graphics card that failed falls back to the CPU silently: its times would be CPU times.
+    if let Some(problem) = sk_core::gpu::problem() {
+        println!("Grafikkarte ausgestiegen, Zeiten sind vom Prozessor: {problem}");
     }
     Ok(())
 }

@@ -352,15 +352,11 @@ fn hue_preserving(tp: Tone, rgb: vec3<f32>) -> vec3<f32> {
     let h = tone_curve(tp, rgb[hi]);
     let l = tone_curve(tp, rgb[lo]);
     let span = rgb[hi] - rgb[lo];
-    var out = vec3<f32>(0.0);
-    out[hi] = h;
-    out[lo] = l;
-    if span > 1e-9 {
-        out[mid] = l + (h - l) * (rgb[mid] - rgb[lo]) / span;
-    } else {
-        out[mid] = h;
-    }
-    return out;
+    let m = select(h, l + (h - l) * (rgb[mid] - rgb[lo]) / span, span > 1e-9);
+    // Put together per component: DX12's FXC rejects writes like `out[hi] = h` ("array
+    // reference cannot be used as an l-value"), and the pipeline then falls back to the CPU.
+    let k = vec3<u32>(0u, 1u, 2u);
+    return select(select(vec3<f32>(m), vec3<f32>(l), k == vec3<u32>(lo)), vec3<f32>(h), k == vec3<u32>(hi));
 }
 
 // ------------------------------------------------------------------ color
@@ -384,21 +380,27 @@ fn oklab_to_linear(lab: vec3<f32>) -> vec3<f32> {
 
 // Piecewise-linear weights over the circular hue bands (band_weights).
 fn band_weights(h: f32) -> array<f32, 8> {
-    var w = array<f32, 8>(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    // Outside all bands: everything on band 0 (lo = 0, t = 0). The weights are built without
+    // writing into the array by a variable index, which DX12's FXC can't compile here.
+    var lo = 0u;
+    var t = 0.0;
     for (var i = 0u; i < 8u; i++) {
         let c0 = P.band_center[i];
         let c1 = P.band_center[(i + 1u) % 8u];
         let span = rem_euclid(c1 - c0, 360.0);
         let d = rem_euclid(h - c0, 360.0);
         if d < span {
-            let t = d / span;
-            w[i] = 1.0 - t;
-            w[(i + 1u) % 8u] = t;
-            return w;
+            lo = i;
+            t = d / span;
+            break;
         }
     }
-    w[0] = 1.0;
-    return w;
+    let hi = (lo + 1u) % 8u;
+    let a = vec4<u32>(0u, 1u, 2u, 3u);
+    let b = a + 4u;
+    let w0 = select(vec4<f32>(0.0), vec4<f32>(1.0 - t), a == vec4<u32>(lo)) + select(vec4<f32>(0.0), vec4<f32>(t), a == vec4<u32>(hi));
+    let w1 = select(vec4<f32>(0.0), vec4<f32>(1.0 - t), b == vec4<u32>(lo)) + select(vec4<f32>(0.0), vec4<f32>(t), b == vec4<u32>(hi));
+    return array<f32, 8>(w0.x, w0.y, w0.z, w0.w, w1.x, w1.y, w1.z, w1.w);
 }
 
 fn skin_weight(h: f32, c: f32) -> f32 {
@@ -523,6 +525,14 @@ fn color(rgb: vec3<f32>, tp: Tone) -> vec3<f32> {
 
 // ------------------------------------------------------------------ local planes
 
+// Plane k of the dark channel's coefficients, bilinear between (x0, y0) and (x1, y1).
+fn dark_plane(k: u32, x0: u32, x1: u32, y0: u32, y1: u32, tx: f32, ty: f32) -> f32 {
+    let o = P.off_dark + k * P.dark_w * P.dark_h;
+    let top = local[o + y0 * P.dark_w + x0] * (1.0 - tx) + local[o + y0 * P.dark_w + x1] * tx;
+    let bot = local[o + y1 * P.dark_w + x0] * (1.0 - tx) + local[o + y1 * P.dark_w + x1] * tx;
+    return top * (1.0 - ty) + bot * ty;
+}
+
 // Haze density at (x, y) of the dark channel's domain for a pixel of color p: the guided
 // filter's coefficients a and b applied to the pixel's guide, limited to the third plane.
 fn dark_at(x: u32, y: u32, p: vec3<f32>) -> f32 {
@@ -535,14 +545,7 @@ fn dark_at(x: u32, y: u32, p: vec3<f32>) -> f32 {
     let y1 = min(y0 + 1u, P.dark_h - 1u);
     let tx = fx - f32(x0);
     let ty = fy - f32(y0);
-    let n = P.dark_w * P.dark_h;
-    var ab = vec3<f32>(0.0);
-    for (var k = 0u; k < 3u; k++) {
-        let o = P.off_dark + k * n;
-        let top = local[o + y0 * P.dark_w + x0] * (1.0 - tx) + local[o + y0 * P.dark_w + x1] * tx;
-        let bot = local[o + y1 * P.dark_w + x0] * (1.0 - tx) + local[o + y1 * P.dark_w + x1] * tx;
-        ab[k] = top * (1.0 - ty) + bot * ty;
-    }
+    let ab = vec3<f32>(dark_plane(0u, x0, x1, y0, y1, tx, ty), dark_plane(1u, x0, x1, y0, y1, tx, ty), dark_plane(2u, x0, x1, y0, y1, tx, ty));
     let al = vec3<f32>(P.airlight[0], P.airlight[1], P.airlight[2]);
     let guide = max(dot(p, LUMA), 0.0) / max(dot(al, LUMA), 1e-3);
     return clamp(ab.x * min(guide, ab.z) + ab.y, 0.0, 1.0);
@@ -652,12 +655,56 @@ fn add_layer(tp: ptr<function, Tone>, l: Layer, w: f32) {
     (*tp).hdr.z += l.whites / 100.0 * w;
     (*tp).hdr.w += l.blacks / 100.0 * w;
     (*tp).vibrance += l.vibrance * w;
-    for (var i = 0u; i < 24u; i++) {
-        (*tp).bands[i] += l.bands[i] * w;
-    }
-    for (var i = 0u; i < 12u; i++) {
-        (*tp).balance[i] += l.balance[i] * w;
-    }
+    (*tp).bands = add_bands((*tp).bands, l.bands, w);
+    (*tp).balance = add_balance((*tp).balance, l.balance, w);
+}
+
+// a + b * w for the band and balance arrays, written out: a loop writing `a[i]` inside the loop
+// over the layers is more than DX12's FXC compiles ("unable to unroll loop").
+fn add_bands(a: array<f32, 24>, b: array<f32, 24>, w: f32) -> array<f32, 24> {
+    return array<f32, 24>(
+        a[0] + b[0] * w,
+        a[1] + b[1] * w,
+        a[2] + b[2] * w,
+        a[3] + b[3] * w,
+        a[4] + b[4] * w,
+        a[5] + b[5] * w,
+        a[6] + b[6] * w,
+        a[7] + b[7] * w,
+        a[8] + b[8] * w,
+        a[9] + b[9] * w,
+        a[10] + b[10] * w,
+        a[11] + b[11] * w,
+        a[12] + b[12] * w,
+        a[13] + b[13] * w,
+        a[14] + b[14] * w,
+        a[15] + b[15] * w,
+        a[16] + b[16] * w,
+        a[17] + b[17] * w,
+        a[18] + b[18] * w,
+        a[19] + b[19] * w,
+        a[20] + b[20] * w,
+        a[21] + b[21] * w,
+        a[22] + b[22] * w,
+        a[23] + b[23] * w,
+    );
+}
+
+fn add_balance(a: array<f32, 12>, b: array<f32, 12>, w: f32) -> array<f32, 12> {
+    return array<f32, 12>(
+        a[0] + b[0] * w,
+        a[1] + b[1] * w,
+        a[2] + b[2] * w,
+        a[3] + b[3] * w,
+        a[4] + b[4] * w,
+        a[5] + b[5] * w,
+        a[6] + b[6] * w,
+        a[7] + b[7] * w,
+        a[8] + b[8] * w,
+        a[9] + b[9] * w,
+        a[10] + b[10] * w,
+        a[11] + b[11] * w,
+    );
 }
 
 @compute @workgroup_size(16, 16)
