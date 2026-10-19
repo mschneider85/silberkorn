@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 
 use rayon::prelude::*;
 
-use crate::color::{Mat3, Oklab, OutputSpace, fast_exp, fast_exp2, fast_ln, fast_log2, fast_powf, luminance, mat_vec, srgb_decode, srgb_encode};
+use crate::color::{Mat3, Oklab, OutputSpace, luminance, mat_vec, srgb_decode, srgb_encode};
 use crate::detail::{Plane, box_blur, fast_guided_filter, gaussian_blur, guided_filter, median_hv, value_noise};
 use crate::geometry::{GeoMap, Region};
 use crate::image::LinearImage;
@@ -256,11 +256,11 @@ impl DarkChannel {
             // haze's own brightness stays, or the sky would burn out).
             let ya = dot(al, LUMA).max(1e-3);
             // t^-0.3 and t^0.4 from one logarithm.
-            let ln_t = fast_ln(t);
-            let lift = 1.0 + (fast_exp(-0.3 * ln_t) - 1.0) * (1.0 - dot(j, LUMA) / ya).clamp(0.0, 1.0);
+            let ln_t = t.ln();
+            let lift = 1.0 + ((-0.3 * ln_t).exp() - 1.0) * (1.0 - dot(j, LUMA) / ya).clamp(0.0, 1.0);
             // Colors gain less than contrast (1/t^0.6 instead of 1/t), or they turn garish.
             let y = dot(j, LUMA);
-            let chroma = fast_exp(0.4 * ln_t);
+            let chroma = (0.4 * ln_t).exp();
             // Values below black run out softly instead of clipping.
             let toe = 0.05 * (1.0 - t) * ya;
             j.map(|v| haze_toe((y + (v - y) * chroma) * lift, toe))
@@ -279,7 +279,7 @@ fn haze_toe(v: f32, k: f32) -> f32 {
     } else if k < 1e-6 {
         v.max(0.0)
     } else {
-        k * fast_exp(v / k - 1.0)
+        k * (v / k - 1.0).exp()
     }
 }
 
@@ -598,17 +598,17 @@ impl Processor {
     /// Scene-linear working RGB -> display-linear working RGB.
     #[inline]
     fn tone(&self, rgb: [f32; 3], local_ev: Option<f32>, detail_ev: [f32; 2], tp: &ToneParams) -> [f32; 3] {
-        let gain = fast_exp2(tp.exposure_ev + detail_ev[0] * tp.clarity / 100.0 * 0.6 + detail_ev[1] * tp.structure / 100.0 * 0.8);
+        let gain = (tp.exposure_ev + detail_ev[0] * tp.clarity / 100.0 * 0.6 + detail_ev[1] * tp.structure / 100.0 * 0.8).exp2();
         let mut rgb = rgb.map(|v| v * gain);
         if tp.temperature != 0.0 || tp.tint != 0.0 {
             let t = tp.temperature / 100.0;
-            rgb[0] *= fast_exp2(t * 0.35);
-            rgb[2] *= fast_exp2(-t * 0.35);
-            rgb[1] *= fast_exp2(-tp.tint / 100.0 * 0.25);
+            rgb[0] *= (t * 0.35).exp2();
+            rgb[2] *= (-t * 0.35).exp2();
+            rgb[1] *= (-tp.tint / 100.0 * 0.25).exp2();
         }
         let l = dot(rgb, LUMA);
         if l > 1e-7 && tp.hdr.iter().any(|v| *v != 0.0) {
-            let ev_px = fast_log2(l / MID_GREY);
+            let ev_px = (l / MID_GREY).log2();
             // Weights come mostly from the smoothed neighborhood (local tone mapping).
             let ev = match local_ev {
                 Some(e) => (e + tp.exposure_ev) * 0.75 + ev_px * 0.25,
@@ -618,7 +618,7 @@ impl Processor {
                 Some([by_ev, by_px]) if tp.hdr == self.base.hdr => ev_lookup(by_ev, ev) + ev_lookup(by_px, ev_px),
                 _ => hdr_gain_ev(tp.hdr, ev, ev_px),
             };
-            let g = fast_exp2(gain_ev);
+            let g = gain_ev.exp2();
             rgb.iter_mut().for_each(|v| *v *= g);
         }
         let lut = self.tone_luts.curve.as_ref().filter(|_| tp.contrast == self.base.contrast);
@@ -997,7 +997,7 @@ impl Processor {
                 c.local.lock().unwrap().as_ref().filter(|(k, _)| *k == key).map(|(_, planes)| planes.clone())
             });
             let compute = || {
-                let log_l = Plane::new(w, h, working.data.par_iter().map(|p| fast_log2(dot(*p, LUMA).max(1e-6)) - MID_GREY.log2()).collect());
+                let log_l = Plane::new(w, h, working.data.par_iter().map(|p| dot(*p, LUMA).max(1e-6).log2() - MID_GREY.log2()).collect());
                 let sub = guided_sub;
                 LocalPlanes {
                     hdr_base: hdr_active.then(|| match median_radius(r_hdr) {
@@ -1105,8 +1105,8 @@ impl Processor {
             let mut e = if any {
                 let mut e = self.encode(self.color(self.tone(haze(p, tp.dehaze), ev, det, &tp), &tp));
                 if tp.brightness != 0.0 {
-                    let g = fast_exp2(-tp.brightness / 100.0 * 0.6);
-                    e = e.map(|v| fast_powf(v.max(0.0), g));
+                    let g = 2f32.powf(-tp.brightness / 100.0 * 0.6);
+                    e = e.map(|v| v.max(0.0).powf(g));
                 }
                 e
             } else {
@@ -1513,7 +1513,7 @@ fn histogram_rgba(rgba: &[u8]) -> Histogram {
 
 #[inline]
 fn sigmoid(x: f32) -> f32 {
-    1.0 / (1.0 + fast_exp(-x))
+    1.0 / (1.0 + (-x).exp())
 }
 
 /// Highlights / shadows / whites / blacks as an exposure change in EV. `ev` is the
@@ -1546,7 +1546,7 @@ fn contrast_and_base_curve_unclipped(kind: BaseCurve, contrast: f32, v: f32) -> 
 #[inline]
 fn contrast_warp(contrast: f32, v: f32) -> f32 {
     let e = contrast_exponent(contrast);
-    if e != 1.0 { MID_GREY * fast_powf(v.max(0.0) / MID_GREY, e) } else { v }
+    if e != 1.0 { MID_GREY * (v.max(0.0) / MID_GREY).powf(e) } else { v }
 }
 
 /// Exponent of the contrast warp. Background and layer contrast add up, so the sum can

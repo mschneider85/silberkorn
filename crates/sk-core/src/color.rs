@@ -54,7 +54,7 @@ impl Trc {
     pub fn encode(self, v: f32) -> f32 {
         match self {
             Trc::Srgb => srgb_encode(v),
-            Trc::Gamma(g) => fast_powf(v.max(0.0), 1.0 / g),
+            Trc::Gamma(g) => v.max(0.0).powf(1.0 / g),
         }
     }
 
@@ -62,7 +62,7 @@ impl Trc {
     pub fn decode(self, v: f32) -> f32 {
         match self {
             Trc::Srgb => srgb_decode(v),
-            Trc::Gamma(g) => fast_powf(v.max(0.0), g),
+            Trc::Gamma(g) => v.max(0.0).powf(g),
         }
     }
 }
@@ -373,12 +373,12 @@ pub fn luminance(rgb: [f32; 3]) -> f32 {
 
 #[inline]
 pub fn srgb_encode(v: f32) -> f32 {
-    if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * fast_powf(v, 1.0 / 2.4) - 0.055 }
+    if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 }
 }
 
 #[inline]
 pub fn srgb_decode(v: f32) -> f32 {
-    if v <= 0.040_45 { v / 12.92 } else { fast_powf((v + 0.055) / 1.055, 2.4) }
+    if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
 }
 
 // ------------------------------------------------------------------ Oklab
@@ -448,133 +448,6 @@ pub fn fast_cbrt(x: f32) -> f32 {
     y.copysign(x)
 }
 
-// The functions below give `f32` results as precise as the system's, and fast on every system
-// (msvcrt in the Windows build is slow: `powf` 84 ns there against 9 ns with glibc). They work
-// in f64 with tables made at compile time and short series, as glibc does, and give the same
-// result everywhere.
-
-/// 2^x.
-#[inline]
-pub fn fast_exp2(x: f32) -> f32 {
-    exp2_f64(x as f64) as f32
-}
-
-/// e^x.
-#[inline]
-pub fn fast_exp(x: f32) -> f32 {
-    exp2_f64(x as f64 * std::f64::consts::LOG2_E) as f32
-}
-
-/// log2(x) (NaN below 0, -∞ at 0).
-#[inline]
-pub fn fast_log2(x: f32) -> f32 {
-    log2_f64(x as f64) as f32
-}
-
-/// ln(x) (NaN below 0, -∞ at 0).
-#[inline]
-pub fn fast_ln(x: f32) -> f32 {
-    (log2_f64(x as f64) * std::f64::consts::LN_2) as f32
-}
-
-/// x^y for x ≥ 0, as `powf` (NaN for negative x).
-#[inline]
-pub fn fast_powf(x: f32, y: f32) -> f32 {
-    if x == 0.0 {
-        return if y > 0.0 { 0.0 } else if y == 0.0 { 1.0 } else { f32::INFINITY };
-    }
-    exp2_f64(y as f64 * log2_f64(x as f64)) as f32
-}
-
-/// Steps of the tables: 2^(j/64) and the mantissa in 64 parts.
-const TABLE_BITS: u32 = 6;
-const TABLE: usize = 1 << TABLE_BITS;
-
-/// 2^(j/64), by the Taylor series of e^(t ln 2) (compile time only).
-static EXP2_TABLE: [f64; TABLE] = {
-    let mut table = [0.0; TABLE];
-    let mut j = 0;
-    while j < TABLE {
-        let t = j as f64 / TABLE as f64 * std::f64::consts::LN_2;
-        let (mut term, mut sum, mut n) = (1.0, 1.0, 1);
-        while n < 30 {
-            term = term * t / n as f64;
-            sum += term;
-            n += 1;
-        }
-        table[j] = sum;
-        j += 1;
-    }
-    table
-};
-
-/// For each 64th of the mantissa range 1..2: 1/c and log2(c) of a point c in it (1 for the
-/// first, so that log2(1) is exactly 0), by the series of atanh (compile time only).
-static LOG2_TABLE: [(f64, f64); TABLE] = {
-    let mut table = [(0.0, 0.0); TABLE];
-    let mut i = 0;
-    while i < TABLE {
-        let c = if i == 0 { 1.0 } else { 1.0 + (i as f64 + 0.5) / TABLE as f64 };
-        let s = (c - 1.0) / (c + 1.0);
-        let (mut term, mut sum, mut k) = (s, 0.0, 1);
-        while k < 61 {
-            sum += term / k as f64;
-            term *= s * s;
-            k += 2;
-        }
-        table[i] = (1.0 / c, 2.0 * sum * std::f64::consts::LOG2_E);
-        i += 1;
-    }
-    table
-};
-
-/// 2^x for the range of `f32` results: x = k/64 + r with |r| ≤ 1/128; 2^(k/64) from the table
-/// and the exponent bits, 2^r by its series (error below 1e-10, far below `f32`'s).
-#[inline]
-fn exp2_f64(x: f64) -> f64 {
-    if x.is_nan() {
-        return x;
-    }
-    if x > 200.0 {
-        return f64::INFINITY;
-    }
-    if x < -200.0 {
-        return 0.0;
-    }
-    // Rounded to the nearest integer by the addition (1.5 · 2^52 has no fraction bits left).
-    const ROUND: f64 = 6_755_399_441_055_744.0;
-    let kd = x * TABLE as f64;
-    let k = (kd + ROUND) - ROUND;
-    let t = (kd - k) / TABLE as f64 * std::f64::consts::LN_2;
-    let p = 1.0 + t * (1.0 + t * (1.0 / 2.0 + t * (1.0 / 6.0)));
-    let k = k as i64;
-    let scale = EXP2_TABLE[(k & (TABLE as i64 - 1)) as usize].to_bits().wrapping_add(((k >> TABLE_BITS) as u64) << 52);
-    f64::from_bits(scale) * p
-}
-
-/// log2(x): the exponent from the bits, the mantissa m as c · (1 + r) with c from the table
-/// (|r| < 1/64), log2(1 + r) by its series (error below 1e-9, far below `f32`'s).
-#[inline]
-fn log2_f64(x: f64) -> f64 {
-    if x.is_nan() || x < 0.0 {
-        return f64::NAN;
-    }
-    if x == 0.0 {
-        return f64::NEG_INFINITY;
-    }
-    if x.is_infinite() {
-        return x;
-    }
-    // Every f32 value, subnormal ones too, is a normal f64.
-    let bits = x.to_bits();
-    let e = ((bits >> 52) & 0x7ff) as i64 - 1023;
-    let m = f64::from_bits((bits & 0x000f_ffff_ffff_ffff) | 0x3ff0_0000_0000_0000);
-    let (inv_c, log2_c) = LOG2_TABLE[((bits >> (52 - TABLE_BITS)) & (TABLE as u64 - 1)) as usize];
-    let r = m * inv_c - 1.0;
-    let ln_1p = r * (1.0 - r * (1.0 / 2.0 - r * (1.0 / 3.0 - r * (1.0 / 4.0))));
-    e as f64 + log2_c + ln_1p * std::f64::consts::LOG2_E
-}
-
 #[cfg(test)]
 mod tests {
 
@@ -636,35 +509,6 @@ mod tests {
         }
         assert_eq!(fast_cbrt(0.0), 0.0);
         assert!((fast_cbrt(27.0) - 3.0).abs() < 1e-6);
-    }
-
-    /// The fast functions are as precise as `f32`'s (within two units in the last place),
-    /// across the range the pipeline uses and at its edges.
-    #[test]
-    fn fast_exp_log_pow_are_accurate() {
-        let close = |fast: f32, exact: f32, what: &str| {
-            let ok = (fast.is_nan() && exact.is_nan()) || fast == exact || (fast - exact).abs() <= exact.abs() * 2.5e-7 || (fast - exact).abs() < 1e-37;
-            assert!(ok, "{what}: {fast} vs {exact}");
-        };
-        for i in -3000..=3000 {
-            let x = i as f32 / 100.0;
-            close(fast_exp2(x), x.exp2(), &format!("exp2({x})"));
-            close(fast_exp(x / 2.0), (x / 2.0).exp(), &format!("exp({})", x / 2.0));
-            let v = (i as f32 / 120.0).exp2();
-            close(fast_log2(v), v.log2(), &format!("log2({v})"));
-            close(fast_ln(v), v.ln(), &format!("ln({v})"));
-            for y in [1.0 / 2.4, 2.4, 0.37, 1.8, -0.6] {
-                close(fast_powf(v, y), v.powf(y), &format!("{v}^{y}"));
-            }
-        }
-        assert_eq!(fast_exp2(200.0), f32::INFINITY);
-        assert_eq!(fast_exp2(-200.0), 0.0);
-        assert_eq!(fast_log2(0.0), f32::NEG_INFINITY);
-        assert!(fast_log2(-1.0).is_nan() && fast_exp2(f32::NAN).is_nan());
-        assert_eq!(fast_log2(1.0), 0.0);
-        assert_eq!(fast_powf(0.0, 2.4), 0.0);
-        assert_eq!(fast_powf(1.0, 2.4), 1.0);
-        close(fast_log2(f32::MIN_POSITIVE / 8.0), (f32::MIN_POSITIVE / 8.0).log2(), "subnormal");
     }
 
     use super::*;
