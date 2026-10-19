@@ -97,6 +97,9 @@ fn main() -> anyhow::Result<()> {
     let opts = AutoOptions::default();
     let mut models = sk_ai::auto::AutoModels::default();
     let guide = guide_image(&meta, &Adjustments::default(), &preview, &opts);
+    // As the app does at start (in the background).
+    let (_, t) = timed(|| models.preload());
+    row("Automatisch: Modelle vorladen (beim Start)", t, None);
     let (focus, t1) = timed(|| models.focus(&guide));
     let (_, t2) = timed(|| models.focus(&guide));
     row("Automatisch: Gesichter und Motiv finden", t1, Some(t2));

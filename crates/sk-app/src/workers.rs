@@ -312,7 +312,8 @@ pub struct Workers {
     focus_tx: Sender<(PathBuf, Arc<ColorImage>, Option<u64>)>,
     thumb_focus_tx: Sender<(PathBuf, Option<PathBuf>)>,
     look_tx: Sender<crate::look_worker::LookRequest>,
-    auto_tx: Sender<AutoJob>,
+    /// `None`: load the models ahead of the first job.
+    auto_tx: Sender<Option<AutoJob>>,
     inpaint_tx: Sender<InpaintJob>,
     style_tx: Sender<StyleThumbJob>,
     /// Run, folder, with subfolders.
@@ -1055,13 +1056,17 @@ impl Workers {
 
         let look_tx = crate::look_worker::spawn(ev_tx.clone(), ctx.clone(), activity.clone());
 
-        let (auto_tx, auto_rx) = channel::<AutoJob>();
+        let (auto_tx, auto_rx) = channel::<Option<AutoJob>>();
         {
             let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
             crate::guard::spawn("Automatisch", move || {
-                // Loaded on first use, kept for further images.
+                // Loaded ahead (see `preload_auto`) or on first use, kept for further images.
                 let mut models = sk_ai::auto::AutoModels::default();
                 while let Ok(job) = auto_rx.recv() {
+                    let Some(job) = job else {
+                        let _ = crate::guard::catch(|| models.preload());
+                        continue;
+                    };
                     for item in job.items {
                         if job.cancel.load(Ordering::Relaxed) {
                             break;
@@ -1249,7 +1254,13 @@ impl Workers {
     }
 
     pub fn auto_adjust(&self, job: AutoJob) {
-        let _ = self.auto_tx.send(job);
+        let _ = self.auto_tx.send(Some(job));
+    }
+
+    /// Loads the models of the automatic adjustment in the background, so that the first one
+    /// doesn't wait for them.
+    pub fn preload_auto(&self) {
+        let _ = self.auto_tx.send(None);
     }
 
     pub fn load(&self, generation: u64, path: PathBuf) {

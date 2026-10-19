@@ -1,6 +1,7 @@
 //! Automatic adjustments: white balance, exposure, matching images to a reference, and the
 //! one-click auto adjustment that optimizes several settings together.
 
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::detail::Plane;
@@ -653,18 +654,29 @@ fn optimize_tone(meta: &RawMeta, a: &mut Adjustments, src: &LinearImage, focus: 
     let mut evals = 0;
     while evals < 160 {
         let mut improved = false;
-        for (k, step) in knobs.iter().zip(&steps) {
-            for dir in [1.0, -1.0] {
-                let mut t = a.clone();
-                k.set(&mut t, k.get(a) + dir * step);
-                if k.get(&t) == k.get(a) {
-                    continue;
-                }
-                let s = score(&t);
+        // Coordinate descent: each knob a step up, else down, an improvement is taken at once.
+        // A rendering this small keeps few cores busy, so the steps of all knobs still to try
+        // are rendered at the same time, against the current settings; then they are taken in
+        // that order, as one after the other would. After an improvement the remaining ones
+        // were made for the old settings and are tried again (same result as one by one).
+        let mut from = 0;
+        while from < knobs.len() {
+            let tries: Vec<(usize, Adjustments)> = (from..knobs.len())
+                .flat_map(|i| [1.0, -1.0].map(|dir| (i, dir)))
+                .filter_map(|(i, dir)| {
+                    let mut t = a.clone();
+                    knobs[i].set(&mut t, knobs[i].get(a) + dir * steps[i]);
+                    (knobs[i].get(&t) != knobs[i].get(a)).then_some((i, t))
+                })
+                .collect();
+            let scores: Vec<f32> = tries.par_iter().map(|(_, t)| score(t)).collect();
+            from = knobs.len();
+            for ((i, t), s) in tries.into_iter().zip(scores) {
                 evals += 1;
                 if s < best - 1e-4 {
                     (best, *a) = (s, t);
                     improved = true;
+                    from = i + 1;
                     break;
                 }
             }

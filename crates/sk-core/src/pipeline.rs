@@ -82,6 +82,19 @@ pub struct StageCache {
     gpu: Mutex<gpu::Cache>,
 }
 
+/// The entry for `key` in `slot`, else what `make` gives, stored there. Made without holding the
+/// lock: the work runs on rayon, where the thread waiting for the lock may be the one that has
+/// to finish it (renderings at the same time, as in `auto`, would hang). Two renderings that
+/// need the same entry at once may both make it.
+fn cached<T>(slot: &Mutex<Option<(u64, Arc<T>)>>, key: u64, make: impl FnOnce() -> Arc<T>) -> Arc<T> {
+    if let Some(v) = slot.lock().unwrap().as_ref().filter(|(k, _)| *k == key).map(|(_, v)| v.clone()) {
+        return v;
+    }
+    let v = make();
+    *slot.lock().unwrap() = Some((key, v.clone()));
+    v
+}
+
 /// What a rendering processes: see [`Processor::plan`].
 struct Plan {
     geo: GeoMap,
@@ -806,15 +819,7 @@ impl Processor {
         let mut img = match cache {
             Some(c) => {
                 let key = Self::source_key(src, region, &self.retouch_relevant());
-                let mut entry = c.resampled.lock().unwrap();
-                match &*entry {
-                    Some((k, img)) if *k == key => (**img).clone(),
-                    _ => {
-                        let img = resample();
-                        *entry = Some((key, Arc::new(img.clone())));
-                        img
-                    }
-                }
+                (*cached(&c.resampled, key, || Arc::new(resample()))).clone()
             }
             None => resample(),
         };
@@ -971,15 +976,7 @@ impl Processor {
             (Some(img), _) => Arc::new(LinearImage::new(ext.w, ext.h, crop_rows(&img.data, full.0, ext))),
             (None, Some(c)) => {
                 let key = self.stage_key(src, ext);
-                let mut entry = c.entry.lock().unwrap();
-                match &*entry {
-                    Some((k, img)) if *k == key => img.clone(),
-                    _ => {
-                        let img = Arc::new(self.early_stages(src, &geo, ext, scale, Some(c)));
-                        *entry = Some((key, img.clone()));
-                        img
-                    }
-                }
+                cached(&c.entry, key, || Arc::new(self.early_stages(src, &geo, ext, scale, Some(c))))
             }
             (None, None) => Arc::new(self.early_stages(src, &geo, ext, scale, None)),
         };
@@ -1022,17 +1019,7 @@ impl Processor {
             };
             Some(match (whole_planes, cache) {
                 (Some(planes), _) => Arc::new(planes.crop(full.0, ext)),
-                (None, Some(c)) => {
-                    let mut entry = c.local.lock().unwrap();
-                    match &*entry {
-                        Some((k, planes)) if *k == key => planes.clone(),
-                        _ => {
-                            let planes = Arc::new(compute());
-                            *entry = Some((key, planes.clone()));
-                            planes
-                        }
-                    }
-                }
+                (None, Some(c)) => cached(&c.local, key, || Arc::new(compute())),
                 (None, None) => Arc::new(compute()),
             })
         } else {
@@ -1064,15 +1051,7 @@ impl Processor {
                         "g": self.adj.geometry, "l": self.adj.lens, "r": self.adj.rotation, "ic": self.opts.ignore_crop,
                     });
                     let key = Self::source_key(src, ext, &relevant);
-                    let mut entry = c.uv.lock().unwrap();
-                    match &*entry {
-                        Some((k, uv)) if *k == key => uv.clone(),
-                        _ => {
-                            let uv = compute();
-                            *entry = Some((key, uv.clone()));
-                            uv
-                        }
-                    }
+                    cached(&c.uv, key, compute)
                 }
                 None => compute(),
             }

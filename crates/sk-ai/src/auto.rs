@@ -45,6 +45,21 @@ impl AutoModels {
         Focus { faces, subject }
     }
 
+    /// Loads the models that are downloaded and runs them once on a gray picture: the first
+    /// automatic adjustment then doesn't wait for that (on the graphics card the first run also
+    /// prepares it). Models not downloaded yet stay to be loaded on first use.
+    pub fn preload(&mut self) {
+        if !FaceDetector::available() && !crate::model_available() {
+            return;
+        }
+        let (width, height) = (320, 240);
+        let gray = Rendered { width, height, rgba: vec![128; width * height * 4], histogram: Default::default(), full_size: (width, height) };
+        self.focus(&gray);
+        // Not there at the start, maybe later (downloaded in the background).
+        self.faces.take_if(|f| f.is_none());
+        self.subject.take_if(|m| m.is_none());
+    }
+
     /// The subject model, if downloaded (loaded on first use).
     fn subject_model(&mut self) -> Option<&crate::SubjectModel> {
         self.subject

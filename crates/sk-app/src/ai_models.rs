@@ -158,6 +158,8 @@ impl App {
             }));
             self.quiet_jobs.push(label.to_string());
         }
+        // The first Strg+L would otherwise wait for loading them (seconds on the graphics card).
+        self.workers.preload_auto();
         self.status = status;
     }
 
