@@ -1903,6 +1903,40 @@ fn removed_areas_can_be_extended_and_deleted() {
     assert_ne!(removals(&f)[0].id, r[0].id);
 }
 
+/// Cancelling an export stops before the next image and says how far it got; the next export
+/// runs through.
+#[test]
+fn export_can_be_cancelled() {
+    let Some(mut f) = Fixture::new("export-cancel") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let photos = f.dir.join("photos");
+    let source = f.photo("_DSC0009.dng");
+    for i in 0..4 {
+        let target = photos.join(format!("_KOP{i:04}.dng"));
+        if std::fs::hard_link(&source, &target).is_err() {
+            std::fs::copy(&source, &target).unwrap();
+        }
+    }
+    f.open_folder(photos.canonicalize().unwrap());
+    assert_eq!(f.app.entries.len(), 6);
+    let out = f.dir.join("out");
+    f.app.recipes[0].output_dir = out.clone();
+    f.app.recipes[0].size = Some(300);
+    f.app.selection = f.app.entries.iter().map(|e| e.path.clone()).collect();
+    f.app.export_selection();
+    f.pump("Erstes Bild", |a| !a.export_log.is_empty());
+    f.app.export_cancel.as_ref().expect("abbrechbar").store(true, std::sync::atomic::Ordering::Relaxed);
+    f.pump("Abgebrochen", |a| a.export_cancel.is_none());
+    assert!(f.app.status.contains("abgebrochen"), "{}", f.app.status);
+    let written = std::fs::read_dir(&out).unwrap().count();
+    assert!(f.app.export_log.len() < 6 && written == f.app.export_log.len(), "{} geschrieben, {:?}", written, f.app.export_log);
+
+    // The next export runs through, in the order of the selection.
+    f.app.export_selection();
+    f.pump("Export", |a| a.export_progress.is_none() && a.export_cancel.is_none() && a.export_log.len() >= 6);
+    assert!(f.app.export_log.iter().all(|l| l.starts_with('✔')), "{:?}", f.app.export_log);
+}
+
 #[test]
 fn xmp_exchange() {
     let Some(mut f) = Fixture::new("xmp") else { return };
