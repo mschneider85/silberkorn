@@ -572,22 +572,6 @@ mod tests {
         let g = solve(&segments, &Geometry::default(), &LensCorrection::default(), None, 0, (preview.width, preview.height), UprightMode::Full);
         let ms = t.elapsed().as_millis();
         eprintln!("{} Kanten, {g:?}, {ms} ms ({})", segments.len(), meta.info.model);
-        if let Some(out) = std::env::var_os("SK_UPRIGHT_DEBUG") {
-            let mut img = image::RgbImage::from_fn(preview.width as u32, preview.height as u32, |x, y| {
-                let p = preview.data[y as usize * preview.width + x as usize];
-                image::Rgb([p[1]; 3].map(|v| (v.max(0.0).powf(0.45) * 255.0).min(255.0) as u8))
-            });
-            for s in &segments {
-                for i in 0..=200 {
-                    let t = i as f32 / 200.0;
-                    let (x, y) = (s.a[0] + (s.b[0] - s.a[0]) * t, s.a[1] + (s.b[1] - s.a[1]) * t);
-                    if x >= 0.0 && y >= 0.0 && (x as u32) < img.width() && (y as u32) < img.height() {
-                        img.put_pixel(x as u32, y as u32, image::Rgb([255, 0, 0]));
-                    }
-                }
-            }
-            img.save(out).unwrap();
-        }
         assert!(ms < 3000);
     }
 

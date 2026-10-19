@@ -2724,7 +2724,6 @@ impl App {
         self.sync_softproof();
         self.send_render();
         self.update_proof(ctx);
-        crate::pointer_debug::show(ctx);
         self.fade_in(ctx);
         if self.brushes_changed_at.is_some_and(|t| t.elapsed() > Duration::from_secs(1)) {
             self.brushes_changed_at = None;

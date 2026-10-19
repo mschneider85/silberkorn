@@ -31,23 +31,6 @@ pub use gpu::prepare as prepare_gpu;
 
 const MID_GREY: f32 = 0.18;
 
-/// Stage timing output, enabled with `SK_TRACE=1`.
-static TRACE: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var_os("SK_TRACE").is_some());
-
-struct Timer(std::time::Instant);
-
-impl Timer {
-    fn start() -> Self {
-        Self(std::time::Instant::now())
-    }
-
-    fn lap(&mut self, what: &str) {
-        if *TRACE {
-            eprintln!("  {what}: {:?}", self.0.elapsed());
-        }
-        self.0 = std::time::Instant::now();
-    }
-}
 const LUT_SIZE: usize = 8192;
 /// Rec.2020 luminance coefficients.
 const LUMA: [f32; 3] = [0.2627, 0.6780, 0.0593];
@@ -768,7 +751,6 @@ impl Processor {
 
     /// Geometry + white balance + noise reduction -> linear working RGB.
     fn early_stages(&self, src: &LinearImage, geo: &GeoMap, region: Region, scale: f32, cache: Option<&StageCache>) -> LinearImage {
-        let mut timer = Timer::start();
         let resample = || {
             let mut img = geo.resample(src, region);
             crate::mask::apply_removals(&mut img, src, geo, region, &self.adj.removals);
@@ -790,13 +772,9 @@ impl Processor {
             }
             None => resample(),
         };
-        timer.lap("  resample");
         img.data.par_iter_mut().for_each(|p| *p = self.to_working(*p));
-        timer.lap("  to working");
         self.defringe(&mut img, scale);
-        timer.lap("  defringe");
         self.noise_reduction(&mut img, scale);
-        timer.lap("  noise reduction");
         img
     }
 
@@ -926,7 +904,6 @@ impl Processor {
         let Plan { geo, full, region, ext, scale, r_hdr, r_clarity, r_structure, hdr_active, clarity_active, structure_active, dehaze_active, .. } = plan;
         let d = &self.adj.detail;
 
-        let mut timer = Timer::start();
         // A part of the image whose whole is in the cache (painting renders only what the brush
         // changed): cut out of it, which is much faster and gives exactly the whole rendering.
         let whole_key = cache.filter(|_| partial).map(|_| self.stage_key(src, Region { x: 0, y: 0, w: full.0, h: full.1 }));
@@ -948,7 +925,6 @@ impl Processor {
             (None, None) => Arc::new(self.early_stages(src, &geo, ext, scale, None)),
         };
         let (w, h) = (ext.w, ext.h);
-        timer.lap("early stages");
 
         // Local operators on log luminance. They are shift invariant in log space, so they
         // are computed before exposure and cached independently of tone settings.
@@ -1004,7 +980,6 @@ impl Processor {
         } else {
             None
         };
-        timer.lap("local operators");
 
         // Layer masks (rasterized once per mask change, sampled in source coordinates).
         let aspect = src.width as f32 / src.height.max(1) as f32;
@@ -1044,7 +1019,6 @@ impl Processor {
                 None => compute(),
             }
         });
-        timer.lap("masks");
 
         // Per pixel: encoded result and mask overlay weight.
         let pixel = |i: usize, p: [f32; 3]| -> ([f32; 3], f32) {
@@ -1112,7 +1086,6 @@ impl Processor {
                 }
             }),
         }
-        timer.lap("tone + color + encode");
 
         if d.sharpen_amount > 0.0 {
             let sigma = d.sharpen_radius * scale;
@@ -1163,7 +1136,6 @@ impl Processor {
             });
         }
 
-        timer.lap("sharpen / glow / vignette / grain");
         // Crop the margin away.
         if ext == region {
             return (LinearImage::new(w, h, out), full, mask_plane);
@@ -1282,7 +1254,6 @@ impl Processor {
 
     /// Encoded working RGB -> display sRGB (or soft proof), clip warning, mask overlay, histogram.
     fn display(&self, enc: LinearImage, full: (usize, usize), mask: Option<Vec<f32>>) -> Rendered {
-        let mut timer = Timer::start();
         let to_srgb = OutputSpace::Srgb.from_working();
         // Direct (not interpolated) tables: fine enough for 8-bit output and much faster.
         let (dec, enc8) = (&*DISPLAY_DECODE, &*DISPLAY_ENCODE_U8);
@@ -1321,9 +1292,7 @@ impl Processor {
                 }
             }
         });
-        timer.lap("display conversion");
         let histogram = histogram_rgba(&rgba);
-        timer.lap("histogram");
         Rendered { width: enc.width, height: enc.height, rgba, histogram, full_size: full }
     }
 }

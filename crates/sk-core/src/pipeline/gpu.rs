@@ -762,7 +762,6 @@ impl Processor {
         if n as u64 * 16 > g.max_binding {
             bail!("Ausschnitt {}x{} zu groß für die Grafikkarte", ext.w, ext.h);
         }
-        let mut timer = Timer::start();
         let stage_key = self.stage_key(src, ext);
         // A part of the image whose whole is in the cache (painting renders only what the brush
         // changed): cut out of it, which is much faster and gives exactly the whole rendering.
@@ -787,7 +786,6 @@ impl Processor {
             }
         };
 
-        timer.lap("gpu: early stages");
 
         let need_log = plan.hdr_active || plan.clarity_active || plan.structure_active || plan.dehaze_active;
         let local = if need_log {
@@ -817,7 +815,6 @@ impl Processor {
             None
         };
 
-        timer.lap("gpu: local operators");
 
         // Tables: HDR gain, contrast/base curve, output curves.
         let mut luts: Vec<f32> = Vec::new();
@@ -893,7 +890,6 @@ impl Processor {
             }
         };
 
-        timer.lap("gpu: masks");
 
         let adj = &self.adj;
         let oklab_to = crate::color::working_to_lms();
@@ -1054,7 +1050,6 @@ impl Processor {
             });
             ops.enc.run_2d(FINISH, &[&a, &out], ext.w, ext.h);
         }
-        timer.lap("gpu: recorded");
         Ok(out)
     }
 
@@ -1117,7 +1112,6 @@ impl Processor {
 
     fn render_gpu_inner(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Result<Rendered> {
         g.checked(|| {
-            let mut timer = Timer::start();
             let plan = self.plan(src, region, 1);
             let mut ops = Ops::new(g);
             let developed = self.develop_gpu(&mut ops, src, &plan, cache, None)?;
@@ -1167,7 +1161,6 @@ impl Processor {
                 rgba[3] = 0;
             }
             check_display(g, &rgba)?;
-            timer.lap("gpu: develop + display");
             let histogram = Histogram { r: h[0..256].to_vec(), g: h[256..512].to_vec(), b: h[512..768].to_vec(), luma: h[768..1024].to_vec() };
             Ok(Rendered { width: r.w, height: r.h, rgba, histogram, full_size: plan.full })
         })

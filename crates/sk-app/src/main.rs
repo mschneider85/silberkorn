@@ -37,7 +37,6 @@ mod look;
 mod look_worker;
 mod merge;
 mod palette;
-mod pointer_debug;
 mod print_preview;
 mod remove;
 mod rename;

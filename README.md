@@ -131,8 +131,7 @@ Ein Fehler in einem Hintergrund-Thread (etwa bei einer beschädigten RAW-Datei) 
 nicht: der betroffene Auftrag schlägt fehl, die Statusleiste meldet ihn, Details stehen in
 `~/.local/share/silberkorn/panic.log`.
 
-`SK_TRACE=1` gibt die Zeiten der einzelnen Stufen aus; `cargo run --release -p sk-core --example bench -- <raw>`
-misst die Pipeline auf Prozessor und Grafikkarte.
+`cargo run --release -p sk-core --example bench -- <raw>` misst die Pipeline auf Prozessor und Grafikkarte.
 
 ### Ebenen & Masken
 
@@ -386,7 +385,6 @@ bleiben unberührt. Die Bereiche rechnen auf Grafikkarte und Prozessor gleich.
   steht, was sich geändert hat und welche Referenz wie viel beigetragen hat.
 
   Ausprobieren ohne App: `cargo run --release -p sk-ai --example look -- aus.png bild.ARW referenz.jpg …`
-  (mit `SK_LOOK_DEBUG=1` werden die Teile der Ähnlichkeit ausgegeben).
 - **Schärfemaske** (K oder Ansicht → „Schärfemaske“): Scharfe Bereiche werden grün markiert, auch in der
   Vergleichsansicht und auf den Vorschaubildern, um schnell das schärfste Bild einer Serie zu finden. Gemessen wird die Energie der
   feinsten Details, die bei Unschärfe zuerst verschwinden; hineingezoomt in voller Auflösung. Die Empfindlichkeit lässt sich im Menü

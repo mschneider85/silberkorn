@@ -1,7 +1,7 @@
 //! Writes "before | after | references" side by side for "Look angleichen", with sky and subject
 //! left out or weighted as in the app:
 //! `cargo run --release -p sk-ai --example look -- <out.png> <raw> <reference raw or picture>...`
-//! (`--no-ai`: without regions; `SK_LOOK_DEBUG=1` prints the parts of the similarity).
+//! (`--no-ai`: without regions).
 
 use std::path::Path;
 

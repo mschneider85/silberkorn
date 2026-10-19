@@ -544,9 +544,6 @@ pub fn similarity(a: &LookStats, b: &LookStats) -> f32 {
     let kind = (-(d / 0.3).powi(2)).exp();
     // Nearly the same composition: a series, whatever the light and the look.
     let series = (-(d_layout / 0.14).powi(2)).exp() * (-(d_sky / 0.15).powi(2)).exp();
-    if std::env::var_os("SK_LOOK_DEBUG").is_some() {
-        eprintln!("Ähnlichkeit: Aufteilung {d_layout:.3} Form {d_shape:.3} Farben {d_hues:.3} Himmel {d_sky:.3} Buntheit {d_color:.3} -> Art {kind:.2}, Serie {series:.2}");
-    }
     kind.max(series)
 }
 

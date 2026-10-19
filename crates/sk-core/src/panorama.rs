@@ -915,16 +915,7 @@ fn estimate(guides: &[Plane], progress: &dyn Fn(f32)) -> Result<(Cameras, Vec<Pa
             PairMatches { i: p.i, j: p.j, h: p.h, pts: p.pts.iter().step_by(step).copied().collect() }
         })
         .collect();
-    if std::env::var_os("SK_TRACE").is_some() {
-        eprintln!("\npanorama: {} Paare, Brennweite {focal:.1} -> ", pairs.len());
-        for p in &pairs {
-            eprintln!("  {}-{}: {} Inlier, H={:?}", p.i, p.j, p.pts.len(), p.h);
-        }
-    }
     bundle_adjust(&mut cams, &sampled, center, refine_focal);
-    if std::env::var_os("SK_TRACE").is_some() {
-        eprintln!("  nach Ausgleich: Brennweite {:.1}, Rotationen {:?}", cams.focal, cams.rot.iter().map(log_rotation).collect::<Vec<_>>());
-    }
     progress(0.5);
     Ok((cams, pairs))
 }
