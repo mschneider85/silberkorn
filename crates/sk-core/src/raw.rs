@@ -104,7 +104,7 @@ fn decode_ext(path: &Path, dummy: bool) -> Result<Decoded> {
     }
     let md = decoder.raw_metadata(&source, &params).ok();
     let mut meta = build_meta(path, &raw, md.as_ref())?;
-    let size = raw.crop_area.or(raw.active_area).map_or((raw.width, raw.height), |r| (r.d.w, r.d.h));
+    let size = image_size(&raw);
     meta.lens = crate::camera_lens::read(&file, size.0, size.1).map(|l| l.oriented(meta.orientation));
     meta.lens_corrected = matches!(
         decoder.ifd(rawler::decoders::WellKnownIFD::Root).ok().flatten().as_deref().and_then(|ifd| ifd.get_entry(50740u16)).map(|e| &e.value),
@@ -144,7 +144,8 @@ fn apply_gain_maps(decoder: &dyn Decoder, raw: &mut RawImage) -> Result<()> {
     let Ok(Some(ifd)) = decoder.ifd(rawler::decoders::WellKnownIFD::Raw) else { return Ok(()) };
     let Some(rawler::formats::tiff::Value::Undefined(list)) = ifd.get_entry(0xC741u16).map(|e| &e.value) else { return Ok(()) };
     let maps = crate::camera_lens::gain_maps(list);
-    if maps.is_empty() {
+    // rawler can't scale other layouts (it panics on BlackIsZero).
+    if maps.is_empty() || !matches!(raw.photometric, RawPhotometricInterpretation::Cfa(_) | RawPhotometricInterpretation::LinearRaw) {
         return Ok(());
     }
     raw.apply_scaling().map_err(|e| anyhow!("Skalierung fehlgeschlagen: {e}"))?;
@@ -177,6 +178,7 @@ fn build_meta(path: &Path, raw: &RawImage, md: Option<&RawMetadata>) -> Result<R
         }
     }
     let mut color = CameraColor::new(xyz_to_cam);
+    color.illuminant = illuminant as u16;
     // A second matrix for tungsten light, when the first is a daylight one.
     if illuminant != Illuminant::A
         && let Some((_, a)) = raw.color_matrix_find_first([Illuminant::A])
@@ -192,18 +194,12 @@ fn build_meta(path: &Path, raw: &RawImage, md: Option<&RawMetadata>) -> Result<R
         [wb[0] / wb[1], 1.0, wb[2] / wb[1]]
     };
 
-    let mut info = CaptureInfo {
-        make: raw.clean_make.clone(),
-        model: raw.clean_model.clone(),
-        width: raw.width,
-        height: raw.height,
-        ..Default::default()
-    };
+    let mut info = CaptureInfo { make: raw.clean_make.clone(), model: raw.clean_model.clone(), ..Default::default() };
     let mut orientation = Orientation::from_exif(raw.orientation as u16 + 1);
     if let Some(md) = md {
         let ex = &md.exif;
         info.iso = ex.iso_speed_ratings.map(u32::from).or(ex.iso_speed).or(ex.recommended_exposure_index);
-        info.exposure_time = ex.exposure_time.filter(|r| r.d != 0).map(|r| {
+        info.exposure_time = ex.exposure_time.filter(|r| r.d != 0 && r.n != 0).map(|r| {
             let s = r.n as f64 / r.d as f64;
             if s >= 0.5 { format!("{s:.1} s") } else { format!("1/{:.0} s", 1.0 / s) }
         });
@@ -223,7 +219,26 @@ fn build_meta(path: &Path, raw: &RawImage, md: Option<&RawMetadata>) -> Result<R
             orientation = Orientation::from_exif(o);
         }
     }
+    // The size of the developed image: default crop (or active area), oriented.
+    let (w, h) = image_size(raw);
+    (info.width, info.height) = if orientation.swaps_dimensions() { (h, w) } else { (w, h) };
     Ok(RawMeta { path: path.to_path_buf(), info, color, as_shot_wb, orientation, hdr: false, lens: None, lens_corrected: false })
+}
+
+/// Size of the image [`load_full`] returns, before orientation: the default crop, else the
+/// active area, else the whole sensor.
+fn image_size(raw: &RawImage) -> (usize, usize) {
+    raw.crop_area.or(raw.active_area).map_or((raw.width, raw.height), |r| (r.d.w, r.d.h))
+}
+
+/// Scales to 0..1 with the black level subtracted. Skips data that already is: rawler would
+/// copy float data for nothing.
+fn scale(raw: &mut RawImage) -> Result<()> {
+    let scaled = matches!(raw.data, RawImageData::Float(_)) && raw.blacklevel.levels.iter().all(|l| l.n == 0) && raw.whitelevel.0.iter().all(|w| *w == 1);
+    if !scaled {
+        raw.apply_scaling().map_err(|e| anyhow!("Skalierung fehlgeschlagen: {e}"))?;
+    }
+    Ok(())
 }
 
 /// Reads only the metadata, without decoding pixel data.
@@ -251,21 +266,30 @@ pub fn load_preview_and_keep(path: &Path, max_edge: usize) -> Result<(RawMeta, L
 }
 
 fn preview_of(Decoded { mut raw, meta }: Decoded, max_edge: usize) -> Result<(RawMeta, LinearImage)> {
-    raw.apply_scaling().map_err(|e| anyhow!("Skalierung fehlgeschlagen: {e}"))?;
+    scale(&mut raw)?;
     let img = match (&raw.photometric, raw.cpp) {
         (RawPhotometricInterpretation::Cfa(cfg), 1) if let Some(k) = superpixel_size(&cfg.cfa) && raw.fuji_rotation_width.is_none() => {
             superpixel(&raw, &cfg.cfa, k)?
         }
         // Other layouts: full demosaic (one Markesteijn pass is enough for a preview).
-        (RawPhotometricInterpretation::Cfa(_), 1) => develop_full(&raw, XTransQuality::Fast)?,
+        (RawPhotometricInterpretation::Cfa(_), 1) => develop_full(raw, XTransQuality::Fast)?,
+        // Demosaiced (linear DNG): the same area as `load_full`.
         (_, 3) => {
             let RawImageData::Float(d) = &raw.data else { bail!("Unerwartetes Datenformat") };
-            LinearImage::new(raw.width, raw.height, d.as_chunks::<3>().0.iter().map(|c| [c[0], c[1], c[2]]).collect())
+            rgb_area(d, raw.width, raw.height, raw.crop_area.or(raw.active_area))?
         }
         _ => bail!("Dieses Sensorlayout wird noch nicht unterstützt"),
     };
     let img = img.fit_within(max_edge).oriented(meta.orientation);
     Ok((meta, img))
+}
+
+/// The `area` (whole image if `None`) of interleaved RGB data `width` x `height`.
+fn rgb_area(d: &[f32], width: usize, height: usize, area: Option<Rect>) -> Result<LinearImage> {
+    let (x0, y0, w, h) = area.map_or((0, 0, width, height), |r| (r.p.x, r.p.y, r.d.w, r.d.h));
+    anyhow::ensure!(x0 + w <= width && y0 + h <= height && d.len() >= width * height * 3, "Bildbereich ungültig");
+    let px = d.as_chunks::<3>().0;
+    Ok(LinearImage::new(w, h, (0..h).flat_map(|y| px[(y0 + y) * width + x0..][..w].iter().map(|c| [c[0], c[1], c[2]])).collect()))
 }
 
 /// Full-resolution demosaic (PPG) in camera space, oriented.
@@ -281,7 +305,7 @@ pub fn load_full(path: &Path) -> Result<(RawMeta, LinearImage)> {
         Some(d) => d,
         None => decode(path)?,
     };
-    let img = develop_full(&raw, XTransQuality::Best)?.oriented(meta.orientation);
+    let img = develop_full(raw, XTransQuality::Best)?.oriented(meta.orientation);
     Ok((meta, img))
 }
 
@@ -292,13 +316,15 @@ enum XTransQuality {
     Best = 3,
 }
 
-fn develop_full(raw: &RawImage, xtrans: XTransQuality) -> Result<LinearImage> {
-    if let Some(img) = develop_xtrans(raw, xtrans)? {
-        return Ok(img);
-    }
-    if let Some(img) = develop_bayer(raw)? {
-        return Ok(img);
-    }
+fn develop_full(raw: RawImage, xtrans: XTransQuality) -> Result<LinearImage> {
+    let raw = match develop_xtrans(raw, xtrans)? {
+        Ok(img) => return Ok(img),
+        Err(raw) => raw,
+    };
+    let raw = match develop_bayer(raw)? {
+        Ok(img) => return Ok(img),
+        Err(raw) => raw,
+    };
     let dev = RawDevelop::new_with(&[
         ProcessingStep::Rescale,
         ProcessingStep::Demosaic,
@@ -306,7 +332,7 @@ fn develop_full(raw: &RawImage, xtrans: XTransQuality) -> Result<LinearImage> {
         ProcessingStep::CropActiveArea,
         ProcessingStep::CropDefault,
     ]);
-    match dev.develop_intermediate(raw).map_err(|e| anyhow!("Entwicklung fehlgeschlagen: {e}"))? {
+    match dev.develop_intermediate(&raw).map_err(|e| anyhow!("Entwicklung fehlgeschlagen: {e}"))? {
         Intermediate::ThreeColor(px) => Ok(LinearImage::new(px.width, px.height, px.data)),
         Intermediate::Monochrome(px) => {
             Ok(LinearImage::new(px.width, px.height, px.data.into_iter().map(|v| [v, v, v]).collect()))
@@ -316,9 +342,9 @@ fn develop_full(raw: &RawImage, xtrans: XTransQuality) -> Result<LinearImage> {
 }
 
 /// Bayer sensors with AHD (see `ahd`) instead of rawler's PPG, which leaves zipper edges and
-/// maze patterns along fine lines. `None` for every other sensor.
-fn develop_bayer(raw: &RawImage) -> Result<Option<LinearImage>> {
-    let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else { return Ok(None) };
+/// maze patterns along fine lines. Every other sensor is handed back.
+fn develop_bayer(mut raw: RawImage) -> Result<Result<LinearImage, RawImage>> {
+    let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else { return Ok(Err(raw)) };
     if raw.cpp != 1
         || config.sensor != rawler::imgop::sensor::SensorType::Bayer
         || !config.cfa.is_rgb()
@@ -326,14 +352,14 @@ fn develop_bayer(raw: &RawImage) -> Result<Option<LinearImage>> {
         || config.cfa.height != 2
         || raw.fuji_rotation_width.is_some()
     {
-        return Ok(None);
+        return Ok(Err(raw));
     }
-    let mut raw = raw.clone();
-    raw.apply_scaling().map_err(|e| anyhow!("Skalierung fehlgeschlagen: {e}"))?;
-    let RawImageData::Float(data) = &raw.data else { bail!("Unerwartetes Datenformat") };
-    let pixels = rawler::pixarray::PixF32::new_with(data.clone(), raw.width, raw.height);
+    let config = config.clone();
+    scale(&mut raw)?;
+    let RawImageData::Float(data) = std::mem::replace(&mut raw.data, RawImageData::Float(Vec::new())) else { bail!("Unerwartetes Datenformat") };
+    let pixels = rawler::pixarray::PixF32::new_with(data, raw.width, raw.height);
     let roi = raw.active_area.unwrap_or(pixels.rect());
-    let input = pixels.crop(roi);
+    let input = pixels.into_crop(roi);
     let mut pattern = [[0usize; 2]; 2];
     for (dy, row) in pattern.iter_mut().enumerate() {
         for (dx, c) in row.iter_mut().enumerate() {
@@ -357,7 +383,7 @@ fn develop_bayer(raw: &RawImage) -> Result<Option<LinearImage>> {
             rgb = rgb.crop(crop);
         }
     }
-    Ok(Some(LinearImage::new(rgb.width, rgb.height, rgb.data)))
+    Ok(Ok(LinearImage::new(rgb.width, rgb.height, rgb.data)))
 }
 
 /// The scaled (black level subtracted, 0..1) photosites of a Bayer sensor within the area that
@@ -419,18 +445,18 @@ pub fn load_bayer(path: &Path) -> Result<Option<(RawMeta, BayerMosaic)>> {
 }
 
 /// X-Trans sensors with Markesteijn's demosaic instead of rawler's bilinear default, which
-/// leaves color moiré and soft detail. `None` for every other sensor.
-fn develop_xtrans(raw: &RawImage, quality: XTransQuality) -> Result<Option<LinearImage>> {
+/// leaves color moiré and soft detail. Every other sensor is handed back.
+fn develop_xtrans(mut raw: RawImage, quality: XTransQuality) -> Result<Result<LinearImage, RawImage>> {
     use rawler::imgop::sensor::Demosaic;
     use rawler::imgop::sensor::xtrans::markesteijn::XTransMarkesteijnDemosaic;
-    let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else { return Ok(None) };
+    let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else { return Ok(Err(raw)) };
     // Rotated (SuperCCD) layouts stay with rawler.
     if raw.cpp != 1 || config.sensor != rawler::imgop::sensor::SensorType::Xtrans || !config.cfa.is_rgb() || raw.fuji_rotation_width.is_some() {
-        return Ok(None);
+        return Ok(Err(raw));
     }
-    let mut raw = raw.clone();
-    raw.apply_scaling().map_err(|e| anyhow!("Skalierung fehlgeschlagen: {e}"))?;
-    let RawImageData::Float(data) = raw.data else { bail!("Unerwartetes Datenformat") };
+    let config = config.clone();
+    scale(&mut raw)?;
+    let RawImageData::Float(data) = std::mem::replace(&mut raw.data, RawImageData::Float(Vec::new())) else { bail!("Unerwartetes Datenformat") };
     let pixels = rawler::pixarray::PixF32::new_with(data, raw.width, raw.height);
     let roi = raw.active_area.unwrap_or(pixels.rect());
     let mut rgb = XTransMarkesteijnDemosaic::new(quality as usize).demosaic(&pixels, &config.cfa, &config.colors, roi);
@@ -443,7 +469,7 @@ fn develop_xtrans(raw: &RawImage, quality: XTransQuality) -> Result<Option<Linea
             rgb = rgb.crop(crop);
         }
     }
-    Ok(Some(LinearImage::new(rgb.width, rgb.height, rgb.data)))
+    Ok(Ok(LinearImage::new(rgb.width, rgb.height, rgb.data)))
 }
 
 /// Block size for [`superpixel`]: 2 for Bayer, 3 for X-Trans (each 3×3 block of its 6×6 pattern
@@ -506,6 +532,20 @@ fn superpixel(raw: &RawImage, cfa: &rawler::CFA, k: usize) -> Result<LinearImage
     Ok(LinearImage::new(ow, oh, out))
 }
 
+/// Whether the file is a DNG that Silberkorn wrote (merged, stacked, denoised): its embedded
+/// preview is Silberkorn's rendering, not the camera's.
+pub fn written_by_silberkorn(path: &Path) -> bool {
+    let file = crate::variant::file_of(path);
+    if !file.extension().is_some_and(|e| e.eq_ignore_ascii_case("dng")) {
+        return false;
+    }
+    let Ok(source) = RawSource::new(&file) else { return false };
+    let Ok(decoder) = rawler::get_decoder(&source) else { return false };
+    let root = decoder.ifd(rawler::decoders::WellKnownIFD::Root).ok().flatten();
+    let software = root.as_deref().and_then(|ifd| ifd.get_entry(305u16)).and_then(|e| e.value.as_string().cloned());
+    software.is_some_and(|s| s.starts_with("Silberkorn"))
+}
+
 /// Embedded JPEG preview (fast thumbnails), already oriented. Reads only the JPEG where the
 /// file's structure allows it (see `raw_preview`), else decodes the file's metadata with rawler.
 pub fn embedded_preview(path: &Path) -> Result<::image::DynamicImage> {
@@ -558,6 +598,34 @@ mod tests {
         assert_eq!(valid_areas(120, 100, Some(active), Some(r(4, 10, 90, 70))), (Some(active), None));
         assert_eq!(valid_areas(120, 100, Some(active), Some(r(10, 10, 120, 70))), (Some(active), None));
         assert_eq!(valid_areas(120, 100, None, Some(r(usize::MAX, 0, 2, 2))), (None, None));
+    }
+
+    #[test]
+    fn rgb_area_cuts_out_the_crop() {
+        let d: Vec<f32> = (0..4 * 3 * 3).map(|i| i as f32).collect();
+        let r = Rect::new(rawler::imgop::Point::new(1, 1), rawler::imgop::Dim2::new(2, 2));
+        let img = rgb_area(&d, 4, 3, Some(r)).unwrap();
+        assert_eq!((img.width, img.height), (2, 2));
+        assert_eq!(img.data, [[15.0, 16.0, 17.0], [18.0, 19.0, 20.0], [27.0, 28.0, 29.0], [30.0, 31.0, 32.0]]);
+        assert_eq!(rgb_area(&d, 4, 3, None).unwrap().data.len(), 12);
+        assert!(rgb_area(&d, 4, 3, Some(Rect::new(rawler::imgop::Point::new(3, 0), rawler::imgop::Dim2::new(2, 1)))).is_err());
+    }
+
+    /// The size in the capture info is that of the developed image (on the sample raws in
+    /// `samples/`, skipped without them).
+    #[test]
+    fn capture_size_is_the_developed_size() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples");
+        for name in ["_DSC0010.ARW", "DSC09192.ARW"] {
+            let path = dir.join(name);
+            if !path.exists() {
+                continue;
+            }
+            let meta = read_meta(&path).unwrap();
+            let (_, img) = load_full(&path).unwrap();
+            assert_eq!((meta.info.width, meta.info.height), (img.width, img.height), "{name}");
+            assert!(!written_by_silberkorn(&path));
+        }
     }
 
     /// The full image from the raw data kept by `load_preview_and_keep` is that of decoding

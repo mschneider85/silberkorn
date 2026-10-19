@@ -238,7 +238,7 @@ pub fn stack_files(paths: &[PathBuf], progress: &dyn Fn(f32)) -> Result<PathBuf>
             width: stacked.width,
             height: stacked.height,
             data: &stacked.data,
-            xyz_to_cam: ref_meta.color.xyz_to_cam,
+            color: &ref_meta.color,
             as_shot_wb: ref_meta.as_shot_wb,
             info: &ref_meta.info,
             baseline_exposure: 0.0,

@@ -182,10 +182,13 @@ pub fn mat_inv(m: &Mat3) -> Option<Mat3> {
     ])
 }
 
-/// Camera calibration derived from the camera's XYZ->camera matrix (D65).
+/// Camera calibration derived from the camera's XYZ->camera matrix (usually daylight).
 #[derive(Clone, Debug)]
 pub struct CameraColor {
     pub xyz_to_cam: Mat3,
+    /// Light the camera calibrated `xyz_to_cam` for, as an EXIF LightSource code (21 = D65,
+    /// 20 = D55, 23 = D50, 1 = daylight, 17 = A).
+    pub illuminant: u16,
     /// The camera's matrix for tungsten light (standard illuminant A, 2856 K), if known; renderings
     /// under warm light interpolate towards it (see [`CameraColor::cam_to_working_at`]).
     pub xyz_to_cam_a: Option<Mat3>,
@@ -214,6 +217,7 @@ impl CameraColor {
     pub fn new(xyz_to_cam: Mat3) -> Self {
         Self {
             xyz_to_cam,
+            illuminant: 21,
             xyz_to_cam_a: None,
             cam_to_srgb: cam_to_rgb(&xyz_to_cam, &SRGB_TO_XYZ),
             cam_to_working: cam_to_rgb(&xyz_to_cam, &REC2020_TO_XYZ),
@@ -225,12 +229,12 @@ impl CameraColor {
     /// specification. Without a tungsten matrix, or in daylight, the daylight one.
     pub fn cam_to_working_at(&self, kelvin: f32) -> Mat3 {
         const A: f32 = 2856.0;
-        const D65: f32 = 6504.0;
+        let first = self.illuminant_kelvin();
         let Some(a) = self.xyz_to_cam_a else { return self.cam_to_working };
-        if !kelvin.is_finite() || kelvin <= 0.0 {
+        if !kelvin.is_finite() || kelvin <= 0.0 || first <= A + 1.0 {
             return self.cam_to_working;
         }
-        let w = ((1.0 / kelvin - 1.0 / D65) / (1.0 / A - 1.0 / D65)).clamp(0.0, 1.0);
+        let w = ((1.0 / kelvin - 1.0 / first) / (1.0 / A - 1.0 / first)).clamp(0.0, 1.0);
         if w <= 0.0 {
             return self.cam_to_working;
         }
@@ -241,6 +245,19 @@ impl CameraColor {
             }
         }
         cam_to_rgb(&m, &REC2020_TO_XYZ)
+    }
+
+    /// Color temperature of [`CameraColor::illuminant`] (D65 for unknown codes).
+    pub fn illuminant_kelvin(&self) -> f32 {
+        match self.illuminant {
+            17 => 2856.0,
+            3 | 24 => 3200.0,
+            20 => 5503.0,
+            23 => 5003.0,
+            1 | 4 | 9 => 5500.0,
+            22 => 7504.0,
+            _ => 6504.0,
+        }
     }
 
     /// Per-channel camera multipliers that neutralize the given illuminant (green = 1).
@@ -453,6 +470,15 @@ mod tests {
         assert!(mid != at_a && mid != c.cam_to_working);
         let white = mat_vec(&mid, [1.0, 1.0, 1.0]);
         assert!(white.iter().all(|v| (v - 1.0).abs() < 1e-4), "{white:?}");
+        // A D50 matrix holds down to 5003 K, not 6504 K.
+        c.illuminant = 23;
+        assert_eq!(c.cam_to_working_at(5100.0), c.cam_to_working);
+        assert!(c.cam_to_working_at(4900.0) != c.cam_to_working);
+        // Only a tungsten matrix: no interpolation.
+        let mut only_a = CameraColor::new(a);
+        only_a.illuminant = 17;
+        only_a.xyz_to_cam_a = Some(a);
+        assert_eq!(only_a.cam_to_working_at(2000.0), only_a.cam_to_working);
     }
 
     #[test]

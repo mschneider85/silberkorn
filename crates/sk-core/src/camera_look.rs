@@ -66,9 +66,10 @@ pub fn fit_cached(meta: &RawMeta, preview: &LinearImage) -> Option<CameraCurve> 
 }
 
 /// The camera's tone curve for this image, from the JPEG embedded in its raw file. `None` without
-/// one, for merged images (their preview is Silberkorn's), and when the two don't fit together.
+/// one, for Silberkorn's own DNGs (merged, stacked, denoised: their preview is Silberkorn's), and
+/// when the two don't fit together.
 pub fn fit_from_file(meta: &RawMeta, preview: &LinearImage) -> Option<CameraCurve> {
-    if meta.hdr {
+    if meta.hdr || crate::raw::written_by_silberkorn(&meta.path) {
         return None;
     }
     let jpeg = crate::raw::embedded_preview(&meta.path).ok()?.thumbnail(640, 640).to_rgb8();

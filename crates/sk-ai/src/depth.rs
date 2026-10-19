@@ -40,26 +40,33 @@ fn input_size(w: usize, h: usize) -> (usize, usize) {
 /// A loaded network: its input size, the runtime configuration it was loaded with, the network.
 type Loaded = ((usize, usize), u64, Arc<Net>);
 
-/// The network, loaded for one input size at a time.
+/// Loaded networks kept at once (landscape, portrait, square …).
+const KEEP: usize = 3;
+
+/// The network, loaded per input size; the last [`KEEP`] sizes stay loaded.
 #[derive(Default)]
 pub struct DepthModel {
-    net: Mutex<Option<Loaded>>,
+    /// Most recently used last.
+    nets: Mutex<Vec<Loaded>>,
 }
 
 impl DepthModel {
     fn net(&self, size: (usize, usize)) -> Result<Arc<Net>> {
         let generation = crate::runtime::config_generation();
-        let mut net = self.net.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((s, g, n)) = net.as_ref()
-            && *s == size
-            && *g == generation
-        {
-            return Ok(n.clone());
+        let mut nets = self.nets.lock().unwrap_or_else(|e| e.into_inner());
+        nets.retain(|(_, g, _)| *g == generation);
+        if let Some(k) = nets.iter().position(|(s, _, _)| *s == size) {
+            let hit = nets.remove(k);
+            let n = hit.2.clone();
+            nets.push(hit);
+            return Ok(n);
         }
         anyhow::ensure!(available(), "{} ist nicht geladen", DEPTH.label);
-        *net = None;
+        if nets.len() >= KEEP {
+            nets.remove(0);
+        }
         let n = Arc::new(Net::load(&models::path(&DEPTH), &[Input::F32([1, 3, size.1, size.0])])?);
-        *net = Some((size, generation, n.clone()));
+        nets.push((size, generation, n.clone()));
         Ok(n)
     }
 

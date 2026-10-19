@@ -107,7 +107,11 @@ pub fn cache_size() -> u64 {
 
 /// Removes all products.
 pub fn clear_cache() -> Result<()> {
-    *LOADED.lock().unwrap() = None;
+    {
+        let mut loaded = LOADED.lock().unwrap();
+        loaded.products.clear();
+        loaded.generation += 1;
+    }
     BLENDS.lock().unwrap().clear();
     for e in std::fs::read_dir(cache_dir()).into_iter().flatten().flatten() {
         if e.path().extension().is_some_and(|x| x == "skdn") {
@@ -237,16 +241,35 @@ impl Product {
 
 // ------------------------------------------------------------------ blending
 
-/// The most recently used product (one: a full-resolution one takes hundreds of MB).
-static LOADED: Mutex<Option<(PathBuf, Arc<Product>)>> = Mutex::new(None);
+/// Products kept loaded (two: a full-resolution one takes hundreds of MB, but switching between
+/// two images shouldn't read and decode them each time).
+const KEEP_LOADED: usize = 2;
+
+/// The most recently used products (last: newest), and a counter bumped when the cache is cleared.
+struct Loaded {
+    generation: u64,
+    products: Vec<(PathBuf, Arc<Product>)>,
+}
+
+static LOADED: Mutex<Loaded> = Mutex::new(Loaded { generation: 0, products: Vec::new() });
 
 fn product(file: &Path) -> Option<Arc<Product>> {
-    let mut loaded = LOADED.lock().unwrap();
-    if let Some((f, p)) = loaded.as_ref()
-        && f == file
-    {
-        return Some(p.clone());
-    }
+    product_in(&LOADED, file)
+}
+
+/// The product in `file`, from `cache` or read (outside the lock: other images' products stay
+/// available meanwhile).
+fn product_in(cache: &Mutex<Loaded>, file: &Path) -> Option<Arc<Product>> {
+    let generation = {
+        let mut loaded = cache.lock().unwrap();
+        if let Some(k) = loaded.products.iter().position(|(f, _)| f == file) {
+            let e = loaded.products.remove(k);
+            let p = e.1.clone();
+            loaded.products.push(e);
+            return Some(p);
+        }
+        loaded.generation
+    };
     let bytes = std::fs::read(file).ok()?;
     let p = match decode(&bytes) {
         Ok(p) => Arc::new(p),
@@ -256,9 +279,20 @@ fn product(file: &Path) -> Option<Arc<Product>> {
             return None;
         }
     };
+    drop(bytes);
     // Recently used: kept longest when the cache is full.
     let _ = std::fs::File::options().append(true).open(file).and_then(|f| f.set_modified(std::time::SystemTime::now()));
-    *loaded = Some((file.to_path_buf(), p.clone()));
+    let mut loaded = cache.lock().unwrap();
+    // Not kept if the cache was cleared meanwhile; another thread's copy is taken if it was faster.
+    if loaded.generation == generation {
+        if let Some((_, q)) = loaded.products.iter().find(|(f, _)| f == file) {
+            return Some(q.clone());
+        }
+        if loaded.products.len() >= KEEP_LOADED {
+            loaded.products.remove(0);
+        }
+        loaded.products.push((file.to_path_buf(), p.clone()));
+    }
     Some(p)
 }
 
@@ -426,6 +460,27 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(1100));
         std::fs::write(&raw, b"raw2").unwrap();
         assert!(!is_ready(&raw));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Two products stay loaded: alternating between two images reads neither again.
+    #[test]
+    fn keeps_two_products_loaded() {
+        let dir = std::env::temp_dir().join(format!("sk-denoise-loaded-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let files: Vec<PathBuf> = (0..3).map(|i| dir.join(format!("{i}.skdn"))).collect();
+        for (i, f) in files.iter().enumerate() {
+            std::fs::write(f, encode(&image(3 + i, 2))).unwrap();
+        }
+        let cache = Mutex::new(Loaded { generation: 0, products: Vec::new() });
+        let a = product_in(&cache, &files[0]).unwrap();
+        let b = product_in(&cache, &files[1]).unwrap();
+        assert!(Arc::ptr_eq(&a, &product_in(&cache, &files[0]).unwrap()));
+        assert!(Arc::ptr_eq(&b, &product_in(&cache, &files[1]).unwrap()));
+        // A third one drops the least recently used (the first).
+        product_in(&cache, &files[2]).unwrap();
+        assert!(Arc::ptr_eq(&b, &product_in(&cache, &files[1]).unwrap()));
+        assert!(!Arc::ptr_eq(&a, &product_in(&cache, &files[0]).unwrap()));
         std::fs::remove_dir_all(dir).ok();
     }
 

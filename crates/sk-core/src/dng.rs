@@ -11,7 +11,7 @@ use std::path::Path;
 use anyhow::Result;
 use rayon::prelude::*;
 
-use crate::color::{Mat3, mat_inv};
+use crate::color::{CameraColor, mat_inv};
 use crate::raw::CaptureInfo;
 
 /// What goes into the file.
@@ -21,8 +21,8 @@ pub struct LinearDng<'a> {
     /// Camera RGB, linear, oriented, white balance not applied. 1.0 is the white level of the
     /// reference exposure; brighter values are kept.
     pub data: &'a [[f32; 3]],
-    /// XYZ (D65) -> camera matrix, as in `CameraColor`.
-    pub xyz_to_cam: Mat3,
+    /// The camera's color matrices and the light they are for.
+    pub color: &'a CameraColor,
     /// As-shot camera multipliers (green = 1).
     pub as_shot_wb: [f32; 3],
     pub info: &'a CaptureInfo,
@@ -120,8 +120,13 @@ impl TiffOut {
         }
     }
 
+    /// Current end of the file as a TIFF offset (they are 32 bits).
+    fn offset(&self) -> Result<u32> {
+        u32::try_from(self.buf.len()).map_err(|_| anyhow::anyhow!("DNG zu groß (über 4 GB)"))
+    }
+
     /// Writes the data blocks and the directory; returns the directory's offset.
-    fn write_ifd(&mut self, mut ifd: Ifd) -> u32 {
+    fn write_ifd(&mut self, mut ifd: Ifd) -> Result<u32> {
         // Data blocks first, so their offsets are known.
         let mut offsets: Vec<(u16, Vec<u32>, Vec<u32>)> = Vec::new();
         for (tag, blocks) in std::mem::take(&mut ifd.blocks) {
@@ -129,7 +134,7 @@ impl TiffOut {
             let mut counts = Vec::new();
             for b in blocks {
                 self.align();
-                offs.push(self.buf.len() as u32);
+                offs.push(self.offset()?);
                 counts.push(b.len() as u32);
                 self.buf.extend(b);
             }
@@ -153,7 +158,7 @@ impl TiffOut {
             let bytes = v.bytes(&offs);
             if bytes.len() > 4 {
                 self.align();
-                value_offsets.push(Some(self.buf.len() as u32));
+                value_offsets.push(Some(self.offset()?));
                 self.buf.extend(&bytes);
             } else {
                 value_offsets.push(None);
@@ -161,7 +166,7 @@ impl TiffOut {
             out_values.push(bytes);
         }
         self.align();
-        let at = self.buf.len() as u32;
+        let at = self.offset()?;
         self.buf.extend((ifd.entries.len() as u16).to_le_bytes());
         for (((tag, v), bytes), off) in ifd.entries.iter().zip(&out_values).zip(&value_offsets) {
             let (typ, count) = v.type_count();
@@ -178,7 +183,8 @@ impl TiffOut {
             }
         }
         self.buf.extend(0u32.to_le_bytes()); // next IFD
-        at
+        self.offset()?;
+        Ok(at)
     }
 }
 
@@ -243,7 +249,7 @@ pub fn write_linear_dng(path: &Path, d: &LinearDng) -> Result<()> {
     raw.add(339, Val::Short(vec![3; 3]));
     raw.add(50717, Val::Long(vec![1; 3])); // WhiteLevel: floats are normalized
     raw.blocks.push((324, tiles));
-    let raw_at = out.write_ifd(raw);
+    let raw_at = out.write_ifd(raw)?;
 
     // EXIF directory.
     let mut exif = Ifd::default();
@@ -265,7 +271,7 @@ pub fn write_linear_dng(path: &Path, d: &LinearDng) -> Result<()> {
     if let Some(l) = &info.lens {
         exif.add(42036, Val::Ascii(l.clone()));
     }
-    let exif_at = (!exif.entries.is_empty()).then(|| out.write_ifd(exif));
+    let exif_at = if exif.entries.is_empty() { None } else { Some(out.write_ifd(exif)?) };
 
     // IFD 0: preview and DNG metadata.
     let mut ifd0 = Ifd::default();
@@ -295,18 +301,22 @@ pub fn write_linear_dng(path: &Path, d: &LinearDng) -> Result<()> {
     ifd0.add(50706, Val::Byte(vec![1, 4, 0, 0]));
     ifd0.add(50707, Val::Byte(vec![1, 4, 0, 0]));
     ifd0.add(50708, Val::Ascii(format!("{} {}", info.make, info.model).trim().to_string()));
-    let m = d.xyz_to_cam;
+    let m = d.color.xyz_to_cam;
     ifd0.add(50721, Val::SRational(m.iter().flatten().map(|v| srational(*v)).collect()));
+    if let Some(a) = d.color.xyz_to_cam_a.filter(|_| d.color.illuminant != 17) {
+        ifd0.add(50722, Val::SRational(a.iter().flatten().map(|v| srational(*v)).collect()));
+        ifd0.add(50779, Val::Short(vec![17])); // CalibrationIlluminant2: A
+    }
     // As-shot neutral: the camera values of white, i.e. the inverse of the multipliers.
     let wb = d.as_shot_wb;
     ifd0.add(50728, Val::Rational(wb.iter().map(|v| rational(1.0 / v.max(1e-4) as f64, 1_000_000)).collect()));
     ifd0.add(50730, Val::SRational(vec![srational(d.baseline_exposure)]));
-    ifd0.add(50778, Val::Short(vec![21])); // D65
+    ifd0.add(50778, Val::Short(vec![d.color.illuminant]));
     if d.lens_corrected {
         ifd0.add(50740, Val::Byte(LENS_CORRECTED.to_vec()));
     }
     ifd0.blocks.push((273, vec![preview.into_raw()]));
-    let ifd0_at = out.write_ifd(ifd0);
+    let ifd0_at = out.write_ifd(ifd0)?;
     out.buf[4..8].copy_from_slice(&ifd0_at.to_le_bytes());
     anyhow::ensure!(mat_inv(&m).is_some(), "Farbmatrix nicht invertierbar");
 
@@ -335,11 +345,12 @@ mod tests {
         }).collect();
         let info = CaptureInfo { make: "Testkamera".into(), model: "X1".into(), iso: Some(200), date: Some("2024:05:01 12:00:00".into()), exposure_rational: Some((1, 100)), ..Default::default() };
         let xyz_to_cam = [[0.7, 0.2, -0.1], [-0.3, 1.2, 0.1], [0.0, 0.1, 0.8]];
+        let color = CameraColor::new(xyz_to_cam);
         let dir = std::env::temp_dir().join(format!("sk-dng-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("t.dng");
         let preview = ::image::RgbImage::from_pixel(30, 20, ::image::Rgb([200, 100, 50]));
-        write_linear_dng(&path, &LinearDng { width: w, height: h, data: &data, xyz_to_cam, as_shot_wb: [2.0, 1.0, 1.5], info: &info, baseline_exposure: 0.0, preview: Some(&preview), lens_corrected: false }).unwrap();
+        write_linear_dng(&path, &LinearDng { width: w, height: h, data: &data, color: &color, as_shot_wb: [2.0, 1.0, 1.5], info: &info, baseline_exposure: 0.0, preview: Some(&preview), lens_corrected: false }).unwrap();
         let (meta, img) = crate::raw::load_full(&path).unwrap();
         assert_eq!((img.width, img.height), (w, h));
         assert!(meta.hdr, "Float-Daten ohne Clipping");
@@ -355,14 +366,26 @@ mod tests {
         let (_, small) = crate::raw::load_preview(&path, 100).unwrap();
         assert_eq!(small.width, 100);
         assert!(small.data.iter().any(|p| p[0] > 2.0));
+        assert!(crate::raw::written_by_silberkorn(&path));
         let thumb = crate::raw::embedded_preview(&path).unwrap();
         assert_eq!((thumb.width(), thumb.height()), (30, 20));
         // A panorama keeps its lens name but is marked as corrected.
         let info = CaptureInfo { lens: Some("FE 24-70mm F2.8 GM".into()), focal_mm: Some(24.0), ..info };
-        write_linear_dng(&path, &LinearDng { width: w, height: h, data: &data, xyz_to_cam, as_shot_wb: [2.0, 1.0, 1.5], info: &info, baseline_exposure: 0.0, preview: None, lens_corrected: true }).unwrap();
+        write_linear_dng(&path, &LinearDng { width: w, height: h, data: &data, color: &color, as_shot_wb: [2.0, 1.0, 1.5], info: &info, baseline_exposure: 0.0, preview: None, lens_corrected: true }).unwrap();
         let meta = crate::raw::read_meta(&path).unwrap();
         assert!(meta.lens_corrected);
         assert_eq!(meta.info.lens.as_deref(), Some("FE 24-70mm F2.8 GM"));
+        assert_eq!(meta.color.illuminant, 21);
+        assert!(meta.color.xyz_to_cam_a.is_none());
+        // A D55 matrix keeps its illuminant, the tungsten one goes along as the second.
+        let a = [[0.8, 0.1, -0.1], [-0.35, 1.15, 0.2], [-0.1, 0.25, 0.45]];
+        let color = CameraColor { illuminant: 20, xyz_to_cam_a: Some(a), ..CameraColor::new(xyz_to_cam) };
+        write_linear_dng(&path, &LinearDng { width: w, height: h, data: &data, color: &color, as_shot_wb: [2.0, 1.0, 1.5], info: &info, baseline_exposure: 0.0, preview: None, lens_corrected: false }).unwrap();
+        let meta = crate::raw::read_meta(&path).unwrap();
+        assert_eq!(meta.color.illuminant, 20);
+        let close = |x: crate::color::Mat3, y: crate::color::Mat3| x.iter().flatten().zip(y.iter().flatten()).all(|(p, q)| (p - q).abs() < 1e-3);
+        assert!(close(meta.color.xyz_to_cam, xyz_to_cam));
+        assert!(meta.color.xyz_to_cam_a.is_some_and(|m| close(m, a)), "{:?}", meta.color.xyz_to_cam_a);
         std::fs::remove_dir_all(dir).ok();
     }
 }

@@ -237,18 +237,21 @@ fn shifted(img: &LinearImage, dx: i32, dy: i32) -> LinearImage {
 struct Exposure {
     img: LinearImage,
     k: f32,
+    /// The alignment shift (`shifted`): pixels it pulled in from beyond the border are invalid.
+    shift: (i32, i32),
     /// Weight multiplier (1 - ghost) at `SMALL` resolution, if deghosting.
     keep: Option<Plane>,
 }
 
 /// Merges the images (already loaded, oriented, same size). The first returned value is the
-/// merged camera RGB at the exposure of `images[reference]`.
-fn merge(images: Vec<(LinearImage, f32)>, reference: usize, opts: &HdrOptions, progress: &dyn Fn(f32)) -> LinearImage {
+/// merged camera RGB at the exposure of `images[reference]`. Each image comes with its exposure
+/// and the shift it was aligned with.
+fn merge(images: Vec<(LinearImage, f32, (i32, i32))>, reference: usize, opts: &HdrOptions, progress: &dyn Fn(f32)) -> LinearImage {
     let n = images.len();
     let (w, h) = (images[reference].0.width, images[reference].0.height);
     let ref_small = images[reference].0.box_downscaled(SMALL);
     let mut exposures: Vec<Exposure> = Vec::new();
-    for (i, (img, k)) in images.into_iter().enumerate() {
+    for (i, (img, k, shift)) in images.into_iter().enumerate() {
         let keep = (i != reference).then(|| opts.deghost.threshold()).flatten().map(|thr| {
             let small = img.box_downscaled(SMALL);
             // Disagreement in EV where both show the scene well.
@@ -271,10 +274,13 @@ fn merge(images: Vec<(LinearImage, f32)>, reference: usize, opts: &HdrOptions, p
             let g = dilate(&Plane::new(small.width, small.height, ghost), 3);
             gaussian_blur(&g, 1.5).map(|v| 1.0 - (v * 1.5).clamp(0.0, 1.0))
         });
-        exposures.push(Exposure { img, k, keep });
+        exposures.push(Exposure { img, k, shift, keep });
         progress(0.5 + 0.2 * (i + 1) as f32 / n as f32);
     }
-    let darkest = (0..n).min_by(|&a, &b| exposures[a].k.total_cmp(&exposures[b].k)).unwrap_or(0);
+    let valid = |e: &Exposure, x: usize, y: usize| {
+        let (sx, sy) = (x as i64 + e.shift.0 as i64, y as i64 + e.shift.1 as i64);
+        sx >= 0 && sy >= 0 && sx < w as i64 && sy < h as i64
+    };
     let (sw, sh) = (ref_small.width.max(1), ref_small.height.max(1));
     let keep_at = |p: &Plane, x: usize, y: usize| -> f32 {
         let fx = ((x as f32 + 0.5) / SMALL as f32 - 0.5).clamp(0.0, (sw - 1) as f32);
@@ -294,6 +300,9 @@ fn merge(images: Vec<(LinearImage, f32)>, reference: usize, opts: &HdrOptions, p
             let mut acc = [0.0f32; 3];
             let mut wsum = 0.0f32;
             for e in &exposures {
+                if !valid(e, x, y) {
+                    continue;
+                }
                 let p = e.img.data[i];
                 let mut wt = well_exposed(max3(p)) * e.k;
                 if let Some(keep) = &e.keep {
@@ -308,8 +317,8 @@ fn merge(images: Vec<(LinearImage, f32)>, reference: usize, opts: &HdrOptions, p
             *o = if wsum > 1e-9 {
                 acc.map(|v| v / wsum)
             } else {
-                // Clipped everywhere (or black): the darkest exposure is the best guess.
-                let e = &exposures[darkest];
+                // Clipped everywhere (or black): the darkest valid exposure is the best guess.
+                let e = exposures.iter().filter(|e| valid(e, x, y)).min_by(|a, b| a.k.total_cmp(&b.k)).unwrap_or(&exposures[reference]);
                 e.img.data[i].map(|v| v / e.k)
             };
         }
@@ -341,17 +350,20 @@ pub fn merge_files(paths: &[PathBuf], opts: &HdrOptions, progress: &dyn Fn(f32))
     progress(0.02);
     let (ref_meta, ref_img) = raw::load_full(&files[reference]).with_context(|| format!("{}", files[reference].display()))?;
     let ref_small = ref_img.box_downscaled(SMALL);
+    let ref_size = (ref_img.width, ref_img.height);
+    // Moved into the list at its place (no copy of the full image).
+    let mut ref_img = Some(ref_img);
     let total = files.len() as f32;
-    let mut images: Vec<(LinearImage, f32)> = Vec::new();
+    let mut images: Vec<(LinearImage, f32, (i32, i32))> = Vec::new();
     let mut ref_pos = 0;
     for (i, path) in files.iter().enumerate() {
         if i == reference {
             ref_pos = images.len();
-            images.push((ref_img.clone(), 1.0));
+            images.extend(ref_img.take().map(|img| (img, 1.0, (0, 0))));
             continue;
         }
         let (meta, img) = raw::load_full(path).with_context(|| format!("{}", path.display()))?;
-        if (img.width, img.height) != (ref_img.width, ref_img.height) {
+        if (img.width, img.height) != ref_size {
             bail!("{} hat eine andere Bildgröße als die übrigen Belichtungen", path.display());
         }
         let small = img.box_downscaled(SMALL);
@@ -362,10 +374,9 @@ pub fn merge_files(paths: &[PathBuf], opts: &HdrOptions, progress: &dyn Fn(f32))
         let exif = exif_exposure(&meta.info).zip(exif_exposure(&ref_meta.info)).map(|(a, b)| (a / b) as f32);
         let usable = |k: &f32| k.is_finite() && *k > 0.0;
         let k = exposure_ratio(&small, &ref_small).filter(usable).or(exif.filter(usable)).unwrap_or(1.0).max(1e-4);
-        images.push((img, k));
+        images.push((img, k, (dx, dy)));
         progress(0.05 + 0.45 * (i + 1) as f32 / total);
     }
-    drop(ref_img);
     let merged = merge(images, ref_pos, opts, progress);
     progress(0.75);
     let out = output_path(&files[0], "-HDR");
@@ -376,7 +387,7 @@ pub fn merge_files(paths: &[PathBuf], opts: &HdrOptions, progress: &dyn Fn(f32))
             width: merged.width,
             height: merged.height,
             data: &merged.data,
-            xyz_to_cam: ref_meta.color.xyz_to_cam,
+            color: &ref_meta.color,
             as_shot_wb: ref_meta.as_shot_wb,
             info: &ref_meta.info,
             baseline_exposure: 0.0,
@@ -453,7 +464,7 @@ mod tests {
     fn merge_recovers_highlights_and_shadows() {
         let (w, h) = (256, 64);
         let s = scene(w, h);
-        let shots = vec![(shot(&s, w, h, 0.25, 0, 0), 0.25), (shot(&s, w, h, 1.0, 0, 0), 1.0), (shot(&s, w, h, 4.0, 0, 0), 4.0)];
+        let shots = vec![(shot(&s, w, h, 0.25, 0, 0), 0.25, (0, 0)), (shot(&s, w, h, 1.0, 0, 0), 1.0, (0, 0)), (shot(&s, w, h, 4.0, 0, 0), 4.0, (0, 0))];
         let merged = merge(shots, 1, &HdrOptions { align: false, deghost: Deghost::Off }, &|_| {});
         for x in [5usize, 60, 128, 200, 250] {
             let i = 30 * w + x;
@@ -479,10 +490,28 @@ mod tests {
                 b.data[y * w + x] = [0.01; 3];
             }
         }
-        let merged = merge(vec![(a.clone(), 1.0), (b.clone(), 2.0)], 0, &HdrOptions { align: false, deghost: Deghost::Medium }, &|_| {});
+        let merged = merge(vec![(a.clone(), 1.0, (0, 0)), (b.clone(), 2.0, (0, 0))], 0, &HdrOptions { align: false, deghost: Deghost::Medium }, &|_| {});
         let c = merged.data[60 * w + 60][0];
         assert!((c - 0.3).abs() < 0.02, "{c}");
-        let ghosted = merge(vec![(a, 1.0), (b, 2.0)], 0, &HdrOptions { align: false, deghost: Deghost::Off }, &|_| {});
+        let ghosted = merge(vec![(a, 1.0, (0, 0)), (b, 2.0, (0, 0))], 0, &HdrOptions { align: false, deghost: Deghost::Off }, &|_| {});
         assert!(ghosted.data[60 * w + 60][0] < 0.2);
+    }
+
+    /// Pixels a shift pulled in from beyond the border (repeated edge) get no weight.
+    #[test]
+    fn shifted_border_is_ignored() {
+        let (w, h) = (64, 32);
+        let a = LinearImage::new(w, h, vec![[0.3; 3]; w * h]);
+        let mut b = LinearImage::new(w, h, vec![[0.6; 3]; w * h]);
+        // Its last column differs: the shift repeats it into the three columns beyond.
+        for y in 0..h {
+            b.data[y * w + w - 1] = [0.1; 3];
+        }
+        let b = shifted(&b, 3, 0);
+        let merged = merge(vec![(a, 1.0, (0, 0)), (b, 2.0, (3, 0))], 0, &HdrOptions { align: false, deghost: Deghost::Off }, &|_| {});
+        for x in [w - 3, w - 2, w - 1] {
+            let c = merged.data[10 * w + x][0];
+            assert!((c - 0.3).abs() < 1e-4, "x={x}: {c}");
+        }
     }
 }

@@ -34,7 +34,8 @@ pub(crate) fn origins(len: usize, tile: usize, overlap: usize) -> Vec<usize> {
     if len <= tile {
         return vec![0];
     }
-    let step = tile - overlap;
+    // An overlap of a whole tile or more would never advance.
+    let step = tile.saturating_sub(overlap).max(1);
     let mut v: Vec<usize> = (0..).map(|i| i * step).take_while(|&o| o + tile < len).collect();
     v.push(len - tile);
     v
@@ -159,5 +160,12 @@ mod tests {
         assert_eq!(ramp(128, 2 * tile, 128.0, false, false), 1.0);
         assert!(ramp(64, 2 * tile, 128.0, false, false) < 0.6);
         assert_eq!((mirror(5, 10), mirror(10, 10), mirror(11, 10)), (5, 8, 7));
+    }
+
+    /// An overlap as large as the tile still ends (step 1) instead of looping forever.
+    #[test]
+    fn overlap_of_a_whole_tile_terminates() {
+        assert_eq!(origins(12, 8, 8), vec![0, 1, 2, 3, 4]);
+        assert_eq!(origins(12, 8, 20), vec![0, 1, 2, 3, 4]);
     }
 }

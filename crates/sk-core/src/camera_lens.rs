@@ -497,7 +497,8 @@ impl GainMap {
         let (bottom, right) = (bottom.min(height), right.min(width));
         let (pv, ph) = (self.points[0] as usize, self.points[1] as usize);
         let mp = self.map_planes.max(1) as usize;
-        let at = |r: usize, c: usize, plane: usize| self.gains[(r * ph + c) * mp + plane.min(mp - 1)];
+        // The map's planes count from the first plane it applies to; a single one serves all.
+        let at = |r: usize, c: usize, plane: usize| self.gains[(r * ph + c) * mp + (plane - self.plane as usize).min(mp - 1)];
         // Grid position of a pixel center, clamped to the grid.
         let grid = |pos: usize, size: usize, axis: usize, n: usize| {
             let g = (((pos as f64 + 0.5) / size as f64 - self.origin[axis]) / self.spacing[axis]).clamp(0.0, (n - 1) as f64);
@@ -637,6 +638,26 @@ mod tests {
         assert!((data[8] - 0.25 * 1.625).abs() < 1e-6, "{data:?}");
         // An unknown opcode that isn't optional: nothing is applied.
         assert!(gain_maps(&list(&[opcode(9, 0, &p), opcode(77, 0, &[])])).is_empty());
+    }
+
+    /// A map for planes 1 and 2 starts its own planes at 0.
+    #[test]
+    fn gain_map_planes_count_from_its_first_plane() {
+        let map = GainMap {
+            area: [0, 0, 1, 1],
+            plane: 1,
+            planes: 2,
+            row_pitch: 1,
+            col_pitch: 1,
+            points: [1, 1],
+            spacing: [1.0, 1.0],
+            origin: [0.0, 0.0],
+            map_planes: 2,
+            gains: vec![2.0, 3.0],
+        };
+        let mut data = vec![0.25f32; 3];
+        map.apply(&mut data, 1, 1, 3);
+        assert_eq!(data, [0.25, 0.5, 0.75]);
     }
 
     #[test]

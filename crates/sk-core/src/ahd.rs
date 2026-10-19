@@ -24,15 +24,22 @@ pub struct Mosaic<'a> {
 impl Mosaic<'_> {
     #[inline]
     fn at(&self, x: isize, y: isize) -> f32 {
-        let x = x.clamp(0, self.width as isize - 1) as usize;
-        let y = y.clamp(0, self.height as isize - 1) as usize;
-        self.data[y * self.width + x]
+        self.data[mirror(y, self.height) * self.width + mirror(x, self.width)]
     }
 
     #[inline]
     fn color(&self, x: isize, y: isize) -> usize {
         self.pattern[y.rem_euclid(2) as usize][x.rem_euclid(2) as usize]
     }
+}
+
+/// Index `i` reflected into `0..n` around the edge photosites, so that it keeps its parity (and
+/// with it the color of the CFA); clamped where `n` is too small for that.
+#[inline]
+fn mirror(i: isize, n: usize) -> usize {
+    let n = n as isize;
+    let i = if i < 0 { -i } else if i >= n { 2 * n - 2 - i } else { i };
+    i.clamp(0, n - 1) as usize
 }
 
 /// Demosaics `m` into RGB (`width * height` pixels, row by row). `wb` scales the channels while
@@ -70,7 +77,7 @@ fn tile(m: &Mosaic, wb: [f32; 3], x0: usize, y0: usize) -> Tile {
     let (ex, ey) = (x0 as isize - BORDER as isize, y0 as isize - BORDER as isize);
     let (ew, eh) = (ow + 2 * BORDER, oh + 2 * BORDER);
     let idx = |x: usize, y: usize| y * ew + x;
-    // Balanced mosaic of the extended area (edges clamped).
+    // Balanced mosaic of the extended area (edges mirrored).
     let raw: Vec<f32> = (0..eh)
         .flat_map(|y| (0..ew).map(move |x| (x, y)))
         .map(|(x, y)| {
@@ -189,7 +196,7 @@ mod tests {
     }
 
     fn error(a: &[[f32; 3]], b: &[[f32; 3]], w: usize, h: usize) -> f32 {
-        // Without the outermost pixels (clamped edges).
+        // Without the outermost pixels (mirrored edges).
         let mut sum = 0.0;
         let mut n = 0;
         for y in 3..h - 3 {
@@ -249,6 +256,21 @@ mod tests {
             .collect();
         let (e_ahd, e_bil) = (error(&ahd, &img, w, h), error(&bilinear, &img, w, h));
         assert!(e_ahd < e_bil * 0.7, "AHD {e_ahd}, bilinear {e_bil}");
+    }
+
+    /// Mirrored edges keep the CFA colors: a flat color is exact up to the outermost pixels.
+    #[test]
+    fn flat_color_is_exact_at_the_edges() {
+        let (w, h) = (37, 29);
+        let img = vec![[0.2f32, 0.4, 0.3]; w * h];
+        for pattern in [RGGB, [[1, 0], [2, 1]], [[2, 1], [1, 0]]] {
+            let data: Vec<f32> = (0..w * h).map(|i| img[i][pattern[(i / w) % 2][(i % w) % 2]]).collect();
+            let out = demosaic(&Mosaic { data: &data, width: w, height: h, pattern }, [1.0; 3]);
+            for (i, p) in out.iter().enumerate() {
+                assert!((0..3).all(|c| (p[c] - img[i][c]).abs() < 1e-5), "{pattern:?} ({}, {}): {p:?}", i % w, i / w);
+            }
+        }
+        assert_eq!((mirror(-2, 10), mirror(-5, 10), mirror(10, 10), mirror(12, 10), mirror(3, 1)), (2, 5, 8, 6, 0));
     }
 
     #[test]

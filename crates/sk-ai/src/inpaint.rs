@@ -197,10 +197,15 @@ fn fill_windows(work: &mut Work, fill: Fill, progress: &dyn Fn(f32)) -> Result<(
     let mut done = vec![false; w * h];
     let total = centers.len();
     let mut centers = centers.into_iter();
+    // Where the search for marked pixels left goes on (all before it are done).
+    let mut scan = 0;
     for k in 0.. {
         // After the grid: a window on each marked pixel still left (a cell's window reaches only
         // half a window around the middle of its marks; the window always contains the pixel).
-        let Some((cx, cy)) = centers.next().or_else(|| (0..w * h).find(|&i| hole[i] && !done[i]).map(|i| (i % w, i / w))) else { break };
+        let Some((cx, cy)) = centers.next().or_else(|| {
+            scan = (scan..w * h).find(|&i| hole[i] && !done[i])?;
+            Some((scan % w, scan / w))
+        }) else { break };
         progress((0.1 + 0.85 * k as f32 / total as f32).min(0.95));
         // Window origin (may extend beyond the area: those pixels are mirrored inside).
         let ox = cx as i64 - NET as i64 / 2;

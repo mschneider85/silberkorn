@@ -94,33 +94,39 @@ impl Denoiser {
 
     /// [`Self::product`]; `linear` uses the linear network also for Bayer sensors (for comparisons).
     pub fn product_ext(&self, path: &Path, linear: bool, progress: &dyn Fn(f32)) -> Result<LinearImage> {
-        let (meta, plain) = sk_core::raw::load_full(path).with_context(|| format!("{}", path.display()))?;
-        anyhow::ensure!(!meta.hdr, "Zusammengesetzte HDR-Bilder werden nicht entrauscht");
-        progress(0.05);
-        let progress = |p: f32| progress(0.05 + 0.95 * p);
-        let clean = match sk_core::raw::load_bayer(path)?.filter(|_| !linear) {
-            Some((_, mosaic)) => {
-                let img = self.bayer(&mosaic, &progress)?.oriented(meta.orientation);
+        let context = || format!("{}", path.display());
+        // The mosaic first: the demosaiced image isn't held while the network runs (only loaded
+        // afterwards, for the blend).
+        let mosaic = if linear { None } else { sk_core::raw::load_bayer(path).with_context(context)? };
+        let (plain, mut clean) = match mosaic {
+            Some((meta, mosaic)) => {
+                anyhow::ensure!(!meta.hdr, "Zusammengesetzte HDR-Bilder werden nicht entrauscht");
+                progress(0.05);
+                let img = self.bayer(&mosaic, &|p| progress(0.05 + 0.95 * p))?.oriented(meta.orientation);
+                drop(mosaic);
+                let (_, plain) = sk_core::raw::load_full(path).with_context(context)?;
                 anyhow::ensure!((img.width, img.height) == (plain.width, plain.height), "Bildgröße passt nicht ({}×{})", img.width, img.height);
-                img
+                (plain, img)
             }
-            None => self.linear(&meta, &plain, &progress)?,
+            None => {
+                let (meta, plain) = sk_core::raw::load_full(path).with_context(context)?;
+                anyhow::ensure!(!meta.hdr, "Zusammengesetzte HDR-Bilder werden nicht entrauscht");
+                progress(0.05);
+                let img = self.linear(&meta, &plain, &|p| progress(0.05 + 0.95 * p))?;
+                (plain, img)
+            }
         };
         // Pixels the network didn't produce (an odd border) and clipped highlights, which it knows
-        // nothing about, stay as they were.
-        let data = plain
-            .data
-            .par_iter()
-            .zip(&clean.data)
-            .map(|(p, c)| {
-                if c[0].is_nan() {
-                    return *p;
-                }
-                let keep = ((p.iter().copied().fold(0.0f32, f32::max) - 0.9) / 0.08).clamp(0.0, 1.0);
-                [0, 1, 2].map(|i| (c[i].max(0.0) + (p[i] - c[i].max(0.0)) * keep).min(1.0))
-            })
-            .collect();
-        Ok(LinearImage::new(plain.width, plain.height, data))
+        // nothing about, stay as they were (in place: no third full image).
+        clean.data.par_iter_mut().zip(&plain.data).for_each(|(c, p)| {
+            if c[0].is_nan() {
+                *c = *p;
+                return;
+            }
+            let keep = ((p.iter().copied().fold(0.0f32, f32::max) - 0.9) / 0.08).clamp(0.0, 1.0);
+            *c = [0, 1, 2].map(|i| (c[i].max(0.0) + (p[i] - c[i].max(0.0)) * keep).min(1.0));
+        });
+        Ok(clean)
     }
 
     /// Bayer mosaic -> camera RGB of the mosaic's size (not oriented; NaN where not covered).

@@ -121,7 +121,17 @@ impl SubjectModel {
 
     /// Salient-object probability map at the network resolution (320 x 320).
     fn predict(&self, guide: &Guide) -> Result<Plane> {
-        // Resize to 320x320 (bilinear) and normalize like rembg (max-normalized, ImageNet mean/std).
+        // Resize to 320x320 (area-averaged where shrinking, so nothing aliases; then bilinear) and
+        // normalize like rembg (max-normalized, ImageNet mean/std).
+        let (sw, sh) = (guide.width.min(NET), guide.height.min(NET));
+        let shrunk;
+        let guide = if (sw, sh) != (guide.width, guide.height) {
+            let r = sk_core::image::LinearImage::new(guide.width, guide.height, guide.rgb.clone()).resize_area(sw, sh);
+            shrunk = Guide { width: r.width, height: r.height, rgb: r.data };
+            &shrunk
+        } else {
+            guide
+        };
         let max = guide.rgb.iter().flat_map(|p| p.iter()).fold(1e-6f32, |m, v| m.max(*v));
         let mean = [0.485, 0.456, 0.406];
         let std = [0.229, 0.224, 0.225];
@@ -159,7 +169,7 @@ impl SubjectModel {
     /// Subject mask at mask resolution, edge-refined.
     pub fn subject_mask(&self, guide: &Guide) -> Result<MaskImage> {
         let small = guide.at_mask_resolution();
-        let pred = self.predict(guide)?;
+        let pred = self.predict(&small)?;
         // Upsample the prediction to the mask resolution.
         let (w, h) = (small.width, small.height);
         let up = Plane::new(

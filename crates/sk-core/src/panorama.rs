@@ -231,10 +231,15 @@ fn bilinear(p: &Plane, x: f32, y: f32) -> f32 {
     top * (1.0 - ty) + bot * ty
 }
 
+/// The factor `guide` multiplies an image's luminance with (its mean brought to 0.18).
+pub(crate) fn guide_scale(img: &LinearImage) -> f32 {
+    let mean = img.data.iter().step_by(17).map(|p| p[1]).sum::<f32>() / (img.data.len() / 17).max(1) as f32;
+    0.18 / mean.max(1e-6)
+}
+
 /// Gamma-encoded luminance of camera RGB (a robust guide; the exact color doesn't matter).
 pub(crate) fn guide(img: &LinearImage) -> Plane {
-    let mean = img.data.iter().step_by(17).map(|p| p[1]).sum::<f32>() / (img.data.len() / 17).max(1) as f32;
-    let scale = 0.18 / mean.max(1e-6);
+    let scale = guide_scale(img);
     Plane::new(img.width, img.height, img.data.par_iter().map(|p| ((p[0] + 2.0 * p[1] + p[2]) * 0.25 * scale).clamp(0.0, 1.0).powf(1.0 / 2.2)).collect())
 }
 
@@ -644,7 +649,8 @@ fn wave_correct(rot: &mut [M3]) {
 }
 
 /// Brightness gains of the images from their matched points (log least squares with a prior of 1).
-fn exposure_gains(n: usize, pairs: &[PairMatches], guides: &[Plane]) -> Vec<f32> {
+/// `scales` are the guides' normalization factors (`guide_scale`), taken out of the ratios.
+fn exposure_gains(n: usize, pairs: &[PairMatches], guides: &[Plane], scales: &[f32]) -> Vec<f32> {
     let mut a = vec![vec![0.0; n]; n];
     let mut b = vec![0.0; n];
     for (k, row) in a.iter_mut().enumerate() {
@@ -665,7 +671,8 @@ fn exposure_gains(n: usize, pairs: &[PairMatches], guides: &[Plane]) -> Vec<f32>
             continue;
         }
         let mid = ratios.len() / 2;
-        let r = *ratios.select_nth_unstable_by(mid, |x, y| x.total_cmp(y)).1;
+        // The guides' ratio is (L_i·s_i / L_j·s_j)^(1/2.2): without the scales, the images'.
+        let r = *ratios.select_nth_unstable_by(mid, |x, y| x.total_cmp(y)).1 - (scales[p.i] as f64 / scales[p.j] as f64).ln();
         // log g_i + log I_i = log g_j + log I_j  =>  log g_i - log g_j = -r
         let w = 10.0;
         a[p.i][p.i] += w;
@@ -844,7 +851,6 @@ fn render(sources: &[Source], focal: f64, proj: Projection, auto_crop: bool, max
             }
         }
     });
-    let mut img = LinearImage::new(ow, oh, data);
     if auto_crop {
         // On a reduced mask (fast), then shrunk by a pixel of that grid to stay inside.
         let step = (ow.max(oh) / 1500).max(1);
@@ -859,14 +865,17 @@ fn render(sources: &[Source], focal: f64, proj: Projection, auto_crop: bool, max
         if w > 2 && h > 2 {
             let (x0, y0) = ((x + 1) * step, (y + 1) * step);
             let (cw, ch) = ((w - 2) * step, (h - 2) * step);
-            let mut out = Vec::with_capacity(cw * ch);
-            for yy in y0..y0 + ch {
-                out.extend_from_slice(&img.data[yy * ow + x0..yy * ow + x0 + cw]);
+            drop(covered);
+            // Rows moved to the front in place (targets never pass their sources): no second copy.
+            for (k, yy) in (y0..y0 + ch).enumerate() {
+                data.copy_within(yy * ow + x0..yy * ow + x0 + cw, k * cw);
             }
-            img = LinearImage::new(cw, ch, out);
+            data.truncate(cw * ch);
+            data.shrink_to_fit();
+            (ow, oh) = (cw, ch);
         }
     }
-    Ok(img)
+    Ok(LinearImage::new(ow, oh, data))
 }
 
 // ------------------------------------------------------------------ entry points
@@ -946,16 +955,19 @@ pub fn stitch_files(paths: &[PathBuf], opts: &PanoramaOptions, progress: &dyn Fn
         images.push(img);
         progress(0.15 * (k + 1) as f32 / files.len() as f32);
     }
-    let full_long = images[0].width.max(images[0].height);
-    let factor = (full_long as f32 / FEATURE_EDGE as f32).max(1.0);
-    let guides: Vec<Plane> = images.par_iter().map(|img| guide(&img.fitted(FEATURE_EDGE))).collect();
+    let (guides, scales): (Vec<Plane>, Vec<f32>) = images
+        .par_iter()
+        .map(|img| {
+            let small = img.fitted(FEATURE_EDGE);
+            (guide(&small), guide_scale(&small))
+        })
+        .unzip();
     let (cams, pairs) = estimate(&guides, &|p| progress(0.15 + p * 0.5))?;
-    let gains = exposure_gains(images.len(), &pairs, &guides);
+    let gains = exposure_gains(images.len(), &pairs, &guides, &scales);
     let mut rot = cams.rot;
     wave_correct(&mut rot);
     let gw = guides[0].w as f64;
     let focal_full = cams.focal * images[0].width as f64 / gw;
-    let _ = factor;
     let sources: Vec<Source> = images.into_iter().zip(rot).zip(&gains).map(|((img, rot), g)| Source { img, rot, gain: *g }).collect();
     progress(0.7);
     let pano = render(&sources, focal_full, opts.projection, opts.auto_crop, 250_000_000)?;
@@ -970,7 +982,7 @@ pub fn stitch_files(paths: &[PathBuf], opts: &PanoramaOptions, progress: &dyn Fn
             width: pano.width,
             height: pano.height,
             data: &pano.data,
-            xyz_to_cam: reference.color.xyz_to_cam,
+            color: &reference.color,
             as_shot_wb: reference.as_shot_wb,
             info: &reference.info,
             baseline_exposure: 0.0,
@@ -1061,6 +1073,36 @@ mod tests {
             })
             .collect();
         LinearImage::new(w, h, data)
+    }
+
+    /// Two equally exposed frames, one mostly bright sky, one mostly dark ground: their gains
+    /// stay alike although the guides normalize them differently.
+    #[test]
+    fn gains_ignore_content_brightness() {
+        let (w, h) = (200usize, 100usize);
+        // World columns 0..300; frame a sees 0..200, frame b 100..300.
+        let world = |x: usize, y: usize| {
+            if x < 100 {
+                0.8
+            } else if x < 200 {
+                0.15 + 0.05 * ((x as f32 * 0.37).sin() * (y as f32 * 0.23).cos())
+            } else {
+                0.02
+            }
+        };
+        let frame = |off: usize| LinearImage::new(w, h, (0..w * h).map(|i| [world(i % w + off, i / w); 3]).collect());
+        let imgs = [frame(0), frame(100)];
+        let guides: Vec<Plane> = imgs.iter().map(guide).collect();
+        let scales: Vec<f32> = imgs.iter().map(guide_scale).collect();
+        assert!(scales[1] / scales[0] > 3.0);
+        let pts = (0..60).map(|k| {
+            let (x, y) = (110 + k % 80, 10 + k * 7 % 80);
+            let c = |px: usize| [px as f64 - w as f64 / 2.0, y as f64 - h as f64 / 2.0];
+            (c(x), c(x - 100))
+        });
+        let pairs = [PairMatches { i: 0, j: 1, h: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], pts: pts.collect() }];
+        let g = exposure_gains(2, &pairs, &guides, &scales);
+        assert!((g[0] / g[1] - 1.0).abs() < 0.02, "{g:?}");
     }
 
     #[test]

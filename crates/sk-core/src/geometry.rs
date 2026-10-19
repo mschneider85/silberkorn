@@ -362,9 +362,10 @@ impl GeoMap {
                 let ox = (region.x + rx) as f32 + 0.5;
                 let (pts, gain) = self.map(ox, oy);
                 let mut v = [0.0f32; 3];
-                if pts[0] == pts[2] {
-                    let s = bilinear(src, pts[1][0], pts[1][1]);
-                    v = s;
+                // One lookup only when all channels come from the same place (red and blue
+                // may agree and still differ from green).
+                if pts[0] == pts[1] && pts[1] == pts[2] {
+                    v = bilinear(src, pts[1][0], pts[1][1]);
                 } else {
                     for c in 0..3 {
                         v[c] = bilinear(src, pts[c][0], pts[c][1])[c];
@@ -589,6 +590,19 @@ mod tests {
 
     fn full(w: usize, h: usize) -> Region {
         Region { x: 0, y: 0, w, h }
+    }
+
+    /// Equal red and blue CA (both differing from green) still shifts red and blue.
+    #[test]
+    fn equal_red_and_blue_ca_is_applied() {
+        let src = gradient(40, 30);
+        let lens = LensCorrection { ca_red: 100.0, ca_blue: 100.0, ..Default::default() };
+        let g = GeoMap::new(&Geometry::default(), &lens, None, 0, 40, 30, false);
+        let out = g.resample(&src, full(40, 30));
+        // Near the left edge the scaled red/blue positions lie left of green.
+        let p = out.data[15 * 40 + 2];
+        let s = src.data[15 * 40 + 2];
+        assert!((p[0] - s[0]).abs() > 1e-3, "{p:?} vs {s:?}");
     }
 
     #[test]

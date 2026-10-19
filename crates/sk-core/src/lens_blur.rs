@@ -122,7 +122,15 @@ pub fn apply(src: &LinearImage, depth: &DepthMap, p: &LensBlur, clip: bool) -> L
             })
             .collect()
     };
-    let (far, (behind, near)) = rayon::join(far, || rayon::join(behind, near));
+    // Each grid is parallel inside. Side by side the three only add their transient buffers,
+    // which at full resolution (small first radius, `Grid::blurred`'s f = 1) or on large images
+    // triple the peak memory: then one after the other.
+    let full_res = (step / 3.0).round() <= 1.0;
+    let (far, (behind, near)) = if full_res || w * h > 8_000_000 {
+        (far(), (behind(), near()))
+    } else {
+        rayon::join(far, || rayon::join(behind, near))
+    };
 
     let data = (0..w * h)
         .into_par_iter()
