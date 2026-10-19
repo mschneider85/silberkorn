@@ -20,6 +20,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use crate::color::{Oklab, OutputSpace, mat_inv, mat_vec, srgb_decode, srgb_encode};
@@ -666,7 +667,7 @@ fn match_exposure_and_white_balance(
     mut now: LookStats,
     opts: LookOptions,
     bounds: &Bounds,
-    measure: &dyn Fn(&Adjustments) -> Option<LookStats>,
+    measure: &Measure,
 ) -> LookStats {
     // Variables: exposure (EV), white balance (mired, tint); residuals: brightness, cast a, cast b.
     let (k0, t0) = match out.white_balance.mode {
@@ -703,14 +704,21 @@ fn match_exposure_and_white_balance(
         if r[0].abs() < 0.004 && r[1].abs().max(r[2].abs()) < 0.0015 {
             break;
         }
-        // Jacobian by finite differences, column by column.
+        // Jacobian by finite differences, column by column (measured at the same time).
         let mut jac = [[0.0f32; 3]; 3];
-        for j in (0..3).filter(|j| used[*j]) {
-            let mut xj = x;
-            xj[j] += delta[j];
-            let mut a = out.clone();
-            set(&mut a, &xj);
-            let Some(s) = measure(&a) else { return now };
+        let columns: Vec<usize> = (0..3).filter(|j| used[*j]).collect();
+        let probes: Vec<Adjustments> = columns
+            .iter()
+            .map(|&j| {
+                let mut xj = x;
+                xj[j] += delta[j];
+                let mut a = out.clone();
+                set(&mut a, &xj);
+                a
+            })
+            .collect();
+        for (j, s) in columns.into_iter().zip(measure_all(measure, &probes)) {
+            let Some(s) = s else { return now };
             let rj = residual(&s);
             // Change of the measures per finite step (in units of the step, which keeps the
             // equations well scaled).
@@ -730,6 +738,14 @@ fn match_exposure_and_white_balance(
         }
     }
     now
+}
+
+/// Renders settings and measures their look (see `match_look`).
+type Measure<'a> = dyn Fn(&Adjustments) -> Option<LookStats> + Sync + 'a;
+
+/// `measure` of each of `probes`, at the same time: one rendering this small keeps few cores busy.
+fn measure_all(measure: &Measure, probes: &[Adjustments]) -> Vec<Option<LookStats>> {
+    probes.par_iter().map(measure).collect()
 }
 
 /// Damped normal equations (Levenberg) restricted to the used variables (the others stay put).
@@ -907,7 +923,7 @@ fn match_bands(reference: &LookStats, now: &LookStats, out: &mut Adjustments, bo
 /// The wheels of shadows, midtones and highlights take away the difference between the casts
 /// of the nearly neutral colors in each. Solved together, as the zones overlap, with the effect
 /// of each wheel measured (the curves after the color stage amplify it, in the shadows most).
-fn match_color_balance(reference: &LookStats, mut now: LookStats, out: &mut Adjustments, measure: &dyn Fn(&Adjustments) -> Option<LookStats>) -> LookStats {
+fn match_color_balance(reference: &LookStats, mut now: LookStats, out: &mut Adjustments, measure: &Measure) -> LookStats {
     const PROBE: f32 = 0.15;
     for _ in 0..2 {
         let valid: [bool; 3] = std::array::from_fn(|i| reference.zones[i].share.min(now.zones[i].share) >= 0.02);
@@ -916,15 +932,24 @@ fn match_color_balance(reference: &LookStats, mut now: LookStats, out: &mut Adju
             break;
         }
         let mut step = [[0.0f32; 3]; 2];
-        for c in 0..2 {
-            let mut jac = [[0.0f32; 3]; 3];
-            for j in (0..3).filter(|j| valid[*j]) {
+        // Each wheel nudged along a and b, all measured at the same time.
+        let nudges: Vec<(usize, usize)> = (0..2).flat_map(|c| (0..3).filter(|j| valid[*j]).map(move |j| (c, j))).collect();
+        let probes: Vec<Adjustments> = nudges
+            .iter()
+            .map(|&(c, j)| {
                 let mut probe = out.clone();
                 let w = wheels(&mut probe)[j].offset();
                 let mut ab = [w[0], w[1]];
                 ab[c] += PROBE;
                 *wheels(&mut probe)[j] = wheel(ab, w[2] * 100.0);
-                let Some(s) = measure(&probe) else { return now };
+                probe
+            })
+            .collect();
+        let mut measured = nudges.into_iter().zip(measure_all(measure, &probes)).peekable();
+        for c in 0..2 {
+            let mut jac = [[0.0f32; 3]; 3];
+            while let Some(((_, j), s)) = measured.next_if(|((pc, _), _)| *pc == c) {
+                let Some(s) = s else { return now };
                 for ((row, zs), zn) in jac.iter_mut().zip(&s.zones).zip(&now.zones) {
                     row[j] = (zs.ab[c] - zn.ab[c]) / PROBE;
                 }
