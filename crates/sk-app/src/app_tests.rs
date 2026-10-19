@@ -1585,13 +1585,12 @@ fn trashing_variants_deletes_only_them() {
 fn auto_upright_sets_geometry_as_one_undo_step() {
     let Some(mut f) = Fixture::new("upright") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
-    let undo = f.app.undo.len();
-    f.app.auto_upright(sk_core::upright::UprightMode::Vertical);
-    assert!(f.app.status.starts_with("Perspektive automatisch korrigier"), "{}", f.app.status);
+    f.app.auto_tool(sk_core::tools::Tool::Perspective);
+    f.pump("ausgerichtet", |app| app.auto_progress.is_none());
+    assert!(f.app.status.starts_with("Perspektive automatisch"), "{}", f.app.status);
     let g = f.app.current.as_ref().unwrap().adjustments.geometry.clone();
     assert!(g.straighten.abs() <= 15.0 && g.keystone_h == 0.0);
     if g != Default::default() {
-        assert_eq!(f.app.undo.len(), undo + 1);
         f.app.undo();
         assert_eq!(f.app.current.as_ref().unwrap().adjustments.geometry, Default::default());
     }
@@ -3002,7 +3001,7 @@ fn auto_adjust_current_image_and_selection() {
     assert_eq!(f.app.current.as_ref().unwrap().adjustments, before);
 
     // Only the exposure, on both selected images: the other one is saved to its sidecar.
-    f.app.auto_options = sk_core::auto::AutoOptions { white_balance: false, exposure: true, tone: false, contrast: false, vibrance: false };
+    f.app.auto_options = sk_core::auto::AutoOptions { exposure: true, ..sk_core::auto::AutoOptions::NONE };
     f.app.select_path(&b, egui::Modifiers::COMMAND);
     assert_eq!(f.app.selected_paths().len(), 2);
     f.app.auto_adjust_selection();
@@ -3012,6 +3011,48 @@ fn auto_adjust_current_image_and_selection() {
     let other = sidecar::load(&b).adjustments;
     assert_ne!(other.exposure, 0.0);
     assert_eq!((other.white_balance.mode, other.contrast), (sk_core::params::WbMode::AsShot, 0.0));
+}
+
+/// The "A" in a tool header sets only that tool, on all selected images; on a layer it is
+/// disabled.
+#[test]
+fn tool_auto_sets_only_its_tool_on_the_selection() {
+    let Some(mut f) = Fixture::new("tool-auto") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    f.pump("Indexiert", |a| a.entries.len() == 2);
+    let b = f.photo("_DSC0010.dng");
+    f.app.tab = crate::app::Tab::Exposure;
+    let adj = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.clone();
+    let before = adj(&f);
+
+    // The topmost "A" of the exposure tab is the one of "Belichtung".
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let a = nodes.iter().filter(|(l, _)| l == "A").map(|(_, r)| *r).min_by(|a, b| a.top().total_cmp(&b.top())).expect("A im Kopf");
+    click_at(&mut f, a.center());
+    assert!(f.app.auto_progress.is_some(), "{}", f.app.status);
+    f.pump("Belichtung angepasst", |app| app.auto_progress.is_none());
+    let after = adj(&f);
+    assert_ne!((after.exposure, after.contrast), (before.exposure, before.contrast), "{}", f.app.status);
+    assert_eq!(sk_core::params::Adjustments { exposure: before.exposure, contrast: before.contrast, ..after.clone() }, before);
+    assert_eq!(f.app.auto_mix.as_ref().map(|m| m.opts.exposure), Some(true), "Stärke auch nach einem A");
+
+    // Levels on both selected images: only the levels change, the other one's in its sidecar.
+    f.app.select_path(&b, egui::Modifiers::COMMAND);
+    f.app.auto_tool(sk_core::tools::Tool::Levels);
+    f.pump("Tonwerte angepasst", |app| app.auto_progress.is_none());
+    assert!(f.app.status.contains("2 Bilder"), "{}", f.app.status);
+    assert_eq!(sk_core::params::Adjustments { levels: after.levels.clone(), ..adj(&f) }, after);
+    let other = sidecar::load(&b).adjustments;
+    assert_eq!((other.exposure, other.contrast, other.white_balance.mode), (0.0, 0.0, sk_core::params::WbMode::AsShot));
+
+    // On a layer the "A" does nothing (and its command is off).
+    f.app.edit(|a| a.layers = vec![sk_core::params::Layer { name: "Himmel".into(), ..Default::default() }]);
+    f.app.select_layer(Some(0));
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let a = nodes.iter().filter(|(l, _)| l == "A").map(|(_, r)| *r).min_by(|a, b| a.top().total_cmp(&b.top())).expect("A im Kopf");
+    click_at(&mut f, a.center());
+    assert!(f.app.auto_progress.is_none());
+    assert!(!f.app.command_available("auto-exposure"));
 }
 
 /// Draws the tool panel (with AccessKit) and reports the labels of its widgets.

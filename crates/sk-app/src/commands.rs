@@ -7,8 +7,10 @@ use std::sync::RwLock;
 
 use egui::{Key, Modifiers};
 use sk_core::sidecar::ColorLabel;
+use sk_core::tools::Tool;
 
 use crate::app::{App, Tab};
+use crate::auto_tools::AutoKind;
 use crate::layers::LocalTool;
 use crate::theme::icon;
 
@@ -74,6 +76,10 @@ fn can_export(a: &App) -> bool {
 fn image_tool(a: &App) -> bool {
     has_image(a) && !a.on_layer()
 }
+/// The "A" of a tool (see `auto_tools`): for the selected images.
+fn auto(a: &App, tool: Tool) -> bool {
+    has_selection(a) && AutoKind::of_tool(tool).is_some_and(|k| a.can_auto(k))
+}
 fn has_layers(a: &App) -> bool {
     a.current.as_ref().is_some_and(|c| !c.adjustments.layers.is_empty())
 }
@@ -131,12 +137,15 @@ pub const COMMANDS: &[Command] = &[
     cmd!("crop", icon::CROP, "Zuschneiden", "Entwickeln", [NONE => Key::C], "crop", image_tool, |a, _| a.toggle_crop()),
     cmd!("finish-crop", icon::CHECK, "Zuschnitt bzw. Trapezkorrektur übernehmen", "Entwickeln", [NONE => Key::Enter], "crop fertig trapez anwenden", |a| a.crop_tool.is_some() || a.keystone_guides_active(), |a, _| a.finish_viewer_tool()),
     cmd!("straighten", icon::RULER, "Geraderichten (Linie ziehen)", "Entwickeln", [], "straighten horizont", image_tool, |a, _| a.toggle_straighten()),
-    cmd!("auto-adjust", icon::MAGIC_WAND, "Automatisch anpassen", "Entwickeln", [CTRL => Key::L], "auto adjust automatisch belichtung weißabgleich tonwerte", |a| has_selection(a) && a.auto_progress.is_none() && !a.on_layer(), |a, _| a.auto_adjust_selection()),
-    cmd!("auto-upright", icon::PERSPECTIVE, "Perspektive automatisch korrigieren", "Entwickeln", [SHIFT => Key::A], "upright geraderichten automatisch stürzende linien", image_tool, |a, _| a.auto_upright(sk_core::upright::UprightMode::Vertical)),
-    cmd!("auto-wb", icon::MAGIC_WAND, "Weißabgleich automatisch", "Entwickeln", [], "auto wb white balance weißabgleich automatisch", image_tool, |a, _| {
-        a.tab = Tab::Color;
-        a.auto_white_balance();
-    }),
+    cmd!("auto-adjust", icon::MAGIC_WAND, "Automatisch anpassen", "Entwickeln", [CTRL => Key::L], "auto adjust automatisch belichtung weißabgleich tonwerte", |a| has_selection(a) && a.can_auto(AutoKind::Adjust(a.auto_options)), |a, _| a.auto_adjust_selection()),
+    cmd!("auto-wb", icon::MAGIC_WAND, "Weißabgleich automatisch", "Entwickeln", [], "auto wb white balance weißabgleich automatisch", |a| auto(a, Tool::WhiteBalance), |a, _| a.auto_tool(Tool::WhiteBalance)),
+    cmd!("auto-exposure", icon::MAGIC_WAND, "Belichtung automatisch", "Entwickeln", [], "auto exposure belichtung kontrast automatisch", |a| auto(a, Tool::Exposure), |a, _| a.auto_tool(Tool::Exposure)),
+    cmd!("auto-tone", icon::MAGIC_WAND, "Lichter & Tiefen automatisch", "Entwickeln", [], "auto hdr lichter tiefen weiß schwarz automatisch", |a| auto(a, Tool::HighlightsShadows), |a, _| a.auto_tool(Tool::HighlightsShadows)),
+    cmd!("auto-vibrance", icon::MAGIC_WAND, "Dynamik automatisch", "Entwickeln", [], "auto vibrance dynamik farbe automatisch", |a| auto(a, Tool::Color), |a, _| a.auto_tool(Tool::Color)),
+    cmd!("auto-levels", icon::MAGIC_WAND, "Tonwerte automatisch", "Entwickeln", [], "auto levels tonwerte schwarzpunkt weißpunkt automatisch", |a| auto(a, Tool::Levels), |a, _| a.auto_tool(Tool::Levels)),
+    cmd!("auto-straighten", icon::MAGIC_WAND, "Geraderichten automatisch", "Entwickeln", [], "auto straighten horizont geraderichten drehen automatisch", |a| auto(a, Tool::Rotation), |a, _| a.auto_tool(Tool::Rotation)),
+    cmd!("auto-upright", icon::PERSPECTIVE, "Perspektive automatisch", "Entwickeln", [SHIFT => Key::A], "upright geraderichten automatisch stürzende linien trapez", |a| auto(a, Tool::Perspective), |a, _| a.auto_tool(Tool::Perspective)),
+    cmd!("auto-lens", icon::MAGIC_WAND, "Objektivprofil automatisch", "Entwickeln", [], "auto lens objektiv profil lensfun automatisch", |a| auto(a, Tool::LensCorrection), |a, _| a.auto_tool(Tool::LensCorrection)),
     cmd!("wb-picker", icon::EYEDROPPER, "Weißabgleich-Pipette", "Entwickeln", [NONE => Key::W], "white balance wb aufnehmen", image_tool, |a, _| a.toggle_wb_picker()),
     cmd!("rename", icon::PENCIL_SIMPLE, "Umbenennen …", "Foto", [CTRL_SHIFT => Key::R], "rename", has_selection, |a, _| a.open_rename()),
     cmd!("process-update", icon::ARROW_CIRCLE_UP, "Auf aktuelle Prozessversion heben", "Entwickeln", [], "prozessversion engine update", has_selection, |a, _| a.update_process_version()),

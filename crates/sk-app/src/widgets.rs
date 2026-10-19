@@ -105,6 +105,37 @@ pub fn take_eye_clicked(ctx: &egui::Context) -> Option<sk_core::tools::Tool> {
     })
 }
 
+fn auto_state_id() -> egui::Id {
+    egui::Id::new("tool_auto_state")
+}
+
+fn auto_clicked_id() -> egui::Id {
+    egui::Id::new("tool_auto_clicked")
+}
+
+/// Whether the "A" in the tool headers (see `auto_tools`) can start now. Set before the tool tabs
+/// are drawn.
+#[derive(Clone, Copy, Default)]
+pub struct AutoState {
+    /// An automatic run is going on.
+    pub busy: bool,
+    /// The lens profiles are loaded.
+    pub lens_db: bool,
+}
+
+pub fn set_auto_state(ctx: &egui::Context, state: AutoState) {
+    ctx.data_mut(|d| d.insert_temp(auto_state_id(), state));
+}
+
+/// The tool whose "A" was clicked since the last call.
+pub fn take_auto_clicked(ctx: &egui::Context) -> Option<sk_core::tools::Tool> {
+    ctx.data_mut(|d| {
+        let tool = d.get_temp(auto_clicked_id());
+        d.remove::<sk_core::tools::Tool>(auto_clicked_id());
+        tool
+    })
+}
+
 fn edit_layer_id() -> egui::Id {
     egui::Id::new("tool_edit_layer")
 }
@@ -285,7 +316,7 @@ fn section_inner(
         });
     }
     // Right to left: caret, eye (tools only; its place stays free while there is nothing to
-    // switch off), reset, copy.
+    // switch off), reset, "A" (tools that set themselves), copy.
     let mut x = 34.0;
     if let Some(tool) = eye_tool {
         if hidden || states.edited.contains(&tool) {
@@ -312,6 +343,26 @@ fn section_inner(
         let b = egui::Button::new(RichText::new(theme::icon::ARROWS_COUNTER_CLOCKWISE).size(13.0).color(color)).frame_when_inactive(false);
         if ui.put(r, b).on_hover_text("Werkzeug zurücksetzen").clicked() {
             reset();
+            header_button_clicked = true;
+        }
+        x += 26.0;
+    }
+    if let Some((tool, hint)) = copy.and_then(|t| Some((t, crate::auto_tools::tool_hint(t)?))) {
+        let r = Rect::from_center_size(inner.right_center() - vec2(x, 0.0), vec2(24.0, 22.0));
+        let state = ui.data(|d| d.get_temp::<AutoState>(auto_state_id())).unwrap_or_default();
+        let lens_missing = tool == sk_core::tools::Tool::LensCorrection && !state.lens_db;
+        let enabled = !on_layer && !state.busy && !lens_missing;
+        let color = if hovered || ui.rect_contains_pointer(r) { theme::TEXT } else { theme::TEXT_FAINT };
+        let b = egui::Button::new(RichText::new("A").size(13.0).strong().color(color)).frame_when_inactive(false);
+        let disabled = if on_layer {
+            ONLY_IMAGE
+        } else if state.busy {
+            "Erst wenn die laufende automatische Anpassung fertig ist"
+        } else {
+            "Die Objektivprofile werden noch geladen"
+        };
+        if ui.put(r, |ui: &mut Ui| ui.add_enabled(enabled, b)).on_hover_text(hint).on_disabled_hover_text(disabled).clicked() {
+            ui.data_mut(|d| d.insert_temp(auto_clicked_id(), tool));
             header_button_clicked = true;
         }
         x += 26.0;

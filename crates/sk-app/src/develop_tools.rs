@@ -246,6 +246,7 @@ impl App {
         let mut apply_aspect = false;
         let mut toggle_straighten = false;
         let mut upright = None;
+        let auto_free = self.auto_progress.is_none();
         // Keystone lines: start (with their mode), apply or cancel; a slider moved under the grid.
         let mut guides: Option<Option<crate::crop::GuideMode>> = None;
         let (mut apply_guides, mut grid_moved) = (false, false);
@@ -383,10 +384,6 @@ impl App {
                 if ui.add(line).on_hover_text("Horizont oder Kante nachziehen").clicked() {
                     toggle_straighten = true;
                 }
-                let tip = "Horizont und Kanten automatisch waagerecht, ohne Perspektivkorrektur";
-                if ui.button(format!("{}  Auto", icon::MAGIC_WAND)).on_hover_text(tip).clicked() {
-                    upright = Some(sk_core::upright::UprightMode::Level);
-                }
                 if ui.button(format!("{}  90°", crate::theme::icon::ARROW_COUNTER_CLOCKWISE)).on_hover_text("90° nach links drehen").clicked() {
                     adj.rotation = (adj.rotation + 3) % 4;
                     changed = true;
@@ -412,14 +409,10 @@ impl App {
             use crate::crop::GuideMode;
             use sk_core::upright::UprightMode;
             ui.horizontal_wrapped(|ui| {
-                // Each button stays together with its menu arrow when the row wraps.
-                ui.horizontal(|ui| {
-                    let tip = crate::commands::hint("Stürzende Linien automatisch korrigieren, die Drehung wird mit ausgerichtet", "auto-upright");
-                    if ui.button(format!("{}  Auto", icon::MAGIC_WAND)).on_hover_text(tip).clicked() {
-                        upright = Some(UprightMode::Vertical);
-                    }
-                    ui.menu_button(icon::CARET_DOWN, |ui| {
-                        ui.label(RichText::new("Automatisch ausrichten:").weak());
+                // The vertical edges alone are the "A" in the header; here also both.
+                let label = format!("{}  Automatisch {}", icon::MAGIC_WAND, icon::CARET_DOWN);
+                ui.add_enabled_ui(auto_free, |ui| {
+                    ui.menu_button(label, |ui| {
                         let vertical_tip = crate::commands::hint("Stürzende Linien werden parallel", "auto-upright");
                         for (mode, label, tip) in [
                             (UprightMode::Vertical, "Vertikale Kanten", vertical_tip.as_str()),
@@ -432,7 +425,7 @@ impl App {
                         }
                     })
                     .response
-                    .on_hover_text("Wie automatisch korrigiert wird");
+                    .on_hover_text("Stürzende Linien automatisch korrigieren, bei mehreren ausgewählten Bildern für alle");
                 });
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -505,7 +498,7 @@ impl App {
             }
         }
         if let Some(mode) = upright {
-            self.auto_upright(mode);
+            self.run_auto(crate::auto_tools::AutoKind::Upright(mode));
         }
         match guides {
             Some(Some(mode)) => self.start_keystone_guides(mode),
@@ -854,6 +847,7 @@ impl App {
                 ui.checkbox(&mut opts.tone, "Lichter, Tiefen, Weiß und Schwarz");
                 ui.checkbox(&mut opts.contrast, "Kontrast");
                 ui.checkbox(&mut opts.vibrance, "Dynamik");
+                ui.checkbox(&mut opts.levels, "Tonwerte (Schwarz- und Weißpunkt)");
             })
             .response
             .on_hover_text("Was automatisch angepasst wird");
@@ -889,84 +883,9 @@ impl App {
         }
     }
 
-    /// Adjusts the selected images automatically (see `sk_core::auto::auto_adjust`), in the
-    /// background; the results arrive as [`Self::auto_adjusted`].
-    pub fn auto_adjust_selection(&mut self) {
-        if self.auto_progress.is_some() {
-            return;
-        }
-        if !self.auto_options.any() {
-            self.status = "Automatisch anpassen: nichts ausgewählt, was angepasst werden soll".into();
-            return;
-        }
-        let current = self.current_path();
-        let items: Vec<crate::workers::AutoItem> = self
-            .selected_paths()
-            .into_iter()
-            .map(|path| {
-                let open = (Some(&path) == current.as_ref())
-                    .then(|| self.current.as_ref().map(|c| (c.meta.clone(), c.preview.clone(), c.adjustments.clone())))
-                    .flatten();
-                crate::workers::AutoItem { path, open }
-            })
-            .collect();
-        if items.is_empty() {
-            return;
-        }
-        self.auto_progress = Some((0, items.len()));
-        self.batch_step = None;
-        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        self.auto_cancel = Some(cancel.clone());
-        self.status = if items.len() == 1 { "Passe automatisch an …".into() } else { format!("Passe {} automatisch an …", widgets::image_count(items.len())) };
-        self.workers.auto_adjust(crate::workers::AutoJob { items, opts: self.auto_options, cancel });
-    }
-
-    /// The auto adjustment of one image is done: its settings change (the open image's as one
-    /// undo step). Only what the options cover changes, so edits made meanwhile stay.
-    pub(crate) fn auto_adjusted(&mut self, path: std::path::PathBuf, opts: auto::AutoOptions, result: Result<Box<sk_core::params::Adjustments>, String>) {
-        let failed = match result {
-            Ok(adj) => {
-                let before = self.current.as_ref().filter(|_| self.current_path().as_ref() == Some(&path)).map(|c| c.adjustments.clone());
-                self.set_adjustments_on(std::slice::from_ref(&path), |a| opts.take(&adj, a));
-                // The open image: its strength can still be changed.
-                if let Some(before) = before
-                    && let Some(cur) = &self.current
-                {
-                    self.auto_mix = Some(AutoMix { path, before, auto: cur.adjustments.clone(), opts, strength: 100.0 });
-                }
-                false
-            }
-            Err(e) => {
-                log::warn!("Automatisch anpassen: {e}");
-                self.report_error(format!("Automatisch anpassen fehlgeschlagen: {e}"));
-                true
-            }
-        };
-        if let Some((done, total)) = self.auto_progress {
-            let done = done + 1;
-            self.auto_progress = (done < total).then_some((done, total));
-            if done == total && !failed && !self.status.starts_with("Automatisch anpassen fehlgeschlagen") {
-                self.status = if total == 1 { "Automatisch angepasst".into() } else { format!("{} automatisch angepasst", widgets::image_count(total)) };
-            }
-        }
-    }
-
-    /// White balance from the nearly neutral parts of the image (see `auto::auto_white_balance`).
-    pub fn auto_white_balance(&mut self) {
-        let Some(cur) = &self.current else { return };
-        let wb = auto::auto_white_balance(&cur.meta, &cur.adjustments, &cur.preview);
-        self.edit(|a| a.white_balance = wb.clone());
-    }
-
     /// The lensfun profile for the current image's lens: name and coefficients at its focal length.
     fn lens_profile(&self) -> Option<(String, sk_core::params::LensCoefficients)> {
-        let (db, cur) = (self.lens_db.as_ref()?, self.current.as_ref()?);
-        if cur.meta.lens_corrected {
-            return None;
-        }
-        let profile = sk_core::lensfun::find(db, cur.meta.info.lens.as_deref()?)?;
-        let coeffs = profile.coefficients(cur.meta.info.focal_mm.unwrap_or(50.0), cur.meta.info.fnumber);
-        Some((profile.name(), coeffs))
+        crate::auto_tools::lens_profile(self.lens_db.as_ref()?, &self.current.as_ref()?.meta)
     }
 
     /// Name of the lensfun profile for the current lens, cached per lens name.

@@ -64,28 +64,6 @@ const GRAB_END: f32 = 12.0;
 const GRAB_LINE: f32 = 7.0;
 
 impl App {
-    /// Straighten angle and keystone from the image's straight edges.
-    pub fn auto_upright(&mut self, mode: sk_core::upright::UprightMode) {
-        let Some(cur) = &self.current else { return };
-        let segments = sk_core::upright::detect_segments(&cur.preview);
-        let adj = &cur.adjustments;
-        let src = (cur.preview.width, cur.preview.height);
-        let Some(g) = sk_core::upright::solve(&segments, &adj.geometry, &adj.lens, cur.meta.lens.as_ref(), adj.rotation, src, mode) else {
-            self.status = "Perspektive automatisch korrigieren: keine geraden Kanten gefunden".into();
-            return;
-        };
-        let keystone = if g.keystone_v != 0.0 || g.keystone_h != 0.0 {
-            format!(", Trapezkorrektur {:.0} / {:.0}", g.keystone_v, g.keystone_h)
-        } else {
-            String::new()
-        };
-        self.status = format!("Perspektive automatisch korrigiert: {:.1}°{keystone}", g.straighten);
-        self.edit(|a| a.geometry = g);
-        self.commit_and_save();
-    }
-}
-
-impl App {
     /// The geometric map of the image as the viewer shows it (preview pixels).
     fn shown_geomap(&self) -> Option<sk_core::geometry::GeoMap> {
         let cur = self.current.as_ref()?;

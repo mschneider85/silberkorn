@@ -17,7 +17,11 @@ impl App {
         widgets::set_copy_targets(ui.ctx(), others);
         widgets::set_edit_layer(ui.ctx(), self.on_layer());
         widgets::set_tool_states(ui.ctx(), self.tool_states());
+        widgets::set_auto_state(ui.ctx(), widgets::AutoState { busy: self.auto_progress.is_some(), lens_db: self.lens_db.is_some() });
         self.tool_tabs(ui);
+        if let Some(tool) = widgets::take_auto_clicked(ui.ctx()) {
+            self.auto_tool(tool);
+        }
         if let Some(tool) = widgets::take_copy_clicked(ui.ctx()) {
             self.transfer_tool(tool);
         }
@@ -240,7 +244,6 @@ impl App {
         }
 
         let mut reset_wb = false;
-        let mut auto_wb = false;
         widgets::tool_section(ui, sk_core::tools::Tool::WhiteBalance, Some(&mut || reset_wb = true), |ui| {
             let wb = &mut adj.white_balance;
             // A layer warms or cools relative to the background: no mode, Kelvin or pipette.
@@ -258,10 +261,7 @@ impl App {
                 changed |= widgets::slider_row_with(ui, "Temperatur", &mut l.temperature, -100.0..=100.0, 0.0, 0, opts(widgets::RAIL_KELVIN));
                 changed |= widgets::slider_row_with(ui, "Tönung", &mut l.tint, -150.0..=150.0, 0.0, 0, opts(widgets::RAIL_TINT));
                 ui.add_enabled_ui(false, |ui| {
-                    ui.horizontal(|ui| {
-                        let _ = ui.add(egui::Button::new(format!("{}  Weißabgleich-Pipette", crate::theme::icon::EYEDROPPER)).selected(false));
-                        let _ = ui.button(format!("{}  Auto", crate::theme::icon::MAGIC_WAND));
-                    });
+                    let _ = ui.add(egui::Button::new(format!("{}  Weißabgleich-Pipette", crate::theme::icon::EYEDROPPER)).selected(false));
                 })
                 .response
                 .on_disabled_hover_text(widgets::ONLY_IMAGE);
@@ -286,18 +286,9 @@ impl App {
                 *wb = WhiteBalance { mode: WbMode::Custom, kelvin, tint };
                 changed = true;
             }
-            ui.horizontal(|ui| {
-                if ui.add(egui::Button::new(format!("{}  Weißabgleich-Pipette", crate::theme::icon::EYEDROPPER)).selected(picking)).on_hover_text("Auf eine neutrale (graue) Stelle im Bild klicken").clicked() {
-                    toggle_picker = true;
-                }
-                if ui
-                    .button(format!("{}  Auto", crate::theme::icon::MAGIC_WAND))
-                    .on_hover_text("Weißabgleich aus den fast neutralen Stellen des Bildes (Steine, Wolken, weiße Wände), ausgehend vom Kamerawert")
-                    .clicked()
-                {
-                    auto_wb = true;
-                }
-            });
+            if ui.add(egui::Button::new(format!("{}  Weißabgleich-Pipette", crate::theme::icon::EYEDROPPER)).selected(picking)).on_hover_text("Auf eine neutrale (graue) Stelle im Bild klicken").clicked() {
+                toggle_picker = true;
+            }
         });
         if reset_wb {
             match t.layer_mut() {
@@ -309,9 +300,6 @@ impl App {
         t.store(adj);
         if no_camera_curve {
             self.status = "Kein passendes Kamera-JPEG in dieser Datei: Film Standard bleibt".into();
-        }
-        if auto_wb {
-            self.auto_white_balance();
         }
         if toggle_picker {
             // Ends the other viewer tools; needs `self`, the adjustments are borrowed again below.

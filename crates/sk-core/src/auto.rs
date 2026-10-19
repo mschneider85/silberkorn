@@ -62,21 +62,26 @@ pub fn auto_exposure(meta: &RawMeta, adj: &Adjustments, preview: &LinearImage) -
 pub struct AutoOptions {
     pub white_balance: bool,
     pub exposure: bool,
-    /// Highlights, shadows, whites and blacks (levels go back to neutral).
+    /// Highlights, shadows, whites and blacks.
     pub tone: bool,
     pub contrast: bool,
     pub vibrance: bool,
+    /// Black and white point of the levels (see [`auto_levels`]).
+    pub levels: bool,
 }
 
 impl Default for AutoOptions {
     fn default() -> Self {
-        Self { white_balance: true, exposure: true, tone: true, contrast: true, vibrance: true }
+        Self { white_balance: true, exposure: true, tone: true, contrast: true, vibrance: true, levels: false }
     }
 }
 
 impl AutoOptions {
+    /// Nothing set: the start for the options of a single tool.
+    pub const NONE: AutoOptions = AutoOptions { white_balance: false, exposure: false, tone: false, contrast: false, vibrance: false, levels: false };
+
     pub fn any(&self) -> bool {
-        self.white_balance || self.exposure || self.tone || self.contrast || self.vibrance
+        self.white_balance || self.exposure || self.tone || self.contrast || self.vibrance || self.levels
     }
 
     /// `current` with the settings these options cover `t` of the way from `before` to `auto`
@@ -97,6 +102,8 @@ impl AutoOptions {
             out.shadows = whole(before.shadows, auto.shadows);
             out.whites = whole(before.whites, auto.whites);
             out.blacks = whole(before.blacks, auto.blacks);
+        }
+        if self.levels {
             let (a, b) = (&before.levels, &auto.levels);
             out.levels = Levels {
                 rgb: a.rgb.lerp(&b.rgb, t),
@@ -129,6 +136,8 @@ impl AutoOptions {
         }
         if self.tone {
             (out.highlights, out.shadows, out.whites, out.blacks) = (auto.highlights, auto.shadows, auto.whites, auto.blacks);
+        }
+        if self.levels {
             out.levels = auto.levels.clone();
         }
         if self.contrast {
@@ -579,6 +588,8 @@ pub fn auto_adjust(meta: &RawMeta, adj: &Adjustments, preview: &LinearImage, opt
     }
     if opts.tone {
         (a.highlights, a.shadows, a.whites, a.blacks) = (0.0, 0.0, 0.0, 0.0);
+    }
+    if opts.levels {
         a.levels = Levels::default();
     }
     if opts.contrast {
@@ -597,6 +608,9 @@ pub fn auto_adjust(meta: &RawMeta, adj: &Adjustments, preview: &LinearImage, opt
     }
     if !knobs.is_empty() {
         optimize_tone(meta, &mut a, &src, focus, &knobs, opts.exposure, camera);
+    }
+    if opts.levels {
+        a.levels = auto_levels(meta, &a, &src);
     }
     if opts.vibrance {
         a.vibrance = auto_vibrance(meta, &a, &src, focus);
@@ -662,6 +676,45 @@ fn optimize_tone(meta: &RawMeta, a: &mut Adjustments, src: &LinearImage, focus: 
             }
         }
     }
+}
+
+/// Share of the samples the black and white points of [`auto_levels`] may cut off, each.
+const LEVELS_CLIP: f32 = 0.0005;
+
+/// Levels whose black and white points span what goes into them (see
+/// [`levels_input_histogram`]), cutting off a tiny share. The same for all channels, so the
+/// colors stay as they are; midtones and output stay neutral. Neutral if the range is used
+/// already.
+pub fn auto_levels(meta: &RawMeta, adj: &Adjustments, preview: &LinearImage) -> Levels {
+    let h = levels_input_histogram(meta, &levels_input_settings(adj), preview);
+    let total: u32 = h.r.iter().sum::<u32>() * 3;
+    if total == 0 {
+        return Levels::default();
+    }
+    let count = |i: usize| h.r[i] + h.g[i] + h.b[i];
+    let cut = (total as f32 * LEVELS_CLIP) as u32;
+    let mut sum = 0;
+    let black = (0..256).find(|&i| {
+        sum += count(i);
+        sum > cut
+    });
+    sum = 0;
+    let white = (0..256).rev().find(|&i| {
+        sum += count(i);
+        sum > cut
+    });
+    let (Some(black), Some(white)) = (black, white) else { return Levels::default() };
+    // Not further than a dark or hazy image needs, and only where it shows.
+    let in_black = (black as f32 / 255.0).min(0.15);
+    let in_white = (white as f32 / 255.0).max(0.8);
+    let mut levels = Levels::default();
+    if in_black >= 0.01 {
+        levels.rgb.in_black = (in_black * 1000.0).round() / 1000.0;
+    }
+    if in_white <= 0.99 {
+        levels.rgb.in_white = (in_white * 1000.0).round() / 1000.0;
+    }
+    levels
 }
 
 /// Vibrance for images with few colors: more for dull images, nothing for colorful ones, less
@@ -759,6 +812,22 @@ mod tests {
     }
 
     #[test]
+    fn auto_levels_spread_a_hazy_scene_and_change_nothing_else() {
+        let m = meta();
+        let hazy = LinearImage::new(120, 80, scene(120, 80, 0.2, [1.0; 3]).data.iter().map(|p| p.map(|v| v + 0.1)).collect());
+        let l = auto_levels(&m, &Adjustments::default(), &hazy);
+        assert!(l.rgb.in_black > 0.01 && l.rgb.in_black <= 0.15, "{l:?}");
+        assert!(l.rgb.in_white < 0.99 && l.rgb.in_white >= 0.8, "{l:?}");
+        assert_eq!((l.red, l.rgb.midtone, l.rgb.out_black), (Default::default(), 1.0, 0.0));
+        // As an option of the auto adjustment: only the levels change.
+        let only = AutoOptions { levels: true, ..AutoOptions::NONE };
+        let start = Adjustments { exposure: 0.3, contrast: 7.0, ..Default::default() };
+        let out = auto_adjust(&m, &start, &hazy, &only, &Focus::default(), None);
+        assert_eq!(out.levels, auto_levels(&m, &start, &hazy));
+        assert_eq!(Adjustments { levels: Default::default(), ..out }, start);
+    }
+
+    #[test]
     fn auto_adjust_brightens_a_dark_scene_and_respects_the_options() {
         let m = meta();
         let img = scene(120, 80, 0.08, [1.0; 3]);
@@ -770,7 +839,7 @@ mod tests {
             assert!((-50.0..=90.0).contains(&v) && v == v.round(), "{out:?}");
         }
         // Only the exposure: nothing else changes.
-        let only = AutoOptions { white_balance: false, exposure: true, tone: false, contrast: false, vibrance: false };
+        let only = AutoOptions { exposure: true, ..AutoOptions::NONE };
         let start = Adjustments { contrast: 7.0, highlights: 3.0, ..Default::default() };
         let out = auto_adjust(&m, &start, &img, &only, &Focus::default(), None);
         assert!(out.exposure > 1.0);
@@ -833,7 +902,7 @@ mod tests {
     fn take_copies_only_what_the_options_cover() {
         let auto = Adjustments { exposure: 1.0, contrast: 20.0, vibrance: 10.0, shadows: 30.0, ..Default::default() };
         let onto = Adjustments { saturation: 5.0, ..Default::default() };
-        let opts = AutoOptions { white_balance: false, exposure: true, tone: false, contrast: true, vibrance: false };
+        let opts = AutoOptions { exposure: true, contrast: true, ..AutoOptions::NONE };
         let out = opts.take(&auto, &onto);
         assert_eq!((out.exposure, out.contrast, out.vibrance, out.shadows, out.saturation), (1.0, 20.0, 0.0, 0.0, 5.0));
     }

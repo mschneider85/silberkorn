@@ -461,11 +461,27 @@ eingestellten Belichtungskorrektur. Die übrigen Regler setzen darauf auf.
 
 **Automatisch anpassen** (Strg+L, Knopf im Tab „Belichtung“ oder Entwickeln → „Automatisch
 anpassen“) stellt mehrere Werkzeuge in einem Rückgängig-Schritt ein:
-Weißabgleich, Belichtung, Lichter, Schatten, Weiß, Schwarz, Kontrast und Dynamik. Was dabei
-gesetzt wird, legt das Menü neben dem Knopf fest. Sind mehrere Bilder ausgewählt, werden alle
-angepasst, im Hintergrund. Darunter steht der Regler **Stärke**, aktiv nach
+Weißabgleich, Belichtung, Lichter, Schatten, Weiß, Schwarz, Kontrast und Dynamik, auf Wunsch auch
+die Tonwerte. Was dabei gesetzt wird, legt das Menü neben dem Knopf fest. Sind mehrere Bilder
+ausgewählt, werden alle angepasst, im Hintergrund. Darunter steht der Regler **Stärke**, aktiv nach
 einer automatischen Anpassung des Bildes: Er blendet zwischen den Einstellungen vorher (0 %) und dem vollen Auto-Ergebnis (100 %)
 über, den Weißabgleich in Mired.
+
+**A im Werkzeugkopf:** Werkzeuge, die sich selbst einstellen können, tragen im Kopf ein **A**. Es
+stellt nur dieses Werkzeug ein, die übrigen Regler bleiben, wie sie sind. Wie „Automatisch anpassen“
+wirkt es auf alle ausgewählten Bilder, im Hintergrund, und jedes A ist auch ein Befehl (Befehlssuche,
+eigenes Tastenkürzel). Auf einer Ebene ist es deaktiviert.
+
+| Werkzeug | A stellt ein | Befehl |
+|---|---|---|
+| Weißabgleich | Weißabgleich aus den fast neutralen Stellen | Weißabgleich automatisch |
+| Belichtung | Belichtung und Kontrast | Belichtung automatisch |
+| Lichter & Tiefen | Lichter, Tiefen, Weiß und Schwarz | Lichter & Tiefen automatisch |
+| Farbe | Dynamik | Dynamik automatisch |
+| Tonwerte | Schwarz- und Weißpunkt für alle Kanäle (je höchstens 0.05 % abgeschnitten, Farben bleiben) | Tonwerte automatisch |
+| Drehen & Spiegeln | Horizont und Kanten waagerecht | Geraderichten automatisch |
+| Trapezkorrektur | Drehung und stürzende Linien (Umschalt+A) | Perspektive automatisch |
+| Objektivkorrektur | Lensfun-Profil des Objektivs | Objektivprofil automatisch |
 
 - **Helligkeit:** Wie hell das Bild werden soll, gibt das Kamera-JPEG vor (siehe oben). Auf dem
   Kamera-Look ändert Auto die Belichtung daher meist nur wenig und kümmert sich vor allem um Lichter,
@@ -487,8 +503,7 @@ einer automatischen Anpassung des Bildes: Er blendet zwischen den Einstellungen 
   neutralen Stellen (Steine, Wasser, weiße Wände, Wolken), nicht nach dem Mittelwert des ganzen
   Bildes. So ziehen ein Wald oder eine Holzwand ihn nicht weg. Je weniger solche Stellen es gibt,
   desto mehr bleibt es beim Kamerawert. Warmes und kühles Licht behalten einen Teil ihrer Stimmung
-  (ein Sonnenuntergang bleibt warm). Der Knopf „Auto“ im Abschnitt Weißabgleich (Tab „Farbe“)
-  arbeitet genauso.
+  (ein Sonnenuntergang bleibt warm). Das A im Kopf von Weißabgleich (Tab „Farbe“) arbeitet genauso.
 
 Kommandozeile (Vorher | Nachher nebeneinander): `cargo run --release -p sk-ai --example auto -- <Ordner> <raw>...`
 
@@ -509,10 +524,13 @@ genau ausgerichtet sind, Esc bricht ab. Wer verschobene Linien liegen lässt und
 LSD-Prinzip) und bestimmt Drehung und Perspektive so, dass sie waagerecht bzw. senkrecht stehen.
 Bewertet wird jede Lösung über die echte Geometrie-Kette, einschließlich Objektivkorrektur.
 
-- **Auto** (Umschalt+A, Entwickeln → „Perspektive automatisch korrigieren“): Drehung und stürzende Linien.
-- Im Menü daneben **Vertikale und horizontale Kanten:** zusätzlich die horizontale Perspektive, etwa
-  für eine schräg fotografierte Fassade.
-- **Auto** im Abschnitt Drehung: nur Horizont und Kanten waagerecht, die Perspektive bleibt unverändert.
+- **A** im Kopf der Trapezkorrektur (Umschalt+A, Entwickeln → „Perspektive automatisch“): Drehung und
+  stürzende Linien.
+- Im Menü **Automatisch** zusätzlich **Vertikale und horizontale Kanten:** auch die
+  horizontale Perspektive, etwa für eine schräg fotografierte Fassade.
+- **A** im Kopf von Drehen & Spiegeln: nur Horizont und Kanten waagerecht, die Perspektive bleibt unverändert.
+
+Alle drei wirken auf die ausgewählten Bilder.
 
 Horizontale zählen bis 8° Abweichung, vertikale bis 15°; deutlich schräge Kanten wie Dächer
 oder Wege bleiben unberücksichtigt. Die Perspektive wird nur korrigiert, wenn mehrere passende Kanten über
@@ -641,7 +659,8 @@ Ohne Netz bleibt es still bei der vorhandenen Kopie.
 Ein neues, noch unbearbeitetes Bild bekommt das passende Profil automatisch,
 wenn die Raw-Datei keine eigene Korrektur mitbringt; die Einstellung wird gleich gespeichert, damit
 Export und Vorschaubilder sie auch sehen. Bereits bearbeitete Bilder bleiben unverändert. Im Tab
-„Objektiv“ lässt sich das Profil entfernen und wieder anwenden; „Zurücksetzen“ stellt den Zustand
+„Objektiv“ lässt sich das Profil entfernen und wieder anwenden, über das A im Kopf auch für alle
+ausgewählten Bilder; „Zurücksetzen“ stellt den Zustand
 eines neuen Bildes her. In der Oberfläche heißt es nur „Profil“; die Quelle steht im Info-Fenster
 („Über Silberkorn“).
 

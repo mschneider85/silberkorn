@@ -72,8 +72,8 @@ pub enum Event {
     LookSimilarity { path: PathBuf, refs: Vec<crate::look::LookRef>, values: Vec<Option<f32>> },
     /// The settings that give an image the look of the references.
     LookMatched { path: PathBuf, opts: sk_core::look_match::LookOptions, result: Result<crate::look_worker::LookResult, String> },
-    /// The settings the auto adjustment chose for an image (see [`AutoJob`]).
-    AutoAdjusted { path: PathBuf, opts: sk_core::auto::AutoOptions, result: Result<Box<Adjustments>, String> },
+    /// The settings an automatic run chose for an image, None for nothing to set (see [`AutoJob`]).
+    AutoAdjusted { path: PathBuf, kind: crate::auto_tools::AutoKind, result: Result<Option<Box<Adjustments>>, String> },
     /// Part of an image of the compare view at a higher resolution than its preview. `uv` is the
     /// part (0..1 of the output), `width` the whole output's width at this resolution.
     CompareDetail { path: PathBuf, version: Option<u64>, uv: [f32; 4], width: f32, full_res: bool, image: ColorImage, focus: Option<Arc<Vec<u8>>> },
@@ -207,10 +207,12 @@ pub struct ProofImage {
     pub file_size: usize,
 }
 
-/// One-click auto adjustment of images (see `sk_core::auto::auto_adjust`).
+/// Automatic settings for images (see `auto_tools`).
 pub struct AutoJob {
     pub items: Vec<AutoItem>,
-    pub opts: sk_core::auto::AutoOptions,
+    pub kind: crate::auto_tools::AutoKind,
+    /// For the lens profile.
+    pub lens_db: Option<Arc<Vec<sk_core::lensfun::LensProfile>>>,
     /// Set to stop before the next image (the finished ones stay).
     pub cancel: Arc<std::sync::atomic::AtomicBool>,
 }
@@ -1056,15 +1058,10 @@ impl Workers {
                                     (Arc::new(meta), Arc::new(preview), sidecar::load(&path).adjustments)
                                 }
                             };
-                            // On the camera's look, if the image is to get it (see `camera_look`).
-                            let adj = sk_core::camera_look::apply_if_wanted(&meta, &preview, &adj, sk_core::camera_look::for_new()).unwrap_or(adj);
-                            let guide = sk_core::auto::guide_image(&meta, &adj, &preview, &job.opts);
-                            let focus = models.focus(&guide);
-                            let camera = sk_core::auto::camera_brightness(&meta);
-                            Ok(Box::new(sk_core::auto::auto_adjust(&meta, &adj, &preview, &job.opts, &focus, camera)))
+                            Ok(job.kind.compute(&meta, &preview, adj, &mut models, job.lens_db.as_deref().map(|d| d.as_slice())).map(Box::new))
                         })
                         .and_then(|r| r);
-                        let _ = ev_tx.send(Event::AutoAdjusted { path, opts: job.opts, result });
+                        let _ = ev_tx.send(Event::AutoAdjusted { path, kind: job.kind, result });
                         ctx.request_repaint();
                     }
                 }

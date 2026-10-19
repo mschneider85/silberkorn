@@ -606,6 +606,10 @@ pub struct App {
     pub auto_options: sk_core::auto::AutoOptions,
     /// Images still being adjusted automatically: (done, total).
     pub auto_progress: Option<(usize, usize)>,
+    /// Images of the running automatic run on which there was nothing to set, and whether one
+    /// failed (its message stays).
+    pub auto_missed: usize,
+    pub auto_failed: bool,
     /// Stops the running auto adjustment (see `poll_cancelled`).
     pub auto_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// The last auto adjustment of the open image, for its strength slider.
@@ -1028,6 +1032,8 @@ impl App {
             keystone_guide_mode: Default::default(),
             auto_options: settings.auto_options,
             auto_progress: None,
+            auto_missed: 0,
+            auto_failed: false,
             auto_cancel: None,
             auto_mix: None,
             confirm_delete_variant: None,
@@ -2340,7 +2346,7 @@ impl App {
                 Event::LookMatched { path, opts, result } => self.look_matched(path, opts, result),
                 Event::LookRef { r, result } => self.look_ref_arrived(ctx, r, result),
                 Event::LookSimilarity { path, refs, values } => self.look_similarity = Some(crate::look::LookSimilarity { path, refs, values }),
-                Event::AutoAdjusted { path, opts, result } => self.auto_adjusted(path, opts, result),
+                Event::AutoAdjusted { path, kind, result } => self.auto_adjusted(path, kind, result),
                 Event::Focus { path, version, size, sharpness } => self.focus_received(path, version, size, sharpness),
                 Event::ThumbFocus { path, size, sharpness } => {
                     // Not requested (any more): the thumbnail changed meanwhile.
@@ -2776,7 +2782,7 @@ impl App {
                 }
             }
             if std::env::var_os("SILBERKORN_UPRIGHT").is_some() {
-                self.auto_upright(sk_core::upright::UprightMode::Vertical);
+                self.auto_tool(sk_core::tools::Tool::Perspective);
             }
             if std::env::var_os("SILBERKORN_KEYSTONE").is_some() {
                 self.start_keystone_guides(crate::crop::GuideMode::Both);

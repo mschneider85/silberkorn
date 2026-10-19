@@ -4,6 +4,7 @@
 mod activity;
 mod ai_models;
 mod app;
+mod auto_tools;
 #[cfg(test)]
 mod app_tests;
 mod browser;
