@@ -546,9 +546,6 @@ impl App {
                     do_cleanup = true;
                 }
             });
-            if let Some((done, total)) = self.index_progress {
-                ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).text(format!("Indexiere {done} / {total}")));
-            }
         });
 
         if do_import {
