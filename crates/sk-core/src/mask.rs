@@ -103,10 +103,17 @@ pub fn rasterize(mask: &Mask, aspect: f32, guide: Option<&crate::brush::AutoGuid
                     && ai.width > 0
                     && ai.height > 0
                 {
-                    let ax = ((px / w as f32) * ai.width as f32) as usize;
-                    let ay = ((py / h as f32) * ai.height as f32) as usize;
-                    let v = ai.data[ay.min(ai.height - 1) * ai.width + ax.min(ai.width - 1)] as f32 / 255.0;
-                    *m = m.max(v);
+                    // Bilinear: an AI mask is coarser than the bitmap (a depth mask has half
+                    // its resolution), nearest pixels would give steps along its edges.
+                    let fx = (px / w as f32 * ai.width as f32 - 0.5).clamp(0.0, (ai.width - 1) as f32);
+                    let fy = (py / h as f32 * ai.height as f32 - 0.5).clamp(0.0, (ai.height - 1) as f32);
+                    let (x0, y0) = (fx as usize, fy as usize);
+                    let (x1, y1) = ((x0 + 1).min(ai.width - 1), (y0 + 1).min(ai.height - 1));
+                    let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+                    let at = |xx: usize, yy: usize| ai.data[yy * ai.width + xx] as f32 / 255.0;
+                    let top = at(x0, y0) + (at(x1, y0) - at(x0, y0)) * tx;
+                    let bot = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
+                    *m = m.max(top + (bot - top) * ty);
                 }
             }
         });
@@ -1064,6 +1071,19 @@ mod tests {
         };
         let b = rasterize(&m, 1.0, None);
         assert!(b.sample(0.5, 0.5) > 0.99 && b.sample(0.05, 0.05) < 0.01);
+    }
+
+    #[test]
+    fn coarse_ai_mask_has_smooth_edges() {
+        // Left half on, at a quarter of the bitmap's resolution: the edge is a ramp, not a step.
+        let (aw, ah) = (MASK_RES / 4, MASK_RES / 4);
+        let data = (0..aw * ah).map(|i| if i % aw < aw / 2 { 255 } else { 0 }).collect::<Vec<u8>>();
+        let ai = crate::params::AiMask { kind: "depth".into(), width: aw, height: ah, data: data.into(), depth: None };
+        let b = rasterize(&Mask { ai: Some(ai), ..Default::default() }, 1.0, None);
+        let row = &b.data[b.w * b.h / 2..][..b.w];
+        let ramp = row.iter().filter(|v| **v > 0.02 && **v < 0.98).count();
+        assert!((3..=8).contains(&ramp), "{ramp}");
+        assert!(row.windows(2).all(|p| p[1] <= p[0] + 1e-6));
     }
 
     #[test]
