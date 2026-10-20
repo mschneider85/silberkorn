@@ -22,6 +22,7 @@ pub mod hdr;
 pub mod panorama;
 pub mod history;
 pub mod icc;
+pub mod lateral_ca;
 pub mod lens_blur;
 pub mod lensfun;
 pub mod look_match;

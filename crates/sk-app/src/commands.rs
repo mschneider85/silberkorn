@@ -145,7 +145,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("auto-levels", icon::MAGIC_WAND, "Tonwerte automatisch", "Entwickeln", [], "auto levels tonwerte schwarzpunkt weißpunkt automatisch", |a| auto(a, Tool::Levels), |a, _| a.auto_tool(Tool::Levels)),
     cmd!("auto-straighten", icon::MAGIC_WAND, "Geraderichten automatisch", "Entwickeln", [], "auto straighten horizont geraderichten drehen automatisch", |a| auto(a, Tool::Rotation), |a, _| a.auto_tool(Tool::Rotation)),
     cmd!("auto-upright", icon::PERSPECTIVE, "Perspektive automatisch", "Entwickeln", [SHIFT => Key::A], "upright geraderichten automatisch stürzende linien trapez", |a| auto(a, Tool::Perspective), |a, _| a.auto_tool(Tool::Perspective)),
-    cmd!("auto-lens", icon::MAGIC_WAND, "Objektivprofil automatisch", "Entwickeln", [], "auto lens objektiv profil lensfun automatisch", |a| auto(a, Tool::LensCorrection), |a, _| a.auto_tool(Tool::LensCorrection)),
+    cmd!("auto-lens", icon::MAGIC_WAND, "Objektivkorrektur automatisch", "Entwickeln", [], "auto lens objektiv profil lensfun automatisch chromatische aberration ca farbquerfehler", |a| auto(a, Tool::LensCorrection), |a, _| a.auto_tool(Tool::LensCorrection)),
     cmd!("wb-picker", icon::EYEDROPPER, "Weißabgleich-Pipette", "Entwickeln", [NONE => Key::W], "white balance wb aufnehmen", image_tool, |a, _| a.toggle_wb_picker()),
     cmd!("rename", icon::PENCIL_SIMPLE, "Umbenennen …", "Foto", [CTRL_SHIFT => Key::R], "rename", has_selection, |a, _| a.open_rename()),
     cmd!("process-update", icon::ARROW_CIRCLE_UP, "Auf aktuelle Prozessversion heben", "Entwickeln", [], "prozessversion engine update", has_selection, |a, _| a.update_process_version()),

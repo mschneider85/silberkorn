@@ -21,8 +21,8 @@ pub enum AutoKind {
     Adjust(AutoOptions),
     /// Straighten angle (and keystone) from the straight edges of the image.
     Upright(UprightMode),
-    /// The lensfun profile of the lens.
-    LensProfile,
+    /// The lensfun profile of the lens, then the lateral chromatic aberration left.
+    Lens,
 }
 
 /// The tools with an "A" in their header: what it sets, its command and what it does.
@@ -34,7 +34,7 @@ const TOOLS: &[(Tool, &str, &str)] = &[
     (Tool::Levels, "auto-levels", "Schwarz- und Weißpunkt an den Tonwertumfang des Bildes legen"),
     (Tool::Rotation, "auto-straighten", "Horizont und Kanten automatisch waagerecht, ohne Perspektivkorrektur"),
     (Tool::Perspective, "auto-upright", "Stürzende Linien automatisch korrigieren, die Drehung wird mit ausgerichtet"),
-    (Tool::LensCorrection, "auto-lens", "Das passende Objektivprofil aus der Lensfun-Datenbank anwenden"),
+    (Tool::LensCorrection, "auto-lens", "Das passende Objektivprofil aus der Lensfun-Datenbank anwenden und die chromatische Aberration an den Kanten des Bildes messen"),
 ];
 
 impl AutoKind {
@@ -53,7 +53,7 @@ impl AutoKind {
             Tool::Levels => only(|o| o.levels = true),
             Tool::Rotation => Some(AutoKind::Upright(UprightMode::Level)),
             Tool::Perspective => Some(AutoKind::Upright(UprightMode::Vertical)),
-            Tool::LensCorrection => Some(AutoKind::LensProfile),
+            Tool::LensCorrection => Some(AutoKind::Lens),
             _ => None,
         }
     }
@@ -69,12 +69,15 @@ impl AutoKind {
                 (g.straighten, g.keystone_v, g.keystone_h) = (a.straighten, a.keystone_v, a.keystone_h);
                 out
             }
-            AutoKind::LensProfile => {
+            AutoKind::Lens => {
                 let mut out = onto.clone();
-                out.lens.profile = auto.lens.profile.clone();
-                out.lens.profile_coeffs = auto.lens.profile_coeffs;
-                // Never both: the profile would correct the same lens a second time.
-                out.lens.camera = false;
+                if auto.lens.profile.is_some() {
+                    out.lens.profile = auto.lens.profile.clone();
+                    out.lens.profile_coeffs = auto.lens.profile_coeffs;
+                    // Never both: the profile would correct the same lens a second time.
+                    out.lens.camera = false;
+                }
+                (out.lens.ca_red, out.lens.ca_blue) = (auto.lens.ca_red, auto.lens.ca_blue);
                 out
             }
         }
@@ -105,12 +108,20 @@ impl AutoKind {
                 let geometry = sk_core::upright::solve(&segments, &adj.geometry, &adj.lens, meta.lens.as_ref(), adj.rotation, src, *mode)?;
                 Some(Adjustments { geometry, ..adj })
             }
-            AutoKind::LensProfile => {
-                let (name, coeffs) = lens_profile(lens_db?, meta)?;
+            AutoKind::Lens => {
                 let mut out = adj;
-                out.lens.profile = Some(name);
-                out.lens.profile_coeffs = Some(coeffs);
-                Some(out)
+                let profile = lens_db.and_then(|db| lens_profile(db, meta));
+                if let Some((name, coeffs)) = &profile {
+                    out.lens.profile = Some(name.clone());
+                    out.lens.profile_coeffs = Some(*coeffs);
+                    out.lens.camera = false;
+                }
+                // What is left after the profile or the camera's correction.
+                let ca = sk_core::lateral_ca::measure(preview, &out.lens, meta.lens.as_ref());
+                if let Some((red, blue)) = ca {
+                    (out.lens.ca_red, out.lens.ca_blue) = (red, blue);
+                }
+                (profile.is_some() || ca.is_some()).then_some(out)
             }
         }
     }
@@ -121,14 +132,14 @@ impl AutoKind {
             AutoKind::Adjust(_) => "Automatisch anpassen",
             AutoKind::Upright(UprightMode::Level) => "Geraderichten automatisch",
             AutoKind::Upright(_) => "Perspektive automatisch",
-            AutoKind::LensProfile => "Objektivprofil automatisch",
+            AutoKind::Lens => "Objektivkorrektur automatisch",
         }
     }
 
     /// Why nothing was set on an image.
     fn nothing_found(&self) -> &'static str {
         match self {
-            AutoKind::LensProfile => "kein Profil für dieses Objektiv",
+            AutoKind::Lens => "kein Profil für dieses Objektiv und zu wenige Kanten",
             _ => "keine geraden Kanten gefunden",
         }
     }
@@ -168,18 +179,14 @@ impl App {
     }
 
     /// Whether an automatic run can start now (see `run_auto`).
-    pub fn can_auto(&self, kind: AutoKind) -> bool {
-        self.auto_progress.is_none() && !self.on_layer() && (kind != AutoKind::LensProfile || self.lens_db.is_some())
+    pub fn can_auto(&self, _kind: AutoKind) -> bool {
+        self.auto_progress.is_none() && !self.on_layer()
     }
 
     /// Sets the selected images automatically, in the background; the results arrive as
     /// [`Self::auto_adjusted`].
     pub fn run_auto(&mut self, kind: AutoKind) {
         if self.auto_progress.is_some() {
-            return;
-        }
-        if kind == AutoKind::LensProfile && self.lens_db.is_none() {
-            self.status = "Objektivprofil automatisch: die Objektivprofile sind noch nicht geladen".into();
             return;
         }
         let current = self.current_path();
@@ -250,7 +257,13 @@ impl App {
                     let keystone = if g.keystone_v != 0.0 || g.keystone_h != 0.0 { format!(", Trapezkorrektur {:.0} / {:.0}", g.keystone_v, g.keystone_h) } else { String::new() };
                     format!("Perspektive automatisch korrigiert: {:.1}°{keystone}", g.straighten)
                 }
-                (AutoKind::LensProfile, Some(a)) => format!("Objektivprofil: {}", a.lens.profile.unwrap_or_default()),
+                (AutoKind::Lens, Some(a)) => {
+                    let ca = format!("chromatische Aberration Rot/Cyan {:+.0}, Blau/Gelb {:+.0}", a.lens.ca_red, a.lens.ca_blue);
+                    match &a.lens.profile {
+                        Some(p) => format!("Objektivprofil: {p} · {ca}"),
+                        None => format!("Objektivkorrektur: {ca}"),
+                    }
+                }
                 _ => "Automatisch angepasst".into(),
             },
             (_, 0) => format!("{} automatisch angepasst", widgets::image_count(total)),
