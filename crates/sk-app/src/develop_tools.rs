@@ -1,7 +1,7 @@
 //! Tool tabs for geometry/lens, details and the advanced color tools.
 
 use sk_core::auto;
-use sk_core::params::{AspectRatio, ColorWheel, ColorZone, Detail, HUE_BANDS, HslBand, LensCorrection, MAX_COLOR_ZONES, SkinTone};
+use sk_core::params::{Adjustments, AspectRatio, ColorWheel, ColorZone, Detail, HUE_BANDS, HslBand, LensCorrection, MAX_COLOR_ZONES, SkinTone};
 use egui::{Color32, RichText, Ui};
 
 use crate::app::App;
@@ -24,6 +24,21 @@ pub struct AutoMix {
     pub opts: auto::AutoOptions,
     /// 0..100 %
     pub strength: f32,
+}
+
+/// `current` with a strength slider moved: the settings that are still as the mix left them
+/// (`was`) take their new mixed value (`now`); those changed by hand since stay.
+pub(crate) fn remix(current: &Adjustments, was: &Adjustments, now: &Adjustments) -> Adjustments {
+    let json = |a: &Adjustments| serde_json::to_value(a).unwrap_or_default();
+    let (mut out, was, now) = (json(current), json(was), json(now));
+    if let (Some(out), Some(was), Some(now)) = (out.as_object_mut(), was.as_object(), now.as_object()) {
+        for (key, value) in now {
+            if out.get(key) == was.get(key) {
+                out.insert(key.clone(), value.clone());
+            }
+        }
+    }
+    serde_json::from_value(out).unwrap_or_else(|_| current.clone())
 }
 
 /// What the color editor shows: one property for all colors (hue, saturation or
@@ -869,6 +884,7 @@ impl App {
             Some(m) => &mut m.strength,
             None => &mut idle,
         };
+        let from = *strength;
         ui.add_enabled_ui(enabled, |ui| {
             changed = widgets::slider_row_with(ui, "Stärke", strength, 0.0..=100.0, 100.0, 0, widgets::SliderOpts { suffix: " %", ..Default::default() });
         })
@@ -877,7 +893,8 @@ impl App {
         let Some(mix) = self.auto_mix.as_ref().filter(|_| enabled) else { return };
         let Some(cur) = self.current.as_mut() else { return };
         if changed {
-            cur.adjustments = mix.opts.blend(&cur.adjustments, &mix.before, &mix.auto, mix.strength / 100.0, cur.as_shot_temp_tint);
+            let at = |t: f32| mix.opts.blend(&cur.adjustments, &mix.before, &mix.auto, t / 100.0, cur.as_shot_temp_tint);
+            cur.adjustments = remix(&cur.adjustments, &at(from), &at(mix.strength));
             self.request_render();
         }
     }
@@ -929,5 +946,23 @@ impl App {
         self.sidecar_dirty = true;
         self.commit_and_save();
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// After an auto adjustment the exposure is changed by hand: moving the strength keeps it,
+    /// and still mixes what the hand left alone.
+    #[test]
+    fn strength_keeps_settings_changed_by_hand() {
+        let before = Adjustments::default();
+        let auto = Adjustments { exposure: 1.0, contrast: 20.0, ..Default::default() };
+        let opts = auto::AutoOptions { exposure: true, contrast: true, ..auto::AutoOptions::NONE };
+        let current = Adjustments { exposure: 5.0, ..auto.clone() };
+        let at = |t: f32| opts.blend(&current, &before, &auto, t, (5000.0, 0.0));
+        let out = remix(&current, &at(1.0), &at(0.5));
+        assert_eq!((out.exposure, out.contrast), (5.0, 10.0));
     }
 }

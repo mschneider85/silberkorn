@@ -401,6 +401,7 @@ impl App {
             Some(m) => &mut m.strength,
             None => &mut idle,
         };
+        let from = *strength;
         ui.add_enabled_ui(enabled, |ui| {
             changed = widgets::slider_row_with(ui, "Stärke", strength, 0.0..=100.0, 100.0, 0, widgets::SliderOpts { suffix: " %", ..Default::default() });
         })
@@ -414,7 +415,8 @@ impl App {
         }
         let Some(cur) = self.current.as_mut() else { return };
         if changed {
-            cur.adjustments = mix.opts.blend(&cur.adjustments, &mix.before, &mix.matched, mix.strength / 100.0, cur.as_shot_temp_tint);
+            let at = |t: f32| mix.opts.blend(&cur.adjustments, &mix.before, &mix.matched, t / 100.0, cur.as_shot_temp_tint);
+            cur.adjustments = crate::develop_tools::remix(&cur.adjustments, &at(from), &at(mix.strength));
             self.request_render();
         }
     }
