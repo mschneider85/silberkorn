@@ -94,7 +94,7 @@ pub fn run_tiled(net: &Net, planes: &[Vec<f32>], w: usize, h: usize, t: Tiling, 
             }
             None => 1.0,
         };
-        let mut acc = acc.lock().unwrap();
+        let mut acc = acc.lock().unwrap_or_else(|e| e.into_inner());
         let (sum, wsum) = &mut *acc;
         for j in 0..ot {
             let y = scale * ty + j;

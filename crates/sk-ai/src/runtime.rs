@@ -31,7 +31,7 @@ pub fn config_generation() -> u64 {
 static LAST_DEVICE: Mutex<Option<&'static str>> = Mutex::new(None);
 
 pub fn last_device() -> Option<&'static str> {
-    *LAST_DEVICE.lock().unwrap()
+    *LAST_DEVICE.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 pub fn gpu_enabled() -> bool {
@@ -117,7 +117,7 @@ pub fn gpu_problem() -> Option<String> {
         return Some("Nicht installiert".into());
     }
     match ort_ready() {
-        Ok(()) => LAST_GPU_ERROR.lock().unwrap().clone(),
+        Ok(()) => LAST_GPU_ERROR.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         Err(e) => Some(e.clone()),
     }
 }
@@ -301,7 +301,7 @@ fn ort_session(path: &Path) -> Result<(ort::session::Session, bool)> {
     let session = new()?.commit_from_file(path).map_err(|e| anyhow!("{e}"))?;
     if let Some(e) = dml_error {
         log::warn!("{}: DirectML nicht verwendbar, ONNX Runtime rechnet auf dem Prozessor: {e:#}", path.display());
-        *LAST_GPU_ERROR.lock().unwrap() = Some(format!("{e:#}"));
+        *LAST_GPU_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{e:#}"));
     }
     Ok((session, false))
 }
@@ -338,15 +338,15 @@ impl Net {
             match ort_session(path) {
                 Ok((session, gpu)) => {
                     if gpu {
-                        *LAST_GPU_ERROR.lock().unwrap() = None;
+                        *LAST_GPU_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = None;
                     }
                     let net = Net { backend: Backend::Ort { session: Mutex::new(session), gpu }, inputs: inputs.to_vec() };
-                    *LAST_DEVICE.lock().unwrap() = Some(net.device());
+                    *LAST_DEVICE.lock().unwrap_or_else(|e| e.into_inner()) = Some(net.device());
                     return Ok(net);
                 }
                 Err(e) => {
                     log::warn!("{}: ONNX Runtime nicht verwendbar, rechne mit tract: {e:#}", path.display());
-                    *LAST_GPU_ERROR.lock().unwrap() = Some(format!("{e:#}"));
+                    *LAST_GPU_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{e:#}"));
                 }
             }
         }
@@ -356,7 +356,7 @@ impl Net {
             tract_plan(path, inputs, keep, true).map_err(|_| e)
         })?;
         let net = Net { backend: Backend::Cpu(plan), inputs: inputs.to_vec() };
-        *LAST_DEVICE.lock().unwrap() = Some(net.device());
+        *LAST_DEVICE.lock().unwrap_or_else(|e| e.into_inner()) = Some(net.device());
         Ok(net)
     }
 
@@ -404,7 +404,7 @@ impl Net {
                     .collect()
             }
             Backend::Ort { session, .. } => {
-                let mut session = session.lock().unwrap();
+                let mut session = session.lock().unwrap_or_else(|e| e.into_inner());
                 let names: Vec<String> = session.inputs().iter().map(|i| i.name().to_string()).collect();
                 let mut ins: Vec<(String, ort::value::DynValue)> = Vec::new();
                 for ((inp, d), name) in self.inputs.iter().zip(data).zip(names) {

@@ -480,12 +480,12 @@ impl App {
                             c.x = n.x.clamp(0.0, right - 0.02);
                             c.w = right - c.x;
                         }
-                        Side::Right => c.w = (n.x - s.x).clamp(0.02, 1.0 - s.x),
+                        Side::Right => c.w = (n.x - s.x).clamp(0.02, (1.0 - s.x).max(0.02)),
                         Side::Top => {
                             c.y = n.y.clamp(0.0, bottom - 0.02);
                             c.h = bottom - c.y;
                         }
-                        Side::Bottom => c.h = (n.y - s.y).clamp(0.02, 1.0 - s.y),
+                        Side::Bottom => c.h = (n.y - s.y).clamp(0.02, (1.0 - s.y).max(0.02)),
                     }
                     let horizontal = matches!(side, Side::Left | Side::Right);
                     let anchor = match side {

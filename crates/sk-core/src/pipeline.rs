@@ -87,11 +87,11 @@ pub struct StageCache {
 /// to finish it (renderings at the same time, as in `auto`, would hang). Two renderings that
 /// need the same entry at once may both make it.
 fn cached<T>(slot: &Mutex<Option<(u64, Arc<T>)>>, key: u64, make: impl FnOnce() -> Arc<T>) -> Arc<T> {
-    if let Some(v) = slot.lock().unwrap().as_ref().filter(|(k, _)| *k == key).map(|(_, v)| v.clone()) {
+    if let Some(v) = slot.lock().unwrap_or_else(|e| e.into_inner()).as_ref().filter(|(k, _)| *k == key).map(|(_, v)| v.clone()) {
         return v;
     }
     let v = make();
-    *slot.lock().unwrap() = Some((key, v.clone()));
+    *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some((key, v.clone()));
     v
 }
 
@@ -760,7 +760,7 @@ impl Processor {
     fn whole_airlight(&self, src: &LinearImage) -> [f32; 3] {
         static CACHE: Mutex<Vec<(u64, [f32; 3])>> = Mutex::new(Vec::new());
         let key = self.stage_key(src, Region { x: 0, y: 0, w: 0, h: 0 });
-        if let Some((_, a)) = CACHE.lock().unwrap().iter().find(|(k, _)| *k == key) {
+        if let Some((_, a)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
             return *a;
         }
         let level = src.width.max(src.height).div_ceil(768).max(1);
@@ -774,7 +774,7 @@ impl Processor {
         let plan = self.plan(img, None);
         let working = self.early_stages(img, &plan.geo, plan.ext, plan.scale, None);
         let a = gpu::airlight_of(working.data.iter().step_by(7).copied().collect());
-        let mut cache = CACHE.lock().unwrap();
+        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
         cache.push((key, a));
         if cache.len() > 8 {
             cache.remove(0);
@@ -971,7 +971,7 @@ impl Processor {
         // A part of the image whose whole is in the cache (painting renders only what the brush
         // changed): cut out of it, which is much faster and gives exactly the whole rendering.
         let whole_key = cache.filter(|_| partial).map(|_| self.stage_key(src, Region { x: 0, y: 0, w: full.0, h: full.1 }));
-        let whole = cache.zip(whole_key).and_then(|(c, key)| c.entry.lock().unwrap().as_ref().filter(|(k, _)| *k == key).map(|(_, img)| img.clone()));
+        let whole = cache.zip(whole_key).and_then(|(c, key)| c.entry.lock().unwrap_or_else(|e| e.into_inner()).as_ref().filter(|(k, _)| *k == key).map(|(_, img)| img.clone()));
         let working = match (&whole, cache) {
             (Some(img), _) => Arc::new(LinearImage::new(ext.w, ext.h, crop_rows(&img.data, full.0, ext))),
             (None, Some(c)) => {
@@ -994,7 +994,7 @@ impl Processor {
             // Cut out of the whole image's planes as well (see `whole`).
             let whole_planes = whole.as_ref().and(cache).zip(whole_key).and_then(|(c, wk)| {
                 let key = local_key(wk);
-                c.local.lock().unwrap().as_ref().filter(|(k, _)| *k == key).map(|(_, planes)| planes.clone())
+                c.local.lock().unwrap_or_else(|e| e.into_inner()).as_ref().filter(|(k, _)| *k == key).map(|(_, planes)| planes.clone())
             });
             let compute = || {
                 let log_l = Plane::new(w, h, working.data.par_iter().map(|p| log2(dot(*p, LUMA).max(1e-6)) - MID_GREY.log2()).collect());
@@ -1572,12 +1572,12 @@ fn cached_lut<T: Send + Sync + 'static>(key: serde_json::Value, build: impl FnOn
     type Entries = Vec<(TypeId, u64, Arc<dyn Any + Send + Sync>)>;
     static CACHE: Mutex<Entries> = Mutex::new(Vec::new());
     let key = crate::cache::fnv1a(key.to_string().as_bytes());
-    let found = CACHE.lock().unwrap().iter().find(|(t, k, _)| *t == TypeId::of::<T>() && *k == key).map(|(_, _, v)| v.clone());
+    let found = CACHE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(t, k, _)| *t == TypeId::of::<T>() && *k == key).map(|(_, _, v)| v.clone());
     if let Some(v) = found.and_then(|v| v.downcast::<T>().ok()) {
         return v;
     }
     let v = Arc::new(build());
-    let mut cache = CACHE.lock().unwrap();
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.push((TypeId::of::<T>(), key, v.clone()));
     if cache.len() > 16 {
         cache.remove(0);
@@ -1941,7 +1941,7 @@ mod tests {
         }];
         let cache = StageCache::default();
         Processor::new(&meta(), &adj).render_cpu(&src, None, Some(&cache));
-        let keys = |c: &StageCache| (c.resampled.lock().unwrap().as_ref().unwrap().0, c.uv.lock().unwrap().as_ref().unwrap().0);
+        let keys = |c: &StageCache| (c.resampled.lock().unwrap_or_else(|e| e.into_inner()).as_ref().unwrap().0, c.uv.lock().unwrap_or_else(|e| e.into_inner()).as_ref().unwrap().0);
         let before = keys(&cache);
         adj.white_balance.mode = crate::params::WbMode::Custom;
         adj.white_balance.kelvin = 3500.0;
@@ -1959,13 +1959,13 @@ mod tests {
         let p = Processor::new(&meta(), &adj);
         let cache = StageCache::default();
         let full = p.render_cpu(&src, None, Some(&cache));
-        let whole_key = cache.entry.lock().unwrap().as_ref().unwrap().0;
+        let whole_key = cache.entry.lock().unwrap_or_else(|e| e.into_inner()).as_ref().unwrap().0;
         for region in [Region { x: 50, y: 40, w: 40, h: 30 }, Region { x: 0, y: 0, w: 25, h: 20 }, Region { x: 170, y: 120, w: 30, h: 30 }] {
             let part = p.render_cpu(&src, Some(region), Some(&cache));
             assert_eq!((part.width, part.height), (region.w, region.h));
             assert!(max_region_diff(&part, &full, region) <= 1, "{region:?}: {}", max_region_diff(&part, &full, region));
         }
-        assert_eq!(cache.entry.lock().unwrap().as_ref().unwrap().0, whole_key, "the whole stays cached");
+        assert_eq!(cache.entry.lock().unwrap_or_else(|e| e.into_inner()).as_ref().unwrap().0, whole_key, "the whole stays cached");
     }
 
     #[test]

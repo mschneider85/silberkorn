@@ -37,11 +37,11 @@ static PROVIDER: RwLock<Option<Arc<Provider>>> = RwLock::new(None);
 
 /// Registers the function that computes products; `tag` names the model (e.g. its hash).
 pub fn set_provider(tag: &str, compute: Box<ComputeFn>) {
-    *PROVIDER.write().unwrap() = Some(Arc::new(Provider { tag: tag.to_string(), compute }));
+    *PROVIDER.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Provider { tag: tag.to_string(), compute }));
 }
 
 fn provider() -> Option<Arc<Provider>> {
-    PROVIDER.read().unwrap().clone()
+    PROVIDER.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 /// Folder of the products (`SILBERKORN_DENOISE_CACHE` overrides it).
@@ -108,11 +108,11 @@ pub fn cache_size() -> u64 {
 /// Removes all products.
 pub fn clear_cache() -> Result<()> {
     {
-        let mut loaded = LOADED.lock().unwrap();
+        let mut loaded = LOADED.lock().unwrap_or_else(|e| e.into_inner());
         loaded.products.clear();
         loaded.generation += 1;
     }
-    BLENDS.lock().unwrap().clear();
+    BLENDS.lock().unwrap_or_else(|e| e.into_inner()).clear();
     for e in std::fs::read_dir(cache_dir()).into_iter().flatten().flatten() {
         if e.path().extension().is_some_and(|x| x == "skdn") {
             std::fs::remove_file(e.path())?;
@@ -261,7 +261,7 @@ fn product(file: &Path) -> Option<Arc<Product>> {
 /// available meanwhile).
 fn product_in(cache: &Mutex<Loaded>, file: &Path) -> Option<Arc<Product>> {
     let generation = {
-        let mut loaded = cache.lock().unwrap();
+        let mut loaded = cache.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(k) = loaded.products.iter().position(|(f, _)| f == file) {
             let e = loaded.products.remove(k);
             let p = e.1.clone();
@@ -282,7 +282,7 @@ fn product_in(cache: &Mutex<Loaded>, file: &Path) -> Option<Arc<Product>> {
     drop(bytes);
     // Recently used: kept longest when the cache is full.
     let _ = std::fs::File::options().append(true).open(file).and_then(|f| f.set_modified(std::time::SystemTime::now()));
-    let mut loaded = cache.lock().unwrap();
+    let mut loaded = cache.lock().unwrap_or_else(|e| e.into_inner());
     // Not kept if the cache was cleared meanwhile; another thread's copy is taken if it was faster.
     if loaded.generation == generation {
         if let Some((_, q)) = loaded.products.iter().find(|(f, _)| f == file) {
@@ -323,7 +323,7 @@ pub fn blended(path: &Path, plain: &LinearImage, amount: f32) -> Option<Arc<Line
     let file = product_file(path)?;
     let key: BlendKey = (plain.data.as_ptr() as usize, plain.width, plain.height, fingerprint(plain), file.clone(), amount.to_bits());
     {
-        let mut blends = BLENDS.lock().unwrap();
+        let mut blends = BLENDS.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(i) = blends.iter().position(|(k, _)| *k == key) {
             let e = blends.remove(i);
             let img = e.1.clone();
@@ -350,7 +350,7 @@ pub fn blended(path: &Path, plain: &LinearImage, amount: f32) -> Option<Arc<Line
         LinearImage::new(plain.width, plain.height, data)
     };
     let img = Arc::new(img);
-    let mut blends = BLENDS.lock().unwrap();
+    let mut blends = BLENDS.lock().unwrap_or_else(|e| e.into_inner());
     blends.push((key, img.clone()));
     let mut total: usize = blends.iter().map(|(_, i)| i.data.len() * 12).sum();
     while total > BLEND_BUDGET && blends.len() > 1 {
@@ -365,11 +365,11 @@ static RESIZED: Mutex<Vec<(Resized, Arc<LinearImage>)>> = Mutex::new(Vec::new())
 
 fn resized(file: &Path, product: &Product, w: usize, h: usize) -> Arc<LinearImage> {
     let key = (file.to_path_buf(), w, h);
-    if let Some((_, img)) = RESIZED.lock().unwrap().iter().find(|(k, _)| *k == key) {
+    if let Some((_, img)) = RESIZED.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
         return img.clone();
     }
     let img = Arc::new(product.resized(w, h));
-    let mut r = RESIZED.lock().unwrap();
+    let mut r = RESIZED.lock().unwrap_or_else(|e| e.into_inner());
     r.push((key, img.clone()));
     if r.len() > 6 {
         r.remove(0);

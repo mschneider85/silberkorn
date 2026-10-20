@@ -84,7 +84,7 @@ static RANGE_MASKS: Mutex<Vec<(RangeKey, Arc<DepthMap>, crate::params::AiMask)>>
 /// [`DepthMap::range_mask`], reused while the map and the range stay the same.
 pub fn range_mask_cached(map: &Arc<DepthMap>, r: &crate::params::DepthRange) -> crate::params::AiMask {
     let key = (Arc::as_ptr(map) as usize, [r.near, r.far, r.falloff].map(f32::to_bits));
-    let mut done = RANGE_MASKS.lock().unwrap();
+    let mut done = RANGE_MASKS.lock().unwrap_or_else(|e| e.into_inner());
     // The map is held with its key, so the address can't be reused by another one.
     if let Some(e) = done.iter().find(|(k, m, _)| *k == key && Arc::ptr_eq(m, map)) {
         return e.2.clone();
@@ -110,11 +110,11 @@ static PROVIDER: RwLock<Option<Arc<Provider>>> = RwLock::new(None);
 
 /// Registers the function that computes maps; `tag` names the model (e.g. its hash).
 pub fn set_provider(tag: &str, compute: Box<ComputeFn>) {
-    *PROVIDER.write().unwrap() = Some(Arc::new(Provider { tag: tag.to_string(), compute }));
+    *PROVIDER.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Provider { tag: tag.to_string(), compute }));
 }
 
 fn provider() -> Option<Arc<Provider>> {
-    PROVIDER.read().unwrap().clone()
+    PROVIDER.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 /// The model is registered (the application can compute maps).
@@ -163,7 +163,7 @@ static LOADED: Mutex<Vec<(PathBuf, Arc<DepthMap>)>> = Mutex::new(Vec::new());
 /// The map of an image, if it has been computed.
 pub fn load(path: &Path) -> Option<Arc<DepthMap>> {
     let file = map_file(path)?;
-    let mut loaded = LOADED.lock().unwrap();
+    let mut loaded = LOADED.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(i) = loaded.iter().position(|(f, _)| *f == file) {
         let e = loaded.remove(i);
         let map = e.1.clone();

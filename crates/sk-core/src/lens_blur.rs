@@ -51,7 +51,7 @@ pub fn blurred(path: &Path, src: &LinearImage, p: &LensBlur, clip: bool) -> Opti
     let bits = [p.amount, p.focus, p.range, p.bokeh].map(f32::to_bits);
     let key: BlurKey = (src.data.as_ptr() as usize, src.width, src.height, crate::ai_denoise::fingerprint(src), path.to_path_buf(), bits);
     {
-        let mut done = BLURRED.lock().unwrap();
+        let mut done = BLURRED.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(i) = done.iter().position(|(k, _)| *k == key) {
             let e = done.remove(i);
             let img = e.1.clone();
@@ -60,7 +60,7 @@ pub fn blurred(path: &Path, src: &LinearImage, p: &LensBlur, clip: bool) -> Opti
         }
     }
     let img = Arc::new(apply(src, &depth, p, clip));
-    let mut done = BLURRED.lock().unwrap();
+    let mut done = BLURRED.lock().unwrap_or_else(|e| e.into_inner());
     done.push((key, img.clone()));
     let mut total: usize = done.iter().map(|(_, i)| i.data.len() * 12).sum();
     while total > BLUR_BUDGET && done.len() > 1 {

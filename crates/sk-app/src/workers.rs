@@ -799,6 +799,9 @@ impl Workers {
             crate::guard::spawn("Schnellvorschau", move || {
                 while let Some((generation, path, session)) = recv_latest(&quick_rx) {
                     if let Some(img) = quick_preview(&path, session.as_deref()) {
+                        // Camera JPEGs can be larger than a texture may be (8256 px from a D850).
+                        let max = ctx.input(|i| i.max_texture_side) as u32;
+                        let img = if img.width().max(img.height()) > max { img.thumbnail(max, max) } else { img };
                         let _ = ev_tx.send(Event::Quick { generation, image: to_color_image(&img) });
                         ctx.request_repaint();
                     }

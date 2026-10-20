@@ -76,7 +76,7 @@ fn raw_files_in(dir: &Path) -> std::sync::Arc<RawNames> {
     static FOLDERS: Mutex<Vec<(PathBuf, SystemTime, Arc<RawNames>)>> = Mutex::new(Vec::new());
     let modified = std::fs::metadata(dir).and_then(|m| m.modified()).ok();
     if let Some(m) = modified
-        && let Some((_, _, names)) = FOLDERS.lock().unwrap().iter().find(|(d, t, _)| d == dir && *t == m)
+        && let Some((_, _, names)) = FOLDERS.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(d, t, _)| d == dir && *t == m)
     {
         return names.clone();
     }
@@ -95,7 +95,7 @@ fn raw_files_in(dir: &Path) -> std::sync::Arc<RawNames> {
     if let Some(m) = modified
         && started.duration_since(m).is_ok_and(|d| d > Duration::from_secs(2))
     {
-        let mut folders = FOLDERS.lock().unwrap();
+        let mut folders = FOLDERS.lock().unwrap_or_else(|e| e.into_inner());
         folders.retain(|(d, ..)| d != dir);
         folders.push((dir.to_path_buf(), m, names.clone()));
         if folders.len() > 32 {

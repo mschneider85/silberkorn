@@ -55,7 +55,8 @@ fn crop_face(img: &::image::DynamicImage, bbox: [f32; 4]) -> egui::ColorImage {
     let [x, y, bw, bh] = bbox;
     let side = (bw * w).max(bh * h) * 1.5;
     let (cx, cy) = ((x + bw / 2.0) * w, (y + bh / 2.0) * h);
-    let side = side.min(w).min(h).max(8.0);
+    // At least 8 px, but never more than the image: `clamp` below panics on a negative bound.
+    let side = side.max(8.0).min(w).min(h);
     let left = (cx - side / 2.0).clamp(0.0, w - side);
     let top = (cy - side / 2.0).clamp(0.0, h - side);
     let crop = img.crop_imm(left as u32, top as u32, side as u32, side as u32).resize_exact(FACE_PX, FACE_PX, ::image::imageops::FilterType::Triangle).to_rgba8();
@@ -119,7 +120,7 @@ impl FaceThumbs {
                     let img = crate::guard::catch(|| analysis_image(&path).map_err(|e| log::warn!("Gesicht {}: {e:#}", path.display())).ok()).ok().flatten();
                     loaded = Some((path.clone(), img));
                 }
-                let image = loaded.as_ref().and_then(|(_, img)| img.as_ref()).map(|img| crop_face(img, bbox));
+                let image = loaded.as_ref().and_then(|(_, img)| img.as_ref()).and_then(|img| crate::guard::catch(|| crop_face(img, bbox)).ok());
                 if tx.send((key, image)).is_err() {
                     return;
                 }

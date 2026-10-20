@@ -773,6 +773,8 @@ pub struct App {
     logged_geometry: (String, Option<(String, Instant)>),
     /// Saved after the window's graphics device was lost, before the restart (see `guard`).
     saved_for_restart: bool,
+    /// When the frames that ended in a panic happened (see `ui`).
+    frame_panics: Vec<Instant>,
     /// Largest texture side the GPU takes: a view rendering must fit into one texture.
     pub(crate) max_texture_side: usize,
     /// Debug aid: `SILBERKORN_SCREENSHOT=<file.png>` saves a screenshot once the first image is shown, then quits.
@@ -1066,6 +1068,7 @@ impl App {
             pixels_per_point: 1.0,
             logged_geometry: Default::default(),
             saved_for_restart: false,
+            frame_panics: Vec::new(),
             // egui's assumption until the viewer is first shown.
             max_texture_side: 2048,
             sidecar_dirty: false,
@@ -3055,8 +3058,23 @@ fn merge_ai(old: Option<sk_core::params::AiMask>, new: sk_ai::MaskImage) -> sk_c
     sk_core::params::AiMask { kind: "ai".into(), width: new.width, height: new.height, data: data.into(), depth: None }
 }
 
-impl eframe::App for App {
-    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+impl App {
+    /// A frame ended in a panic (a bug in the UI code): the rest of it is skipped and the next
+    /// one is drawn as usual, the status bar shows the error (see `guard`). Edits are saved
+    /// right away; if every frame fails, the app saves and closes instead of hanging.
+    fn frame_panicked(&mut self, ctx: &egui::Context) {
+        let now = Instant::now();
+        self.frame_panics.retain(|t| now.duration_since(*t) < std::time::Duration::from_secs(10));
+        self.frame_panics.push(now);
+        let _ = crate::guard::catch(|| self.commit_and_save());
+        if self.frame_panics.len() >= 20 {
+            log::error!("Jeder Frame scheitert, Silberkorn wird beendet");
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        ctx.request_repaint();
+    }
+
+    fn draw_frame(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         // Drawing this frame will fail and the app starts anew: save what `on_exit` would.
         if crate::guard::display_lost() && !self.saved_for_restart {
@@ -3207,9 +3225,19 @@ impl eframe::App for App {
         self.finish_frame(&ctx);
     }
 
+}
+
+impl eframe::App for App {
+    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
+        if crate::guard::catch(|| self.draw_frame(ui, frame)).is_err() {
+            self.frame_panicked(ui.ctx());
+        }
+    }
+
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        self.end_viewer_tools();
-        self.commit_and_save();
+        // A panic in these must not keep the settings from being saved.
+        let _ = crate::guard::catch(|| self.end_viewer_tools());
+        let _ = crate::guard::catch(|| self.commit_and_save());
         self.save_settings();
         self.install_update_on_exit();
         crate::guard::mark_clean_exit();

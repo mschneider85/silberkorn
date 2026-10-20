@@ -441,7 +441,7 @@ static MASKS: LazyLock<MaskBuffers> = LazyLock::new(Default::default);
 
 fn mask_buffer(g: &Gpu, bm: &Arc<MaskBitmap>) -> Arc<Buffer> {
     let device = g as *const Gpu as usize;
-    let mut masks = MASKS.lock().unwrap();
+    let mut masks = MASKS.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((_, _, _, b)) = masks.iter().find(|(d, v, ..)| *d == device && *v == bm.version) {
         return b.clone();
     }
@@ -606,7 +606,7 @@ impl Processor {
             let win = plan.geo.source_window(ext);
             args.win = [win.0 as u32, win.1 as u32, win.2 as u32, win.3 as u32];
             let k = key(&format!("{:p}|{}x{}|{}|{win:?}", src.data.as_ptr(), src.width, src.height, crate::ai_denoise::fingerprint(src)));
-            let mut c = cache.map(|c| c.gpu.lock().unwrap());
+            let mut c = cache.map(|c| c.gpu.lock().unwrap_or_else(|e| e.into_inner()));
             match c.as_mut().and_then(|c| c.source.as_ref().filter(|(ck, _)| *ck == k).map(|(_, b)| b.clone())) {
                 Some(b) => b,
                 None => {
@@ -633,7 +633,7 @@ impl Processor {
                 crate::ai_denoise::fingerprint(src),
                 self.retouch_relevant()
             ));
-            let mut c = cache.map(|c| c.gpu.lock().unwrap());
+            let mut c = cache.map(|c| c.gpu.lock().unwrap_or_else(|e| e.into_inner()));
             match c.as_mut().and_then(|c| c.source.as_ref().filter(|(ck, _)| *ck == k).map(|(_, b)| b.clone())) {
                 Some(b) => b,
                 None => {
@@ -778,8 +778,8 @@ impl Processor {
         // changed): cut out of it, which is much faster and gives exactly the whole rendering.
         let full_w = plan.full.0;
         let whole_key = cache.filter(|_| plan.partial() && global_dark.is_none()).map(|_| self.stage_key(src, Region { x: 0, y: 0, w: full_w, h: plan.full.1 }));
-        let whole = cache.zip(whole_key).and_then(|(c, k)| c.gpu.lock().unwrap().early.as_ref().filter(|(ck, _)| *ck == k).map(|(_, b)| b.clone()));
-        let cached = early.or_else(|| cache.and_then(|c| c.gpu.lock().unwrap().early.as_ref().filter(|(k, _)| *k == stage_key).map(|(_, b)| b.clone())));
+        let whole = cache.zip(whole_key).and_then(|(c, k)| c.gpu.lock().unwrap_or_else(|e| e.into_inner()).early.as_ref().filter(|(ck, _)| *ck == k).map(|(_, b)| b.clone()));
+        let cached = early.or_else(|| cache.and_then(|c| c.gpu.lock().unwrap_or_else(|e| e.into_inner()).early.as_ref().filter(|(k, _)| *k == stage_key).map(|(_, b)| b.clone())));
         let working = match (&whole, cached) {
             (Some(full), _) => {
                 let b = ops.image(n);
@@ -791,7 +791,7 @@ impl Processor {
                 let b = Arc::new(self.early_gpu(ops, src, plan, cache));
                 if let Some(c) = cache {
                     ops.keep(&b);
-                    c.gpu.lock().unwrap().early = Some((stage_key, b.clone()));
+                    c.gpu.lock().unwrap_or_else(|e| e.into_inner()).early = Some((stage_key, b.clone()));
                 }
                 b
             }
@@ -805,9 +805,9 @@ impl Processor {
             // Cut out of the whole image's planes as well (see `whole`).
             let whole_local = whole.as_ref().and(cache).zip(whole_key).and_then(|(c, wk)| {
                 let k = local_key(wk);
-                c.gpu.lock().unwrap().local.as_ref().filter(|(ck, _)| *ck == k).map(|(_, l)| l.clone())
+                c.gpu.lock().unwrap_or_else(|e| e.into_inner()).local.as_ref().filter(|(ck, _)| *ck == k).map(|(_, l)| l.clone())
             });
-            let cached = cache.and_then(|c| c.gpu.lock().unwrap().local.as_ref().filter(|(ck, _)| *ck == k).map(|(_, l)| l.clone()));
+            let cached = cache.and_then(|c| c.gpu.lock().unwrap_or_else(|e| e.into_inner()).local.as_ref().filter(|(ck, _)| *ck == k).map(|(_, l)| l.clone()));
             match (whole_local, cached) {
                 (Some(full), _) => Some(Arc::new(full.crop(ops, full_w, ext))),
                 (None, Some(l)) if global_dark.is_none() => Some(l),
@@ -818,7 +818,7 @@ impl Processor {
                     let l = Arc::new(self.local_gpu(ops, &working, plan, global_dark, airlight)?);
                     if let Some(c) = cache.filter(|_| global_dark.is_none()) {
                         ops.keep(&l.buf);
-                        c.gpu.lock().unwrap().local = Some((k, l.clone()));
+                        c.gpu.lock().unwrap_or_else(|e| e.into_inner()).local = Some((k, l.clone()));
                     }
                     Some(l)
                 }
@@ -1380,10 +1380,10 @@ mod tests {
         let p = Processor::new(&meta(w, h), &Adjustments::default());
         let cache = StageCache::default();
         assert!(p.render_gpu(&g, &src, None, Some(&cache)).is_ok());
-        assert!(cache.gpu.lock().unwrap().early.is_some());
+        assert!(cache.gpu.lock().unwrap_or_else(|e| e.into_inner()).early.is_some());
         g.inject_incomplete.store(true, std::sync::atomic::Ordering::Relaxed);
         assert!(p.render_gpu(&g, &src, None, Some(&cache)).is_err());
-        let c = cache.gpu.lock().unwrap();
+        let c = cache.gpu.lock().unwrap_or_else(|e| e.into_inner());
         assert!(c.source.is_none() && c.early.is_none() && c.local.is_none());
     }
 
@@ -1398,7 +1398,7 @@ mod tests {
         assert!(p.render_gpu(&g, &src, None, Some(&cache)).is_ok());
         let black = p.render_gpu(&g, &src, Some(Region { x: 0, y: 0, w: 40, h: 30 }), Some(&cache)).expect("schwarzer Ausschnitt auf der Grafikkarte");
         assert!(black.rgba.chunks_exact(4).all(|p| p[..3] == [0, 0, 0]));
-        assert!(cache.gpu.lock().unwrap().early.is_some(), "Cache bleibt");
+        assert!(cache.gpu.lock().unwrap_or_else(|e| e.into_inner()).early.is_some(), "Cache bleibt");
         // A part too large for the card goes to the CPU, without emptying the cache.
         let small = Region { x: 70, y: 40, w: 20, h: 20 };
         let ext = p.plan(&src, Some(small)).ext;
@@ -1408,7 +1408,7 @@ mod tests {
         }
         let Err(e) = p.render_gpu(&g, &src, None, Some(&cache)) else { panic!("zu groß") };
         assert!(e.downcast_ref::<Fallback>().is_some(), "{e:#}");
-        assert!(cache.gpu.lock().unwrap().early.is_some(), "Cache bleibt");
+        assert!(cache.gpu.lock().unwrap_or_else(|e| e.into_inner()).early.is_some(), "Cache bleibt");
         assert!(g.problem().is_none());
     }
 
@@ -1436,7 +1436,7 @@ mod tests {
         let p = Processor::new(&meta(w, h), &painted_scene());
         let cache = StageCache::default();
         let full = p.render_gpu(g, &src, None, Some(&cache)).unwrap();
-        let whole_key = cache.gpu.lock().unwrap().early.as_ref().unwrap().0;
+        let whole_key = cache.gpu.lock().unwrap_or_else(|e| e.into_inner()).early.as_ref().unwrap().0;
         for region in [Region { x: 50, y: 40, w: 40, h: 30 }, Region { x: 0, y: 0, w: 25, h: 20 }, Region { x: 170, y: 120, w: 30, h: 30 }] {
             let part = p.render_gpu(g, &src, Some(region), Some(&cache)).unwrap();
             let mut max = 0;
@@ -1451,7 +1451,7 @@ mod tests {
             }
             assert!(max <= 1, "{region:?}: {max}");
         }
-        assert_eq!(cache.gpu.lock().unwrap().early.as_ref().unwrap().0, whole_key, "the whole stays cached");
+        assert_eq!(cache.gpu.lock().unwrap_or_else(|e| e.into_inner()).early.as_ref().unwrap().0, whole_key, "the whole stays cached");
     }
 
     /// While a stroke is painted only its changed rows go to the card: the result is that of
@@ -1489,12 +1489,12 @@ mod tests {
         };
         let cache = StageCache::default();
         Processor::new(&meta(w, h), &adj).render_gpu(g, &src, None, Some(&cache)).unwrap();
-        let source_key = cache.gpu.lock().unwrap().source.as_ref().unwrap().0;
+        let source_key = cache.gpu.lock().unwrap_or_else(|e| e.into_inner()).source.as_ref().unwrap().0;
         adj.white_balance.mode = crate::params::WbMode::Custom;
         adj.white_balance.kelvin = 3500.0;
         let p = Processor::new(&meta(w, h), &adj);
         let cached = p.render_gpu(g, &src, None, Some(&cache)).unwrap();
-        assert_eq!(cache.gpu.lock().unwrap().source.as_ref().unwrap().0, source_key, "retouch not done again");
+        assert_eq!(cache.gpu.lock().unwrap_or_else(|e| e.into_inner()).source.as_ref().unwrap().0, source_key, "retouch not done again");
         let fresh = p.render_gpu(g, &src, None, None).unwrap();
         assert_eq!(cached.rgba, fresh.rgba);
     }

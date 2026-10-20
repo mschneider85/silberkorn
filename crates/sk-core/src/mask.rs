@@ -208,7 +208,7 @@ fn mask_keys(mask: &Mask, aspect: f32, src: Option<&LinearImage>) -> (u64, u64) 
 fn ai_hash(data: &Arc<Vec<u8>>) -> u64 {
     type Hashes = Vec<(std::sync::Weak<Vec<u8>>, u64)>;
     static HASHES: Mutex<Hashes> = Mutex::new(Vec::new());
-    let mut hashes = HASHES.lock().unwrap();
+    let mut hashes = HASHES.lock().unwrap_or_else(|e| e.into_inner());
     // A weak reference keeps its allocation, so no other data can be at that address meanwhile.
     hashes.retain(|(w, _)| w.strong_count() > 0);
     if let Some((_, h)) = hashes.iter().find(|(w, _)| std::ptr::eq(w.as_ptr(), Arc::as_ptr(data))) {
@@ -231,7 +231,7 @@ type MaskCache = Mutex<Vec<(u64, Arc<MaskBitmap>)>>;
 static MASK_CACHE: LazyLock<MaskCache> = LazyLock::new(|| Mutex::new(Vec::new()));
 
 fn cache_lookup(key: u64) -> Option<Arc<MaskBitmap>> {
-    let mut cache = MASK_CACHE.lock().unwrap();
+    let mut cache = MASK_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     let pos = cache.iter().position(|(k, _)| *k == key)?;
     let entry = cache.remove(pos);
     let bm = entry.1.clone();
@@ -276,7 +276,7 @@ pub fn cached_bitmap(mask: &Mask, aspect: f32, src: Option<&LinearImage>) -> Arc
 }
 
 fn cache_insert(key: u64, bm: Arc<MaskBitmap>) {
-    let mut cache = MASK_CACHE.lock().unwrap();
+    let mut cache = MASK_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.push((key, bm));
     if cache.len() > 24 {
         cache.remove(0);
@@ -304,14 +304,14 @@ fn paint_live(
     aspect: f32,
     guide: Option<&crate::brush::AutoGuide>,
 ) -> Arc<MaskBitmap> {
-    let mut live = LIVE.lock().unwrap();
+    let mut live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
     let (w, h) = (base.w, base.h);
     let continued = live.as_ref().is_some_and(|l| l.prefix_key == prefix_key && l.stroke.continues(last, w, h, aspect));
     if continued {
         // The stroke's previous state is not needed any more; dropping it keeps the cache from
         // filling with the in-between states of one stroke.
         let old = live.as_ref().unwrap().out_key;
-        MASK_CACHE.lock().unwrap().retain(|(k, _)| *k != old);
+        MASK_CACHE.lock().unwrap_or_else(|e| e.into_inner()).retain(|(k, _)| *k != old);
     } else {
         *live = Some(Live { prefix_key, out: base.clone(), out_key: key, stroke: crate::brush::LiveStroke::new(w, h, aspect) });
     }
@@ -335,7 +335,7 @@ type GuideCache = Mutex<Option<(u64, Arc<crate::brush::AutoGuide>)>>;
 fn cached_guide(src: &LinearImage) -> Arc<crate::brush::AutoGuide> {
     static GUIDE: LazyLock<GuideCache> = LazyLock::new(|| Mutex::new(None));
     let key = image_fingerprint(src);
-    let mut g = GUIDE.lock().unwrap();
+    let mut g = GUIDE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some((k, guide)) = g.as_ref()
         && *k == key
     {
@@ -531,11 +531,11 @@ fn cached_heal(src: &LinearImage, segments: &[Segment], offset: (f32, f32), r: f
         [a.0, a.1, b.0, b.1].into_iter().for_each(&mut add);
     }
     [offset.0, offset.1, r].into_iter().for_each(&mut add);
-    if let Some((_, f)) = CACHE.lock().unwrap().iter().find(|(k, _)| *k == h) {
+    if let Some((_, f)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == h) {
         return f.clone();
     }
     let f = Arc::new(HealField::solve(src, segments, offset, r));
-    let mut cache = CACHE.lock().unwrap();
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.push((h, f.clone()));
     if cache.len() > 32 {
         cache.remove(0);
@@ -932,11 +932,11 @@ static PATCH_CACHE: LazyLock<PatchCache> = LazyLock::new(|| Mutex::new(Vec::new(
 /// Decoded patch of a removal from a small cache.
 fn cached_patch(r: &crate::params::Removal) -> Option<Arc<Patch>> {
     let key = r.id ^ (r.patch.len() as u64).rotate_left(32);
-    if let Some((_, p)) = PATCH_CACHE.lock().unwrap().iter().find(|(k, _)| *k == key) {
+    if let Some((_, p)) = PATCH_CACHE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
         return Some(p.clone());
     }
     let p = Arc::new(Patch::decode(&r.patch, r.scale)?);
-    let mut cache = PATCH_CACHE.lock().unwrap();
+    let mut cache = PATCH_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     cache.push((key, p.clone()));
     if cache.len() > 32 {
         cache.remove(0);

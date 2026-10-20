@@ -303,7 +303,7 @@ impl Gpu {
 
     /// The compute pipeline of a kernel (`main` in `src`), compiled on first use.
     fn kernel(&self, name: &'static str, src: &str) -> wgpu::ComputePipeline {
-        let mut kernels = self.kernels.lock().unwrap();
+        let mut kernels = self.kernels.lock().unwrap_or_else(|e| e.into_inner());
         kernels
             .entry(name)
             .or_insert_with(|| {

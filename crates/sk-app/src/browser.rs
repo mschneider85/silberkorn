@@ -572,7 +572,8 @@ impl App {
             ui.spacing_mut().item_spacing.x = 6.0;
             let field_w = 62.0;
             let (lo, hi) = ZOOM_PCT;
-            let fit = self.zoom_fit_pct.unwrap_or(lo).clamp(lo, ZOOM_SLIDER_MAX - 1.0);
+            // NaN (an image of size 0) would make the clamps below panic.
+            let fit = self.zoom_fit_pct.filter(|f| f.is_finite()).unwrap_or(lo).clamp(lo, ZOOM_SLIDER_MAX - 1.0);
             let mut log = pct.clamp(fit, ZOOM_SLIDER_MAX).log2();
             let slider_w = (ui.available_width() - field_w - 6.0).max(40.0);
             let range = fit.log2()..=ZOOM_SLIDER_MAX.log2();

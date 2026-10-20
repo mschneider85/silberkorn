@@ -84,9 +84,9 @@ thread_local! {
 /// [`KEPT`], to read or change.
 fn kept<R>(f: impl FnOnce(&mut Option<(String, Decoded)>) -> R) -> R {
     #[cfg(not(test))]
-    return f(&mut KEPT.lock().unwrap());
+    return f(&mut KEPT.lock().unwrap_or_else(|e| e.into_inner()));
     #[cfg(test)]
-    KEPT.with(|k| f(&mut k.lock().unwrap()))
+    KEPT.with(|k| f(&mut k.lock().unwrap_or_else(|e| e.into_inner())))
 }
 
 /// Raw data larger than this is not kept (float or multi-channel files).
@@ -103,8 +103,27 @@ fn decode(path: &Path) -> Result<Decoded> {
 /// `dummy` skips decoding the pixel data (metadata only). `path` may be a variant (see
 /// `variant`): the file is read, the metadata keeps the variant's path.
 fn decode_ext(path: &Path, dummy: bool) -> Result<Decoded> {
+    contained(|| decode_ext_unguarded(path, dummy))
+}
+
+/// Runs code that calls into rawler: its decoders panic on some damaged files, and several
+/// callers run on the UI thread, where a panic would end the app.
+fn contained<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|_| Err(anyhow!("Datei beschädigt oder nicht lesbar")))
+}
+
+/// The file for rawler, read into memory. `RawSource::new` maps it instead: if it shrinks or
+/// its drive goes away meanwhile (memory card pulled, network share lost), reading the mapping
+/// ends the process (SIGBUS, EXCEPTION_IN_PAGE_ERROR), which no panic handler catches.
+fn open_source(path: &Path) -> Result<RawSource> {
+    let data = std::fs::read(path)?;
+    crate::raw_check::check(&data).map_err(|e| anyhow!("Datei beschädigt: {e}"))?;
+    Ok(RawSource::new_from_shared_vec(std::sync::Arc::new(data)).with_path(path))
+}
+
+fn decode_ext_unguarded(path: &Path, dummy: bool) -> Result<Decoded> {
     let file = crate::variant::file_of(path);
-    let source = RawSource::new(&file).with_context(|| format!("Kann {} nicht öffnen", file.display()))?;
+    let source = open_source(&file).with_context(|| format!("Kann {} nicht öffnen", file.display()))?;
     let decoder: Box<dyn Decoder> = rawler::get_decoder(&source).map_err(|e| anyhow!("Unbekanntes RAW-Format: {e}"))?;
     let params = RawDecodeParams::default();
     let mut raw = decoder.raw_image(&source, &params, dummy).map_err(|e| anyhow!("RAW-Dekodierung fehlgeschlagen: {e}"))?;
@@ -548,11 +567,15 @@ fn superpixel(raw: &RawImage, cfa: &rawler::CFA, k: usize) -> Result<LinearImage
 /// Whether the file is a DNG that Silberkorn wrote (merged, stacked, denoised): its embedded
 /// preview is Silberkorn's rendering, not the camera's.
 pub fn written_by_silberkorn(path: &Path) -> bool {
+    contained(|| Ok(written_by_silberkorn_unguarded(path))).unwrap_or(false)
+}
+
+fn written_by_silberkorn_unguarded(path: &Path) -> bool {
     let file = crate::variant::file_of(path);
     if !file.extension().is_some_and(|e| e.eq_ignore_ascii_case("dng")) {
         return false;
     }
-    let Ok(source) = RawSource::new(&file) else { return false };
+    let Ok(source) = open_source(&file) else { return false };
     let Ok(decoder) = rawler::get_decoder(&source) else { return false };
     let root = decoder.ifd(rawler::decoders::WellKnownIFD::Root).ok().flatten();
     let software = root.as_deref().and_then(|ifd| ifd.get_entry(305u16)).and_then(|e| e.value.as_string().cloned());
@@ -568,6 +591,10 @@ pub fn embedded_preview(path: &Path) -> Result<::image::DynamicImage> {
 /// [`embedded_preview`] from the smallest embedded JPEG with at least `min_edge` pixels on its
 /// longer side, where the file holds several (much faster for thumbnails).
 pub fn embedded_preview_at_least(path: &Path, min_edge: usize) -> Result<::image::DynamicImage> {
+    contained(|| embedded_preview_unguarded(path, min_edge))
+}
+
+fn embedded_preview_unguarded(path: &Path, min_edge: usize) -> Result<::image::DynamicImage> {
     let file = crate::variant::file_of(path);
     if let Some((jpeg, orientation)) = crate::raw_preview::read_at_least(&file, min_edge)
         && let Ok(img) = ::image::load_from_memory_with_format(&jpeg, ::image::ImageFormat::Jpeg)
@@ -579,7 +606,7 @@ pub fn embedded_preview_at_least(path: &Path, min_edge: usize) -> Result<::image
 
 /// [`embedded_preview`] through rawler (reads the whole file).
 fn embedded_preview_rawler(path: &Path) -> Result<::image::DynamicImage> {
-    let source = RawSource::new(path)?;
+    let source = open_source(path)?;
     let decoder = rawler::get_decoder(&source).map_err(|e| anyhow!("{e}"))?;
     let params = RawDecodeParams::default();
     let img = decoder

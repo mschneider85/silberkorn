@@ -33,6 +33,7 @@ pub mod print;
 pub mod paths;
 pub mod pipeline;
 pub mod raw;
+pub mod raw_check;
 pub mod raw_preview;
 pub mod safe_file;
 pub mod session;

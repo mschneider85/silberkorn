@@ -141,6 +141,8 @@ fn main() -> eframe::Result {
         eframe::run_native("Silberkorn", options, Box::new(move |cc| {
             log_renderer(cc);
             if let Some(rs) = &cc.wgpu_render_state {
+                // wgpu's default handler panics, which would end the app on any error in drawing.
+                rs.device.on_uncaptured_error(std::sync::Arc::new(|e| log::error!("Grafikkarte der Anzeige: {e}")));
                 rs.device.set_device_lost_callback(|reason, message| {
                     if reason == eframe::wgpu::DeviceLostReason::Unknown {
                         log::warn!("Grafikgerät der Anzeige verloren: {message}");

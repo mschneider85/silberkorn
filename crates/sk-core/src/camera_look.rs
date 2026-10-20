@@ -53,11 +53,11 @@ static CACHE: std::sync::Mutex<Vec<Fitted>> = std::sync::Mutex::new(Vec::new());
 
 /// [`fit_from_file`], remembered for the last few files.
 pub fn fit_cached(meta: &RawMeta, preview: &LinearImage) -> Option<CameraCurve> {
-    if let Some((_, c)) = CACHE.lock().unwrap().iter().find(|(p, _)| *p == meta.path) {
+    if let Some((_, c)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(p, _)| *p == meta.path) {
         return c.clone();
     }
     let curve = fit_from_file(meta, preview);
-    let mut cache = CACHE.lock().unwrap();
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if cache.len() >= 32 {
         cache.remove(0);
     }

@@ -767,9 +767,12 @@ impl CropRect {
 
     /// Clamps into the unit square with a minimum size.
     pub fn clamped(self) -> Self {
-        let w = self.w.clamp(0.02, 1.0);
-        let h = self.h.clamp(0.02, 1.0);
-        Self { x: self.x.clamp(0.0, 1.0 - w), y: self.y.clamp(0.0, 1.0 - h), w, h }
+        // NaN (a damaged sidecar, a zero-sized frame) would make the bounds below NaN, and
+        // `clamp` panics on those.
+        let finite = |v: f32, or: f32| if v.is_finite() { v } else { or };
+        let w = finite(self.w, 1.0).clamp(0.02, 1.0);
+        let h = finite(self.h, 1.0).clamp(0.02, 1.0);
+        Self { x: finite(self.x, 0.0).clamp(0.0, 1.0 - w), y: finite(self.y, 0.0).clamp(0.0, 1.0 - h), w, h }
     }
 }
 
@@ -1295,6 +1298,13 @@ impl Adjustments {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A damaged crop (NaN, too big) becomes a valid one instead of panicking in `clamp`.
+    #[test]
+    fn damaged_crop_is_clamped() {
+        let c = CropRect { x: f32::NAN, y: 0.5, w: f32::NAN, h: 3.0 }.clamped();
+        assert_eq!((c.x, c.y, c.w, c.h), (0.0, 0.0, 1.0, 1.0));
+    }
 
     #[test]
     fn levels_of_old_files_load_and_channels_stay_out_until_used() {
