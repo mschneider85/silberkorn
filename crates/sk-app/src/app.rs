@@ -575,6 +575,8 @@ pub struct App {
     pub pointer_down: bool,
     pub clip_warning: bool,
     pub show_before: bool,
+    /// A tool left out of the view while Shift and the mouse button are held on its reset button.
+    pub(crate) tool_peek: Option<sk_core::tools::Tool>,
     render_requested: bool,
     pub(crate) undo: Vec<Adjustments>,
     pub(crate) redo: Vec<Adjustments>,
@@ -1019,6 +1021,7 @@ impl App {
             pointer_down: false,
             clip_warning: false,
             show_before: false,
+            tool_peek: None,
             render_requested: false,
             undo: Vec::new(),
             undo_seq: Vec::new(),
@@ -2602,22 +2605,28 @@ impl App {
         // (the whole image once if it is not complete, so that the next parts can follow).
         let (painting, part) = self.painted_part(softproof.is_some());
         let draft = match (self.pointer_down, self.view_magnified) {
-            _ if painting => 1,
+            // The button is held, but nothing is dragged.
+            _ if painting || self.tool_peek.is_some() => 1,
             (false, _) => 1,
             (true, false) => self.drag_draft_level(),
             // Zoomed in, the view draft covers the screen; this only feeds the histogram.
             (true, true) => 4,
         };
         self.drag_rendered |= self.pointer_down && self.current.is_some();
-        self.whole_sent = (draft == 1 && !self.show_before && self.style_preview.is_none() && self.current.is_some()).then_some(self.edit_version);
+        let peek = self.tool_peek;
+        self.whole_sent = (draft == 1 && !self.show_before && self.style_preview.is_none() && peek.is_none() && self.current.is_some()).then_some(self.edit_version);
         if let Some(cur) = &self.current {
+            // A style preview or a tool left out is shown, but never cached.
+            let mut adjustments = self.style_preview.clone().unwrap_or_else(|| cur.adjustments.clone());
+            if let Some(tool) = peek.filter(|t| !adjustments.hidden.contains(t)) {
+                adjustments.hidden.push(tool);
+            }
             self.workers.render(RenderJob {
                 generation: self.generation,
                 version: self.edit_version,
-                // A style preview is shown, but never cached.
-                adjustments: self.style_preview.clone().unwrap_or_else(|| cur.adjustments.clone()),
+                adjustments,
                 draft,
-                cache_as: (!self.pointer_down && self.style_preview.is_none()).then(|| (cur.meta.path.clone(), self.session_root())),
+                cache_as: (!self.pointer_down && self.style_preview.is_none() && peek.is_none()).then(|| (cur.meta.path.clone(), self.session_root())),
                 meta: cur.meta.clone(),
                 preview: cur.preview.clone(),
                 clip_warning: self.clip_warning,

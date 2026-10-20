@@ -84,12 +84,11 @@ fn eye_clicked_id() -> egui::Id {
     egui::Id::new("tool_eye_clicked")
 }
 
-/// Which tools of the image are switched off and which are changed: a tool section shows its
-/// eye for these. Set before the tool tabs are drawn.
+/// Which tools of the image are switched off: a tool section shows the eye to switch them on
+/// again. Set before the tool tabs are drawn.
 #[derive(Clone, Default)]
 pub struct ToolStates {
     pub hidden: Vec<sk_core::tools::Tool>,
-    pub edited: Vec<sk_core::tools::Tool>,
 }
 
 pub fn set_tool_states(ctx: &egui::Context, states: ToolStates) {
@@ -101,6 +100,20 @@ pub fn take_eye_clicked(ctx: &egui::Context) -> Option<sk_core::tools::Tool> {
     ctx.data_mut(|d| {
         let tool = d.get_temp(eye_clicked_id());
         d.remove::<sk_core::tools::Tool>(eye_clicked_id());
+        tool
+    })
+}
+
+fn peek_id() -> egui::Id {
+    egui::Id::new("tool_peek")
+}
+
+/// The tool whose effect is left out of the view while Shift and the mouse button are held on
+/// its reset button (as in Capture One); set anew each frame.
+pub fn take_tool_peek(ctx: &egui::Context) -> Option<sk_core::tools::Tool> {
+    ctx.data_mut(|d| {
+        let tool = d.get_temp(peek_id());
+        d.remove::<sk_core::tools::Tool>(peek_id());
         tool
     })
 }
@@ -315,25 +328,15 @@ fn section_inner(
             ui.label(help);
         });
     }
-    // Right to left: caret, eye (tools only; its place stays free while there is nothing to
-    // switch off), reset, "A" (tools that set themselves), copy.
+    // Right to left: caret, eye (only for a tool switched off with the former eye, to switch it
+    // on again), reset, "A" (tools that set themselves), copy.
     let mut x = 34.0;
-    if let Some(tool) = eye_tool {
-        if hidden || states.edited.contains(&tool) {
-            let r = Rect::from_center_size(inner.right_center() - vec2(x, 0.0), vec2(24.0, 22.0));
-            let (symbol, color) = if hidden {
-                (theme::icon::EYE_SLASH, theme::ACCENT)
-            } else if hovered || ui.rect_contains_pointer(r) {
-                (theme::icon::EYE, theme::TEXT)
-            } else {
-                (theme::icon::EYE, theme::TEXT_FAINT)
-            };
-            let b = egui::Button::new(RichText::new(symbol).size(13.0).color(color)).frame_when_inactive(false);
-            let hover = if hidden { "Wirkung wieder einblenden" } else { "Wirkung ausblenden (Einstellungen bleiben erhalten)" };
-            if ui.put(r, b).on_hover_text(hover).clicked() {
-                ui.data_mut(|d| d.insert_temp(eye_clicked_id(), tool));
-                header_button_clicked = true;
-            }
+    if let Some(tool) = eye_tool.filter(|_| hidden) {
+        let r = Rect::from_center_size(inner.right_center() - vec2(x, 0.0), vec2(24.0, 22.0));
+        let b = egui::Button::new(RichText::new(theme::icon::EYE_SLASH).size(13.0).color(theme::ACCENT)).frame_when_inactive(false);
+        if ui.put(r, b).on_hover_text("Wirkung wieder einblenden").clicked() {
+            ui.data_mut(|d| d.insert_temp(eye_clicked_id(), tool));
+            header_button_clicked = true;
         }
         x += 26.0;
     }
@@ -341,8 +344,17 @@ fn section_inner(
         let r = Rect::from_center_size(inner.right_center() - vec2(x, 0.0), vec2(24.0, 22.0));
         let color = if hovered || ui.rect_contains_pointer(r) { theme::TEXT } else { theme::TEXT_FAINT };
         let b = egui::Button::new(RichText::new(theme::icon::ARROWS_COUNTER_CLOCKWISE).size(13.0).color(color)).frame_when_inactive(false);
-        if ui.put(r, b).on_hover_text("Werkzeug zurücksetzen").clicked() {
-            reset();
+        // With Shift the tool is only left out of the view while the button is held.
+        let peek = eye_tool.filter(|_| ui.input(|i| i.modifiers.shift));
+        let hover = if eye_tool.is_some() { "Werkzeug zurücksetzen\nShift gedrückt halten: Wirkung vorübergehend ausblenden" } else { "Werkzeug zurücksetzen" };
+        let br = ui.put(r, b).on_hover_text(hover);
+        if let Some(tool) = peek.filter(|_| br.is_pointer_button_down_on()) {
+            ui.data_mut(|d| d.insert_temp(peek_id(), tool));
+        }
+        if br.clicked() {
+            if peek.is_none() {
+                reset();
+            }
             header_button_clicked = true;
         }
         x += 26.0;
@@ -424,7 +436,9 @@ pub fn field<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
 /// Drop-down list as a form row; `show` lists the choices.
 pub fn combo_field(ui: &mut Ui, label: &str, selected: impl Into<egui::WidgetText>, show: impl FnOnce(&mut Ui)) {
     field(ui, label, |ui| {
-        egui::ComboBox::from_id_salt(label).selected_text(selected).width(ui.available_width() - 8.0).show_ui(ui, show);
+        let r = egui::ComboBox::from_id_salt(label).selected_text(selected).width(ui.available_width() - 8.0).show_ui(ui, show);
+        // Named after the row (screen readers, tests), not after the chosen entry.
+        r.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), label));
     });
 }
 
@@ -504,7 +518,10 @@ pub fn slider_row_with(
     opts: SliderOpts<'_>,
 ) -> bool {
     let mut changed = false;
-    ui.horizontal(|ui| {
+    // Its own ids, so that the row (label, rail, number) keeps them while widgets before it
+    // come and go; a changed id would end a drag.
+    let id = stable_id(ui, label);
+    ui.scope_builder(egui::UiBuilder::new().id(id), |ui| ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         let modified = (*value - default).abs() > f32::EPSILON;
         let color = if modified { Color32::WHITE } else { theme::TEXT_DIM };
@@ -558,8 +575,25 @@ pub fn slider_row_with(
             }
             changed |= ui.add_sized(vec2(value_w, 20.0), drag).changed();
         });
-    });
+    }));
     changed
+}
+
+/// An id for the widget `name` that stays the same while widgets before it come and go: egui's
+/// automatic ids count those, and a slider whose id changes mid-drag loses the drag (as when the
+/// tool header gained a button with the first change). A second widget of the same name in the
+/// same place gets the automatic id.
+fn stable_id(ui: &Ui, name: &str) -> egui::Id {
+    let id = ui.id().with(("stable", name));
+    let pass = ui.ctx().cumulative_pass_nr();
+    let fresh = ui.data_mut(|d| {
+        let used = d.get_temp_mut_or_default::<(u64, std::collections::HashSet<egui::Id>)>(egui::Id::new("stable_ids"));
+        if used.0 != pass {
+            *used = (pass, Default::default());
+        }
+        used.1.insert(id)
+    });
+    if fresh { id } else { ui.next_auto_id() }
 }
 
 /// Slim slider: a thin rail filled from the default to the value, a small round handle.

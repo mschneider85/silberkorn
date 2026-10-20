@@ -3232,6 +3232,12 @@ fn tool_auto_sets_only_its_tool_on_the_selection() {
 
 /// Draws the tool panel (with AccessKit) and reports the labels of its widgets.
 fn tool_panel_frame(f: &mut Fixture, events: Vec<egui::Event>) -> Vec<(String, egui::Rect)> {
+    tool_panel_frame_with(f, events, Default::default())
+}
+
+/// [`tool_panel_frame`] with modifier keys held.
+fn tool_panel_frame_with(f: &mut Fixture, events: Vec<egui::Event>, modifiers: egui::Modifiers) -> Vec<(String, egui::Rect)> {
+    let events = std::iter::once(egui::Event::ModifiersChanged(modifiers)).chain(events).collect();
     let input = egui::RawInput {
         screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1500.0, 2400.0))),
         events,
@@ -3876,4 +3882,120 @@ fn auto_run_keeps_foreign_steps_and_results_apart() {
     assert_eq!(f.app.extra_undo.len(), steps + 1, "das zweite Ergebnis kommt zum Schritt des Laufs");
     assert!(f.app.auto_progress.is_none());
     assert_eq!(sidecar::load(&b).adjustments.exposure, 1.0);
+}
+
+/// Presses on a slider's rail at `from` (share of the rail), moves to `to` in ten steps (ending
+/// `dy` below the row), releases; returns the value read by `get` after each step.
+fn drag_slider(f: &mut Fixture, label: &str, from: f32, to: f32, dy: f32, get: impl Fn(&Fixture) -> f32) -> Vec<f32> {
+    let nodes = tool_panel_frame(f, vec![]);
+    let rail = slider(&nodes, label);
+    let at = |s: f32, y: f32| egui::pos2(rail.left() + 7.0 + (rail.width() - 14.0) * s, rail.center().y + y);
+    let button = |p, pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    let a = at(from, 0.0);
+    tool_panel_frame(f, vec![egui::Event::PointerMoved(a)]);
+    tool_panel_frame(f, vec![button(a, true)]);
+    let mut seen = vec![get(f)];
+    for k in 1..=10 {
+        let t = k as f32 / 10.0;
+        tool_panel_frame(f, vec![egui::Event::PointerMoved(at(from + (to - from) * t, dy * t))]);
+        seen.push(get(f));
+    }
+    tool_panel_frame(f, vec![button(at(to, dy), false)]);
+    seen
+}
+
+/// A drag keeps going when the tool header changes under it: with the first change of a tool,
+/// when the value passes its default, and when the pointer leaves the row. (The header's buttons
+/// shifted egui's automatic ids, which ended the drag.)
+#[test]
+fn slider_drags_survive_header_changes() {
+    let Some(mut f) = Fixture::new("slider-drags") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let adj = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.clone();
+    let follows = |seen: &[f32], label: &str| {
+        assert!(seen.windows(2).all(|w| w[1] > w[0]), "{label} folgt der Maus nicht: {seen:?}");
+    };
+
+    // The untouched tool, from below its default to above.
+    f.app.tab = crate::app::Tab::Exposure;
+    let seen = drag_slider(&mut f, "Belichtung", 0.2, 0.8, 0.0, |f| adj(f).exposure);
+    follows(&seen, "Belichtung");
+    assert!(seen[0] < 0.0 && seen[10] > 0.0, "{seen:?}");
+
+    // The color editor's bands, also when the pointer wanders over the rows below.
+    f.app.tab = crate::app::Tab::Color;
+    follows(&drag_slider(&mut f, "Rot", 0.3, 0.7, 0.0, |f| adj(f).color_editor.bands[0].hue), "Rot");
+    follows(&drag_slider(&mut f, "Orange", 0.3, 0.7, 80.0, |f| adj(f).color_editor.bands[1].hue), "Orange");
+
+    // To zero (the tool becomes unchanged) and back up in one drag.
+    f.app.tab = crate::app::Tab::Details;
+    f.app.edit(|a| a.detail.ai_denoise = 50.0);
+    std::sync::Arc::make_mut(&mut f.app.current.as_mut().unwrap().meta).hdr = false;
+    let down = drag_slider(&mut f, "KI-Entrauschen", 0.5, 0.0, 0.0, |f| adj(f).detail.ai_denoise);
+    assert_eq!(*down.last().unwrap(), 0.0, "{down:?}");
+    follows(&drag_slider(&mut f, "KI-Entrauschen", 0.0, 0.4, 0.0, |f| adj(f).detail.ai_denoise), "KI-Entrauschen");
+}
+
+/// Shift and the mouse button held on a tool's reset button leave the tool out of the view
+/// until released; the settings stay. Without Shift the button resets.
+#[test]
+fn shift_on_reset_leaves_the_tool_out_while_held() {
+    let Some(mut f) = Fixture::new("tool-peek") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.tab = crate::app::Tab::Exposure;
+    f.app.edit(|a| a.exposure = 1.0);
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    // The reset button in the header right above the exposure slider.
+    let rail = slider(&nodes, "Belichtung");
+    let reset = nodes
+        .iter()
+        .filter(|(l, r)| l == crate::theme::icon::ARROWS_COUNTER_CLOCKWISE && r.bottom() <= rail.top())
+        .map(|(_, r)| *r)
+        .max_by(|a, b| a.top().total_cmp(&b.top()))
+        .expect("Zurücksetzen im Kopf")
+        .center();
+    let button = |pressed| egui::Event::PointerButton { pos: reset, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::SHIFT };
+    tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(reset)], egui::Modifiers::SHIFT);
+    tool_panel_frame_with(&mut f, vec![button(true)], egui::Modifiers::SHIFT);
+    tool_panel_frame_with(&mut f, vec![], egui::Modifiers::SHIFT);
+    assert_eq!(f.app.tool_peek, Some(sk_core::tools::Tool::Exposure));
+    tool_panel_frame_with(&mut f, vec![button(false)], egui::Modifiers::SHIFT);
+    tool_panel_frame(&mut f, vec![]);
+    assert_eq!(f.app.tool_peek, None);
+    let adj = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.clone();
+    assert_eq!((adj(&f).exposure, adj(&f).hidden.len()), (1.0, 0), "nur vorübergehend");
+    click_at(&mut f, reset);
+    assert_eq!(adj(&f).exposure, 0.0, "ohne Shift: zurückgesetzt");
+}
+
+/// The lens correction comes from one source, chosen in a drop-down: none, the camera's data or
+/// a local profile.
+#[test]
+fn lens_correction_source_is_chosen_in_a_list() {
+    let Some(mut f) = Fixture::new("lens-source") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.tab = crate::app::Tab::Lens;
+    let lens = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.lens.clone();
+    // A correction stored by the camera (the sample files have none).
+    let neutral = sk_core::camera_lens::CameraLens { source: "Test", center: [0.0; 2], warp: [[1.0, 0.0, 0.0, 0.0]; 3], vignette: [0.0; 5] };
+    std::sync::Arc::make_mut(&mut f.app.current.as_mut().unwrap().meta).lens = Some(neutral);
+    let choose = |f: &mut Fixture, entry: &str| {
+        let nodes = tool_panel_frame(f, vec![]);
+        let combo = widget(&nodes, "Korrektur").expect("Auswahl der Korrektur");
+        let nodes = click_at(f, combo.center());
+        let item = nodes.iter().filter(|(l, r)| l == entry && r.top() > combo.bottom() - 1.0).map(|(_, r)| *r).next().unwrap_or_else(|| panic!("Eintrag {entry} fehlt"));
+        click_at(f, item.center());
+    };
+    let profile = f.app.lens_profile_name().is_some();
+    choose(&mut f, "Kamera");
+    assert!(lens(&f).camera && lens(&f).profile.is_none(), "{:?}", lens(&f));
+    choose(&mut f, "Keine");
+    assert!(!lens(&f).camera && lens(&f).profile.is_none(), "{:?}", lens(&f));
+    // The profile only where the lens database is there (not in every test environment).
+    if profile {
+        choose(&mut f, "Lokales Profil");
+        assert!(!lens(&f).camera && lens(&f).profile.is_some(), "{:?}", lens(&f));
+        choose(&mut f, "Keine");
+        assert!(lens(&f).profile.is_none() && lens(&f).profile_coeffs.is_none(), "{:?}", lens(&f));
+    }
 }

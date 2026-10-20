@@ -269,48 +269,54 @@ impl App {
         widgets::tool_section(ui, sk_core::tools::Tool::LensCorrection, Some(&mut || reset_lens = true), |ui| {
             ui.label(RichText::new(lens_name.clone().unwrap_or_else(|| "Objektiv unbekannt".into())).color(Color32::from_gray(170)));
             let l = &mut adj.lens;
-            if let Some(source) = camera_source {
-                let r = ui
-                    .checkbox(&mut l.camera, format!("Korrektur aus den Kameradaten ({source})"))
-                    .on_hover_text("Verzeichnung, Farbsäume und Randabschattung, wie die Kamera sie für dieses Objektiv gespeichert hat");
-                if r.changed() {
+            // Where the correction comes from: never both, the profile would correct the same
+            // lens a second time. Choices that don't exist for this image are shown, but disabled.
+            let loading = downloading || (!db_loaded && lens_name.is_some());
+            let current = if l.profile.is_some() {
+                "Lokales Profil"
+            } else if l.camera && camera_source.is_some() {
+                "Kamera"
+            } else {
+                "Keine"
+            };
+            widgets::combo_field(ui, "Korrektur", current, |ui| {
+                if ui.selectable_label(current == "Keine", "Keine").clicked() && current != "Keine" {
+                    l.camera = false;
                     changed = true;
-                    // Never both: the profile would correct the same lens a second time.
-                    if l.camera {
-                        l.profile = None;
-                        l.profile_coeffs = None;
-                    }
+                    profile_action = Some(false);
                 }
-            }
-            ui.horizontal(|ui| {
-                match (&l.profile, &match_name) {
-                    (Some(p), _) => {
-                        // Right to left, so the button keeps its place and a long name is cut.
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.button("Entfernen").clicked() {
-                                profile_action = Some(false);
-                            }
-                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                ui.add(egui::Label::new(format!("Profil: {p}")).truncate()).on_hover_text(p.as_str());
-                            });
-                        });
-                    }
-                    (None, Some(p)) => {
-                        ui.label("Kein Profil");
-                        if ui.button("Anwenden").on_hover_text(format!("Profil „{p}“")).clicked() {
-                            profile_action = Some(true);
-                        }
-                    }
-                    (None, None) if downloading || (!db_loaded && lens_name.is_some()) => {
-                        ui.spinner();
-                        ui.label("Lade Objektivprofile …");
-                    }
-                    (None, None) if lens_name.is_some() => {
-                        ui.label(RichText::new("Kein Profil für dieses Objektiv").color(crate::theme::TEXT_FAINT));
-                    }
-                    (None, None) => {}
+                let camera = ui
+                    .add_enabled(camera_source.is_some(), egui::Button::selectable(current == "Kamera", "Kamera"))
+                    .on_hover_text(match camera_source {
+                        Some(source) => format!("Verzeichnung, Farbsäume und Randabschattung, wie die Kamera sie für dieses Objektiv gespeichert hat ({source})"),
+                        None => String::new(),
+                    })
+                    .on_disabled_hover_text("Die RAW-Datei enthält keine Objektivkorrektur");
+                if camera.clicked() && current != "Kamera" {
+                    l.camera = true;
+                    l.profile = None;
+                    l.profile_coeffs = None;
+                    changed = true;
+                }
+                let profile = ui
+                    .add_enabled(match_name.is_some() || l.profile.is_some(), egui::Button::selectable(current == "Lokales Profil", "Lokales Profil"))
+                    .on_hover_text(match &match_name {
+                        Some(p) => format!("Profil „{p}“ aus der Lensfun-Datenbank"),
+                        None => String::new(),
+                    })
+                    .on_disabled_hover_text(if loading { "Die Objektivprofile werden noch geladen" } else { "Kein Profil für dieses Objektiv" });
+                if profile.clicked() && current != "Lokales Profil" {
+                    profile_action = Some(true);
                 }
             });
+            if let Some(p) = &l.profile {
+                ui.add(egui::Label::new(RichText::new(format!("Profil: {p}")).color(Color32::from_gray(170))).truncate()).on_hover_text(p.as_str());
+            } else if loading {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Lade Objektivprofile …");
+                });
+            }
             if let Some(f) = &focal {
                 crate::widgets::hint(ui, format!("Brennweite {f}"));
             }
@@ -890,7 +896,7 @@ impl App {
     }
 
     /// Name of the lensfun profile for the current lens, cached per lens name.
-    fn lens_profile_name(&mut self) -> Option<String> {
+    pub(crate) fn lens_profile_name(&mut self) -> Option<String> {
         let meta = &self.current.as_ref()?.meta;
         let lens = meta.info.lens.clone().filter(|_| !meta.lens_corrected)?;
         self.lens_db.as_ref()?;

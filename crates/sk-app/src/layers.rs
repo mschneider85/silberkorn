@@ -1728,6 +1728,9 @@ impl App {
             Some(t @ (LocalTool::Heal | LocalTool::Clone)) => {
                 brushes_changed |= brush_controls(ui, self.brushes.of(Some(t)), Some(t), false);
             }
+            Some(LocalTool::Remove) => {
+                brushes_changed |= brush_controls(ui, &mut self.brushes.remove, Some(LocalTool::Remove), true);
+            }
             Some(LocalTool::Magic) => {
                 let d = Brushes::defaults_of(Some(LocalTool::Magic));
                 brushes_changed |= slider_row(ui, "Größe", &mut self.brushes.magic.size, 2.0..=400.0, d.size, 0);

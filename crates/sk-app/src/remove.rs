@@ -249,22 +249,17 @@ impl App {
         let mut act = None;
         let mut changed = false;
         let downloading = self.ai_download_progress(AiFeature::Inpaint);
-        let active = self.local_tool == Some(LocalTool::Remove);
         let selected = self.selected_removal;
-        // Always there, like the other sections: the brush only works while the tool is on, the
-        // buttons only with something removed (shown, but disabled otherwise).
+        // Always there, like the other sections; the buttons only work with something removed
+        // (shown, but disabled otherwise). The brush shows below the tool tiles while the tool is
+        // on, as for healing and cloning.
         let help = "Über das Störende malen; beim Loslassen füllt die KI die Stelle passend zur Umgebung.\n\nGewählten Bereich ändern: mit Umschalt dazumalen, mit Alt wegnehmen; er wird dann neu gefüllt.";
         let mut reset = false;
         let cancel = self.job_cancel(None, Some(&AiFeature::Inpaint.job_label()));
         let mut no_image = Vec::new();
         let removals = self.current.as_mut().map_or(&mut no_image, |c| &mut c.adjustments.removals);
-        let (brushes, area_paint, changed_at) = (&mut self.brushes.remove, &mut self.area_paint, &mut self.brushes_changed_at);
+        let area_paint = &mut self.area_paint;
         section_help_ai(ui, "Objekt entfernen", help, Some(&mut || reset = true), |ui| {
-            let brush = ui.add_enabled_ui(active, |ui| crate::layers::brush_controls(ui, brushes, Some(LocalTool::Remove), true));
-            if brush.inner {
-                *changed_at = Some(std::time::Instant::now());
-            }
-            brush.response.on_disabled_hover_text(crate::commands::hint("Pinsel des Werkzeugs „Objekt entfernen“", "tool-remove"));
             if let Some(p) = downloading {
                 crate::ai_models::download_progress(ui, AiFeature::Inpaint, p, cancel);
             }

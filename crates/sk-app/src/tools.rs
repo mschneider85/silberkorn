@@ -28,23 +28,17 @@ impl App {
         if let Some(tool) = widgets::take_eye_clicked(ui.ctx()) {
             self.edit(|a| a.toggle_hidden(tool));
         }
+        let peek = widgets::take_tool_peek(ui.ctx());
+        if peek != self.tool_peek {
+            self.tool_peek = peek;
+            self.request_render();
+        }
     }
 
-    /// The switched-off and the changed tools of the current image, for the eyes in the headers.
+    /// The switched-off tools of the current image, for the eyes in the headers.
     fn tool_states(&self) -> widgets::ToolStates {
-        use sk_core::tools::Tool;
         let Some(cur) = &self.current else { return Default::default() };
-        let a = &cur.adjustments;
-        let edited = Tool::ALL
-            .into_iter()
-            .filter(|t| match t {
-                // Without copying layers and spots each frame.
-                Tool::Layers => !a.layers.is_empty(),
-                Tool::Retouch => !a.retouch.is_empty() || !a.removals.is_empty(),
-                t => !t.is_default(a),
-            })
-            .collect();
-        widgets::ToolStates { hidden: a.hidden.clone(), edited }
+        widgets::ToolStates { hidden: cur.adjustments.hidden.clone() }
     }
 
     fn tool_tabs(&mut self, ui: &mut Ui) {
