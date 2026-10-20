@@ -466,9 +466,50 @@ pub const RAIL_TONE: &[Color32] = &[Color32::from_rgb(40, 40, 40), Color32::from
 /// Rail colors for a luminance from black to white.
 pub const RAIL_LUMA: &[Color32] = &[Color32::from_rgb(0, 0, 0), Color32::from_rgb(255, 255, 255)];
 
-/// A hue (Oklab degrees) at the given HSV saturation and value, for display.
+/// A hue (Oklab degrees, as the color tools take them) at the given saturation and value, for
+/// display: HSV of the shown sRGB values. (egui's `Hsva` works on linear values, which turned a
+/// red of saturation 0.75 into pink.)
 pub fn band_hsv(hue: f32, s: f32, v: f32) -> Color32 {
-    egui::ecolor::Hsva::new(((hue - 25.0 + 720.0) % 360.0 + 5.0) / 360.0, s, v, 1.0).into()
+    let h = srgb_hue(hue) / 60.0;
+    let x = |k: f32| {
+        let k = (k + h) % 6.0;
+        v * (1.0 - s * (k.min(4.0 - k)).clamp(0.0, 1.0))
+    };
+    let c = |f: f32| (f.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color32::from_rgb(c(x(5.0)), c(x(3.0)), c(x(1.0)))
+}
+
+/// The HSV hue (degrees) of the sRGB colors with the Oklab hue `hue`.
+fn srgb_hue(hue: f32) -> f32 {
+    // Oklab hue of the fully saturated colors around the HSV circle (it rises with it), unwrapped.
+    static TABLE: std::sync::LazyLock<Vec<(f32, f32)>> = std::sync::LazyLock::new(|| {
+        use sk_core::color::{REC2020_TO_XYZ, SRGB_TO_XYZ, mat_inv, mat_mul, mat_vec, srgb_decode};
+        let ok = sk_core::color::Oklab::default();
+        let to_working = mat_mul(&mat_inv(&REC2020_TO_XYZ).expect("invertible"), &SRGB_TO_XYZ);
+        let mut table: Vec<(f32, f32)> = Vec::with_capacity(721);
+        for i in 0..=720 {
+            let h = i as f32 / 2.0;
+            let k = |n: f32| {
+                let k = (n + h / 60.0) % 6.0;
+                1.0 - k.min(4.0 - k).clamp(0.0, 1.0)
+            };
+            let [_, a, b] = ok.from_linear(mat_vec(&to_working, [k(5.0), k(3.0), k(1.0)].map(srgb_decode)));
+            let mut deg = b.atan2(a).to_degrees().rem_euclid(360.0);
+            if let Some(&(prev, _)) = table.last() {
+                deg += ((prev - deg) / 360.0).round() * 360.0;
+                // Kept rising where it wavers slightly (between blue and purple).
+                deg = deg.max(prev);
+            }
+            table.push((deg, h));
+        }
+        table
+    });
+    let t = &TABLE;
+    let first = t[0].0;
+    let q = first + (hue - first).rem_euclid(360.0);
+    let i = t.partition_point(|e| e.0 < q).clamp(1, t.len() - 1);
+    let ((o0, h0), (o1, h1)) = (t[i - 1], t[i]);
+    (h0 + (h1 - h0) * ((q - o0) / (o1 - o0).max(1e-6)).clamp(0.0, 1.0)).rem_euclid(360.0)
 }
 
 /// Colors of the hue circle (Oklab degrees 0..360), for a hue rail.
@@ -932,19 +973,25 @@ fn on_circle(center: Pos2, radius: f32, deg: f32) -> Pos2 {
 }
 
 /// An arc from `from` to `to` degrees, its color running through `colors` along the way.
+/// Its edges fade out over a pixel, so that they look smooth (egui smooths only its own shapes).
 fn paint_arc(p: &egui::Painter, center: Pos2, radius: f32, from: f32, to: f32, width: f32, colors: impl Fn(f32) -> Color32) {
-    let n = 40;
+    let n = ((to - from).abs() / 2.0).ceil().max(8.0) as u32;
+    let feather = 1.0 / p.ctx().pixels_per_point();
+    let radii = [radius - width / 2.0 - feather / 2.0, radius - width / 2.0 + feather / 2.0, radius + width / 2.0 - feather / 2.0, radius + width / 2.0 + feather / 2.0];
     let mut mesh = egui::Mesh::default();
     for i in 0..=n {
         let t = i as f32 / n as f32;
         let deg = from + (to - from) * t;
         let c = colors(t);
-        mesh.colored_vertex(on_circle(center, radius - width / 2.0, deg), c);
-        mesh.colored_vertex(on_circle(center, radius + width / 2.0, deg), c);
+        for (j, r) in radii.iter().enumerate() {
+            mesh.colored_vertex(on_circle(center, *r, deg), if j == 0 || j == 3 { Color32::TRANSPARENT } else { c });
+        }
         if i > 0 {
-            let k = 2 * i;
-            mesh.add_triangle(k - 2, k - 1, k);
-            mesh.add_triangle(k - 1, k, k + 1);
+            let k = 4 * i;
+            for j in 0..3 {
+                mesh.add_triangle(k - 4 + j, k - 3 + j, k + j);
+                mesh.add_triangle(k - 3 + j, k + j, k + 1 + j);
+            }
         }
     }
     p.add(mesh);
@@ -1080,20 +1127,7 @@ pub fn color_wheel(ui: &mut Ui, label: &str, wheel: &mut ColorWheel, with_lightn
             // The disc: dark inside, the hues as a ring around it.
             p.circle_filled(center, radius, Color32::from_rgb(26, 26, 28));
             let ring = 4.5;
-            let n = 120;
-            let mut mesh = egui::Mesh::default();
-            for i in 0..=n {
-                let deg = i as f32 * 360.0 / n as f32;
-                let c = band_hsv(deg, 0.85, 0.95);
-                mesh.colored_vertex(on_circle(center, radius - ring, deg), c);
-                mesh.colored_vertex(on_circle(center, radius, deg), c);
-                if i > 0 {
-                    let k = 2 * i;
-                    mesh.add_triangle(k - 2, k - 1, k);
-                    mesh.add_triangle(k - 1, k, k + 1);
-                }
-            }
-            p.add(mesh);
+            paint_arc(p, center, radius - ring / 2.0, 0.0, 360.0, ring, |t| band_hsv(t * 360.0, 0.85, 0.95));
             p.circle_stroke(center, radius + 0.5, Stroke::new(1.0, Color32::from_black_alpha(160)));
 
             // The arcs: amount from white to the hue, lightness from dark to light.
@@ -1657,6 +1691,23 @@ pub fn images_dative(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The colors of the hue bands look like their names: red is red, not pink.
+    #[test]
+    fn band_colors_match_their_hues() {
+        for (name, hue) in sk_core::params::HUE_BANDS {
+            println!("{name}: {:?}", band_hsv(hue, 0.75, 0.9));
+        }
+        // sRGB red has Oklab hue 29°, yellow 110°, blue 264°.
+        let near = |a: Color32, b: [u8; 3]| [a.r(), a.g(), a.b()].iter().zip(b).all(|(x, y)| x.abs_diff(y) <= 4);
+        assert!(near(band_hsv(29.2, 1.0, 1.0), [255, 0, 0]));
+        assert!(near(band_hsv(109.8, 1.0, 1.0), [255, 255, 0]));
+        // Near blue the Oklab hue hardly changes towards cyan: a slightly cyan blue may come.
+        let blue = band_hsv(264.1, 1.0, 1.0);
+        assert!(blue.b() == 255 && blue.r() < 10 && blue.g() < 80, "{blue:?}");
+        let red = band_hsv(sk_core::params::HUE_BANDS[0].1, 0.75, 0.9);
+        assert!(red.r() > 200 && red.g() < 80 && red.b() < 100, "{red:?}");
+    }
 
     /// A point clicked on the border becomes an inner point, not a second endpoint.
     #[test]
