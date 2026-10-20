@@ -130,7 +130,8 @@ fn main() -> eframe::Result {
                 // Maximized, with the size above when restored; debug screenshots keep that size.
                 .with_maximized(std::env::var_os("SILBERKORN_SCREENSHOT").is_none())
                 // The app draws its own title bar with the menus (see `chrome::title_bar`).
-                .with_decorations(false),
+                .with_decorations(false)
+                .with_icon(app_icon()),
             ..Default::default()
         };
         // The window's adapter is chosen like the pipeline's (see `sk_core::gpu::rank`), not by
@@ -290,4 +291,10 @@ mod tests {
         missing.dedup();
         assert!(missing.is_empty(), "Fehlende Glyphen: {missing:?}");
     }
+}
+
+/// The window's icon (taskbar, window switcher), from `assets/icon.svg` (see `build.rs`).
+fn app_icon() -> std::sync::Arc<egui::IconData> {
+    let img = image::load_from_memory(include_bytes!("../assets/icon-256.png")).map(|i| i.to_rgba8()).unwrap_or_default();
+    std::sync::Arc::new(egui::IconData { width: img.width(), height: img.height(), rgba: img.into_raw() })
 }

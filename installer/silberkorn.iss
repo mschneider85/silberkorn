@@ -36,6 +36,7 @@ DisableProgramGroupPage=yes
 DisableDirPage=yes
 DisableWelcomePage=yes
 DisableReadyPage=yes
+SetupIconFile=..\crates\sk-app\assets\silberkorn.ico
 UninstallDisplayIcon={app}\silberkorn.exe
 UninstallDisplayName=Silberkorn
 ArchitecturesAllowed=x64compatible
