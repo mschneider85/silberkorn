@@ -1,6 +1,7 @@
 //! Depth maps (see `sk_core::depth`): Depth Anything V2 Small (Apache-2.0) predicts the inverse
 //! depth of every part of the image; it is scaled to 0 (far) .. 1 (near) and its edges are
-//! refined against the image, so masks and the lens blur follow the subject's outline.
+//! moved onto the image's, so masks, relight, atmosphere and the lens blur follow the subject's
+//! outline.
 
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -12,7 +13,7 @@ use sk_core::detail::Plane;
 
 use crate::models::{self, DEPTH};
 use crate::runtime::{Data, Input, Net};
-use crate::{Guide, refine_edges};
+use crate::{Guide, refine_edges_color};
 
 /// The network sees the short edge at this size (as trained), the long edge in proportion.
 const SHORT: usize = 518;
@@ -108,9 +109,11 @@ impl DepthModel {
             mh,
             (0..mw * mh).into_par_iter().map(|i| sample(&pred, ((i % mw) as f32 + 0.5) / mw as f32, ((i / mw) as f32 + 0.5) / mh as f32)).collect(),
         );
-        let luma = Plane::new(mw, mh, small.data.iter().map(|p| 0.2627 * p[0] + 0.678 * p[1] + 0.0593 * p[2]).collect());
-        let r = ((mw.max(mh) as f32 / iw.max(ih) as f32) * 2.0).round().max(2.0) as usize;
-        let refined = refine_edges(&up, &luma, r, 1e-3);
+        // Map pixels per network pixel: the network's edges are a few of its pixels soft and off.
+        let scale = mw.max(mh) as f32 / iw.max(ih) as f32;
+        let snapped = snap_edges(&up, &small.data, (scale * 5.0).round().max(3.0) as usize, 0.08);
+        // Smooths the snapped steps along the edges again.
+        let refined = refine_edges_color(&snapped, &small.data, scale.round().max(2.0) as usize, 1e-3);
         Ok(DepthMap { width: mw, height: mh, data: refined.data })
     }
 
@@ -131,6 +134,52 @@ impl DepthModel {
         progress(1.0);
         Ok(map)
     }
+}
+
+/// Moves the depth's edges onto the image's: where the depth changes within `r`, each pixel
+/// takes the weighted median of its neighbors' depths, weighted by how alike their colors are.
+/// The network's edges are soft and lie a few pixels off; a median makes a hard step where the
+/// colors change.
+fn snap_edges(depth: &Plane, rgb: &[[f32; 3]], r: usize, sigma: f32) -> Plane {
+    let (w, h) = (depth.w, depth.h);
+    let ri = r as isize;
+    let k = 1.0 / (2.0 * sigma * sigma);
+    let data = (0..w * h)
+        .into_par_iter()
+        .map_init(Vec::new, |near: &mut Vec<(f32, f32)>, i| {
+            let (x, y) = ((i % w) as isize, (i / w) as isize);
+            let d0 = depth.data[i];
+            let at = |xx: isize, yy: isize| (xx.clamp(0, w as isize - 1) + yy.clamp(0, h as isize - 1) * w as isize) as usize;
+            // Only near edges: the corners and middles of the window differ.
+            let (mut lo, mut hi) = (d0, d0);
+            for (dx, dy) in [(-ri, 0), (ri, 0), (0, -ri), (0, ri), (-ri, -ri), (ri, ri), (-ri, ri), (ri, -ri)] {
+                let d = depth.data[at(x + dx, y + dy)];
+                lo = lo.min(d);
+                hi = hi.max(d);
+            }
+            if hi - lo < 0.02 {
+                return d0;
+            }
+            let c = rgb[i];
+            near.clear();
+            for dy in -ri..=ri {
+                for dx in -ri..=ri {
+                    let j = at(x + dx, y + dy);
+                    let q = rgb[j];
+                    let e = (c[0] - q[0]).powi(2) + (c[1] - q[1]).powi(2) + (c[2] - q[2]).powi(2);
+                    near.push((depth.data[j], (-e * k).exp()));
+                }
+            }
+            near.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+            let half = near.iter().map(|n| n.1).sum::<f32>() / 2.0;
+            let mut acc = 0.0;
+            near.iter().find(|n| {
+                acc += n.1;
+                acc >= half
+            }).map_or(d0, |n| n.0)
+        })
+        .collect();
+    Plane::new(w, h, data)
 }
 
 fn guide_resized(g: &Guide, w: usize, h: usize) -> sk_core::image::LinearImage {
@@ -173,6 +222,23 @@ pub fn register() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn depth_edges_move_onto_the_image_edges() {
+        // The image changes from red to gray at x = 30, the depth (soft, as the network's) from
+        // 31 to 35; the window as for a map twice the network's size.
+        let (w, h) = (64, 16);
+        let rgb: Vec<[f32; 3]> = (0..w * h).map(|i| if i % w < 30 { [0.7, 0.3, 0.3] } else { [0.5, 0.5, 0.5] }).collect();
+        let depth = Plane::new(w, h, (0..w * h).map(|i| (1.0 - ((i % w) as f32 - 31.0) / 4.0).clamp(0.0, 1.0) * 0.5 + 0.25).collect());
+        let snapped = snap_edges(&depth, &rgb, 10, 0.08);
+        let refined = refine_edges_color(&snapped, &rgb, 2, 1e-3);
+        let at = |x: usize| refined.data[8 * w + x];
+        // Near (high) up to the color edge, far behind it, across the old soft edge.
+        assert!(at(29) > 0.7, "vor der Kante {}", at(29));
+        for x in 30..40 {
+            assert!(at(x) < 0.3, "hinter der Kante bei {x}: {}", at(x));
+        }
+    }
 
     #[test]
     fn input_keeps_the_aspect_in_patches() {

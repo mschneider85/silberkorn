@@ -13,6 +13,7 @@ struct Tone {
     brightness: f32,
     dehaze: f32,
     vibrance: f32,
+    veil: f32,
     // Color editor per band: hue shift, saturation and lightness (both /100).
     bands: array<f32, 24>,
     // Color balance offsets per wheel: a, b, lightness.
@@ -51,6 +52,8 @@ struct Params {
     dark_ox: u32,
     dark_oy: u32,
     airlight: array<f32, 3>,
+    // The atmosphere's haze color (Processor::veil).
+    veil: array<f32, 3>,
     // Offsets into the table buffer (u32::MAX: no table).
     lut_hdr_ev: u32,
     lut_hdr_px: u32,
@@ -130,6 +133,7 @@ struct Layer {
     whites: f32,
     blacks: f32,
     vibrance: f32,
+    veil: f32,
     bands: array<f32, 24>,
     balance: array<f32, 12>,
     // Offsets of the layer's curve tables (NO_LUT: none), as long as the output curves.
@@ -163,7 +167,7 @@ fn base_tone() -> Tone {
         bands[i * 3u + 2u] = P.band_light[i] / 100.0;
     }
     return Tone(P.exposure_ev, P.contrast, vec4<f32>(P.hdr[0], P.hdr[1], P.hdr[2], P.hdr[3]), P.clarity, P.structure, P.saturation, 0.0, 0.0, 0.0, P.dehaze,
-        P.vibrance, bands, P.balance);
+        P.vibrance, 0.0, bands, P.balance);
 }
 
 // ------------------------------------------------------------------ tables
@@ -586,6 +590,14 @@ fn haze(p: vec3<f32>, dark: f32, strength0: f32) -> vec3<f32> {
     return p + (al - p) * s;
 }
 
+// pipeline.rs veiled
+fn veiled(p: vec3<f32>, s: f32) -> vec3<f32> {
+    if s <= 0.0 {
+        return p;
+    }
+    return mix(p, vec3<f32>(P.veil[0], P.veil[1], P.veil[2]), s);
+}
+
 // ------------------------------------------------------------------ masks
 
 fn mask_sample(l: Layer, u: f32, v: f32) -> f32 {
@@ -655,6 +667,7 @@ fn add_layer(tp: ptr<function, Tone>, l: Layer, w: f32) {
     (*tp).hdr.z += l.whites / 100.0 * w;
     (*tp).hdr.w += l.blacks / 100.0 * w;
     (*tp).vibrance += l.vibrance * w;
+    (*tp).veil += l.veil * w;
     (*tp).bands = add_bands((*tp).bands, l.bands, w);
     (*tp).balance = add_balance((*tp).balance, l.balance, w);
 }
@@ -770,7 +783,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     var e: vec3<f32>;
     if any_layer {
-        e = encode(color(tone(haze(p, dark, tp.dehaze), has_ev, ev, det, tp), tp));
+        e = encode(color(tone(veiled(haze(p, dark, tp.dehaze), tp.veil), has_ev, ev, det, tp), tp));
         if tp.brightness != 0.0 {
             let g = exp2(-tp.brightness / 100.0 * 0.6);
             e = pow(max(e, vec3<f32>(0.0)), vec3<f32>(g));

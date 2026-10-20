@@ -1,6 +1,7 @@
 //! Writes the depth map of a raw file and the image with lens blur as PNGs:
 //! `cargo run --release -p sk-ai --example depth -- <raw> <out_dir> [amount] [focus] [bokeh]`
 //! (focus 0 far .. 1 near; without it the nearest tenth of the image is in focus).
+//! With `SK_ADJ` (adjustments as JSON, e.g. `{"atmosphere":{"amount":60}}`) those are rendered instead.
 
 use std::path::Path;
 
@@ -23,7 +24,10 @@ fn main() -> anyhow::Result<()> {
     let (meta, preview) = sk_core::raw::load_preview(path, 2400)?;
     let lens_blur = LensBlur { amount: num(3, 60.0), focus: num(4, map.quantile(0.9)), range: 0.1, bokeh: num(5, 30.0) };
     println!("{lens_blur:?}");
-    let adj = Adjustments { lens_blur, ..Default::default() };
+    let adj = match std::env::var("SK_ADJ") {
+        Ok(json) => serde_json::from_str(&json)?,
+        Err(_) => Adjustments { lens_blur, ..Default::default() },
+    };
     let t = std::time::Instant::now();
     let r = Processor::new(&meta, &adj).render_cpu(&preview, None, None);
     println!("Objektivunschärfe {}×{} {:?}", r.width, r.height, t.elapsed());

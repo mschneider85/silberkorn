@@ -20,3 +20,4 @@ libloading = "0.8"
 
 [dev-dependencies]
 image = { version = "0.25", default-features = false, features = ["png"] }
+serde_json = "1.0.152"

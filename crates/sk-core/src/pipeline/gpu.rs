@@ -347,6 +347,8 @@ struct DevelopParams {
     dark_ox: u32,
     dark_oy: u32,
     airlight: [f32; 3],
+    /// The atmosphere's haze color (`Processor::veil`).
+    veil: [f32; 3],
     lut_hdr_ev: u32,
     lut_hdr_px: u32,
     lut_hdr_len: u32,
@@ -401,8 +403,8 @@ struct LayerGpu {
     /// hue, width, falloff, minimum chroma
     color: [f32; 4],
     /// exposure, contrast, brightness, saturation, highlights, shadows, clarity, structure,
-    /// temperature, tint, dehaze, whites, blacks, vibrance
-    adj: [f32; 14],
+    /// temperature, tint, dehaze, whites, blacks, vibrance, veil
+    adj: [f32; 15],
     /// Color editor per band: hue shift, saturation and lightness (both /100).
     bands: [f32; 24],
     /// Color balance offsets per wheel (`ColorWheel::offset`).
@@ -886,7 +888,7 @@ impl Processor {
             let a = &l.adj;
             lg.adj = [
                 a.exposure, a.contrast, a.brightness, a.saturation, a.highlights, a.shadows, a.clarity, a.structure, a.temperature, a.tint, a.dehaze,
-                a.whites, a.blacks, a.vibrance,
+                a.whites, a.blacks, a.vibrance, l.veil,
             ];
             for (i, b) in a.color_bands.iter().enumerate() {
                 lg.bands[i * 3..i * 3 + 3].copy_from_slice(&[b.hue, b.saturation / 100.0, b.lightness / 100.0]);
@@ -954,6 +956,7 @@ impl Processor {
             dark_ox: dark.map_or(0, |d| d.origin.0),
             dark_oy: dark.map_or(0, |d| d.origin.1),
             airlight: dark.map_or([1.0; 3], |d| d.airlight),
+            veil: self.veil(src),
             lut_hdr_ev,
             lut_hdr_px,
             lut_hdr_len,
@@ -1839,6 +1842,23 @@ mod tests {
         // All cases, so that one difference doesn't hide the others.
         let failed: Vec<String> = cases.into_iter().filter_map(|(name, adj, opts, region)| compare(name, g, &adj, opts, region)).collect();
         assert!(failed.is_empty(), "{}", failed.join("\n"));
+    }
+
+    #[test]
+    fn atmosphere_matches_cpu() {
+        let Some(g) = gpu() else { return };
+        let (w, h) = (300, 200);
+        let src = image(w, h);
+        // Far at the top, near at the bottom.
+        let map = Arc::new(crate::depth::DepthMap { width: 60, height: 40, data: (0..60 * 40).map(|i| (i / 60) as f32 / 39.0).collect() });
+        let adj = Adjustments { atmosphere: crate::params::Atmosphere { amount: 70.0, reach: 0.7, brightness: 20.0, warmth: 30.0 }, ..Default::default() };
+        let mut p = Processor::new(&meta(w, h), &adj);
+        p.layers.splice(0..0, super::depth_layers_with(&map, &adj));
+        p.haze_map = Some(map);
+        let cpu = p.render_cpu(&src, None, None);
+        let gpu = p.render_gpu(g, &src, None, None).unwrap();
+        let max = cpu.rgba.iter().zip(&gpu.rgba).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap_or(0);
+        assert!(max <= 4, "größte Abweichung {max}");
     }
 
     #[test]

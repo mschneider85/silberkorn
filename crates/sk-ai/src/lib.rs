@@ -83,6 +83,52 @@ pub fn refine_edges(mask: &Plane, guide: &Plane, r: usize, eps: f32) -> Plane {
     Plane::new(w, h, (0..w * h).map(|i| (ma.data[i] * guide.data[i] + mb.data[i]).clamp(0.0, 1.0)).collect())
 }
 
+/// [`refine_edges`] with the image's color as guide (He et al.'s color guided filter): also
+/// separates parts of the same brightness but different color.
+pub fn refine_edges_color(mask: &Plane, guide: &[[f32; 3]], r: usize, eps: f32) -> Plane {
+    use rayon::prelude::*;
+    let (w, h) = (mask.w, mask.h);
+    let blur = |p: Plane| sk_core::detail::box_blur(&p, r);
+    let ch = |f: &(dyn Fn(usize) -> f32 + Sync)| blur(Plane::new(w, h, (0..w * h).into_par_iter().map(f).collect()));
+    let mi: [Plane; 3] = std::array::from_fn(|c| ch(&|i| guide[i][c]));
+    let ip: [Plane; 3] = std::array::from_fn(|c| ch(&|i| guide[i][c] * mask.data[i]));
+    // Covariances of the guide's channels: rr, rg, rb, gg, gb, bb.
+    const PAIRS: [(usize, usize); 6] = [(0, 0), (0, 1), (0, 2), (1, 1), (1, 2), (2, 2)];
+    let ii: Vec<Plane> = PAIRS.iter().map(|&(a, b)| ch(&|i| guide[i][a] * guide[i][b])).collect();
+    let mp = blur(mask.clone());
+    let coef: Vec<[f32; 4]> = (0..w * h)
+        .into_par_iter()
+        .map(|i| {
+            let m = [mi[0].data[i], mi[1].data[i], mi[2].data[i]];
+            let cov: [f32; 3] = std::array::from_fn(|c| ip[c].data[i] - m[c] * mp.data[i]);
+            let s = |k: usize| ii[k].data[i] - m[PAIRS[k].0] * m[PAIRS[k].1];
+            let (rr, rg, rb, gg, gb, bb) = (s(0) + eps, s(1), s(2), s(3) + eps, s(4), s(5) + eps);
+            // Inverse of the symmetric 3x3 matrix by its adjugate.
+            let (a0, a1, a2) = (gg * bb - gb * gb, rb * gb - rg * bb, rg * gb - rb * gg);
+            let (a3, a4, a5) = (rr * bb - rb * rb, rg * rb - rr * gb, rr * gg - rg * rg);
+            let det = (rr * a0 + rg * a1 + rb * a2).max(1e-12);
+            let a = [
+                (a0 * cov[0] + a1 * cov[1] + a2 * cov[2]) / det,
+                (a1 * cov[0] + a3 * cov[1] + a4 * cov[2]) / det,
+                (a2 * cov[0] + a4 * cov[1] + a5 * cov[2]) / det,
+            ];
+            [a[0], a[1], a[2], mp.data[i] - a[0] * m[0] - a[1] * m[1] - a[2] * m[2]]
+        })
+        .collect();
+    let mc: [Plane; 4] = std::array::from_fn(|k| ch(&|i| coef[i][k]));
+    Plane::new(
+        w,
+        h,
+        (0..w * h)
+            .into_par_iter()
+            .map(|i| {
+                let g = guide[i];
+                (mc[0].data[i] * g[0] + mc[1].data[i] * g[1] + mc[2].data[i] * g[2] + mc[3].data[i]).clamp(0.0, 1.0)
+            })
+            .collect(),
+    )
+}
+
 // ------------------------------------------------------------------ subject (U²-Net)
 
 /// Where the subject model is expected (download target).

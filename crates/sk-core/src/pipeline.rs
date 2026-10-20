@@ -271,6 +271,15 @@ impl DarkChannel {
     }
 }
 
+/// `p` with the share `s` of the haze color `veil` mixed in (see `Processor::veil`).
+#[inline]
+fn veiled(p: [f32; 3], veil: [f32; 3], s: f32) -> [f32; 3] {
+    if s <= 0.0 {
+        return p;
+    }
+    std::array::from_fn(|c| p[c] + (veil[c] - p[c]) * s)
+}
+
 /// `v` above `k`; below it runs smoothly towards 0 (same value and slope at `k`).
 #[inline]
 fn haze_toe(v: f32, k: f32) -> f32 {
@@ -298,6 +307,8 @@ struct ToneParams {
     brightness: f32,
     dehaze: f32,
     vibrance: f32,
+    /// Share of the atmosphere's haze color mixed in (see `Processor::veil`).
+    veil: f32,
     /// Color editor: hue shift, saturation and lightness (both /100) per hue band.
     bands: [[f32; 3]; 8],
     /// Color balance offsets per wheel (master, shadows, midtones, highlights), see
@@ -319,7 +330,9 @@ fn layer_colors(l: &LayerAdjustments) -> bool {
 }
 
 impl ToneParams {
-    fn add(&mut self, l: &LayerAdjustments, w: f32) {
+    fn add(&mut self, l: &PreparedLayer, w: f32) {
+        self.veil += l.veil * w;
+        let l = &l.adj;
         self.exposure_ev += l.exposure * w;
         self.contrast += l.contrast * w;
         self.hdr[0] += l.highlights / 100.0 * w;
@@ -352,16 +365,21 @@ struct PreparedLayer {
     mask: Mask,
     opacity: f32,
     adj: LayerAdjustments,
-    /// `adj` changes the tone or color parameters (not only the curves).
+    /// Share of the haze color mixed in (the atmosphere's layer only).
+    veil: f32,
+    /// `adj` or `veil` change the tone or color parameters (not only the curves).
     adds: bool,
     curve: Option<LayerCurve>,
 }
 
 impl PreparedLayer {
     fn new(index: usize, mask: Mask, opacity: f32, adj: LayerAdjustments) -> Self {
-        Self { index, mask, opacity, adds: !adj.deltas_neutral(), curve: LayerCurve::new(&adj.curves), adj }
+        Self { index, mask, opacity, adds: !adj.deltas_neutral(), curve: LayerCurve::new(&adj.curves), adj, veil: 0.0 }
     }
 }
+
+/// Most of the haze color the atmosphere mixes in (at full strength, in the farthest part).
+const VEIL_MAX: f32 = 0.75;
 
 /// A layer's curves as tables: the RGB curve followed by the channel's, then the luma curve
 /// (as the background's curves in `encode`).
@@ -403,13 +421,14 @@ impl LayerCurve {
 /// `PreparedLayer::index` of the layers made from tools (not in `Adjustments::layers`).
 const TOOL_LAYER: usize = usize::MAX;
 
-/// Relight and atmosphere as layers with masks from the depth map (none until the map exists).
-fn depth_layers(meta: &RawMeta, adj: &Adjustments) -> Vec<PreparedLayer> {
+/// Relight and atmosphere as layers with masks from the depth map (none until the map exists),
+/// and the map if the atmosphere needs it for its color.
+fn depth_layers(meta: &RawMeta, adj: &Adjustments) -> (Vec<PreparedLayer>, Option<Arc<crate::depth::DepthMap>>) {
     let (rl, at) = (&adj.relight, &adj.atmosphere);
     if rl.is_off() && at.is_off() {
-        return Vec::new();
+        return (Vec::new(), None);
     }
-    crate::depth::load(&meta.path).map_or_else(Vec::new, |map| depth_layers_with(&map, adj))
+    crate::depth::load(&meta.path).map_or_else(|| (Vec::new(), None), |map| (depth_layers_with(&map, adj), (!at.is_off()).then_some(map)))
 }
 
 fn depth_layers_with(map: &Arc<crate::depth::DepthMap>, adj: &Adjustments) -> Vec<PreparedLayer> {
@@ -427,8 +446,11 @@ fn depth_layers_with(map: &Arc<crate::depth::DepthMap>, adj: &Adjustments) -> Ve
         }
     }
     if !at.is_off() {
-        let a = LayerAdjustments { dehaze: -at.amount, brightness: at.brightness, temperature: at.warmth, ..Default::default() };
-        out.push(layer(&at.range(), a));
+        let mask = Mask { ai: Some(crate::depth::haze_mask_cached(map, at)), ..Default::default() };
+        let mut l = PreparedLayer::new(TOOL_LAYER, mask, 1.0, LayerAdjustments::default());
+        l.veil = at.amount / 100.0 * VEIL_MAX;
+        l.adds = true;
+        out.push(l);
     }
     out
 }
@@ -462,6 +484,8 @@ pub struct Processor {
     ai_denoise: Option<(std::path::PathBuf, f32)>,
     /// Image and settings of the lens blur (see `lens_blur`).
     lens_blur: Option<(std::path::PathBuf, crate::params::LensBlur)>,
+    /// The depth map while the atmosphere is on: its color comes from the far part (see `veil`).
+    haze_map: Option<Arc<crate::depth::DepthMap>>,
 }
 
 /// The geometric map of [`Processor::geomap`] without building a processor (no tone tables, no
@@ -486,7 +510,7 @@ impl Processor {
         // dcraw convention: the smallest multiplier is 1.
         let min_wb = wb.iter().cloned().fold(f32::MAX, f32::min).max(1e-6);
         let wb = wb.map(|v| v / min_wb);
-        let mut layers = depth_layers(meta, adj);
+        let (mut layers, haze_map) = depth_layers(meta, adj);
         layers.extend(
             adj.layers
                 .iter()
@@ -513,6 +537,7 @@ impl Processor {
             brightness: 0.0,
             dehaze: adj.detail.dehaze,
             vibrance: adj.vibrance,
+            veil: 0.0,
             bands: band_params(&adj.color_editor.bands),
             balance: balance_params(&adj.color_balance),
         };
@@ -543,6 +568,7 @@ impl Processor {
             opts,
             ai_denoise: (adj.detail.ai_denoise > 0.0 && !meta.hdr).then(|| (meta.path.clone(), adj.detail.ai_denoise / 100.0)),
             lens_blur: (!adj.lens_blur.is_off()).then(|| (meta.path.clone(), adj.lens_blur)),
+            haze_map,
             adj: adj.clone(),
             camera_lens: meta.lens.clone(),
         }
@@ -753,6 +779,52 @@ impl Processor {
     }
 
     // ------------------------------------------------------------ image stages
+
+    /// The atmosphere's haze color (scene-linear working RGB): the average color of the image
+    /// where the haze is (weighted by its density), somewhat paler, as bright as the bright
+    /// quarter there, then brightened and warmed by the tool's settings. Light scattered by the
+    /// air has the color of the distance and is brighter than what it covers, but not the white
+    /// of the brightest highlight. From the whole `src`, so parts and the whole get the same.
+    fn veil(&self, src: &LinearImage) -> [f32; 3] {
+        let Some(map) = &self.haze_map else { return [0.0; 3] };
+        let at = &self.adj.atmosphere;
+        let (w, h) = (src.width, src.height);
+        let step = ((w * h) as f32 / 20_000.0).sqrt().max(1.0) as usize;
+        let (mut sum, mut total, mut all, mut n) = ([0.0f32; 3], 0.0f32, [0.0f32; 3], 0.0f32);
+        let mut lumas: Vec<(f32, f32)> = Vec::new();
+        for y in (step / 2..h).step_by(step) {
+            for x in (step / 2..w).step_by(step) {
+                let p = self.to_working(src.data[y * w + x]);
+                let k = at.density(map.sample((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32));
+                for c in 0..3 {
+                    sum[c] += p[c] * k;
+                    all[c] += p[c];
+                }
+                total += k;
+                n += 1.0;
+                lumas.push((dot(p, LUMA), k));
+            }
+        }
+        // Hardly any haze anywhere: the image's average.
+        let hazy = total > 1e-3 * n;
+        let m = if hazy { sum.map(|v| v / total) } else { all.map(|v| v / n.max(1.0)) };
+        lumas.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+        let weight = |l: &(f32, f32)| if hazy { l.1 } else { 1.0 };
+        let all_weight: f32 = lumas.iter().map(weight).sum();
+        let mut acc = 0.0;
+        let bright = lumas.iter().find(|l| {
+            acc += weight(l);
+            acc >= 0.75 * all_weight
+        });
+        let y = dot(m, LUMA);
+        let target = bright.map_or(y, |l| l.0).max(y);
+        let m = m.map(|v| (y + (v - y) * 0.6) * target / y.max(1e-6));
+        let y = target;
+        let t = at.warmth / 100.0;
+        let warm = [m[0] * exp2(t * 0.35), m[1], m[2] * exp2(-t * 0.35)];
+        let k = y / dot(warm, LUMA).max(1e-6) * exp2(at.brightness / 100.0);
+        warm.map(|v| (v * k).max(0.0))
+    }
 
     /// Airlight (the haze's brightness) of the whole image, for every rendering (parts, tiles
     /// and the whole alike, so that they match): estimated from a small copy, cached per image
@@ -1057,6 +1129,7 @@ impl Processor {
             }
         });
 
+        let veil = self.veil(src);
         // Per pixel: encoded result and mask overlay weight.
         let pixel = |i: usize, p: [f32; 3]| -> ([f32; 3], f32) {
             let (mut ev, mut det) = (None, [0.0f32; 2]);
@@ -1097,13 +1170,13 @@ impl Processor {
                     overlay = wgt;
                 }
                 if wgt > 0.0 && layer.adds {
-                    tp.add(&layer.adj, wgt);
+                    tp.add(layer, wgt);
                     any = true;
                 }
                 curved |= wgt > 0.0 && layer.curve.is_some();
             }
             let mut e = if any {
-                let mut e = self.encode(self.color(self.tone(haze(p, tp.dehaze), ev, det, &tp), &tp));
+                let mut e = self.encode(self.color(self.tone(veiled(haze(p, tp.dehaze), veil, tp.veil), ev, det, &tp), &tp));
                 if tp.brightness != 0.0 {
                     let g = 2f32.powf(-tp.brightness / 100.0 * 0.6);
                     e = e.map(|v| v.max(0.0).powf(g));
@@ -1742,6 +1815,7 @@ mod tests {
                     brightness: 0.0,
                     dehaze: 0.0,
                     vibrance: 0.0,
+                    veil: 0.0,
                     bands: [[0.0; 3]; 8],
                     balance: [[0.0; 3]; 4],
                 };
@@ -2010,6 +2084,7 @@ mod tests {
     fn with_depth_layers(adj: &Adjustments, map: &Arc<crate::depth::DepthMap>) -> Processor {
         let mut p = Processor::new(&meta(), adj);
         p.layers.splice(0..0, depth_layers_with(map, adj));
+        p.haze_map = (!adj.atmosphere.is_off()).then(|| map.clone());
         p
     }
 
@@ -2052,6 +2127,29 @@ mod tests {
         let hazy = with_depth_layers(&adj, &map).render_cpu(&src, None, None);
         assert!(contrast(&hazy, 48) < contrast(&plain, 48) * 0.8, "fern: {} statt {}", contrast(&hazy, 48), contrast(&plain, 48));
         assert!((contrast(&hazy, 4) - contrast(&plain, 4)).abs() < 3.0, "nah: {} statt {}", contrast(&hazy, 4), contrast(&plain, 4));
+    }
+
+    #[test]
+    fn atmosphere_takes_its_color_from_the_distance() {
+        // The far half: dark blue-gray with a few blown-out highlights (a backlit sky).
+        let (mut src, map) = near_and_far();
+        for (i, p) in src.data.iter_mut().enumerate() {
+            if i % 64 >= 32 {
+                *p = if i % 7 == 0 { [1.0; 3] } else { [0.08, 0.1, 0.14] };
+            }
+        }
+        let veil = |at: crate::params::Atmosphere| with_depth_layers(&Adjustments { atmosphere: at, ..Default::default() }, &map).veil(&src);
+        let at = crate::params::Atmosphere { amount: 80.0, ..Default::default() };
+        let v = veil(at);
+        let y = dot(v, LUMA);
+        // Brighter than the far part's average, far from the white of the highlights, bluish.
+        assert!(y > 0.1 && y < 0.5, "Helligkeit {y}");
+        assert!(v[2] > v[0], "Farbe der Ferne: {v:?}");
+        let brighter = veil(crate::params::Atmosphere { brightness: 50.0, ..at });
+        assert!(dot(brighter, LUMA) > y * 1.3);
+        let warm = veil(crate::params::Atmosphere { warmth: 60.0, ..at });
+        assert!(warm[0] / warm[2] > v[0] / v[2] * 1.2, "wärmer: {warm:?} statt {v:?}");
+        assert!((dot(warm, LUMA) - y).abs() < 0.01 * y.max(0.1) + 1e-4, "Wärme ändert die Helligkeit nicht");
     }
 
     #[test]

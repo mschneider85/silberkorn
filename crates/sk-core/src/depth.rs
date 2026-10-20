@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use anyhow::{Context, Result, bail};
 
 /// Changes when maps made earlier must not be used any more.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 /// Maps are small (about 1 MB); the oldest are removed beyond this.
 pub const CACHE_LIMIT: u64 = 2 << 30;
 
@@ -66,30 +66,49 @@ impl DepthMap {
 
     /// Mask of a depth range, 8 bit at the map's resolution.
     pub fn range_mask(&self, r: &crate::params::DepthRange) -> crate::params::AiMask {
+        crate::params::AiMask { depth: Some(*r), ..self.mask_of(|d| r.weight(d)) }
+    }
+
+    /// Mask of the atmosphere's haze density ([`crate::params::Atmosphere::density`]).
+    pub fn haze_mask(&self, at: &crate::params::Atmosphere) -> crate::params::AiMask {
+        self.mask_of(|d| at.density(d))
+    }
+
+    fn mask_of(&self, f: impl Fn(f32) -> f32) -> crate::params::AiMask {
         crate::params::AiMask {
             kind: "depth".into(),
             width: self.width,
             height: self.height,
-            data: self.data.iter().map(|d| (r.weight(*d) * 255.0 + 0.5) as u8).collect::<Vec<u8>>().into(),
-            depth: Some(*r),
+            data: self.data.iter().map(|d| (f(*d) * 255.0 + 0.5) as u8).collect::<Vec<u8>>().into(),
+            depth: None,
         }
     }
 }
 
-/// Masks of depth ranges made recently (relight and atmosphere ask for the same ones with
-/// every rendering): by map and range, sharing the bitmap so the mask cache recognizes it.
-type RangeKey = (usize, [u32; 3]);
+/// Masks made recently from depth maps (relight and atmosphere ask for the same ones with
+/// every rendering): by map, kind and parameters, sharing the bitmap so the mask cache
+/// recognizes it.
+type RangeKey = (usize, [u32; 4]);
 static RANGE_MASKS: Mutex<Vec<(RangeKey, Arc<DepthMap>, crate::params::AiMask)>> = Mutex::new(Vec::new());
 
 /// [`DepthMap::range_mask`], reused while the map and the range stay the same.
 pub fn range_mask_cached(map: &Arc<DepthMap>, r: &crate::params::DepthRange) -> crate::params::AiMask {
-    let key = (Arc::as_ptr(map) as usize, [r.near, r.far, r.falloff].map(f32::to_bits));
+    mask_cached(map, [r.near, r.far, r.falloff].map(f32::to_bits), 0, || map.range_mask(r))
+}
+
+/// [`DepthMap::haze_mask`], reused while the map and the reach stay the same.
+pub fn haze_mask_cached(map: &Arc<DepthMap>, at: &crate::params::Atmosphere) -> crate::params::AiMask {
+    mask_cached(map, [at.reach.to_bits(), 0, 0], 1, || map.haze_mask(at))
+}
+
+fn mask_cached(map: &Arc<DepthMap>, params: [u32; 3], kind: u32, make: impl FnOnce() -> crate::params::AiMask) -> crate::params::AiMask {
+    let key = (Arc::as_ptr(map) as usize, [params[0], params[1], params[2], kind]);
     let mut done = RANGE_MASKS.lock().unwrap_or_else(|e| e.into_inner());
     // The map is held with its key, so the address can't be reused by another one.
     if let Some(e) = done.iter().find(|(k, m, _)| *k == key && Arc::ptr_eq(m, map)) {
         return e.2.clone();
     }
-    let mask = map.range_mask(r);
+    let mask = make();
     done.push((key, map.clone(), mask.clone()));
     if done.len() > 8 {
         done.remove(0);
@@ -275,6 +294,19 @@ mod tests {
         assert_eq!(mid.weight(0.5), 1.0);
         assert_eq!(mid.weight(0.9), 0.0);
         assert_eq!(mid.weight(0.1), 0.0);
+    }
+
+    #[test]
+    fn haze_thins_out_towards_the_front() {
+        let at = crate::params::Atmosphere { amount: 50.0, reach: 0.6, ..Default::default() };
+        assert!((at.density(0.0) - 1.0).abs() < 1e-5);
+        assert_eq!(at.density(0.6), 0.0);
+        assert_eq!(at.density(0.9), 0.0);
+        let d: Vec<f32> = (0..=12).map(|i| at.density(i as f32 * 0.05)).collect();
+        assert!(d.windows(2).all(|w| w[1] <= w[0]), "fällt nach vorn: {d:?}");
+        // The middle distance clearly clearer than the far end (staggered, not a flat veil).
+        assert!(at.density(0.3) < 0.5, "Mitte {}", at.density(0.3));
+        assert!(at.density(0.1) > 0.5, "ferner Teil {}", at.density(0.1));
     }
 
     #[test]

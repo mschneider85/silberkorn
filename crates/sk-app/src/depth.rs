@@ -333,7 +333,7 @@ impl App {
         let mut reset = false;
         let state = self.depth_state(&path);
         let cancel = self.depth_cancel();
-        let help = "Legt Dunst über das Bild, der mit der Entfernung dichter wird.\n\nReichweite: wie weit nach vorn er reicht. Helligkeit und Wärme färben ihn.";
+        let help = "Legt Dunst über das Bild, der mit der Entfernung dichter wird. Seine Farbe kommt aus der Ferne des Bildes.\n\nReichweite: wie weit nach vorn er reicht. Helligkeit und Wärme verändern seine Farbe.";
         crate::widgets::tool_section_help(ui, sk_core::tools::Tool::Atmosphere, help, Some(&mut || reset = true), |ui| {
             let d = Atmosphere::default();
             crate::widgets::percent_row(ui, "Stärke", &mut at.amount, 0.0..=100.0, 0.0);

@@ -613,8 +613,8 @@ impl Relight {
     }
 }
 
-/// Haze that grows with the distance, by the depth map: internally a
-/// layer adding haze through a depth mask (see `pipeline`).
+/// Haze that grows with the distance, by the depth map: internally a layer that veils the
+/// image with the haze's color through a mask of its density (see `pipeline`).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Atmosphere {
@@ -643,9 +643,16 @@ impl Atmosphere {
         *self == Self::default()
     }
 
-    /// The depth range of the haze: full at the farthest part, gone at `reach`.
-    pub fn range(&self) -> DepthRange {
-        DepthRange { near: 0.0, far: 0.0, falloff: self.reach.clamp(0.02, 1.0) }
+    /// Density of the haze at a depth (0 far .. 1 near): 1 at the farthest part, 0 from `reach`
+    /// on. The depth is inverse (1 / distance), so the distance falls fast from the far end:
+    /// the haze thins out quickly first and then slowly towards `reach` (as light through air,
+    /// `1 - exp(-k * distance)`), the middle distance stays clearer than the far one.
+    pub fn density(&self, d: f32) -> f32 {
+        let u = (d / self.reach.clamp(0.02, 1.0)).clamp(0.0, 1.0);
+        // Distance from `reach` (0) to the farthest part (1).
+        let z = (1.0 - u) / (1.0 + 3.0 * u);
+        const K: f32 = 2.0;
+        (1.0 - (-K * z).exp()) / (1.0 - (-K).exp())
     }
 }
 
