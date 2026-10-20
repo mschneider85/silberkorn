@@ -4427,7 +4427,7 @@ checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
 
 [[package]]
 name = "sk-ai"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "flate2",
@@ -4445,7 +4445,7 @@ dependencies = [
 
 [[package]]
 name = "sk-app"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "anyhow",
  "eframe",
@@ -4466,7 +4466,7 @@ dependencies = [
 
 [[package]]
 name = "sk-core"
-version = "0.2.4"
+version = "0.2.5"
 dependencies = [
  "ab_glyph",
  "anyhow",
