@@ -116,10 +116,20 @@ pub fn gpu_problem() -> Option<String> {
     if !gpu_installed() {
         return Some("Nicht installiert".into());
     }
+    // With the separate process, ONNX Runtime is never loaded into this one: its problems are
+    // known once a network was loaded there.
+    if crate::worker::configured() {
+        return LAST_GPU_ERROR.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    }
     match ort_ready() {
         Ok(()) => LAST_GPU_ERROR.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         Err(e) => Some(e.clone()),
     }
+}
+
+/// Sets the reason the graphics card isn't used (`None`: it is).
+pub(crate) fn set_gpu_error(e: Option<String>) {
+    *LAST_GPU_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = e;
 }
 
 /// The latest reason a network fell back to the processor.
@@ -261,22 +271,33 @@ pub struct Output {
     pub data: Vec<f32>,
 }
 
+/// Input data with its shape, owned (for ONNX Runtime and the separate process).
+pub(crate) enum Tensor {
+    F32(Vec<usize>, Vec<f32>),
+    U8(Vec<usize>, Vec<u8>),
+}
+
 enum Backend {
     /// tract on the processor.
     Cpu(Arc<TypedRunnableModel>),
-    /// ONNX Runtime, on the graphics card (`gpu`) or the processor.
+    /// ONNX Runtime in this process, on the graphics card (`gpu`) or the processor.
     Ort { session: Mutex<ort::session::Session>, gpu: bool },
+    /// ONNX Runtime in the separate process (see `worker`). If that ends, the network goes on
+    /// with tract (`fallback`, made then).
+    Remote { session: crate::worker::Session, gpu: bool, fallback: Mutex<Option<Arc<TypedRunnableModel>>> },
 }
 
 /// A loaded network, on the graphics card or the processor.
 pub struct Net {
     backend: Backend,
     inputs: Vec<Input>,
+    path: PathBuf,
+    keep: Option<Vec<usize>>,
 }
 
 /// An ONNX Runtime session: with DirectML on the graphics card (Windows), else on the processor.
-/// Returns the session and whether it runs on the graphics card.
-fn ort_session(path: &Path) -> Result<(ort::session::Session, bool)> {
+/// Returns the session, whether it runs on the graphics card, and why DirectML could not be used.
+pub(crate) fn ort_session(path: &Path) -> Result<(ort::session::Session, bool, Option<String>)> {
     ort_ready().as_ref().map_err(|e| anyhow!("{e}"))?;
     let new = || ort::session::Session::builder().map_err(|e| anyhow!("{e}"));
     let mut dml_error = None;
@@ -294,16 +315,75 @@ fn ort_session(path: &Path) -> Result<(ort::session::Session, bool)> {
             .map_err(|e| anyhow!("{e}"))
             .and_then(|mut b| b.commit_from_file(path).map_err(|e| anyhow!("{e}")));
         match dml {
-            Ok(s) => return Ok((s, true)),
-            Err(e) => dml_error = Some(e),
+            Ok(s) => return Ok((s, true, None)),
+            Err(e) => dml_error = Some(format!("{e:#}")),
         }
     }
     let session = new()?.commit_from_file(path).map_err(|e| anyhow!("{e}"))?;
-    if let Some(e) = dml_error {
-        log::warn!("{}: DirectML nicht verwendbar, ONNX Runtime rechnet auf dem Prozessor: {e:#}", path.display());
-        *LAST_GPU_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{e:#}"));
+    Ok((session, false, dml_error))
+}
+
+/// Runs an ONNX Runtime session; outputs converted to f32.
+pub(crate) fn ort_run(session: &mut ort::session::Session, data: Vec<Tensor>) -> Result<Vec<Output>> {
+    let names: Vec<String> = session.inputs().iter().map(|i| i.name().to_string()).collect();
+    anyhow::ensure!(names.len() == data.len(), "Falsche Anzahl Eingaben");
+    let mut ins: Vec<(String, ort::value::DynValue)> = Vec::new();
+    for (t, name) in data.into_iter().zip(names) {
+        let v: ort::value::DynValue = match t {
+            Tensor::F32(s, v) => ort::value::Tensor::from_array((s, v)).map_err(|e| anyhow!("{e}"))?.into_dyn(),
+            Tensor::U8(s, v) => ort::value::Tensor::from_array((s, v)).map_err(|e| anyhow!("{e}"))?.into_dyn(),
+        };
+        ins.push((name, v));
     }
-    Ok((session, false))
+    let outputs = session.run(ins).map_err(|e| anyhow!("{e}"))?;
+    let mut out = Vec::new();
+    for i in 0..outputs.len() {
+        let v = &outputs[i];
+        let (shape, data) = match v.try_extract_tensor::<f32>() {
+            Ok((s, d)) => (s.to_vec(), d.to_vec()),
+            Err(_) => {
+                let (s, d) = v.try_extract_tensor::<u8>().map_err(|e| anyhow!("{e}"))?;
+                (s.to_vec(), d.iter().map(|x| *x as f32).collect())
+            }
+        };
+        out.push(Output { shape: shape.iter().map(|d| *d as usize).collect(), data });
+    }
+    Ok(out)
+}
+
+fn tract_run(plan: &Arc<TypedRunnableModel>, inputs: &[Input], data: &[Data]) -> Result<Vec<Output>> {
+    let mut ins: TVec<TValue> = TVec::new();
+    for (inp, d) in inputs.iter().zip(data) {
+        let t = match (inp, d) {
+            (Input::F32(s), Data::F32(v)) => tract_onnx::prelude::Tensor::from_shape(s, v)?,
+            (Input::U8(s), Data::U8(v)) => tract_onnx::prelude::Tensor::from_shape(s, v)?,
+            (Input::F32Shape(s), Data::F32(v)) => tract_onnx::prelude::Tensor::from_shape(s, v)?,
+            _ => bail!("Falscher Eingabetyp"),
+        };
+        ins.push(t.into());
+    }
+    plan.run(ins)?
+        .iter()
+        .map(|o| {
+            let f = o.cast_to::<f32>()?;
+            let v = f.to_plain_array_view::<f32>()?;
+            Ok(Output { shape: v.shape().to_vec(), data: v.iter().copied().collect() })
+        })
+        .collect()
+}
+
+/// The input data with their shapes, owned.
+fn tensors(inputs: &[Input], data: &[Data]) -> Result<Vec<Tensor>> {
+    inputs
+        .iter()
+        .zip(data)
+        .map(|(inp, d)| match (inp, d) {
+            (Input::F32(s), Data::F32(v)) => Ok(Tensor::F32(s.to_vec(), v.to_vec())),
+            (Input::U8(s), Data::U8(v)) => Ok(Tensor::U8(s.to_vec(), v.to_vec())),
+            (Input::F32Shape(s), Data::F32(v)) => Ok(Tensor::F32(s.to_vec(), v.to_vec())),
+            _ => bail!("Falscher Eingabetyp"),
+        })
+        .collect()
 }
 
 /// A network for tract with fixed input shapes (`plain`: without the shape hints of the file).
@@ -334,48 +414,60 @@ impl Net {
     /// [`Self::load`]; with tract only the outputs `keep` (by index) are computed, for networks
     /// whose other outputs tract cannot handle. ONNX Runtime returns all of them.
     pub fn load_outputs(path: &Path, inputs: &[Input], keep: Option<&[usize]>) -> Result<Net> {
-        if gpu_enabled() && gpu_installed() {
-            match ort_session(path) {
-                Ok((session, gpu)) => {
-                    if gpu {
-                        *LAST_GPU_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                    }
-                    let net = Net { backend: Backend::Ort { session: Mutex::new(session), gpu }, inputs: inputs.to_vec() };
-                    *LAST_DEVICE.lock().unwrap_or_else(|e| e.into_inner()) = Some(net.device());
-                    return Ok(net);
+        let net = |backend| Net { backend, inputs: inputs.to_vec(), path: path.to_path_buf(), keep: keep.map(<[usize]>::to_vec) };
+        // ONNX Runtime and DirectML in the separate process if there is one (a crash in them or
+        // in the graphics driver then ends only that), else in this one.
+        let ort = if !gpu_enabled() || !gpu_installed() {
+            None
+        } else if crate::worker::configured() {
+            crate::worker::usable().then(|| crate::worker::load(path).map(|(session, gpu, dml)| (Backend::Remote { session, gpu, fallback: Mutex::default() }, gpu, dml)))
+        } else {
+            Some(ort_session(path).map(|(session, gpu, dml)| (Backend::Ort { session: Mutex::new(session), gpu }, gpu, dml)))
+        };
+        match ort {
+            Some(Ok((backend, gpu, dml_error))) => {
+                if let Some(e) = &dml_error {
+                    log::warn!("{}: DirectML nicht verwendbar, ONNX Runtime rechnet auf dem Prozessor: {e}", path.display());
                 }
-                Err(e) => {
-                    log::warn!("{}: ONNX Runtime nicht verwendbar, rechne mit tract: {e:#}", path.display());
-                    *LAST_GPU_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!("{e:#}"));
+                if gpu || dml_error.is_some() {
+                    set_gpu_error(dml_error);
                 }
+                let net = net(backend);
+                *LAST_DEVICE.lock().unwrap_or_else(|e| e.into_inner()) = Some(net.device());
+                return Ok(net);
             }
+            Some(Err(e)) => {
+                log::warn!("{}: ONNX Runtime nicht verwendbar, rechne mit tract: {e:#}", path.display());
+                set_gpu_error(Some(format!("{e:#}")));
+            }
+            None => {}
         }
-        // Shape hints inside some exports (symbolic batch sizes) contradict the fixed input
-        // shapes; such networks are loaded again without them.
-        let plan = tract_plan(path, inputs, keep, false).or_else(|e| {
-            tract_plan(path, inputs, keep, true).map_err(|_| e)
-        })?;
-        let net = Net { backend: Backend::Cpu(plan), inputs: inputs.to_vec() };
+        let net = net(Backend::Cpu(tract_plan_any(path, inputs, keep)?));
         *LAST_DEVICE.lock().unwrap_or_else(|e| e.into_inner()) = Some(net.device());
         Ok(net)
     }
 
     /// Runs on the graphics card.
     pub fn on_gpu(&self) -> bool {
-        matches!(self.backend, Backend::Ort { gpu: true, .. })
+        match &self.backend {
+            Backend::Ort { gpu, .. } => *gpu,
+            Backend::Remote { gpu, fallback, .. } => *gpu && fallback.lock().unwrap_or_else(|e| e.into_inner()).is_none(),
+            Backend::Cpu(_) => false,
+        }
     }
 
     /// One run at a time is best (ONNX Runtime parallelizes itself, the graphics card works
     /// through one request after the other); tract runs are parallelized by the caller.
     pub fn prefers_serial(&self) -> bool {
-        matches!(self.backend, Backend::Ort { .. })
+        matches!(self.backend, Backend::Ort { .. } | Backend::Remote { .. })
     }
 
     /// Where it runs, for display.
     pub fn device(&self) -> &'static str {
-        match self.backend {
-            Backend::Ort { gpu: true, .. } => "Grafikkarte",
-            Backend::Ort { gpu: false, .. } => "Prozessor (ONNX Runtime)",
+        match &self.backend {
+            Backend::Remote { fallback, .. } if fallback.lock().unwrap_or_else(|e| e.into_inner()).is_some() => "Prozessor",
+            Backend::Ort { gpu: true, .. } | Backend::Remote { gpu: true, .. } => "Grafikkarte",
+            Backend::Ort { gpu: false, .. } | Backend::Remote { gpu: false, .. } => "Prozessor (ONNX Runtime)",
             Backend::Cpu(_) => "Prozessor",
         }
     }
@@ -383,56 +475,31 @@ impl Net {
     pub fn run(&self, data: &[Data]) -> Result<Vec<Output>> {
         anyhow::ensure!(data.len() == self.inputs.len(), "Falsche Anzahl Eingaben");
         match &self.backend {
-            Backend::Cpu(plan) => {
-                let mut ins: TVec<TValue> = TVec::new();
-                for (inp, d) in self.inputs.iter().zip(data) {
-                    let t = match (inp, d) {
-                        (Input::F32(s), Data::F32(v)) => Tensor::from_shape(s, v)?,
-                        (Input::U8(s), Data::U8(v)) => Tensor::from_shape(s, v)?,
-                        (Input::F32Shape(s), Data::F32(v)) => Tensor::from_shape(s, v)?,
-                        _ => bail!("Falscher Eingabetyp"),
-                    };
-                    ins.push(t.into());
-                }
-                plan.run(ins)?
-                    .iter()
-                    .map(|o| {
-                        let f = o.cast_to::<f32>()?;
-                        let v = f.to_plain_array_view::<f32>()?;
-                        Ok(Output { shape: v.shape().to_vec(), data: v.iter().copied().collect() })
-                    })
-                    .collect()
-            }
-            Backend::Ort { session, .. } => {
-                let mut session = session.lock().unwrap_or_else(|e| e.into_inner());
-                let names: Vec<String> = session.inputs().iter().map(|i| i.name().to_string()).collect();
-                let mut ins: Vec<(String, ort::value::DynValue)> = Vec::new();
-                for ((inp, d), name) in self.inputs.iter().zip(data).zip(names) {
-                    let v: ort::value::DynValue = match (inp, d) {
-                        (Input::F32(s), Data::F32(v)) => ort::value::Tensor::from_array((s.to_vec(), v.to_vec())).map_err(|e| anyhow!("{e}"))?.into_dyn(),
-                        (Input::U8(s), Data::U8(v)) => ort::value::Tensor::from_array((s.to_vec(), v.to_vec())).map_err(|e| anyhow!("{e}"))?.into_dyn(),
-                        (Input::F32Shape(s), Data::F32(v)) => ort::value::Tensor::from_array((s.to_vec(), v.to_vec())).map_err(|e| anyhow!("{e}"))?.into_dyn(),
-                        _ => bail!("Falscher Eingabetyp"),
-                    };
-                    ins.push((name, v));
-                }
-                let outputs = session.run(ins).map_err(|e| anyhow!("{e}"))?;
-                let mut out = Vec::new();
-                for i in 0..outputs.len() {
-                    let v = &outputs[i];
-                    let (shape, data) = match v.try_extract_tensor::<f32>() {
-                        Ok((s, d)) => (s.to_vec(), d.to_vec()),
-                        Err(_) => {
-                            let (s, d) = v.try_extract_tensor::<u8>().map_err(|e| anyhow!("{e}"))?;
-                            (s.to_vec(), d.iter().map(|x| *x as f32).collect())
+            Backend::Cpu(plan) => tract_run(plan, &self.inputs, data),
+            Backend::Ort { session, .. } => ort_run(&mut session.lock().unwrap_or_else(|e| e.into_inner()), tensors(&self.inputs, data)?),
+            Backend::Remote { session, fallback, .. } => {
+                let mut fallback = fallback.lock().unwrap_or_else(|e| e.into_inner());
+                let plan = match &*fallback {
+                    Some(plan) => plan.clone(),
+                    None => match crate::worker::run(session, tensors(&self.inputs, data)?) {
+                        Ok(out) => return Ok(out),
+                        Err(e) => {
+                            log::warn!("{}: {e:#}, rechne mit tract weiter", self.path.display());
+                            fallback.insert(tract_plan_any(&self.path, &self.inputs, self.keep.as_deref())?).clone()
                         }
-                    };
-                    out.push(Output { shape: shape.iter().map(|d| *d as usize).collect(), data });
-                }
-                Ok(out)
+                    },
+                };
+                drop(fallback);
+                tract_run(&plan, &self.inputs, data)
             }
         }
     }
+}
+
+/// [`tract_plan`]; shape hints inside some exports (symbolic batch sizes) contradict the fixed
+/// input shapes, such networks are loaded again without them.
+fn tract_plan_any(path: &Path, inputs: &[Input], keep: Option<&[usize]>) -> Result<Arc<TypedRunnableModel>> {
+    tract_plan(path, inputs, keep, false).or_else(|e| tract_plan(path, inputs, keep, true).map_err(|_| e))
 }
 
 #[cfg(test)]

@@ -3239,6 +3239,8 @@ impl eframe::App for App {
         let _ = crate::guard::catch(|| self.end_viewer_tools());
         let _ = crate::guard::catch(|| self.commit_and_save());
         self.save_settings();
+        // Its process runs from the program file an update replaces.
+        sk_ai::worker::shutdown();
         self.install_update_on_exit();
         crate::guard::mark_clean_exit();
     }

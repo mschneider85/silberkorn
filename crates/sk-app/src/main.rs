@@ -100,9 +100,17 @@ static ALLOC: GuardedAlloc = GuardedAlloc;
 fn main() -> eframe::Result {
     guard::install_hook();
     // Warnings and errors also into silberkorn.log: the Windows release has no console.
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,silberkorn=info,sk_core=info,wgpu_core=error,wgpu_hal=error,naga=error"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,silberkorn=info,sk_core=info,sk_ai=info,wgpu_core=error,wgpu_hal=error,naga=error"))
         .target(env_logger::Target::Pipe(guard::log_target()))
         .init();
+    // Started as the process the networks run in (see `sk_ai::worker`).
+    if std::env::args_os().nth(1).is_some_and(|a| a == sk_ai::worker::ARG) {
+        sk_ai::worker::serve();
+        return Ok(());
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        sk_ai::worker::set_command(exe, vec![sk_ai::worker::ARG.into()]);
+    }
     if guard::mark_running() {
         log::warn!("Die letzte Sitzung wurde nicht normal beendet");
     }

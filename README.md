@@ -152,7 +152,10 @@ des Mosaiks zusammen (3×3 statt 2×2) und brauchen daher kein Demosaicing.
 
 Ein Fehler in einem Hintergrund-Thread (etwa bei einer beschädigten RAW-Datei) beendet den Thread
 nicht: der betroffene Auftrag schlägt fehl, die Statusleiste meldet ihn, Details stehen in
-`~/.local/share/silberkorn/panic.log`.
+`~/.local/share/silberkorn/panic.log`. Ein Fehler beim Zeichnen der Oberfläche kostet nur diesen
+Frame (Bearbeitungen werden sofort gespeichert). RAW-Dateien werden vor rawler geprüft
+(`raw_check`): Verweise im Kreis, riesige Einträge und unplausible Bildgrößen, an denen rawler
+unabfangbar abbräche, gelten als beschädigt.
 
 `cargo run --release -p sk-core --example bench -- <raw>` misst die Pipeline auf Prozessor und Grafikkarte.
 
@@ -256,6 +259,12 @@ per Teil-Download nur diese beiden Dateien (etwa 28 MB statt über 200 MB). Die 
 einzelne Datei, der Cross-Build aus WSL funktioniert weiter. Steht DirectML nicht zur Verfügung,
 rechnet ONNX Runtime auf dem Prozessor (etwa doppelt so schnell wie ohne); ohne ONNX Runtime oder
 bei Fehlern übernimmt tract. Zum Testen auf anderen Systemen: `SILBERKORN_ORT=<libonnxruntime.so>`.
+ONNX Runtime und DirectML laufen in einem eigenen Prozess (`silberkorn --ki-prozess`, gestartet beim
+ersten Netz, Daten über stdin/stdout): Ein Absturz darin oder im Grafiktreiber beendet nur diesen.
+Die geladenen Netze rechnen dann mit tract weiter, das nächste startet einen neuen Prozess; nach zwei
+Abstürzen bleibt die Grafikkarte für KI bis zum nächsten Start aus. Antwortet der Prozess fünf Minuten
+nicht, gilt er als abgestürzt. `cargo run --release -p sk-ai --example ki_prozess -- <silberkorn>`
+vergleicht die Zeiten und beendet den Prozess zur Probe.
 
 Alles, was länger dauert (KI, Zusammenfügen, Exportieren, Indexieren, Downloads), zeigt die
 Statusleiste mit Fortschritt an; Export, Zusammenfügen und Entrauschen lassen sich dort mit ✕
