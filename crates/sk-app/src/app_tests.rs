@@ -2061,7 +2061,7 @@ fn remove_tool_fills_the_painted_area() {
     f.app.request_removal();
     assert!(f.app.inpaint_busy);
     // Shown in the viewer and the status bar while it runs.
-    assert!(f.app.activities().iter().any(|a| a.label == "Objekt entfernen" && a.in_viewer));
+    assert!(f.app.activities().iter().any(|a| a.label == "Entfernen" && a.in_viewer));
     f.pump("Entfernt", |a| !a.inpaint_busy);
     let cur = f.app.current.as_ref().unwrap();
     assert_eq!(cur.adjustments.removals.len(), 1, "{}", f.app.status);
@@ -3871,6 +3871,41 @@ fn delete_in_layer_tab_ignores_hidden_spot() {
     let adj = &f.app.current.as_ref().unwrap().adjustments;
     assert!(adj.layers.is_empty());
     assert_eq!(adj.retouch.len(), 1);
+}
+
+/// The retouch tab lists removals and heal/clone areas together: a click chooses one (and the
+/// tool that shows it), "Alle löschen" clears both kinds.
+#[test]
+fn retouch_tab_lists_all_areas_together() {
+    use crate::app::Tab;
+    use crate::layers::LocalTool;
+    use sk_core::params::{Removal, Spot, SpotMode};
+    let Some(mut f) = Fixture::new("retouch-areas") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let spot = Spot { mode: SpotMode::Heal, target: [0.3, 0.3], source: [0.6, 0.6], path: Vec::new(), strokes: Vec::new(), radius: 0.02, feather: 0.5, opacity: 1.0 };
+    f.app.edit(|a| {
+        a.retouch.push(spot);
+        a.removals.push(Removal { id: 7, opacity: 1.0, ..Default::default() });
+    });
+    f.app.tab = Tab::Retouch;
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(widget(&nodes, "Objekt entfernen").is_none() && widget(&nodes, "Reparieren & Klonen").is_none());
+    let removal = widget(&nodes, "Entfernen 1").expect("Entfernen 1 in der Liste");
+    let heal = widget(&nodes, "Reparieren 2").expect("Reparieren 2 in der Liste");
+    assert!(removal.top() < heal.top(), "Entfernen zuerst, wie es angewandt wird");
+
+    click_at(&mut f, removal.center());
+    assert_eq!((f.app.selected_removal, f.app.selected_spot), (Some(0), None));
+    assert_eq!(f.app.local_tool, Some(LocalTool::Remove));
+    // The tool's brush settings now show above the list.
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let nodes = click_at(&mut f, widget(&nodes, "Reparieren 2").unwrap().center());
+    assert_eq!((f.app.selected_removal, f.app.selected_spot), (None, Some(0)));
+    assert_eq!(f.app.local_tool, Some(LocalTool::Heal));
+
+    click_at(&mut f, widget(&nodes, "Alle löschen").expect("Alle löschen").center());
+    let adj = &f.app.current.as_ref().unwrap().adjustments;
+    assert!(adj.retouch.is_empty() && adj.removals.is_empty());
 }
 
 /// The results of an auto run join one undo step, a paste onto several images meanwhile stays a

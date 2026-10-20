@@ -1102,116 +1102,117 @@ impl App {
         }
     }
 
-    /// List of the heal and clone areas: select one to edit it (also in the viewer), change
-    /// its kind, opacity and softness, find a new source or delete it.
-    fn retouch_section(&mut self, ui: &mut Ui) {
+    /// "Stellen": everything retouched, removals first (they are applied first), then the heal
+    /// and clone areas. Select one to edit it (also in the viewer), change its settings, find a
+    /// new source or delete it; settings a kind does not have are shown, but disabled.
+    fn areas_section(&mut self, ui: &mut Ui) {
+        #[derive(Clone, Copy)]
+        enum Area {
+            Removal(usize),
+            Spot(usize),
+        }
         enum Act {
-            Select(usize),
+            Select(Area),
             Delete,
             NewSource,
             /// From the context menu of an area (it becomes the chosen one first).
-            DeleteAt(usize),
+            DeleteAt(Area),
             SourceOf(usize),
             Clear,
-            Find,
         }
         let mut act = None;
         let mut changed = false;
-        let selected = self.selected_spot;
+        let (selected_spot, selected_removal) = (self.selected_spot, self.selected_removal);
         let Some(cur) = self.current.as_mut() else { return };
-        let spots = &mut cur.adjustments.retouch;
+        let adj = &mut cur.adjustments;
+        let (spots, removals) = (&mut adj.retouch, &mut adj.removals);
         use crate::commands::hint;
         let help = format!(
-            "Mit {} oder {} über eine Stelle malen. Pins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · {}\n\nGewählten Bereich ändern: mit Umschalt dazumalen, mit Alt wegnehmen.\n\nStaub und Flecken finden: repariert kleine dunkle Flecken auf ruhigen Flächen, etwa Sensorstaub.",
-            hint("Reparieren", "tool-heal"),
-            hint("Klonen", "tool-clone"),
+            "Alle retuschierten Stellen. Eine wählen, um sie zu ändern; im Bild ist sie dann markiert.\n\nPins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · {}\n\nGewählten Bereich ändern: mit Umschalt dazumalen, mit Alt wegnehmen; entfernte Bereiche werden dann neu gefüllt.",
             hint("Löschen", "delete-spot")
         );
-        let searching = self.spot_search.is_some();
-        let spot_cancel = self.spot_cancel.clone();
-        let sensitivity = &mut self.spot_sensitivity;
         let area_paint = &mut self.area_paint;
-        let mut reset_spots = false;
-        crate::widgets::section_help(ui, "Reparieren & Klonen", &help, Some(&mut || reset_spots = true), |ui| {
-            ui.horizontal(|ui| {
-                if ui.add_enabled(!searching, egui::Button::new(format!("{}  Staub und Flecken finden", crate::theme::icon::BROOM))).clicked() {
-                    act = Some(Act::Find);
-                }
-                if searching {
-                    ui.spinner();
-                    if let Some(c) = &spot_cancel {
-                        crate::widgets::cancel_button(ui, c);
-                    }
-                }
-            });
-            let mut percent = *sensitivity * 100.0;
-            if slider_row(ui, "Empfindlichkeit", &mut percent, 0.0..=100.0, 50.0, 0) {
-                *sensitivity = percent / 100.0;
-            }
-            ui.add_space(4.0);
-            if spots.is_empty() {
+        let mut reset = false;
+        crate::widgets::section_help(ui, "Stellen", &help, Some(&mut || reset = true), |ui| {
+            if spots.is_empty() && removals.is_empty() {
                 crate::widgets::hint(ui, "Noch keine.");
             }
-            for (i, s) in spots.iter().enumerate() {
-                let (ic, kind) = match s.mode {
-                    SpotMode::Heal => (crate::theme::icon::BANDAIDS, "Reparieren"),
-                    SpotMode::Clone => (crate::theme::icon::STAMP, "Klonen"),
+            let entries = (0..removals.len()).map(Area::Removal).chain((0..spots.len()).map(Area::Spot));
+            for (n, area) in entries.enumerate() {
+                let (ic, kind, chosen) = match area {
+                    Area::Removal(i) => (icon::SPARKLE, "Entfernen", selected_removal == Some(i)),
+                    Area::Spot(i) => match spots[i].mode {
+                        SpotMode::Heal => (icon::BANDAIDS, "Reparieren", selected_spot == Some(i)),
+                        SpotMode::Clone => (icon::STAMP, "Klonen", selected_spot == Some(i)),
+                    },
                 };
-                let text = format!("{ic}  {kind} {}", i + 1);
                 let w = ui.available_width();
-                let r = ui.add_sized([w, 24.0], egui::Button::selectable(selected == Some(i), text));
+                let r = ui.add_sized([w, 24.0], egui::Button::selectable(chosen, format!("{ic}  {kind} {}", n + 1)));
                 if r.clicked() {
-                    act = Some(Act::Select(i));
+                    act = Some(Act::Select(area));
                 }
                 r.context_menu(|ui| {
-                    if ui.button(format!("{}  Neue Quelle", crate::theme::icon::MAGIC_WAND)).clicked() {
+                    if let Area::Spot(i) = area
+                        && ui.button(format!("{}  Neue Quelle", icon::MAGIC_WAND)).clicked()
+                    {
                         act = Some(Act::SourceOf(i));
                     }
-                    if ui.button(format!("{}  Löschen", crate::theme::icon::TRASH)).clicked() {
-                        act = Some(Act::DeleteAt(i));
+                    if ui.button(format!("{}  Löschen", icon::TRASH)).clicked() {
+                        act = Some(Act::DeleteAt(area));
                     }
                 });
             }
             // The settings of the chosen area; without one they are shown, but disabled.
-            let mut placeholder = Spot { mode: SpotMode::Heal, target: [0.0; 2], source: [0.0; 2], path: Vec::new(), strokes: Vec::new(), radius: 0.0, feather: 0.4, opacity: 1.0 };
-            let chosen = selected.and_then(|i| spots.get_mut(i));
-            let has = chosen.is_some();
-            let s = chosen.unwrap_or(&mut placeholder);
+            let mut spot_placeholder = Spot { mode: SpotMode::Heal, target: [0.0; 2], source: [0.0; 2], path: Vec::new(), strokes: Vec::new(), radius: 0.0, feather: 0.4, opacity: 1.0 };
+            let mut removal_placeholder = sk_core::params::Removal::default();
+            let spot = selected_spot.and_then(|i| spots.get_mut(i));
+            let removal = selected_removal.and_then(|i| removals.get_mut(i)).filter(|_| spot.is_none());
+            let (is_spot, is_removal) = (spot.is_some(), removal.is_some());
+            let has = is_spot || is_removal;
+            let s = spot.unwrap_or(&mut spot_placeholder);
+            let r = removal.unwrap_or(&mut removal_placeholder);
             ui.scope(|ui| {
                 if !has {
                     ui.disable();
                 }
-                    ui.add_space(6.0);
+                ui.add_space(6.0);
+                ui.add_enabled_ui(!is_removal, |ui| {
                     crate::widgets::field(ui, "Art", |ui| {
                         changed |= ui.selectable_value(&mut s.mode, SpotMode::Heal, "Reparieren").changed();
                         changed |= ui.selectable_value(&mut s.mode, SpotMode::Clone, "Klonen").changed();
                     });
-                    let mut opacity = s.opacity * 100.0;
-                    if slider_row(ui, "Deckkraft", &mut opacity, 0.0..=100.0, 100.0, 0) {
-                        s.opacity = opacity / 100.0;
-                        changed = true;
-                    }
+                });
+                let opacity = if is_removal { &mut r.opacity } else { &mut s.opacity };
+                let mut percent = *opacity * 100.0;
+                if slider_row(ui, "Deckkraft", &mut percent, 0.0..=100.0, 100.0, 0) {
+                    *opacity = percent / 100.0;
+                    changed = true;
+                }
+                ui.add_enabled_ui(!is_removal, |ui| {
                     let mut feather = s.feather * 100.0;
                     if slider_row(ui, "Weichheit", &mut feather, 0.0..=100.0, 40.0, 0) {
                         s.feather = feather / 100.0;
                         changed = true;
                     }
-                    area_paint_row(ui, area_paint, has);
-                    ui.horizontal(|ui| {
-                        if ui.button(format!("{}  Neue Quelle", crate::theme::icon::MAGIC_WAND)).on_hover_text("Quelle erneut automatisch wählen").clicked() {
-                            act = Some(Act::NewSource);
-                        }
-                        if ui.button(format!("{}  Löschen", crate::theme::icon::TRASH)).on_hover_text(crate::commands::shortcut_of("delete-spot")).clicked() {
-                            act = Some(Act::Delete);
-                        }
-                    });
+                });
+                area_paint_row(ui, area_paint, has);
+                ui.horizontal(|ui| {
+                    let source = ui.add_enabled(!is_removal, egui::Button::new(format!("{}  Neue Quelle", icon::MAGIC_WAND)));
+                    if source.on_hover_text("Quelle erneut automatisch wählen").clicked() {
+                        act = Some(Act::NewSource);
+                    }
+                    if ui.button(format!("{}  Löschen", icon::TRASH)).on_hover_text(crate::commands::shortcut_of("delete-spot")).clicked() {
+                        act = Some(Act::Delete);
+                    }
+                });
             });
             ui.add_space(4.0);
-            if ui.add_enabled(!spots.is_empty(), egui::Button::new(format!("{}  Alle löschen", crate::theme::icon::TRASH))).clicked() {
+            let any = !spots.is_empty() || !removals.is_empty();
+            if ui.add_enabled(any, egui::Button::new(format!("{}  Alle löschen", icon::TRASH))).clicked() {
                 act = Some(Act::Clear);
             }
         });
-        if reset_spots {
+        if reset {
             act = Some(Act::Clear);
         }
         if changed {
@@ -1219,18 +1220,30 @@ impl App {
         }
         // The context menu acts on its area as the panel buttons act on the chosen one.
         let act = match act {
-            Some(Act::DeleteAt(i)) => {
-                self.selected_spot = Some(i);
+            Some(Act::DeleteAt(Area::Removal(i))) => {
+                (self.selected_spot, self.selected_removal) = (None, Some(i));
+                Some(Act::Delete)
+            }
+            Some(Act::DeleteAt(Area::Spot(i))) => {
+                (self.selected_spot, self.selected_removal) = (Some(i), None);
                 Some(Act::Delete)
             }
             Some(Act::SourceOf(i)) => {
-                self.selected_spot = Some(i);
+                (self.selected_spot, self.selected_removal) = (Some(i), None);
                 Some(Act::NewSource)
             }
             a => a,
         };
         match act {
-            Some(Act::Select(i)) => {
+            Some(Act::Select(Area::Removal(i))) => {
+                self.selected_removal = Some(i);
+                self.selected_spot = None;
+                // The outlines are shown with the tool.
+                if self.local_tool != Some(LocalTool::Remove) {
+                    self.set_local_tool(LocalTool::Remove);
+                }
+            }
+            Some(Act::Select(Area::Spot(i))) => {
                 self.selected_spot = Some(i);
                 self.selected_removal = None;
                 // The pins are shown with the heal and clone tools.
@@ -1239,7 +1252,15 @@ impl App {
                     self.set_local_tool(if heal { LocalTool::Heal } else { LocalTool::Clone });
                 }
             }
-            Some(Act::Delete) => self.delete_selected_spot(),
+            Some(Act::Delete) => {
+                // The list shows a chosen heal or clone area before a chosen removal.
+                if self.selected_spot.is_some() {
+                    self.selected_removal = None;
+                    self.delete_selected_spot();
+                } else {
+                    self.delete_selected_removal();
+                }
+            }
             Some(Act::NewSource) => {
                 let Some(i) = self.selected_spot else { return };
                 let Some(cur) = self.current.as_ref() else { return };
@@ -1251,9 +1272,12 @@ impl App {
             }
             Some(Act::Clear) => {
                 self.selected_spot = None;
-                self.edit(|a| a.retouch.clear());
+                self.selected_removal = None;
+                self.edit(|a| {
+                    a.retouch.clear();
+                    a.removals.clear();
+                });
             }
-            Some(Act::Find) => self.find_spots(),
             // Turned into Delete and NewSource above.
             Some(Act::DeleteAt(_) | Act::SourceOf(_)) | None => {}
         }
@@ -1682,21 +1706,43 @@ impl App {
         }
         use crate::commands::{hint, shortcut_of};
         let help = format!(
-            "{} und {}: über eine Stelle malen. {}: die KI füllt die Stelle passend zur Umgebung.\n\n{} und {} oder Ziehen mit der rechten Maustaste: Pinselgröße und Härte.",
+            "{}: übernimmt Struktur aus der Umgebung und gleicht Farbe und Helligkeit an. {}: kopiert eine Quelle 1:1. {}: die KI füllt die Stelle passend zur Umgebung. Jeweils über die Stelle malen.\n\n{} und {} oder Ziehen mit der rechten Maustaste: Pinselgröße und Härte.\n\nStaub und Flecken finden: repariert kleine dunkle Flecken auf ruhigen Flächen, etwa Sensorstaub.",
             hint("Reparieren", "tool-heal"),
             hint("Klonen", "tool-clone"),
-            hint("Objekt entfernen", "tool-remove"),
+            hint("Entfernen", "tool-remove"),
             shortcut_of("brush-smaller"),
             shortcut_of("brush-larger")
         );
-        self.tools_section(ui, &help, &[LocalTool::Heal, LocalTool::Clone, LocalTool::Remove]);
-        self.remove_section(ui);
-        self.retouch_section(ui);
-    }
-
-    /// "Werkzeuge" section with the tool tiles (retouch tab).
-    fn tools_section(&mut self, ui: &mut Ui, help: &str, tools: &[LocalTool]) {
-        crate::widgets::section_help(ui, "Werkzeuge", help, None, |ui| self.tool_tiles(ui, tools));
+        let downloading = self.ai_download_progress(AiFeature::Inpaint);
+        let cancel = self.job_cancel(None, Some(&AiFeature::Inpaint.job_label()));
+        let mut find = false;
+        crate::widgets::section_help(ui, "Werkzeuge", &help, None, |ui| {
+            self.tool_tiles(ui, &[LocalTool::Heal, LocalTool::Clone, LocalTool::Remove]);
+            if let Some(p) = downloading {
+                crate::ai_models::download_progress(ui, AiFeature::Inpaint, p, cancel);
+            }
+            ui.add_space(6.0);
+            let searching = self.spot_search.is_some();
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!searching, egui::Button::new(format!("{}  Staub und Flecken finden", crate::theme::icon::BROOM))).clicked() {
+                    find = true;
+                }
+                if searching {
+                    ui.spinner();
+                    if let Some(c) = &self.spot_cancel {
+                        crate::widgets::cancel_button(ui, c);
+                    }
+                }
+            });
+            let mut percent = self.spot_sensitivity * 100.0;
+            if slider_row(ui, "Empfindlichkeit", &mut percent, 0.0..=100.0, 50.0, 0) {
+                self.spot_sensitivity = percent / 100.0;
+            }
+        });
+        if find {
+            self.find_spots();
+        }
+        self.areas_section(ui);
     }
 
     /// The tool tiles (three per row) and the settings of the active one.

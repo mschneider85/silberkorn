@@ -205,9 +205,9 @@ Drehen oder Objektivkorrektur am Bildinhalt.
 „Reparieren“ und „Klonen“ (Tab „Retusche“) werden wie ein Pinsel über die Stelle gemalt (ein Klick ergibt einen runden
 Punkt). „Reparieren“ übernimmt Struktur von einer automatisch gewählten Quelle und gleicht Farbe/Helligkeit an
 die Umgebung an; „Klonen“ kopiert 1:1. Mit aktivem Werkzeug zeigt das Bild alle Bereiche mit Pins: der
-weiße verschiebt den Bereich, der gelbe (beim ausgewählten) die Quelle. Im Abschnitt „Reparieren & Klonen“
-stehen alle Bereiche in einer Liste; dort lassen sich Art, Deckkraft und Weichheit ändern, eine neue Quelle
-suchen oder Bereiche löschen. Einen gewählten Bereich erweitert man, indem man mit Umschalt dazumalt; mit Alt
+weiße verschiebt den Bereich, der gelbe (beim ausgewählten) die Quelle. Im Abschnitt „Stellen“
+stehen alle Bereiche in einer Liste, zusammen mit den entfernten; dort lassen sich Art, Deckkraft und
+Weichheit ändern, eine neue Quelle suchen oder Bereiche löschen (was eine Art nicht hat, ist ausgegraut). Einen gewählten Bereich erweitert man, indem man mit Umschalt dazumalt; mit Alt
 nimmt man einen Teil weg (oder „Malen: Erweitern / Verkleinern“ im Abschnitt). Die Striche gehören zum Bereich:
 gleiche Größe, Weichheit und Quelle, und sie wandern mit, wenn man ihn verschiebt.
 
@@ -287,12 +287,12 @@ erscheint zusätzlich oben im Bild.
   in die RAW-Daten: nicht-destruktiv, rückgängig zu machen, gilt für Vorschau, Export und
   Thumbnails. Fehlt es beim Export, wird es dort berechnet – nie wird stillschweigend ohne
   exportiert. Kommandozeile: `cargo run --release -p sk-ai --example denoise -- <raw> <ordner> [stärke] [--linear]`
-- **Objekt entfernen** (X, Tab „Retusche“): Über Störendes malen; beim Loslassen füllt MI-GAN
+- **Entfernen** (X, Tab „Retusche“): Über Störendes malen; beim Loslassen füllt MI-GAN
   (Picsart, MIT, 30 MB) die Stelle passend zur Umgebung. Gefüllt wird in voller Auflösung, bei
   größeren Markierungen in mehreren 512er-Fenstern nacheinander; erst sehr große Flächen werden
   verkleinert berechnet. Das Ergebnis ist ein kleiner Flicken mit weicher Kante im Sidecar (Feld
   `removals`): Er wird vor Reparieren/Klonen eingesetzt, bleibt am Bildinhalt wie die Masken und
-  ist ein Rückgängig-Schritt. Die entfernten Bereiche stehen in einer Liste und sind im Bild umrandet;
+  ist ein Rückgängig-Schritt. Die entfernten Bereiche stehen in der Liste „Stellen“ und sind im Bild umrandet;
   ein Klick auf den Pin wählt einen. Er hat eine eigene Deckkraft, lässt sich einzeln löschen (Entf)
   und wie bei Reparieren/Klonen mit Umschalt erweitern oder mit Alt verkleinern: Dann wird nur dieser
   Bereich mit allen seinen Strichen neu gefüllt und behält Platz und Deckkraft. „Alle löschen“ stellt

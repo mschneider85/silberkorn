@@ -199,7 +199,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("find-spots", icon::BROOM, "Staub und Flecken finden", "Retusche", [], "sensorstaub flecken unreinheiten pickel retusche reparieren", |a| image_tool(a) && a.spot_search.is_none(), |a, _| a.find_spots()),
     cmd!("tool-heal", icon::BANDAIDS, "Reparieren", "Retusche", [NONE => Key::H], "heal flecken", image_tool, |a, _| tool(a, LocalTool::Heal)),
     cmd!("tool-clone", icon::STAMP, "Klonen", "Retusche", [NONE => Key::S], "clone stempel", image_tool, |a, _| tool(a, LocalTool::Clone)),
-    cmd!("tool-remove", icon::SPARKLE, "Objekt entfernen", "Retusche", [NONE => Key::X], "entfernen remove objekt", image_tool, |a, _| tool(a, LocalTool::Remove)),
+    cmd!("tool-remove", icon::SPARKLE, "Entfernen", "Retusche", [NONE => Key::X], "entfernen remove objekt", image_tool, |a, _| tool(a, LocalTool::Remove)),
     cmd!("brush-smaller", icon::MINUS, "Pinsel kleiner", "Ebenen", [NONE => Key::OpenBracket], "größe", always, |a, _| brush_size(a, 1.0 / 1.2)),
     cmd!("brush-larger", icon::PLUS, "Pinsel größer", "Ebenen", [NONE => Key::CloseBracket], "größe", always, |a, _| brush_size(a, 1.2)),
     cmd!("show-mask", icon::EYE, "Maske anzeigen", "Ebenen", [NONE => Key::M], "mask", always, |a, _| {

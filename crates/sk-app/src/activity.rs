@@ -36,7 +36,7 @@ impl App {
     pub fn activities(&self) -> Vec<Activity> {
         let mut v = Vec::new();
         if self.inpaint_busy {
-            v.push(Activity { label: "Objekt entfernen".into(), progress: Some(self.removal_progress), in_viewer: true, cancel: None });
+            v.push(Activity { label: "Entfernen".into(), progress: Some(self.removal_progress), in_viewer: true, cancel: None });
         }
         if self.ai_busy {
             v.push(Activity { label: "Berechne Maske".into(), progress: None, in_viewer: true, cancel: None });

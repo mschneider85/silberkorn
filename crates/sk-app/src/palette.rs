@@ -100,9 +100,9 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Effects, "Atmosphäre", "atmosphere nebel dunst fog haze tiefe ki"),
     (Tab::Layers, "Maske", "pinsel radierer verlauf zauberpinsel motiv himmel tiefe helligkeitsbereich farbbereich eingrenzen brush luma range"),
     (Tab::Layers, "Anpassungen", "ebenen-anpassungen lokal belichtung"),
-    (Tab::Retouch, "Objekt entfernen", "entfernen remove objekt retusche ki"),
     (Tab::Layers, "Ebenen", "layer maske lokal"),
-    (Tab::Retouch, "Reparieren & Klonen", "heal clone stempel flecken staub"),
+    (Tab::Retouch, "Werkzeuge", "reparieren klonen entfernen heal clone stempel remove objekt ki flecken staub"),
+    (Tab::Retouch, "Stellen", "retusche reparieren klonen entfernen bereiche liste"),
     (Tab::Metadata, "Keywords", "schlagworte stichworte tags"),
     (Tab::Metadata, "Aufnahme", "exif kamera objektiv iso"),
     (Tab::Styles, "Filmsimulationen", "film look preset vorschau raster"),
@@ -335,7 +335,7 @@ fn command_row(ui: &Ui, rect: Rect, c: &Command, selected: bool) {
 
 /// Sections of AI functions (marked in the palette as in the tool tabs).
 fn is_ai_section(title: &str) -> bool {
-    matches!(title, "Objekt entfernen" | "Gesichter & Sichtung") || sk_core::tools::Tool::ALL.iter().any(|t| t.is_ai() && t.label() == title)
+    matches!(title, "Gesichter & Sichtung") || sk_core::tools::Tool::ALL.iter().any(|t| t.is_ai() && t.label() == title)
 }
 
 /// "Strg+1" … "Strg+0" for the tool tabs in rail order.

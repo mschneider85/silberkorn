@@ -163,7 +163,7 @@ impl App {
                 let value = match name {
                     "Ebenen" => adj.layers.len().to_string(),
                     "Retusche" => adj.retouch.len().to_string(),
-                    "Objekt entfernen" => adj.removals.len().to_string(),
+                    "Entfernen" => adj.removals.len().to_string(),
                     _ => v.map(|v| if v > 0.0 { format!("+{}", number(v)) } else { number(v) }).unwrap_or_default(),
                 };
                 (name, value)
@@ -305,8 +305,7 @@ fn tool_of(name: &'static str) -> Option<(Tab, Option<&'static str>)> {
         "Vignette" => (Tab::Effects, Some("Vignette")),
         "Objektivunschärfe" => (Tab::Effects, Some("Objektivunschärfe")),
         "Ebenen" => (Tab::Layers, None),
-        "Retusche" => (Tab::Retouch, Some("Reparieren & Klonen")),
-        "Objekt entfernen" => (Tab::Retouch, Some("Objekt entfernen")),
+        "Retusche" | "Entfernen" => (Tab::Retouch, Some("Stellen")),
         _ => return None,
     };
     Some(t)

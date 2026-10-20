@@ -10,8 +10,7 @@ use sk_core::params::{BrushStroke, Removal, WbMode};
 
 use crate::ai_models::AiFeature;
 use crate::app::App;
-use crate::layers::{AreaPaint, LocalDrag, LocalTool};
-use crate::widgets::{section_help_ai, slider_row};
+use crate::layers::{AreaPaint, LocalDrag};
 use crate::workers::InpaintJob;
 
 impl App {
@@ -194,7 +193,7 @@ impl App {
                     app.request_removal();
                 }
             });
-            self.status = format!("Objekt entfernen: lade KI-Modell ({} MB, einmalig) …", AiFeature::Inpaint.download_mb());
+            self.status = format!("Entfernen: lade KI-Modell ({} MB, einmalig) …", AiFeature::Inpaint.download_mb());
             return;
         }
         let Some(cur) = &self.current else { return };
@@ -235,102 +234,7 @@ impl App {
                 self.selected_spot = None;
                 self.status = if at.is_some() { "Bereich neu gefüllt".into() } else { "Entfernt".into() };
             }
-            Err(e) => self.report_error(format!("Objekt entfernen fehlgeschlagen: {e}")),
-        }
-    }
-
-    /// Section in the retouch tab: the brush, the areas removed and the chosen one's settings.
-    pub(crate) fn remove_section(&mut self, ui: &mut Ui) {
-        enum Act {
-            Select(usize),
-            Delete(usize),
-            Clear,
-        }
-        let mut act = None;
-        let mut changed = false;
-        let downloading = self.ai_download_progress(AiFeature::Inpaint);
-        let selected = self.selected_removal;
-        // Always there, like the other sections; the buttons only work with something removed
-        // (shown, but disabled otherwise). The brush shows below the tool tiles while the tool is
-        // on, as for healing and cloning.
-        let help = "Über das Störende malen; beim Loslassen füllt die KI die Stelle passend zur Umgebung.\n\nGewählten Bereich ändern: mit Umschalt dazumalen, mit Alt wegnehmen; er wird dann neu gefüllt.";
-        let mut reset = false;
-        let cancel = self.job_cancel(None, Some(&AiFeature::Inpaint.job_label()));
-        let mut no_image = Vec::new();
-        let removals = self.current.as_mut().map_or(&mut no_image, |c| &mut c.adjustments.removals);
-        let area_paint = &mut self.area_paint;
-        section_help_ai(ui, "Objekt entfernen", help, Some(&mut || reset = true), |ui| {
-            if let Some(p) = downloading {
-                crate::ai_models::download_progress(ui, AiFeature::Inpaint, p, cancel);
-            }
-            ui.add_space(4.0);
-            if removals.is_empty() {
-                crate::widgets::hint(ui, "Noch nichts entfernt.");
-            }
-            for i in 0..removals.len() {
-                let text = format!("{}  Entfernen {}", crate::theme::icon::SPARKLE, i + 1);
-                let w = ui.available_width();
-                let r = ui.add_sized([w, 24.0], egui::Button::selectable(selected == Some(i), text));
-                if r.clicked() {
-                    act = Some(Act::Select(i));
-                }
-                r.context_menu(|ui| {
-                    if ui.button(format!("{}  Löschen", crate::theme::icon::TRASH)).clicked() {
-                        act = Some(Act::Delete(i));
-                    }
-                });
-            }
-            // The settings of the chosen area; without one they are shown, but disabled.
-            let mut placeholder = Removal::default();
-            let chosen = selected.and_then(|i| removals.get_mut(i));
-            let has = chosen.is_some();
-            let r = chosen.unwrap_or(&mut placeholder);
-            ui.scope(|ui| {
-                if !has {
-                    ui.disable();
-                }
-                ui.add_space(6.0);
-                let mut opacity = r.opacity * 100.0;
-                if slider_row(ui, "Deckkraft", &mut opacity, 0.0..=100.0, 100.0, 0) {
-                    r.opacity = opacity / 100.0;
-                    changed = true;
-                }
-                crate::layers::area_paint_row(ui, area_paint, has);
-                if ui.button(format!("{}  Löschen", crate::theme::icon::TRASH)).on_hover_text(crate::commands::shortcut_of("delete-spot")).clicked()
-                    && let Some(i) = selected
-                {
-                    act = Some(Act::Delete(i));
-                }
-            });
-            ui.add_space(4.0);
-            if ui.add_enabled(!removals.is_empty(), egui::Button::new(format!("{}  Alle löschen", crate::theme::icon::TRASH))).on_hover_text("Alle entfernten Bereiche wiederherstellen").clicked() {
-                act = Some(Act::Clear);
-            }
-        });
-        if reset {
-            act = Some(Act::Clear);
-        }
-        if changed {
-            self.request_render();
-        }
-        match act {
-            Some(Act::Select(i)) => {
-                self.selected_removal = Some(i);
-                self.selected_spot = None;
-                // The outlines are shown with the tool.
-                if self.local_tool != Some(LocalTool::Remove) {
-                    self.set_local_tool(LocalTool::Remove);
-                }
-            }
-            Some(Act::Delete(i)) => {
-                self.selected_removal = Some(i);
-                self.delete_selected_removal();
-            }
-            Some(Act::Clear) => {
-                self.selected_removal = None;
-                self.edit(|a| a.removals.clear());
-            }
-            None => {}
+            Err(e) => self.report_error(format!("Entfernen fehlgeschlagen: {e}")),
         }
     }
 
