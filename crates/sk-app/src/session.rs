@@ -62,12 +62,14 @@ pub enum PendingAction {
     Stack(crate::stacks::StackAction),
 }
 
+/// Folder icons, so that the session's parts read as the folders on disk they are.
 pub fn folder_icon(f: SessionFolder) -> &'static str {
     match f {
-        SessionFolder::Capture => icon::CAMERA,
-        SessionFolder::Selects => icon::CHECK_CIRCLE,
-        SessionFolder::Output => icon::EXPORT,
-        SessionFolder::Trash => icon::TRASH,
+        SessionFolder::Capture => icon::FOLDER_SIMPLE,
+        SessionFolder::Selects => icon::FOLDER_SIMPLE_STAR,
+        // A click shows it in the file manager.
+        SessionFolder::Output => icon::FOLDER_NOTCH_OPEN,
+        SessionFolder::Trash => icon::FOLDER_SIMPLE_MINUS,
     }
 }
 
@@ -433,10 +435,11 @@ impl App {
                     _ => format!("{}  {} ({count})", folder_icon(f), f.label()),
                 };
                 let selected = matches!(&self.scope, Scope::Folder { path, .. } if *path == dir);
-                let mut resp = ui.selectable_label(selected, text);
-                if f == SessionFolder::Output {
-                    resp = resp.on_hover_text("Exportierte Bilder im Dateimanager zeigen");
-                }
+                let resp = ui.selectable_label(selected, text);
+                let resp = match f {
+                    SessionFolder::Output => resp.on_hover_text(format!("Ordner {}\nKlick: im Dateimanager zeigen", dir.display())),
+                    _ => resp.on_hover_text(format!("Ordner {}", dir.display())),
+                };
                 if resp.clicked() {
                     if f == SessionFolder::Output {
                         if let Err(e) = reveal(&dir) {

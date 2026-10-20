@@ -96,11 +96,9 @@ impl App {
         let menus_right = ui
             .scope_builder(UiBuilder::new().max_rect(left).layout(Layout::left_to_right(Align::Center)), |ui| {
                 ui.add_space(10.0);
-                let logo = ui.painter().layout_no_wrap(icon::APERTURE.to_string(), FontId::proportional(17.0), theme::ACCENT);
-                let (rect, _) = ui.allocate_exact_size(logo.size(), Sense::hover());
-                theme::paint_glow(ui.painter(), rect.min, &logo, 1.5, 0.35);
-                ui.painter().galley(rect.min, logo, theme::GLOW);
-                ui.add_space(4.0);
+                let (rect, _) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::hover());
+                ui.painter().image(app_icon(ui.ctx()).id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+                ui.add_space(6.0);
                 self.menu_bar(ui)
             })
             .inner;
@@ -946,4 +944,18 @@ fn group_gap(ui: &mut Ui) {
 
 pub fn bar_margin() -> Margin {
     Margin::symmetric(8, 5)
+}
+
+/// The app's icon as a texture (with mipmaps: it is drawn much smaller than it is).
+fn app_icon(ctx: &egui::Context) -> egui::TextureHandle {
+    let id = egui::Id::new("app-icon");
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return t;
+    }
+    let img = image::load_from_memory(include_bytes!("../assets/icon-256.png")).map(|i| i.to_rgba8()).unwrap_or_default();
+    let image = egui::ColorImage::from_rgba_unmultiplied([img.width() as usize, img.height() as usize], img.as_raw());
+    let options = egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear));
+    let t = ctx.load_texture("app-icon", image, options);
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    t
 }
