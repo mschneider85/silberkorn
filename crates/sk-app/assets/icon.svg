@@ -1,48 +1,43 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1024 1024" width="1024" height="1024">
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3a3c43"/>
-      <stop offset="1" stop-color="#16171b"/>
+      <stop offset="0" stop-color="#151b2b"/>
+      <stop offset="1" stop-color="#07090f"/>
     </linearGradient>
-    <radialGradient id="silver" cx="0.40" cy="0.22" r="0.80">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="0.40" stop-color="#d6d9de"/>
-      <stop offset="1" stop-color="#868b93"/>
+    <radialGradient id="halo" cx="512" cy="512" r="380" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2f8cff" stop-opacity="0.38"/>
+      <stop offset="0.55" stop-color="#2f8cff" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#2f8cff" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="far" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#6e737b"/>
-      <stop offset="1" stop-color="#4a4e55"/>
+    <linearGradient id="edge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7cc4ff" stop-opacity="0.85"/>
+      <stop offset="0.5" stop-color="#3d8bff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#7cc4ff" stop-opacity="0.75"/>
     </linearGradient>
-    <linearGradient id="near" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2c2e34"/>
-      <stop offset="1" stop-color="#17181c"/>
+    <!-- metallic silver: bright top, dark band below the middle, light again at the bottom -->
+    <linearGradient id="silver" x1="0" y1="326" x2="0" y2="700" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.30" stop-color="#d9dde3"/>
+      <stop offset="0.52" stop-color="#8d939c"/>
+      <stop offset="0.60" stop-color="#c3c8cf"/>
+      <stop offset="0.85" stop-color="#eef0f3"/>
+      <stop offset="1" stop-color="#a7adb5"/>
     </linearGradient>
-    <linearGradient id="river" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#c9ccd2"/>
-      <stop offset="1" stop-color="#f4f5f7"/>
-    </linearGradient>
-    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0.18"/>
-    </linearGradient>
-    <clipPath id="disc"><circle cx="512" cy="512" r="344"/></clipPath>
-    <filter id="grain" x="0" y="0" width="100%" height="100%">
-      <feTurbulence type="fractalNoise" baseFrequency="0.55" numOctaves="2" seed="11" result="n"/>
-      <feColorMatrix in="n" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -2.6 1.45" result="dots"/>
-      <feComposite in="dots" in2="SourceGraphic" operator="in" result="d"/>
-      <feMerge><feMergeNode in="SourceGraphic"/><feMergeNode in="d"/></feMerge>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="26"/>
+    </filter>
+    <filter id="edgeglow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="10"/>
     </filter>
   </defs>
   <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#bg)"/>
-  <rect x="33.5" y="33.5" width="957" height="957" rx="214.5" fill="none" stroke="#ffffff" stroke-opacity="0.07" stroke-width="3"/>
-  <g clip-path="url(#disc)" filter="url(#grain)">
-    <rect x="160" y="160" width="704" height="704" fill="url(#silver)"/>
-    <!-- far range -->
-    <path d="M160 590 L300 470 L370 520 L470 400 L540 470 L600 420 L700 500 L760 460 L870 560 L870 870 L160 870 Z" fill="url(#far)"/>
-    <!-- near range -->
-    <path d="M160 650 L260 580 L340 630 L470 540 L580 615 L680 560 L870 680 L870 870 L160 870 Z" fill="url(#near)"/>
-    <!-- river: from the middle distance towards the viewer -->
-    <path d="M560 640 C600 655 610 675 560 700 C500 730 430 750 430 800 C430 830 470 850 520 870 L380 870 C330 840 320 800 360 760 C400 720 490 700 520 680 C545 665 545 650 520 640 Z" fill="url(#river)"/>
-  </g>
-  <circle cx="512" cy="512" r="344" fill="none" stroke="url(#rim)" stroke-width="5"/>
+  <rect x="32" y="32" width="960" height="960" rx="216" fill="url(#halo)"/>
+  <!-- neon edge: a soft glow plus a thin line -->
+  <rect class="fx" x="44" y="44" width="936" height="936" rx="205" fill="none" stroke="#3d8bff" stroke-opacity="0.55" stroke-width="10" filter="url(#edgeglow)"/>
+  <rect x="44" y="44" width="936" height="936" rx="205" fill="none" stroke="url(#edge)" stroke-width="6"/>
+  <!-- the "s" -->
+  <path id="s" d="M648 392 C616 356 568 340 512 340 C440 340 390 372 390 424 C390 478 448 494 512 510 C582 528 636 548 636 602 C636 656 584 684 512 684 C450 684 400 666 368 628" fill="none" stroke-width="96" stroke-linecap="butt"/>
+  <use class="fx" xlink:href="#s" stroke="#3d8bff" stroke-opacity="0.8" filter="url(#glow)"/>
+  <use xlink:href="#s" stroke="#0a0d14" stroke-width="112"/>
+  <use xlink:href="#s" stroke="url(#silver)"/>
 </svg>
