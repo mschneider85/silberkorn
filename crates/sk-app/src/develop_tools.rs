@@ -367,7 +367,7 @@ impl App {
             });
             // A free crop has no orientation: shown, but disabled.
             let fixed = !matches!(g.aspect, AspectRatio::Free);
-            if ui.add_enabled(fixed, egui::Checkbox::new(&mut g.aspect_portrait, "Hochformat")).changed() {
+            if ui.add_enabled(fixed, crate::widgets::Check::new(&mut g.aspect_portrait, "Hochformat")).changed() {
                 apply_aspect = true;
             }
             let c = g.crop;
@@ -401,8 +401,8 @@ impl App {
             });
             let g = &mut adj.geometry;
             ui.horizontal(|ui| {
-                changed |= ui.checkbox(&mut g.flip_h, "Horizontal spiegeln").changed();
-                changed |= ui.checkbox(&mut g.flip_v, "Vertikal").changed();
+                changed |= crate::widgets::checkbox(ui, &mut g.flip_h, "Horizontal spiegeln").changed();
+                changed |= crate::widgets::checkbox(ui, &mut g.flip_v, "Vertikal").changed();
             });
         });
         if reset_rot {
@@ -415,25 +415,14 @@ impl App {
             use crate::crop::GuideMode;
             use sk_core::upright::UprightMode;
             ui.horizontal_wrapped(|ui| {
-                // The vertical edges alone are the "A" in the header; here also both.
-                let label = format!("{}  Automatisch {}", icon::MAGIC_WAND, icon::CARET_DOWN);
-                ui.add_enabled_ui(auto_free, |ui| {
-                    ui.menu_button(label, |ui| {
-                        let vertical_tip = crate::commands::hint("Stürzende Linien werden parallel", "auto-upright");
-                        for (mode, label, tip) in [
-                            (UprightMode::Vertical, "Vertikale Kanten", vertical_tip.as_str()),
-                            (UprightMode::Full, "Vertikale und horizontale Kanten", "Auch die horizontale Perspektive wird korrigiert"),
-                        ] {
-                            if ui.button(label).on_hover_text(tip).clicked() {
-                                upright = Some(mode);
-                                ui.close();
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text("Stürzende Linien automatisch korrigieren, bei mehreren ausgewählten Bildern für alle");
-                });
-                ui.add_space(8.0);
+                // The vertical edges alone are the "A" in the header (as with every tool); here
+                // only what it doesn't do.
+                let label = format!("{}  Beide Richtungen", icon::MAGIC_WAND);
+                let tip = "Automatisch auch die horizontale Perspektive korrigieren, bei mehreren ausgewählten Bildern für alle; nur stürzende Linien: „A“ oben";
+                if ui.add_enabled(auto_free, egui::Button::new(label)).on_hover_text(tip).clicked() {
+                    upright = Some(UprightMode::Full);
+                }
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     let tip = "Linien an Kanten legen, die vertikal oder horizontal sein sollen";
                     let label = format!("{}  Linien ziehen", icon::LINE_SEGMENTS);
@@ -651,6 +640,9 @@ impl App {
                 *view = ColorView::Single;
             }
             ui.horizontal_wrapped(|ui| {
+                // All five in one row at the panel's usual width ("Eigene" wrapped alone).
+                ui.spacing_mut().button_padding.x = 5.0;
+                ui.spacing_mut().item_spacing.x = 3.0;
                 // Ranges of one's own only for the whole image.
                 for v in ColorView::ALL {
                     let zones = v == ColorView::Zones;
@@ -702,7 +694,7 @@ impl App {
                     let z = &mut zones[i];
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
-                        changed |= ui.checkbox(&mut z.enabled, format!("Bereich {}", i + 1)).changed();
+                        changed |= crate::widgets::checkbox(ui, &mut z.enabled, format!("Bereich {}", i + 1)).changed();
                         if ui.add(egui::Button::new(icon::EYEDROPPER).selected(picking_zone == Some(i))).on_hover_text("Farbe neu aufnehmen").clicked() {
                             toggle_pick = Some(ColorPick::Zone(i));
                         }
@@ -811,7 +803,7 @@ impl App {
         let mut reset_bw = false;
         widgets::tool_section(ui, sk_core::tools::Tool::BlackWhite, Some(&mut || reset_bw = true), |ui| {
             let bw = &mut adj.black_white;
-            changed |= ui.checkbox(&mut bw.enabled, "Schwarzweiß aktivieren").changed();
+            changed |= crate::widgets::checkbox(ui, &mut bw.enabled, "Schwarzweiß aktivieren").changed();
             ui.add_enabled_ui(bw.enabled, |ui| {
                 ui.label(RichText::new("Farbempfindlichkeit").strong());
                 for (i, (name, hue)) in HUE_BANDS.iter().enumerate() {
@@ -849,12 +841,12 @@ impl App {
             let mut opts = self.auto_options;
             ui.menu_button(icon::CARET_DOWN, |ui| {
                 ui.label(RichText::new("Automatisch anpassen setzt:").weak());
-                ui.checkbox(&mut opts.white_balance, "Weißabgleich");
-                ui.checkbox(&mut opts.exposure, "Belichtung");
-                ui.checkbox(&mut opts.tone, "Lichter, Tiefen, Weiß und Schwarz");
-                ui.checkbox(&mut opts.contrast, "Kontrast");
-                ui.checkbox(&mut opts.vibrance, "Dynamik");
-                ui.checkbox(&mut opts.levels, "Tonwerte (Schwarz- und Weißpunkt)");
+                crate::widgets::checkbox(ui, &mut opts.white_balance, "Weißabgleich");
+                crate::widgets::checkbox(ui, &mut opts.exposure, "Belichtung");
+                crate::widgets::checkbox(ui, &mut opts.tone, "Lichter, Tiefen, Weiß und Schwarz");
+                crate::widgets::checkbox(ui, &mut opts.contrast, "Kontrast");
+                crate::widgets::checkbox(ui, &mut opts.vibrance, "Dynamik");
+                crate::widgets::checkbox(ui, &mut opts.levels, "Tonwerte (Schwarz- und Weißpunkt)");
             })
             .response
             .on_hover_text("Was automatisch angepasst wird");

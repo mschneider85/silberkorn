@@ -47,7 +47,7 @@ pub fn tool_checkboxes(ui: &mut egui::Ui, adj: &Adjustments, chosen: &mut BTreeS
                 let edited = !t.is_default(adj);
                 let text = RichText::new(t.label()).color(if edited { theme::TEXT } else { theme::TEXT_FAINT });
                 let mut on = chosen.contains(&t);
-                let r = ui.checkbox(&mut on, text);
+                let r = crate::widgets::checkbox(ui, &mut on, text);
                 let r = match (edited, t.image_specific()) {
                     (_, true) => r.on_hover_text("Gehört zum Bildinhalt; nur dabei, wenn hier gewählt"),
                     (false, _) => r.on_hover_text("Nicht bearbeitet: setzt das Werkzeug beim Anwenden zurück"),

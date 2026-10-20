@@ -75,7 +75,7 @@ impl AiFeature {
     }
 
     pub(crate) fn job_label(self) -> String {
-        format!("KI-Modell laden: {}", self.label())
+        format!("KI-Modell für {} laden", self.label())
     }
 }
 
@@ -149,7 +149,7 @@ impl App {
             self.quiet_jobs.push(crate::gpu::GPU_JOB.to_string());
         }
         if FACES_AT_STARTUP.iter().any(|m| !models::available(m)) {
-            let label = "KI-Modell laden: Gesichtserkennung";
+            let label = "KI-Modell für Gesichtserkennung laden";
             self.start_job(label, Box::new(|_| {
                 for m in FACES_AT_STARTUP.iter().filter(|m| !models::available(m)) {
                     models::download(m, &|_| {})?;

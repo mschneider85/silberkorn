@@ -107,10 +107,10 @@ impl App {
     /// The switches in the library tab (and the file menu).
     pub(crate) fn hot_folder_ui(&mut self, ui: &mut egui::Ui) {
         let (mut on, mut open_new) = (self.hot_folder.on, self.hot_folder.open_new);
-        ui.checkbox(&mut on, "Ordner überwachen")
+        crate::widgets::checkbox(ui, &mut on, "Ordner überwachen")
             .on_hover_text("Neue Bilder, etwa aus der Kamerasoftware, erscheinen von selbst in der Übersicht");
         ui.add_enabled_ui(on, |ui| {
-            ui.indent("hot_folder", |ui| ui.checkbox(&mut open_new, "Neue Aufnahme gleich öffnen"));
+            ui.indent("hot_folder", |ui| crate::widgets::checkbox(ui, &mut open_new, "Neue Aufnahme gleich öffnen"));
         });
         if on && self.watched_folder().is_none() {
             ui.label(egui::RichText::new("Wirkt, sobald ein Ordner (ohne Unterordner) angezeigt wird").small().color(crate::theme::TEXT_FAINT));

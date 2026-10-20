@@ -199,10 +199,12 @@ impl App {
 /// "Übernehmen" and "Abbrechen" at the bottom of the image, for the tools that are confirmed
 /// (crop, keystone lines): Some(true) when applied, Some(false) when cancelled.
 fn apply_or_cancel(ui: &mut Ui, img_rect: Rect) -> Option<bool> {
-    let size = vec2(110.0, 28.0);
+    // Wide enough for the tick and "Übernehmen" in one line (it wrapped and grew taller).
+    let size = vec2(130.0, 28.0);
     let at = pos2(img_rect.center().x, img_rect.bottom().min(ui.clip_rect().bottom()) - 44.0);
-    let apply = ui.put(Rect::from_center_size(at - vec2(size.x / 2.0 + 4.0, 0.0), size), egui::Button::new(format!("{}  Übernehmen", crate::theme::icon::CHECK)));
-    let cancel = ui.put(Rect::from_center_size(at + vec2(size.x / 2.0 + 4.0, 0.0), size), egui::Button::new("Abbrechen"));
+    let button = |text: String| egui::Button::new(text).wrap_mode(egui::TextWrapMode::Extend);
+    let apply = ui.put(Rect::from_center_size(at - vec2(size.x / 2.0 + 4.0, 0.0), size), button(format!("{}  Übernehmen", crate::theme::icon::CHECK)));
+    let cancel = ui.put(Rect::from_center_size(at + vec2(size.x / 2.0 + 4.0, 0.0), size), button("Abbrechen".into()));
     if apply.on_hover_text(crate::commands::shortcut_of("finish-crop")).clicked() {
         Some(true)
     } else if cancel.on_hover_text("Esc").clicked() {
@@ -530,12 +532,11 @@ impl App {
         for c in [r.left_top(), r.right_top(), r.left_bottom(), r.right_bottom()] {
             painter.rect_filled(Rect::from_center_size(c, Vec2::splat(9.0)), 1.0, Color32::WHITE);
         }
-        let px = (crop.w * frame.x, crop.h * frame.y);
-        let full = self.current.as_ref().map_or(1.0, |c| c.meta.info.width.max(c.meta.info.height) as f32 / frame.x.max(frame.y));
+        // In percent of the frame, as in the panel.
         painter.text(
             r.center_bottom() + vec2(0.0, -8.0),
             egui::Align2::CENTER_BOTTOM,
-            format!("{:.0} × {:.0}", px.0 * full, px.1 * full),
+            format!("{:.0} % × {:.0} %", crop.w * 100.0, crop.h * 100.0),
             egui::FontId::proportional(12.0),
             Color32::WHITE,
         );

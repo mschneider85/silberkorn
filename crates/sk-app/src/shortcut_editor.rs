@@ -104,6 +104,13 @@ impl App {
                     groups.push(c.group);
                 }
             }
+            // One width for the names in every group, so that the keys line up in one column.
+            let font = egui::TextStyle::Body.resolve(ui.style());
+            let width = |t: String| ui.painter().layout_no_wrap(t, font.clone(), egui::Color32::WHITE).size().x;
+            let label_w = COMMANDS
+                .iter()
+                .map(|c| width(format!("{}  {}", c.icon, c.label.trim_end_matches(" …"))))
+                .fold(270.0, f32::max);
             let height = (ctx.content_rect().height() - 260.0).clamp(200.0, 640.0);
             egui::ScrollArea::vertical().auto_shrink([true, false]).max_height(height).min_scrolled_height(height).show(ui, |ui| {
                 for group in groups {
@@ -117,7 +124,7 @@ impl App {
                     }
                     ui.add_space(10.0);
                     ui.label(RichText::new(group).size(12.0).strong().color(theme::TEXT_DIM));
-                    egui::Grid::new(group).num_columns(2).spacing(vec2(16.0, 3.0)).min_col_width(270.0).show(ui, |ui| {
+                    egui::Grid::new(group).num_columns(2).spacing(vec2(16.0, 3.0)).min_col_width(label_w).show(ui, |ui| {
                         for c in cmds {
                             ui.label(format!("{}  {}", c.icon, c.label.trim_end_matches(" …")));
                             ui.horizontal(|ui| {
@@ -165,7 +172,7 @@ impl App {
                 if filter.is_empty() {
                     ui.add_space(14.0);
                     ui.label(RichText::new("Fest vergeben").size(12.0).strong().color(theme::TEXT_DIM));
-                    egui::Grid::new("fixed_keys").num_columns(2).spacing(vec2(16.0, 3.0)).min_col_width(270.0).show(ui, |ui| {
+                    egui::Grid::new("fixed_keys").num_columns(2).spacing(vec2(16.0, 3.0)).min_col_width(label_w).show(ui, |ui| {
                         for (key, what) in fixed_keys() {
                             ui.label(what);
                             ui.label(RichText::new(key).monospace().color(theme::TEXT_DIM));

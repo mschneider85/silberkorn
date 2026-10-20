@@ -183,7 +183,7 @@ pub fn brush_controls(ui: &mut Ui, b: &mut BrushSettings, tool: Option<LocalTool
     crate::widgets::unit_percent_row(ui, "Deckkraft", &mut b.opacity, 0.05..=1.0, d.opacity, Default::default());
     if flow_and_auto {
         crate::widgets::unit_percent_row(ui, "Fluss", &mut b.flow, 0.02..=1.0, d.flow, Default::default());
-        ui.checkbox(&mut b.auto_mask, "Kanten beachten")
+        crate::widgets::checkbox(ui, &mut b.auto_mask, "Kanten beachten")
             .on_hover_text("Wirkt nur, wo das Bild der Pinselmitte ähnelt – hält Kanten wie den Horizont sauber");
     }
     *b != before
@@ -983,7 +983,7 @@ impl App {
                     layer.mask = Mask::default();
                     *changed = true;
                 }
-                *changed |= ui.checkbox(&mut layer.mask.invert, "Invertieren").changed();
+                *changed |= crate::widgets::checkbox(ui, &mut layer.mask.invert, "Invertieren").changed();
                 if ui.selectable_label(*show_mask, crate::commands::hint("Maske anzeigen", "show-mask")).clicked() {
                     *show_mask = !*show_mask;
                     *changed = true;
@@ -1038,7 +1038,7 @@ impl App {
                 }
                 let m = &mut layer.mask;
                 let mut luma_on = m.luma_range.is_some();
-                if ui.checkbox(&mut luma_on, "Helligkeitsbereich").changed() {
+                if crate::widgets::checkbox(ui, &mut luma_on, "Helligkeitsbereich").changed() {
                     m.luma_range = luma_on.then(Default::default);
                     *changed = true;
                 }
@@ -1049,13 +1049,13 @@ impl App {
                     *changed |= crate::widgets::unit_percent_row(ui, "Von", &mut r.low, 0.0..=1.0, 0.0, luma);
                     *changed |= crate::widgets::unit_percent_row(ui, "Bis", &mut r.high, 0.0..=1.0, 1.0, luma);
                     *changed |= crate::widgets::unit_percent_row(ui, "Weichheit", &mut r.falloff, 0.0..=0.5, 0.1, Default::default());
-                    *changed |= ui.checkbox(&mut r.invert, "Bereich umkehren").changed();
+                    *changed |= crate::widgets::checkbox(ui, &mut r.invert, "Bereich umkehren").changed();
                 });
                 if luma_on {
                     m.luma_range = Some(r);
                 }
                 let mut color_on = m.color_range.is_some();
-                if ui.checkbox(&mut color_on, "Farbbereich").changed() {
+                if crate::widgets::checkbox(ui, &mut color_on, "Farbbereich").changed() {
                     m.color_range = color_on.then(Default::default);
                     *changed = true;
                 }

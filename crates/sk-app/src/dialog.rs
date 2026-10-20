@@ -126,9 +126,12 @@ pub fn card(ui: &mut Ui, title: &str, status: Option<(Tone, &str)>, body: impl F
 pub fn pill(ui: &mut Ui, tone: Tone, text: &str) {
     let c = tone.color();
     Frame::new().fill(c.gamma_multiply(0.14)).corner_radius(CornerRadius::same(10)).inner_margin(Margin::symmetric(8, 2)).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.x = 5.0;
-        ui.label(RichText::new("●").size(8.0).color(c));
-        ui.label(RichText::new(text).size(11.5).color(c.lerp_to_gamma(Color32::WHITE, 0.35)));
+        // Dot and text as one piece, so that the dot stays in front also in a right-to-left
+        // row. The dot is painted: egui's fonts have no filled circle (it showed as a box).
+        let galley = ui.painter().layout_no_wrap(text.to_string(), egui::FontId::proportional(11.5), c.lerp_to_gamma(Color32::WHITE, 0.35));
+        let (rect, _) = ui.allocate_exact_size(vec2(11.0 + galley.size().x, galley.size().y.max(16.0)), egui::Sense::hover());
+        ui.painter().circle_filled(egui::pos2(rect.left() + 3.0, rect.center().y), 3.0, c);
+        ui.painter().galley(egui::pos2(rect.left() + 11.0, rect.center().y - galley.size().y / 2.0), galley, Color32::WHITE);
     });
 }
 

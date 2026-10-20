@@ -289,7 +289,7 @@ fn tool_of(name: &'static str) -> Option<(Tab, Option<&'static str>)> {
         "Tonwerte" => (Tab::Exposure, Some("Tonwerte")),
         "Gradationskurve" => (Tab::Exposure, Some("Gradationskurve")),
         "Weißabgleich" => (Tab::Color, Some("Weißabgleich")),
-        "Basiskurve" => (Tab::Color, Some("Basismerkmale")),
+        "Basismerkmale" => (Tab::Color, Some(name)),
         "Sättigung" | "Dynamik" => (Tab::Color, Some("Farbe")),
         // These sections are named like the tool.
         "Farbeditor" | "Hauttöne" | "Farbbalance" | "Schwarzweiß" => (Tab::Color, Some(name)),

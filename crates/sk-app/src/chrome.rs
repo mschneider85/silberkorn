@@ -178,7 +178,7 @@ impl App {
         ui.separator();
         self.command_item(ui, "open-folder");
         let mut watch = self.hot_folder.on;
-        if ui.checkbox(&mut watch, "Ordner überwachen").on_hover_text("Neue Bilder, etwa aus der Kamerasoftware, erscheinen von selbst").changed() {
+        if crate::widgets::checkbox(ui, &mut watch, "Ordner überwachen").on_hover_text("Neue Bilder, etwa aus der Kamerasoftware, erscheinen von selbst").changed() {
             self.hot_folder.on = watch;
             self.save_settings();
         }

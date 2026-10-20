@@ -56,7 +56,7 @@ impl App {
             };
             dialog::card(ui, "Bildberechnung", Some((tone, pill)), |ui| {
                 dialog::note(ui, "Regler, Vorschau und Export rechnen auf der Grafikkarte, mit dem Prozessor als Rückfall.");
-                ui.checkbox(&mut develop, "Grafikkarte verwenden");
+                crate::widgets::checkbox(ui, &mut develop, "Grafikkarte verwenden");
                 ui.label(RichText::new(detail).size(12.0).color(theme::TEXT));
             });
 
@@ -93,7 +93,7 @@ impl App {
                         }
                     }
                 } else {
-                    ui.checkbox(&mut enabled, "Grafikkarte verwenden");
+                    crate::widgets::checkbox(ui, &mut enabled, "Grafikkarte verwenden");
                     let detail = match (runtime::gpu_problem(), runtime::last_device()) {
                         (_, _) if !enabled => "Alles rechnet auf dem Prozessor.".to_string(),
                         (Some(p), _) => format!("Grafikkarte nicht verwendbar: {p}. Es wird auf dem Prozessor gerechnet."),

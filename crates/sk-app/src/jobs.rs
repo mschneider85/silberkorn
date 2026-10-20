@@ -60,7 +60,7 @@ impl App {
     pub fn start_job(&mut self, label: &str, f: JobFn) {
         let (id, cancel) = self.workers.job(label.to_string(), f);
         self.jobs.push(RunningJob { id, label: label.to_string(), progress: 0.0, cancel });
-        self.status = format!("{label} …");
+        self.status = format!("{} …", crate::activity::running(label));
     }
 
     /// The cancel switch of a running job, by id or by label.

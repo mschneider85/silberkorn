@@ -517,6 +517,9 @@ impl App {
 
         self.session_sections(ui);
         let title = if self.session.is_some() { "Session-Katalog" } else { "Katalog" };
+        // Images of a folder only browsed are not in the catalog (their records have no id):
+        // "Alle Bilder (0)" beside them would look like an error.
+        let browsed = if self.session.is_none() && matches!(self.scope, Scope::Folder { .. }) { self.entries.iter().filter(|e| e.id == 0).count() } else { 0 };
         section(ui, title, None, |ui| {
             let mut entry = |ui: &mut Ui, scope: Scope, text: String| {
                 if ui.selectable_label(self.scope == scope, text).clicked() {
@@ -525,6 +528,14 @@ impl App {
             };
             entry(ui, Scope::All, format!("{}  Alle Bilder ({})", crate::theme::icon::STACK_SIMPLE, self.lists.total));
             entry(ui, Scope::LastImport, format!("{}  Letzter Import", crate::theme::icon::CLOCK_COUNTER_CLOCKWISE));
+            if browsed > 0 {
+                let text = match browsed {
+                    n if n == self.entries.len() => "Die Bilder dieses Ordners sind nur durchsucht, nicht im Katalog. „Importieren …“ nimmt sie auf.".to_string(),
+                    1 => "1 Bild dieses Ordners ist nur durchsucht, nicht im Katalog. „Importieren …“ nimmt es auf.".to_string(),
+                    n => format!("{n} Bilder dieses Ordners sind nur durchsucht, nicht im Katalog. „Importieren …“ nimmt sie auf."),
+                };
+                widgets::hint(ui, text);
+            }
             ui.horizontal(|ui| {
                 if self.session.is_none()
                     && ui.button(format!("{}  Importieren …", crate::theme::icon::DOWNLOAD_SIMPLE)).on_hover_text("Bilder dieses Ordners und seiner Unterordner in den Katalog aufnehmen").clicked()
@@ -709,9 +720,18 @@ impl App {
                     if ui.button(format!("{}  Durchsuchen …", crate::theme::icon::FOLDER_OPEN)).on_hover_text(crate::commands::hint("Ordner auswählen", "open-folder")).clicked() {
                         browse = true;
                     }
-                    let resp = ui.add(egui::TextEdit::singleline(&mut self.folder_input).desired_width(ui.available_width()));
-                    if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                        open_folder = Some(self.folder_input.clone().into());
+                    let id = egui::Id::new("folder_input");
+                    let width = ui.available_width();
+                    if ui.memory(|m| m.has_focus(id)) {
+                        let resp = ui.add(egui::TextEdit::singleline(&mut self.folder_input).id(id).desired_width(width));
+                        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            open_folder = Some(self.folder_input.clone().into());
+                        }
+                    } else {
+                        // Not being edited, the end of the path (the folder's name) is what
+                        // matters: shortened in front. A click edits the whole path.
+                        let mut shown = widgets::elide_start(ui, &self.folder_input, width - 12.0);
+                        ui.add(egui::TextEdit::singleline(&mut shown).id(id).desired_width(width)).on_hover_text(&self.folder_input);
                     }
                 });
             });

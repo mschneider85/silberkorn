@@ -1172,6 +1172,60 @@ pub fn tool_tile(ui: &mut Ui, ic: &str, label: &str, key: &str, selected: bool, 
 }
 
 /// Small faint explanatory text.
+/// A checkbox that reads as one: square with a visible edge, filled with the accent when on.
+/// egui's takes the look of the buttons (rounded, no edge), which on the dark panel made an
+/// empty box look like a radio button and a ticked one like a bare tick.
+pub struct Check<'a> {
+    inner: egui::Checkbox<'a>,
+    on: bool,
+}
+
+impl<'a> Check<'a> {
+    pub fn new(checked: &'a mut bool, text: impl egui::IntoAtoms<'a>) -> Self {
+        let on = *checked;
+        Self { inner: egui::Checkbox::new(checked, text), on }
+    }
+}
+
+impl egui::Widget for Check<'_> {
+    fn ui(self, ui: &mut Ui) -> Response {
+        ui.scope(|ui| {
+            let w = &mut ui.visuals_mut().widgets;
+            for (state, edge) in [(&mut w.inactive, 110), (&mut w.hovered, 150), (&mut w.active, 170)] {
+                state.corner_radius = egui::CornerRadius::same(3);
+                if self.on {
+                    state.bg_fill = theme::ACCENT;
+                    state.bg_stroke = Stroke::new(1.0, theme::ACCENT);
+                } else {
+                    state.bg_fill = theme::PANEL;
+                    state.bg_stroke = Stroke::new(1.0, Color32::from_gray(edge));
+                }
+            }
+            ui.add(self.inner)
+        })
+        .inner
+    }
+}
+
+/// `text` shortened in front ("…/Bilder/2026") to fit `width` in the body font.
+pub fn elide_start(ui: &Ui, text: &str, width: f32) -> String {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let fits = |t: &str| ui.painter().layout_no_wrap(t.to_string(), font.clone(), Color32::WHITE).size().x <= width;
+    if fits(text) {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    (1..chars.len())
+        .map(|i| format!("…{}", chars[i..].iter().collect::<String>()))
+        .find(|t| fits(t))
+        .unwrap_or_else(|| "…".into())
+}
+
+/// [`Check`], like `ui.checkbox`.
+pub fn checkbox<'a>(ui: &mut Ui, checked: &'a mut bool, text: impl egui::IntoAtoms<'a>) -> Response {
+    ui.add(Check::new(checked, text))
+}
+
 pub fn hint(ui: &mut Ui, text: impl Into<String>) -> Response {
     ui.label(RichText::new(text.into()).small().color(theme::TEXT_FAINT))
 }

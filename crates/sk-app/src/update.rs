@@ -223,7 +223,7 @@ impl App {
                 }
             }
             ui.add_space(4.0);
-            ui.checkbox(&mut auto, "Beim Start nach Updates suchen (höchstens einmal am Tag)");
+            crate::widgets::checkbox(ui, &mut auto, "Beim Start nach Updates suchen (höchstens einmal am Tag)");
             dialog::footer(ui, |ui| {
                 let release = self.updates.available.as_ref();
                 if self.updates.setup.is_some() {

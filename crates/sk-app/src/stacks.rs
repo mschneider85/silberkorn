@@ -172,7 +172,7 @@ impl App {
                     }
                 }
                 self.apply_stack_changes(changes);
-                Ok(if missing > 0 { format!("{} noch nicht analysiert (Bibliothek → Gesichter & Sichtung)", crate::widgets::image_count(missing)) } else { String::new() })
+                Ok(if missing > 0 { format!("{} noch nicht analysiert (Bibliothek {} Gesichter & Sichtung)", crate::widgets::image_count(missing), crate::theme::icon::ARROW_RIGHT) } else { String::new() })
             }
             StackAction::Toggle => {
                 self.toggle_stack_of_primary();

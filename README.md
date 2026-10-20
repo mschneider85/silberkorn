@@ -563,8 +563,8 @@ Bewertet wird jede Lösung über die echte Geometrie-Kette, einschließlich Obje
 
 - **A** im Kopf der Trapezkorrektur (Umschalt+A, Entwickeln → „Perspektive automatisch“): Drehung und
   stürzende Linien.
-- Im Menü **Automatisch** zusätzlich **Vertikale und horizontale Kanten:** auch die
-  horizontale Perspektive, etwa für eine schräg fotografierte Fassade.
+- Der Knopf **Beide Richtungen** darunter korrigiert zusätzlich die horizontale Perspektive,
+  etwa für eine schräg fotografierte Fassade.
 - **A** im Kopf von Drehen & Spiegeln: nur Horizont und Kanten waagerecht, die Perspektive bleibt unverändert.
 
 Alle drei wirken auf die ausgewählten Bilder.

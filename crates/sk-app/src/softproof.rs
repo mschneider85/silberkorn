@@ -100,7 +100,7 @@ impl App {
         let mut pick = false;
         section(ui, "Softproof", None, |ui| {
             let mut on = self.softproof.on;
-            let checkbox = egui::Checkbox::new(&mut on, crate::commands::hint("Softproof anzeigen", "softproof"));
+            let checkbox = crate::widgets::Check::new(&mut on, crate::commands::hint("Softproof anzeigen", "softproof"));
             if ui.add_enabled(self.current.is_some() || self.softproof.on, checkbox).changed() {
                 toggle = true;
             }
@@ -133,12 +133,12 @@ impl App {
                     ui.selectable_value(&mut s.intent, i, i.label());
                 }
             });
-            ui.checkbox(&mut s.black_point_compensation, "Tiefenkompensierung");
-            ui.checkbox(&mut s.simulate_paper, "Papier und Druckfarbe simulieren")
+            crate::widgets::checkbox(ui, &mut s.black_point_compensation, "Tiefenkompensierung");
+            crate::widgets::checkbox(ui, &mut s.simulate_paper, "Papier und Druckfarbe simulieren")
                 .on_hover_text("Zeigt den Papierton und das tatsächliche Schwarz des Drucks (absolut farbmetrisch)");
-            ui.checkbox(&mut s.gamut_warning, "Farbumfang-Warnung")
+            crate::widgets::checkbox(ui, &mut s.gamut_warning, "Farbumfang-Warnung")
                 .on_hover_text("Farben, die das Profil nicht wiedergeben kann, erscheinen magenta; in der Ausgabevorschau: was die Datei beschneidet");
-            ui.checkbox(&mut s.paper_margin, "Papierrand zeigen")
+            crate::widgets::checkbox(ui, &mut s.paper_margin, "Papierrand zeigen")
                 .on_hover_text("Papier um das Bild, im Papierton, wenn er simuliert wird");
             if let Some(e) = &self.softproof.error {
                 ui.label(RichText::new(e).small().color(crate::theme::DANGER));

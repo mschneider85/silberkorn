@@ -26,12 +26,12 @@ const GAP: f32 = 8.0;
 /// Where the catalog import puts the files.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Target {
-    /// "Aktueller Ort": the files stay where they are.
+    /// "Nicht kopieren": the files stay where they are.
     #[default]
     InPlace,
-    /// "Im Katalog": copied into the catalog's picture folder.
+    /// "In den Bilderordner kopieren": copied into the catalog's picture folder.
     Library,
-    /// "Ordner": copied into a folder of one's choice.
+    /// "In einen Ordner kopieren": a folder of one's choice.
     Folder,
 }
 
@@ -310,7 +310,7 @@ impl App {
         let session_copies = self.session.as_ref().is_some_and(|s| !source.starts_with(&s.root));
         let options = &mut self.import_options;
         let before = options.clone();
-        // Choosing "Ordner" without a folder yet asks for one.
+        // Choosing "In einen Ordner kopieren" without a folder yet asks for one.
         let ready = in_session || options.target != Target::Folder || options.folder.is_some();
         let (title, subtitle, place, badge) = if in_session {
             ("Bilder in die Session importieren", "Die gewählten Bilder werden in den Ordner „Aufnahmen“ kopiert", "in der Session", "In Session")
@@ -325,7 +325,7 @@ impl App {
                     if ui.button("Andere Quelle …").clicked() {
                         change_source = true;
                     }
-                    if ui.checkbox(&mut dialog.recursive, "Unterordner einbeziehen").changed() {
+                    if crate::widgets::checkbox(ui, &mut dialog.recursive, "Unterordner einbeziehen").changed() {
                         rescan = true;
                     }
                 });
@@ -356,11 +356,13 @@ impl App {
             dialog::note(ui, "Klick wählt ein Bild ab oder wieder an, Umschalt+Klick einen Bereich.");
             if !in_session {
                 ui.add_space(4.0);
-                dialog::card(ui, "Speichern in", None, |ui| {
+                // Each choice says what happens to the files ("Im Katalog" sounded like "only
+                // take in", which is what leaving them does).
+                dialog::card(ui, "Dateien", None, |ui| {
                     ui.horizontal(|ui| {
-                        ui.radio_value(&mut options.target, Target::InPlace, "Aktueller Ort").on_hover_text("Die Bilder bleiben, wo sie sind");
-                        ui.radio_value(&mut options.target, Target::Library, "Im Katalog").on_hover_text("In den Bilderordner des Katalogs kopieren");
-                        if ui.radio(options.target == Target::Folder, "Ordner").on_hover_text("In einen Ordner nach Wahl kopieren").clicked() {
+                        ui.radio_value(&mut options.target, Target::InPlace, "Nicht kopieren").on_hover_text("Die Bilder bleiben, wo sie sind");
+                        ui.radio_value(&mut options.target, Target::Library, "In den Bilderordner kopieren").on_hover_text("In den Bilderordner des Katalogs kopieren");
+                        if ui.radio(options.target == Target::Folder, "In einen Ordner kopieren").on_hover_text("In einen Ordner nach Wahl kopieren").clicked() {
                             options.target = Target::Folder;
                             if options.folder.is_none() {
                                 pick = Some(Target::Folder);
@@ -386,7 +388,7 @@ impl App {
                                 }
                             });
                             let example = date_folder(Some("2026:10:18")).display().to_string();
-                            ui.checkbox(&mut options.by_date, format!("Unterordner nach Aufnahmedatum ({example})"));
+                            crate::widgets::checkbox(ui, &mut options.by_date, format!("Unterordner nach Aufnahmedatum ({example})"));
                         }
                     }
                 });
@@ -413,7 +415,7 @@ impl App {
             match (target, picked) {
                 (Target::Folder, Some(dir)) => options.folder = Some(dir),
                 (_, Some(dir)) => options.library = Some(dir),
-                // Without a folder "Ordner" can't be used.
+                // Without a folder "In einen Ordner kopieren" can't be used.
                 (Target::Folder, None) if options.folder.is_none() => options.target = before.target,
                 _ => {}
             }
@@ -456,7 +458,7 @@ impl App {
 fn names_card(ui: &mut egui::Ui, dialog: &mut ImportDialog, options: &mut ImportOptions, copies: bool, session: &str) {
     dialog::card(ui, "Dateinamen", None, |ui| {
         ui.add_enabled_ui(copies, |ui| {
-            ui.checkbox(&mut options.rename, "Beim Kopieren umbenennen").on_disabled_hover_text("Nur Kopien werden umbenannt, die Originale bleiben, wie sie sind");
+            crate::widgets::checkbox(ui, &mut options.rename, "Beim Kopieren umbenennen").on_disabled_hover_text("Nur Kopien werden umbenannt, die Originale bleiben, wie sie sind");
             ui.add_enabled_ui(options.rename, |ui| {
                 ui.add(egui::TextEdit::singleline(&mut options.template).desired_width(340.0));
                 ui.horizontal_wrapped(|ui| {

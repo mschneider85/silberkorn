@@ -465,7 +465,7 @@ pub fn key_text((m, k): (Modifiers, Key)) -> String {
     }
     s += &match k {
         Key::Delete => "Entf".to_string(),
-        Key::Backspace => "Rück".to_string(),
+        Key::Backspace => "Rücktaste".to_string(),
         Key::OpenBracket => "[".to_string(),
         Key::CloseBracket => "]".to_string(),
         Key::ArrowLeft => icon::ARROW_LEFT.to_string(),

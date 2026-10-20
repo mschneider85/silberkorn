@@ -102,7 +102,7 @@ impl Tab {
             Tab::Effects => "Effekte",
             Tab::Layers => "Ebenen",
             Tab::Retouch => "Retusche",
-            Tab::Metadata => "Info",
+            Tab::Metadata => "Metadaten",
             Tab::Styles => "Stile",
             Tab::History => "Verlauf",
             Tab::Output => "Ausgabe",

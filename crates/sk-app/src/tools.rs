@@ -436,7 +436,7 @@ impl App {
         section(ui, "Ausgaberezepte", None, |ui| {
             for (i, r) in self.recipes.iter_mut().enumerate() {
                 ui.horizontal(|ui| {
-                    ui.checkbox(&mut r.enabled, "").on_hover_text("Beim Exportieren verwenden");
+                    crate::widgets::checkbox(ui, &mut r.enabled, "").on_hover_text("Beim Exportieren verwenden");
                     if ui.selectable_label(self.selected_recipe == i, &r.name).clicked() {
                         self.selected_recipe = i;
                     }
@@ -540,7 +540,7 @@ impl App {
         let mut reset_watermark = false;
         section(ui, "Wasserzeichen", Some(&mut || reset_watermark = true), |ui| {
             let wm = &mut r.watermark;
-            ui.checkbox(&mut wm.enabled, "Wasserzeichen einfügen");
+            crate::widgets::checkbox(ui, &mut wm.enabled, "Wasserzeichen einfügen");
             ui.add_enabled_ui(wm.enabled, |ui| {
                 ui.horizontal(|ui| {
                     ui.selectable_value(&mut wm.kind, WatermarkKind::Text, "Text");
@@ -587,7 +587,7 @@ impl App {
             r.watermark = Default::default();
         }
         section(ui, "Metadaten", None, |ui| {
-            ui.checkbox(&mut r.capture_metadata, "Aufnahmedaten übernehmen").on_hover_text("Kamera, Objektiv, Belichtung und Aufnahmedatum");
+            crate::widgets::checkbox(ui, &mut r.capture_metadata, "Aufnahmedaten übernehmen").on_hover_text("Kamera, Objektiv, Belichtung und Aufnahmedatum");
             widgets::field(ui, "Fotograf", |ui| ui.text_edit_singleline(&mut r.artist));
             widgets::field(ui, "Copyright", |ui| ui.text_edit_singleline(&mut r.copyright));
             let note = if r.format.has_metadata() {

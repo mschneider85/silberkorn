@@ -116,7 +116,7 @@ pub fn changes(before: &Adjustments, after: &Adjustments) -> Vec<(&'static str, 
         push(x != y, name, Some(y));
     }
     push(a.white_balance != b.white_balance, "Weißabgleich", None);
-    push(a.base_curve != b.base_curve, "Basiskurve", None);
+    push(a.base_curve != b.base_curve, "Basismerkmale", None);
     push(a.levels != b.levels, "Tonwerte", None);
     push(a.curves != b.curves, "Gradationskurve", None);
     push(a.rotation != b.rotation, "Drehen", None);

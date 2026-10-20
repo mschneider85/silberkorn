@@ -991,6 +991,28 @@ fn zoom_percent_can_be_set_and_keeps_the_middle() {
     assert!((pct - 100.0).abs() < 0.5, "{pct}");
 }
 
+/// The slider keeps two decimals of log2: its upper end and 100 % still come out exactly.
+#[test]
+fn zoom_slider_reaches_whole_percents() {
+    let round2 = |v: f32| (v * 100.0).round() / 100.0;
+    assert_eq!(crate::browser::slider_pct(round2(400f32.log2())), 400.0);
+    assert_eq!(crate::browser::slider_pct(round2(100f32.log2())), 100.0);
+}
+
+/// Before the full resolution is loaded, the full size comes from the file, not from the
+/// rounded preview (which gave 3999 for 4000 px).
+#[test]
+fn full_size_before_the_full_resolution_is_exact() {
+    let Some(mut f) = Fixture::new("full_size") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    // As long as it is not loaded (it may already be, depending on timing).
+    f.app.current.as_mut().unwrap().full = None;
+    let cur = f.app.current.as_ref().unwrap();
+    let info = (cur.meta.info.width as f32, cur.meta.info.height as f32);
+    let (w, h) = f.app.full_output_size().unwrap();
+    assert_eq!((w.max(h), w.min(h)), (info.0.max(info.1), info.0.min(info.1)));
+}
+
 #[test]
 fn navigator_moves_the_zoomed_view() {
     let Some(mut f) = Fixture::new("navigator") else { return };
@@ -2018,7 +2040,7 @@ fn hdr_merge_job_creates_and_selects_dng() {
     let files = dialog.files.clone();
     let opts = f.app.hdr_options;
     f.app.start_job("HDR zusammenfügen", Box::new(move |p| Ok(vec![sk_core::hdr::merge_files(&files, &opts, p)?])));
-    assert!(f.app.activities().iter().any(|a| a.label == "HDR zusammenfügen" && a.progress.is_some() && !a.in_viewer));
+    assert!(f.app.activities().iter().any(|a| a.label == "Füge HDR zusammen" && a.progress.is_some() && !a.in_viewer));
     f.pump("HDR fertig", |a| a.jobs.is_empty());
     let dng = f.dir.join("photos/_DSC0009-HDR.dng");
     assert!(dng.exists(), "{}", f.app.status);

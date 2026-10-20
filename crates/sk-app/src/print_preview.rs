@@ -130,8 +130,8 @@ impl App {
             (false, _) => "",
             (true, true) => "  ·  Druckgröße",
             (true, false) => {
-                hints.push("Druckgröße ≈: Bildschirm nicht kalibriert, die Größe ist geschätzt (Tab „Ausgabe“ → Bildschirm kalibrieren)".to_string());
-                "  ·  Druckgröße ≈"
+                hints.push(format!("Bildschirm nicht kalibriert, die Druckgröße ist geschätzt (Tab „Ausgabe“ {} Bildschirm kalibrieren)", theme::icon::ARROW_RIGHT));
+                "  ·  Druckgröße geschätzt"
             }
         };
         let color = if l.ppi < PPI_POOR {
@@ -166,7 +166,7 @@ impl App {
         let (mut toggle, mut zoom, mut calibrate) = (false, false, false);
         section(ui, "Druckvorschau", None, |ui| {
             let mut on = self.print.on;
-            let checkbox = egui::Checkbox::new(&mut on, crate::commands::hint("Druckvorschau in Druckgröße", "print-preview"));
+            let checkbox = crate::widgets::Check::new(&mut on, crate::commands::hint("Druckvorschau in Druckgröße", "print-preview"));
             if ui.add_enabled(self.current.is_some() || self.print.on, checkbox).changed() {
                 toggle = true;
             }

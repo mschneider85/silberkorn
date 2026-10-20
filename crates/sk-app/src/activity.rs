@@ -9,6 +9,18 @@ use egui::{Color32, Rect, RichText, Ui, pos2, vec2};
 
 use crate::app::App;
 
+/// A job's name as it runs, verb first like the other activities ("Update laden" becomes
+/// "Lade Update"). The name itself stays for the messages after it ("Update laden fehlgeschlagen").
+pub(crate) fn running(label: &str) -> String {
+    if let Some(what) = label.strip_suffix(" laden") {
+        format!("Lade {what}")
+    } else if let Some(what) = label.strip_suffix(" zusammenfügen") {
+        format!("Füge {what} zusammen")
+    } else {
+        label.to_string()
+    }
+}
+
 /// A running activity.
 pub struct Activity {
     pub label: String,
@@ -39,7 +51,7 @@ impl App {
             v.push(Activity { label: "Suche Staub und Flecken".into(), progress: None, in_viewer: false, cancel: self.spot_cancel.clone() });
         }
         for j in &self.jobs {
-            v.push(Activity { label: j.label.clone(), progress: Some(j.progress), in_viewer: false, cancel: Some(j.cancel.clone()) });
+            v.push(Activity { label: running(&j.label), progress: Some(j.progress), in_viewer: false, cancel: Some(j.cancel.clone()) });
         }
         if let Some((done, total)) = self.export_progress {
             v.push(Activity {
@@ -61,7 +73,7 @@ impl App {
         v
     }
 
-    /// A cancel switch was set (✕ in the status bar or a panel): the work ends here; what was
+    /// A cancel switch was set (X in the status bar or a panel): the work ends here; what was
     /// finished stays.
     pub(crate) fn poll_cancelled(&mut self) {
         let set = |c: &Option<Arc<AtomicBool>>| c.as_ref().is_some_and(|c| c.load(Ordering::Relaxed));
@@ -89,7 +101,7 @@ impl App {
     }
 
     /// Status bar: one activity with a spinner (and its progress), the others in the tooltip.
-    /// One that can be cancelled comes first, so that its ✕ is always within reach.
+    /// One that can be cancelled comes first, so that its X is always within reach.
     pub(crate) fn activity_status(&self, ui: &mut Ui) {
         let all = self.activities();
         let Some(first) = all.iter().find(|a| a.cancel.is_some()).or(all.first()) else { return };
@@ -98,7 +110,7 @@ impl App {
             .horizontal(|ui| {
                 if let Some(cancel) = &first.cancel {
                     let stopping = cancel.load(Ordering::Relaxed);
-                    let b = ui.add_enabled(!stopping, egui::Button::new(RichText::new("✕").size(11.0)).small().frame(false));
+                    let b = ui.add_enabled(!stopping, egui::Button::new(RichText::new(crate::theme::icon::X).size(11.0)).small().frame(false));
                     if b.on_hover_text(if stopping { "Wird abgebrochen …" } else { "Abbrechen" }).clicked() {
                         cancel.store(true, Ordering::Relaxed);
                     }

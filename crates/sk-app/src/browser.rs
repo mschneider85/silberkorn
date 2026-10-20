@@ -32,6 +32,14 @@ pub const SPEED_KEYS: [(egui::Key, SpeedParam); 6] = [
     (egui::Key::T, SpeedParam::Temperature),
 ];
 
+/// The zoom of the slider's position (`log`: log2 of the percent), in whole percent. The slider
+/// keeps two decimals of the logarithm (steps of 0.35 %), which alone would end at 399 % and
+/// miss 100 %: values that close to its end or to 100 % are those.
+pub(crate) fn slider_pct(log: f32) -> f32 {
+    let pct = log.exp2();
+    [100.0, ZOOM_SLIDER_MAX].into_iter().find(|t| (pct / t - 1.0).abs() < 0.005).unwrap_or(pct.round().min(ZOOM_SLIDER_MAX))
+}
+
 /// "850 KB", "3.4 MB"
 fn file_size(bytes: usize) -> String {
     if bytes < 1024 * 1024 {
@@ -579,7 +587,7 @@ impl App {
             let range = fit.log2()..=ZOOM_SLIDER_MAX.log2();
             if widgets::compact_slider(ui, "Zoom", &mut log, range, 100f32.log2().clamp(fit.log2(), ZOOM_SLIDER_MAX.log2()), slider_w) {
                 // At its left end: fitted again (the view follows the window size then).
-                wanted = Some(if log <= fit.log2() + 0.01 { 0.0 } else { log.exp2() });
+                wanted = Some(if log <= fit.log2() + 0.01 { 0.0 } else { slider_pct(log) });
             }
             let mut typed = pct;
             let drag = egui::DragValue::new(&mut typed).range(lo..=hi).suffix(" %").fixed_decimals(0).speed(0.5).update_while_editing(false);
@@ -699,15 +707,23 @@ impl App {
     }
 
     pub(crate) fn full_output_width(&self) -> Option<f32> {
+        self.full_output_size().map(|(w, _)| w)
+    }
+
+    /// Size of the output at full resolution (uncropped while the crop tool is open).
+    pub(crate) fn full_output_size(&self) -> Option<(f32, f32)> {
         let cur = self.current.as_ref()?;
         let (w, h) = match &cur.full {
             Some(f) => (f.width, f.height),
+            // The file's size, oriented like the preview. Scaling up the preview would carry its
+            // rounding: 1365 of 2048 px make 3999 instead of 4000.
             None => {
-                let k = cur.meta.info.width.max(cur.meta.info.height) as f32 / cur.preview.width.max(cur.preview.height) as f32;
-                ((cur.preview.width as f32 * k) as usize, (cur.preview.height as f32 * k) as usize)
+                let (long, short) = (cur.meta.info.width.max(cur.meta.info.height), cur.meta.info.width.min(cur.meta.info.height));
+                if cur.preview.width >= cur.preview.height { (long, short) } else { (short, long) }
             }
         };
-        Some(sk_core::pipeline::geomap(&cur.meta, &cur.adjustments, self.crop_tool.is_some(), w, h).out_w as f32)
+        let g = sk_core::pipeline::geomap(&cur.meta, &cur.adjustments, self.crop_tool.is_some(), w, h);
+        Some((g.out_w as f32, g.out_h as f32))
     }
 
     /// Zoom to 100 % (one full-resolution pixel per physical screen pixel) or back to fit.

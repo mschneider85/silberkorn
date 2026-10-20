@@ -91,7 +91,7 @@ impl App {
                     ));
                     ui.add_space(6.0);
                     dialog::card(ui, "Optionen", None, |ui| {
-                        ui.checkbox(&mut self.hdr_options.align, "Automatisch ausrichten (aus der Hand fotografiert)");
+                        crate::widgets::checkbox(ui, &mut self.hdr_options.align, "Automatisch ausrichten (aus der Hand fotografiert)");
                         egui::ComboBox::from_label("Geister entfernen").selected_text(self.hdr_options.deghost.label()).show_ui(ui, |ui| {
                             for d in Deghost::ALL {
                                 ui.selectable_value(&mut self.hdr_options.deghost, d, d.label());
@@ -107,14 +107,15 @@ impl App {
                     ));
                     ui.add_space(6.0);
                     dialog::card(ui, "Optionen", None, |ui| {
-                        egui::ComboBox::from_label("Projektion").selected_text(self.pano_options.projection.label()).show_ui(ui, |ui| {
+                        // Label in front, as everywhere.
+                        crate::widgets::combo_field(ui, "Projektion", self.pano_options.projection.label(), |ui| {
                             for p in Projection::ALL {
                                 ui.selectable_value(&mut self.pano_options.projection, p, p.label());
                             }
                         });
                         dialog::note(ui, "Sphärisch für weite und mehrreihige Panoramen, zylindrisch für eine Reihe, perspektivisch für Architektur (gerade Linien, bis etwa 120°).");
-                        ui.checkbox(&mut self.pano_options.auto_crop, "Rand automatisch beschneiden");
-                        ui.checkbox(&mut self.pano_options.lens_correction, "Objektivkorrektur der Einzelbilder anwenden");
+                        crate::widgets::checkbox(ui, &mut self.pano_options.auto_crop, "Rand automatisch beschneiden");
+                        crate::widgets::checkbox(ui, &mut self.pano_options.lens_correction, "Objektivkorrektur der Einzelbilder anwenden");
                     });
                 }
                 MergeKind::FocusStack => {
