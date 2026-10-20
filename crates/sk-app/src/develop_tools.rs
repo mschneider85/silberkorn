@@ -303,7 +303,7 @@ impl App {
                 let camera = ui
                     .add_enabled(camera_source.is_some(), egui::Button::selectable(current == "Kamera", "Kamera"))
                     .on_hover_text(match camera_source {
-                        Some(source) => format!("Verzeichnung, Farbsäume und Randabschattung, wie die Kamera sie für dieses Objektiv gespeichert hat ({source})"),
+                        Some(source) => format!("Verzeichnung, chromatische Aberration und Randabschattung, wie die Kamera sie für dieses Objektiv gespeichert hat ({source})"),
                         None => String::new(),
                     })
                     .on_disabled_hover_text("Die RAW-Datei enthält keine Objektivkorrektur");
@@ -338,14 +338,16 @@ impl App {
             changed |= slider_row(ui, "Verzeichnung", &mut l.distortion, -100.0..=100.0, 0.0, 0);
             changed |= crate::widgets::slider_row_with(ui, "Fisheye", &mut l.fisheye, 0.0..=220.0, 0.0, 0, crate::widgets::SliderOpts { suffix: "°", ..Default::default() });
             crate::widgets::hint(ui, "Fisheye: Bildwinkel über die Diagonale (meist 180°), rechnet in ein normales Weitwinkelbild um");
-            changed |= slider_row(ui, "Farbsaum Rot/Cyan", &mut l.ca_red, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Farbsaum Blau/Gelb", &mut l.ca_blue, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Farbsaum Lila", &mut l.defringe_purple, 0.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Farbsaum Grün", &mut l.defringe_green, 0.0..=100.0, 0.0, 0);
-            ui.label(
-                RichText::new("Farbsaum: entfärbt lila und grüne Säume an kontrastreichen Kanten, auch in der Bildmitte").small().color(crate::theme::TEXT_FAINT),
-            );
             changed |= slider_row(ui, "Randabschattung", &mut l.vignetting, -100.0..=100.0, 0.0, 0);
+            // Two different faults, each under the name photographers know it by.
+            crate::widgets::subheading(ui, "Chromatische Aberration");
+            changed |= slider_row(ui, "Rot/Cyan", &mut l.ca_red, -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Blau/Gelb", &mut l.ca_blue, -100.0..=100.0, 0.0, 0);
+            crate::widgets::hint(ui, "Gleicht Rot- und Blaukanal zum Bildrand hin an; das Kameraprofil korrigiert sie meist schon");
+            crate::widgets::subheading(ui, "Farbsäume");
+            changed |= slider_row(ui, "Lila", &mut l.defringe_purple, 0.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Grün", &mut l.defringe_green, 0.0..=100.0, 0.0, 0);
+            crate::widgets::hint(ui, "Entfärbt lila und grüne Säume an kontrastreichen Kanten, auch in der Bildmitte");
         });
         if reset_lens {
             adj.lens = LensCorrection::default();
