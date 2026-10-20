@@ -280,7 +280,7 @@ impl App {
                     let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                     if scroll != 0.0 {
                         let q = point_at(cursor, self.compare_zoom);
-                        let zoom = (self.compare_zoom * (1.0 + scroll * 0.0015)).clamp(1.0, 16.0);
+                        let zoom = (self.compare_zoom * crate::widgets::wheel_zoom(scroll)).clamp(1.0, 16.0);
                         self.compare_center = (q - (cursor - area.center()) / (size * fit * zoom)).clamp(Vec2::ZERO, Vec2::splat(1.0));
                         self.compare_zoom = zoom;
                     }

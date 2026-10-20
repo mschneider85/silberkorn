@@ -176,7 +176,7 @@ impl App {
         if response.hovered() && speed.is_none() && !zoom_blocked {
             let scroll = ui.input(|i| i.smooth_scroll_delta.y);
             if scroll != 0.0 {
-                let new_scale = (scale * (1.0 + scroll * 0.0015)).clamp(fit.min(0.05), 16.0);
+                let new_scale = (scale * widgets::wheel_zoom(scroll)).clamp(fit.min(0.05), 16.0);
                 if let Some(cursor) = response.hover_pos() {
                     // Over the before half: the same spot of the image.
                     let cursor = side.filter(|(l, _)| l.contains(cursor)).map_or(cursor, |(l, r)| cursor + (r.center() - l.center()));

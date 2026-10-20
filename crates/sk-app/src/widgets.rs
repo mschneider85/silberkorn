@@ -466,6 +466,12 @@ pub const RAIL_TONE: &[Color32] = &[Color32::from_rgb(40, 40, 40), Color32::from
 /// Rail colors for a luminance from black to white.
 pub const RAIL_LUMA: &[Color32] = &[Color32::from_rgb(0, 0, 0), Color32::from_rgb(255, 255, 255)];
 
+/// Zoom factor for a scroll of `scroll` points: a wheel notch (50 points) zooms by about 1.19,
+/// four of them double the size.
+pub fn wheel_zoom(scroll: f32) -> f32 {
+    (scroll / 200.0).exp2()
+}
+
 /// A hue (Oklab degrees, as the color tools take them) at the given saturation and value, for
 /// display: HSV of the shown sRGB values. (egui's `Hsva` works on linear values, which turned a
 /// red of saturation 0.75 into pink.)
