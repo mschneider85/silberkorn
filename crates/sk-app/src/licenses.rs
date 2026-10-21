@@ -25,7 +25,6 @@ fn sections() -> [(&'static str, Vec<Entry>); 3] {
                 ("MobileSAM (Chaoning Zhang et al.), Segment Anything (Meta)", "Objekt auswählen", models::OBJECT_ENCODER.license),
                 ("MI-GAN (Picsart)", "Entfernen", models::INPAINT.license),
                 ("Depth Anything V2 Small (Lihe Yang et al.)", "Tiefenkarte", models::DEPTH.license),
-                ("NAFNet (Liangyu Chen et al., Megvii), Export: Qualcomm AI Hub", "Verwacklung entfernen", models::DEBLUR.license),
                 ("YuNet (OpenCV Zoo)", "Gesichtserkennung", models::FACE_DETECT.license),
                 ("SFace (OpenCV Zoo)", "Gesichtsvergleich", models::FACE_EMBED.license),
                 ("open-closed-eye-0001 (Intel OpenVINO)", "Augen offen/geschlossen", models::EYE_STATE.license),
@@ -34,6 +33,7 @@ fn sections() -> [(&'static str, Vec<Entry>); 3] {
         (
             "Daten und Bibliotheken",
             vec![
+                ("rawler (dnglab), Quelltext: github.com/dnglab/dnglab", "RAW-Dateien lesen", "LGPL-2.1"),
                 ("lensfun", "Objektivprofile", "CC BY-SA 3.0"),
                 ("ONNX Runtime, DirectML (Microsoft)", "KI-Beschleunigung unter Windows", "MIT"),
             ],

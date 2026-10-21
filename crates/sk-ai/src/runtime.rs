@@ -38,6 +38,24 @@ pub fn gpu_enabled() -> bool {
     GPU_ENABLED.load(Ordering::Relaxed)
 }
 
+/// Windows reset the graphics card while a network ran on it (a command took too long, e.g. for
+/// lack of graphics memory): until the program is started again, networks run on the processor.
+static GPU_RESET: AtomicBool = AtomicBool::new(false);
+
+/// Whether an error of ONNX Runtime is the graphics card being reset or removed
+/// (DXGI_ERROR_DEVICE_REMOVED, _HUNG, _RESET).
+fn is_device_reset(e: &str) -> bool {
+    ["887A0005", "887A0006", "887A0007"].iter().any(|c| e.to_ascii_uppercase().contains(c))
+}
+
+fn note_device_reset(e: &str) {
+    if is_device_reset(e) && !GPU_RESET.swap(true, Ordering::Relaxed) {
+        log::error!("Die Grafikkarte wurde zurückgesetzt: KI rechnet bis zum Neustart auf dem Prozessor");
+        set_gpu_error(Some("Grafikkarte wurde zurückgesetzt, KI bis zum Neustart auf dem Prozessor".into()));
+        CONFIG.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// ONNX Runtime with DirectML, and DirectML itself, from Microsoft's NuGet packages: (package
 /// URL, file inside, file name on disk, SHA-256 of the file). The libraries are loaded into the
 /// process, so only exactly these files are accepted.
@@ -297,11 +315,12 @@ pub struct Net {
 
 /// An ONNX Runtime session: with DirectML on the graphics card (Windows), else on the processor.
 /// Returns the session, whether it runs on the graphics card, and why DirectML could not be used.
-pub(crate) fn ort_session(path: &Path) -> Result<(ort::session::Session, bool, Option<String>)> {
+/// `gpu` false: on the processor only.
+pub(crate) fn ort_session(path: &Path, gpu: bool) -> Result<(ort::session::Session, bool, Option<String>)> {
     ort_ready().as_ref().map_err(|e| anyhow!("{e}"))?;
     let new = || ort::session::Session::builder().map_err(|e| anyhow!("{e}"));
     let mut dml_error = None;
-    if cfg!(windows) {
+    if cfg!(windows) && gpu {
         // DirectML needs these off; prefer the dedicated card of laptops with two.
         let dml = new()?
             .with_memory_pattern(false)
@@ -414,15 +433,26 @@ impl Net {
     /// [`Self::load`]; with tract only the outputs `keep` (by index) are computed, for networks
     /// whose other outputs tract cannot handle. ONNX Runtime returns all of them.
     pub fn load_outputs(path: &Path, inputs: &[Input], keep: Option<&[usize]>) -> Result<Net> {
+        Self::load_with(path, inputs, keep, true)
+    }
+
+    /// [`Self::load`], but never on the graphics card: for networks too large for the graphics
+    /// memory of smaller cards (Windows resets a card that takes too long for one command).
+    pub fn load_processor(path: &Path, inputs: &[Input]) -> Result<Net> {
+        Self::load_with(path, inputs, None, false)
+    }
+
+    fn load_with(path: &Path, inputs: &[Input], keep: Option<&[usize]>, gpu: bool) -> Result<Net> {
+        let gpu = gpu && !GPU_RESET.load(Ordering::Relaxed);
         let net = |backend| Net { backend, inputs: inputs.to_vec(), path: path.to_path_buf(), keep: keep.map(<[usize]>::to_vec) };
         // ONNX Runtime and DirectML in the separate process if there is one (a crash in them or
         // in the graphics driver then ends only that), else in this one.
         let ort = if !gpu_enabled() || !gpu_installed() {
             None
         } else if crate::worker::configured() {
-            crate::worker::usable().then(|| crate::worker::load(path).map(|(session, gpu, dml)| (Backend::Remote { session, gpu, fallback: Mutex::default() }, gpu, dml)))
+            crate::worker::usable().then(|| crate::worker::load(path, gpu).map(|(session, gpu, dml)| (Backend::Remote { session, gpu, fallback: Mutex::default() }, gpu, dml)))
         } else {
-            Some(ort_session(path).map(|(session, gpu, dml)| (Backend::Ort { session: Mutex::new(session), gpu }, gpu, dml)))
+            Some(ort_session(path, gpu).map(|(session, gpu, dml)| (Backend::Ort { session: Mutex::new(session), gpu }, gpu, dml)))
         };
         match ort {
             Some(Ok((backend, gpu, dml_error))) => {
@@ -476,7 +506,7 @@ impl Net {
         anyhow::ensure!(data.len() == self.inputs.len(), "Falsche Anzahl Eingaben");
         match &self.backend {
             Backend::Cpu(plan) => tract_run(plan, &self.inputs, data),
-            Backend::Ort { session, .. } => ort_run(&mut session.lock().unwrap_or_else(|e| e.into_inner()), tensors(&self.inputs, data)?),
+            Backend::Ort { session, .. } => ort_run(&mut session.lock().unwrap_or_else(|e| e.into_inner()), tensors(&self.inputs, data)?).inspect_err(|e| note_device_reset(&format!("{e:#}"))),
             Backend::Remote { session, fallback, .. } => {
                 let mut fallback = fallback.lock().unwrap_or_else(|e| e.into_inner());
                 let plan = match &*fallback {
@@ -484,6 +514,7 @@ impl Net {
                     None => match crate::worker::run(session, tensors(&self.inputs, data)?) {
                         Ok(out) => return Ok(out),
                         Err(e) => {
+                            note_device_reset(&format!("{e:#}"));
                             log::warn!("{}: {e:#}, rechne mit tract weiter", self.path.display());
                             fallback.insert(tract_plan_any(&self.path, &self.inputs, self.keep.as_deref())?).clone()
                         }
@@ -518,6 +549,14 @@ mod tests {
         let dll = zip_entry(&url, inner, GPU_FILE_LIMIT, &|_| {}).unwrap();
         assert!(dll.len() > 5_000_000 && dll.starts_with(b"MZ"), "{}", dll.len());
         assert_eq!(crate::models::sha256(&dll), sha256);
+    }
+
+    /// The message of the reset that happened on a GTX 1650 Ti, and others that are none.
+    #[test]
+    fn recognizes_a_reset_graphics_card() {
+        assert!(is_device_reset("Exception(2) tid(716c) 887A0006 Die GPU antwortet auf keine weiteren Befehle mehr."));
+        assert!(is_device_reset("hr 0x887a0005"));
+        assert!(!is_device_reset("Non-zero status code returned while running Pad node"));
     }
 
     #[test]

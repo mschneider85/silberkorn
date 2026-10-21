@@ -482,8 +482,6 @@ pub struct Processor {
     opts: RenderOptions,
     /// Image and amount (0..1) of AI denoising (see `ai_denoise`).
     ai_denoise: Option<(std::path::PathBuf, f32)>,
-    /// Image and amount (0..1) of the removed camera shake (see `ai_deblur`).
-    ai_deblur: Option<(std::path::PathBuf, f32)>,
     /// Image and settings of the lens blur (see `lens_blur`).
     lens_blur: Option<(std::path::PathBuf, crate::params::LensBlur)>,
     /// The depth map while the atmosphere is on: its color comes from the far part (see `veil`).
@@ -569,7 +567,6 @@ impl Processor {
             hdr: meta.hdr,
             opts,
             ai_denoise: (adj.detail.ai_denoise > 0.0 && !meta.hdr).then(|| (meta.path.clone(), adj.detail.ai_denoise / 100.0)),
-            ai_deblur: (adj.detail.ai_deblur > 0.0 && !meta.hdr).then(|| (meta.path.clone(), adj.detail.ai_deblur / 100.0)),
             lens_blur: (!adj.lens_blur.is_off()).then(|| (meta.path.clone(), adj.lens_blur)),
             haze_map,
             adj: adj.clone(),
@@ -879,7 +876,7 @@ impl Processor {
     /// Key of what depends on `src` and the settings in `relevant` for `region`.
     fn source_key(src: &LinearImage, region: Region, relevant: &serde_json::Value) -> u64 {
         // The address alone could be that of a freed image whose memory went to the next one.
-        let key = format!("{:p}|{}x{}|{}|{region:?}|{relevant}", src.data.as_ptr(), src.width, src.height, crate::ai_product::fingerprint(src));
+        let key = format!("{:p}|{}x{}|{}|{region:?}|{relevant}", src.data.as_ptr(), src.width, src.height, crate::ai_denoise::fingerprint(src));
         crate::cache::fnv1a(key.as_bytes())
     }
 
@@ -1310,15 +1307,13 @@ impl Processor {
         w
     }
 
-    /// The source with the AI denoised data blended in, the camera shake removed and the lens
-    /// blur, as far as wanted and available (`None`: the source as it is).
+    /// The source with the AI denoised data blended in and the lens blur, as far as wanted and
+    /// available (`None`: the source as it is).
     fn prepared(&self, src: &LinearImage) -> Option<Arc<LinearImage>> {
         let denoised = self.ai_denoise.as_ref().and_then(|(path, amount)| crate::ai_denoise::blended(path, src, *amount));
         let base = denoised.as_deref().unwrap_or(src);
-        let sharp = self.ai_deblur.as_ref().and_then(|(path, amount)| crate::ai_deblur::blended(path, base, *amount)).or(denoised);
-        let base = sharp.as_deref().unwrap_or(src);
         let blurred = self.lens_blur.as_ref().and_then(|(path, p)| crate::lens_blur::blurred(path, base, p, !self.hdr));
-        blurred.or(sharp)
+        blurred.or(denoised)
     }
 
     /// Full processing into an output color space (encoded 0..1 floats), for export.

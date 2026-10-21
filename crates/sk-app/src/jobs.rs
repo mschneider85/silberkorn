@@ -75,7 +75,7 @@ impl App {
     }
 
     pub(crate) fn job_done(&mut self, id: u64, label: String, result: Result<Vec<PathBuf>, String>) {
-        if self.ai_download_done(id, &label, &result) || self.update_job_done(id, &label, &result) || self.product_job_done(id, &result) || self.depth_job_done(id, &result) {
+        if self.ai_download_done(id, &label, &result) || self.update_job_done(id, &label, &result) || self.denoise_job_done(id, &result) || self.depth_job_done(id, &result) {
             return;
         }
         self.jobs.retain(|j| j.id != id);

@@ -26,7 +26,8 @@ pub struct SubjectNet {
 impl SubjectNet {
     pub fn load() -> Result<Self> {
         anyhow::ensure!(available(), "{} ist nicht geladen", SUBJECT_EDGES.label);
-        Ok(Self { net: Net::load(&models::path(&SUBJECT_EDGES), &[Input::F32([1, 3, NET, NET])])? })
+        // On the processor: on a card with 4 GB it took minutes, and Windows reset the card.
+        Ok(Self { net: Net::load_processor(&models::path(&SUBJECT_EDGES), &[Input::F32([1, 3, NET, NET])])? })
     }
 
     /// The subject's mask, the image's aspect at most [`EDGE`] pixels long.

@@ -9,7 +9,6 @@
 
 pub mod denoise;
 pub mod auto;
-pub mod deblur;
 pub mod depth;
 pub mod faces;
 pub mod inpaint;

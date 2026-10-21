@@ -242,9 +242,6 @@ pub fn export_many_with(
         if adj.detail.ai_denoise > 0.0 && !meta.hdr {
             crate::ai_denoise::ensure(image, &|_| {}).context("KI-Entrauschen")?;
         }
-        if adj.detail.ai_deblur > 0.0 && !meta.hdr {
-            crate::ai_deblur::ensure(image, &|_| {}).context("Verwacklung entfernen")?;
-        }
         // Nor without the lens blur, relight or atmosphere.
         if adj.needs_depth() {
             crate::depth::ensure(image, &|_| {}).context("Tiefenkarte")?;

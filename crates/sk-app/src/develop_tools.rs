@@ -544,12 +544,21 @@ impl App {
             return;
         }
         let mut changed = self.noise_section(ui);
-        changed |= self.sharpen_section(ui);
         let Some(cur) = self.current.as_mut() else { return };
         let mut t = Target::new(&cur.adjustments, self.active_layer);
         let d = &mut cur.adjustments.detail;
+        let defaults = Detail::default();
 
-        let (mut r_clarity, mut r_haze) = (false, false);
+        let (mut r_sharp, mut r_clarity, mut r_haze) = (false, false, false);
+        widgets::tool_section(ui, sk_core::tools::Tool::Sharpening, Some(&mut || r_sharp = true), |ui| {
+            changed |= crate::widgets::percent_row(ui, "Stärke", &mut d.sharpen_amount, 0.0..=500.0, defaults.sharpen_amount);
+            // Without an effect, what shapes it is shown but disabled (here and below).
+            ui.add_enabled_ui(d.sharpen_amount > 0.0, |ui| {
+                changed |= slider_row(ui, "Radius", &mut d.sharpen_radius, 0.2..=3.0, defaults.sharpen_radius, 1);
+                changed |= slider_row(ui, "Schwelle", &mut d.sharpen_threshold, 0.0..=20.0, defaults.sharpen_threshold, 1);
+            });
+            crate::widgets::hint(ui, crate::commands::hint("Wirkung bei 100 % prüfen", "zoom-100"));
+        });
         widgets::tool_section(ui, sk_core::tools::Tool::Clarity, Some(&mut || r_clarity = true), |ui| {
             changed |= slider_row(ui, "Klarheit", t.pick(&mut d.clarity, |l| &mut l.clarity), -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Struktur", t.pick(&mut d.structure, |l| &mut l.structure), -100.0..=100.0, 0.0, 0);
@@ -557,6 +566,9 @@ impl App {
         widgets::tool_section(ui, sk_core::tools::Tool::Dehaze, Some(&mut || r_haze = true), |ui| {
             changed |= crate::widgets::percent_row(ui, "Stärke", t.pick(&mut d.dehaze, |l| &mut l.dehaze), -100.0..=100.0, 0.0);
         });
+        if r_sharp {
+            (d.sharpen_amount, d.sharpen_radius, d.sharpen_threshold) = (defaults.sharpen_amount, defaults.sharpen_radius, defaults.sharpen_threshold);
+        }
         if r_clarity {
             match t.layer_mut() {
                 Some(l) => (l.clarity, l.structure) = (0.0, 0.0),
@@ -570,7 +582,7 @@ impl App {
             }
         }
         t.store(&mut cur.adjustments);
-        if changed || r_clarity || r_haze {
+        if changed || r_sharp || r_clarity || r_haze {
             self.request_render();
         }
     }

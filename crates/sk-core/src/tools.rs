@@ -167,7 +167,6 @@ impl Tool {
             Tool::Sharpening => {
                 let (f, t) = (&from.detail, &mut to.detail);
                 (t.sharpen_amount, t.sharpen_radius, t.sharpen_threshold) = (f.sharpen_amount, f.sharpen_radius, f.sharpen_threshold);
-                t.ai_deblur = f.ai_deblur;
             }
             Tool::NoiseReduction => {
                 let (f, t) = (&from.detail, &mut to.detail);

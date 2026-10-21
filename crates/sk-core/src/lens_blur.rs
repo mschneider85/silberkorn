@@ -49,7 +49,7 @@ pub fn blurred(path: &Path, src: &LinearImage, p: &LensBlur, clip: bool) -> Opti
     }
     let depth = crate::depth::load(path)?;
     let bits = [p.amount, p.focus, p.range, p.bokeh].map(f32::to_bits);
-    let key: BlurKey = (src.data.as_ptr() as usize, src.width, src.height, crate::ai_product::fingerprint(src), path.to_path_buf(), bits);
+    let key: BlurKey = (src.data.as_ptr() as usize, src.width, src.height, crate::ai_denoise::fingerprint(src), path.to_path_buf(), bits);
     {
         let mut done = BLURRED.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(i) = done.iter().position(|(k, _)| *k == key) {

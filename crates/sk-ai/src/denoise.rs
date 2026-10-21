@@ -32,7 +32,7 @@ const LINEAR_GAIN: f32 = -3.2e-10;
 const PARALLEL_TILES: usize = 6;
 
 fn tiling(scale: usize) -> Tiling {
-    Tiling { width: TILE, height: TILE, overlap: OVERLAP, scale, parallel: PARALLEL_TILES }
+    Tiling { tile: TILE, overlap: OVERLAP, scale, parallel: PARALLEL_TILES }
 }
 
 /// Identifies the models for the product cache.

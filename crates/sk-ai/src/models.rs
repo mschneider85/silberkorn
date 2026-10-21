@@ -146,32 +146,6 @@ pub const DEPTH: ModelInfo = ModelInfo {
     entry: None,
 };
 
-/// Removing camera shake: NAFNet (Liangyu Chen et al., Megvii, MIT) trained on REDS, as exported
-/// to ONNX by Qualcomm AI Hub. The network and its weights are two files of one archive.
-pub const DEBLUR: ModelInfo = ModelInfo {
-    label: "Verwacklung entfernen (NAFNet)",
-    file: "nafnet_deblur.onnx",
-    url: NAFNET_ARCHIVE,
-    bytes: 1_966_979,
-    sha256: "e8b8560bd58967f8aa3fe3ac0e41c371a97e4443c4f8cf9205af49df42919993",
-    license: "MIT",
-    entry: Some("nafnet_deblur-onnx-float/nafnet_deblur.onnx"),
-};
-
-/// The weights of [`DEBLUR`] (the network names this file: it must keep its name).
-pub const DEBLUR_WEIGHTS: ModelInfo = ModelInfo {
-    label: "Verwacklung entfernen (NAFNet, Gewichte)",
-    file: "nafnet_deblur.data",
-    url: NAFNET_ARCHIVE,
-    bytes: 271_406_592,
-    sha256: "1c8776d04d107d74b87d00e5c5dc57582178623c0683c0fa3008ba3a2d3a697e",
-    license: "MIT",
-    entry: Some("nafnet_deblur-onnx-float/nafnet_deblur.data"),
-};
-
-/// Qualcomm AI Hub's archive of the NAFNet export (pinned release).
-const NAFNET_ARCHIVE: &str = "https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/models/nafnet_deblur/releases/v0.64.0/nafnet_deblur-onnx-float.zip";
-
 /// Subject selection with exact edges: BiRefNet lite (Peng Zheng et al., MIT), as exported to
 /// ONNX by onnx-community.
 pub const SUBJECT_EDGES: ModelInfo = ModelInfo {
@@ -183,6 +157,23 @@ pub const SUBJECT_EDGES: ModelInfo = ModelInfo {
     license: "MIT",
     entry: None,
 };
+
+/// Files of models that Silberkorn no longer uses (removed at startup): NAFNet of
+/// "Verwacklung entfernen", which came with 0.2.6 only.
+const OBSOLETE: [&str; 2] = ["nafnet_deblur.onnx", "nafnet_deblur.data"];
+
+/// Deletes the files of models that are no longer used.
+pub fn remove_obsolete() {
+    for f in OBSOLETE {
+        let p = models_dir().join(f);
+        if p.is_file() {
+            match std::fs::remove_file(&p) {
+                Ok(()) => log::info!("Nicht mehr benötigtes Modell gelöscht: {}", p.display()),
+                Err(e) => log::warn!("{}: {e}", p.display()),
+            }
+        }
+    }
+}
 
 /// Folder of the downloaded models (`SILBERKORN_MODELS` overrides it).
 pub fn models_dir() -> PathBuf {

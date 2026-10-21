@@ -69,11 +69,10 @@ pub fn thumb_key(path: &Path, adj: &Adjustments) -> String {
     let size = meta.map_or(0, |m| m.len());
     // AI denoising shows once its data has been computed.
     let denoised = if adj.detail.ai_denoise > 0.0 && crate::ai_denoise::is_ready(path) { "|dn" } else { "" };
-    let sharp = if adj.detail.ai_deblur > 0.0 && crate::ai_deblur::is_ready(path) { "|db" } else { "" };
     // So does what uses the depth map once it exists.
     let blurred = if adj.needs_depth() && crate::depth::is_ready(path) { "|lb" } else { "" };
     let adj = if *adj == Adjustments::default() { String::new() } else { serde_json::to_string(adj).unwrap_or_default() };
-    format!("{:016x}", fnv1a(format!("{mtime}|{size}|{adj}{denoised}{sharp}{blurred}").as_bytes()))
+    format!("{:016x}", fnv1a(format!("{mtime}|{size}|{adj}{denoised}{blurred}").as_bytes()))
 }
 
 /// Thumbnail file of an image (without extension). `session` is the root of the open session, if any.

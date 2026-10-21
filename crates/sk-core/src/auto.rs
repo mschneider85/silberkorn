@@ -209,7 +209,6 @@ pub const GUIDE_EDGE: usize = 640;
 fn measuring(adj: &Adjustments) -> Adjustments {
     let mut a = adj.clone();
     a.detail.ai_denoise = 0.0;
-    a.detail.ai_deblur = 0.0;
     a.detail.nr_luma = 0.0;
     a.detail.nr_color = 0.0;
     a.detail.sharpen_amount = 0.0;

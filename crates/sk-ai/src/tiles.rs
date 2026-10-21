@@ -1,5 +1,5 @@
 //! Running an image network with a fixed input size over a larger image: in overlapping tiles,
-//! blended where they meet. Used for denoising and removing camera shake.
+//! blended where they meet. Used for denoising.
 
 use std::sync::Mutex;
 
@@ -11,9 +11,8 @@ use crate::runtime::{Data, Net};
 /// How a network is run over an image.
 #[derive(Clone, Copy, Debug)]
 pub struct Tiling {
-    /// The network's input size (it takes `width` x `height`).
-    pub width: usize,
-    pub height: usize,
+    /// The network's input edge (it takes `tile` x `tile`).
+    pub tile: usize,
     /// Overlap of neighbouring tiles in input pixels.
     pub overlap: usize,
     /// Output pixels per input pixel (per edge).
@@ -64,27 +63,27 @@ pub(crate) fn mirror(i: usize, len: usize) -> usize {
 /// `scale * w` x `scale * h`. Progress (and with it cancelling) is reported from the calling
 /// thread, after each round of tiles.
 pub fn run_tiled(net: &Net, planes: &[Vec<f32>], w: usize, h: usize, t: Tiling, gain: Option<Gain>, progress: &dyn Fn(f32)) -> Result<[Vec<f32>; 3]> {
-    let (xs, ys) = (origins(w, t.width, t.overlap), origins(h, t.height, t.overlap));
+    let (xs, ys) = (origins(w, t.tile, t.overlap), origins(h, t.tile, t.overlap));
     let tiles: Vec<(usize, usize, usize, usize)> =
         ys.iter().enumerate().flat_map(|(yi, &ty)| xs.iter().enumerate().map(move |(xi, &tx)| (xi, yi, tx, ty))).collect();
-    let (scale, tw, th) = (t.scale, t.width, t.height);
-    let (ow, oh, otw, oth) = (scale * w, scale * h, scale * tw, scale * th);
+    let (scale, tile) = (t.scale, t.tile);
+    let (ow, oh, ot) = (scale * w, scale * h, scale * tile);
     let o = (scale * t.overlap) as f32;
     let acc = Mutex::new(([vec![0.0f32; ow * oh], vec![0.0f32; ow * oh], vec![0.0f32; ow * oh]], vec![0.0f32; ow * oh]));
     let run = |&(xi, yi, tx, ty): &(usize, usize, usize, usize)| -> Result<()> {
         let c = planes.len();
-        let mut input = vec![0.0f32; c * tw * th];
+        let mut input = vec![0.0f32; c * tile * tile];
         for (p, plane) in planes.iter().enumerate() {
-            for j in 0..th {
+            for j in 0..tile {
                 let y = mirror(ty + j, h);
-                for i in 0..tw {
-                    input[p * tw * th + j * tw + i] = plane[y * w + mirror(tx + i, w)];
+                for i in 0..tile {
+                    input[p * tile * tile + j * tile + i] = plane[y * w + mirror(tx + i, w)];
                 }
             }
         }
         let out = net.run(&[Data::F32(&input)])?;
         let out = out.first().context("Keine Modellausgabe")?;
-        let n = otw * oth;
+        let n = ot * ot;
         anyhow::ensure!(out.data.len() == 3 * n, "Unerwartete Modellausgabe {:?}", out.shape);
         let k = match gain {
             Some(g) => {
@@ -97,20 +96,20 @@ pub fn run_tiled(net: &Net, planes: &[Vec<f32>], w: usize, h: usize, t: Tiling, 
         };
         let mut acc = acc.lock().unwrap_or_else(|e| e.into_inner());
         let (sum, wsum) = &mut *acc;
-        for j in 0..oth {
+        for j in 0..ot {
             let y = scale * ty + j;
             if y >= oh {
                 break;
             }
-            let wy = ramp(j, oth, o, yi == 0, yi + 1 == ys.len());
-            for i in 0..otw {
+            let wy = ramp(j, ot, o, yi == 0, yi + 1 == ys.len());
+            for i in 0..ot {
                 let x = scale * tx + i;
                 if x >= ow {
                     break;
                 }
-                let wt = wy * ramp(i, otw, o, xi == 0, xi + 1 == xs.len());
+                let wt = wy * ramp(i, ot, o, xi == 0, xi + 1 == xs.len());
                 for (c, plane) in sum.iter_mut().enumerate() {
-                    plane[y * ow + x] += out.data[c * n + j * otw + i] * k * wt;
+                    plane[y * ow + x] += out.data[c * n + j * ot + i] * k * wt;
                 }
                 wsum[y * ow + x] += wt;
             }

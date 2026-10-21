@@ -1200,7 +1200,7 @@ fn only_fine_detail_changed(before: &sk_core::params::Adjustments, now: &sk_core
     let mut a = before.clone();
     let (d, n) = (&mut a.detail, &now.detail);
     (d.sharpen_amount, d.sharpen_radius, d.sharpen_threshold) = (n.sharpen_amount, n.sharpen_radius, n.sharpen_threshold);
-    (d.nr_luma, d.nr_color, d.ai_denoise, d.ai_deblur) = (n.nr_luma, n.nr_color, n.ai_denoise, n.ai_deblur);
+    (d.nr_luma, d.nr_color, d.ai_denoise) = (n.nr_luma, n.nr_color, n.ai_denoise);
     (d.grain_amount, d.grain_size) = (n.grain_amount, n.grain_size);
     a == *now && before != now
 }

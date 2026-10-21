@@ -203,8 +203,8 @@ fn request(generation: Option<u64>, message: &[u8]) -> Result<(u64, Vec<u8>)> {
 
 /// Loads a network in the worker process: the session, whether it runs on the graphics card,
 /// and why DirectML could not be used.
-pub(crate) fn load(path: &Path) -> Result<(Session, bool, Option<String>)> {
-    let mut m = vec![LOAD];
+pub(crate) fn load(path: &Path, gpu: bool) -> Result<(Session, bool, Option<String>)> {
+    let mut m = vec![LOAD, gpu as u8];
     m.extend(path.to_string_lossy().as_bytes());
     let (generation, reply) = request(None, &m)?;
     let mut r = Reader(&reply);
@@ -346,8 +346,9 @@ pub fn serve() {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<Vec<u8>> {
             match kind {
                 LOAD => {
-                    let path = PathBuf::from(String::from_utf8_lossy(body).into_owned());
-                    let (session, gpu, dml_error) = crate::runtime::ort_session(&path)?;
+                    let (&gpu, path) = body.split_first().context("Anfrage unlesbar")?;
+                    let path = PathBuf::from(String::from_utf8_lossy(path).into_owned());
+                    let (session, gpu, dml_error) = crate::runtime::ort_session(&path, gpu != 0)?;
                     next_id += 1;
                     sessions.insert(next_id, session);
                     let mut reply = Vec::new();

@@ -16,11 +16,10 @@ pub enum AiFeature {
     Inpaint,
     Depth,
     Faces,
-    Deblur,
 }
 
 impl AiFeature {
-    pub const ALL: [AiFeature; 7] = [Self::Denoise, Self::Subject, Self::Object, Self::Inpaint, Self::Depth, Self::Faces, Self::Deblur];
+    pub const ALL: [AiFeature; 6] = [Self::Denoise, Self::Subject, Self::Object, Self::Inpaint, Self::Depth, Self::Faces];
 
     /// What the user uses it for.
     pub fn label(self) -> &'static str {
@@ -31,7 +30,6 @@ impl AiFeature {
             Self::Inpaint => "Entfernen",
             Self::Depth => "Tiefenkarte",
             Self::Faces => "Gesichter und Augen",
-            Self::Deblur => "Verwacklung entfernen",
         }
     }
 
@@ -40,7 +38,6 @@ impl AiFeature {
             Self::Inpaint => &[&models::INPAINT],
             Self::Depth => &[&models::DEPTH],
             Self::Faces => &sk_ai::faces::NEEDED,
-            Self::Deblur => &[&models::DEBLUR, &models::DEBLUR_WEIGHTS],
             Self::Denoise | Self::Subject | Self::Object => &[],
         }
     }
@@ -58,7 +55,6 @@ impl AiFeature {
         match self {
             Self::Denoise => sk_ai::denoise::download_mb(),
             Self::Subject => (models::SUBJECT.bytes + models::SUBJECT_EDGES.bytes).div_ceil(1_000_000),
-            Self::Deblur => sk_ai::deblur::download_mb(),
             Self::Object => sk_ai::segment::download_mb(),
             _ => self.files().iter().map(|m| m.bytes).sum::<u64>().div_ceil(1_000_000),
         }
@@ -151,6 +147,17 @@ impl App {
     /// acceleration; quiet also without network (a function used later tries again).
     pub fn preload_ai(&mut self) {
         let status = self.status.clone();
+        // What 0.2.6 downloaded and computed for "Verwacklung entfernen" (since removed).
+        std::thread::spawn(|| {
+            models::remove_obsolete();
+            let cache = sk_core::paths::cache_dir().join("deblur");
+            if cache.is_dir() {
+                match std::fs::remove_dir_all(&cache) {
+                    Ok(()) => log::info!("Nicht mehr benötigten Zwischenspeicher gelöscht: {}", cache.display()),
+                    Err(e) => log::warn!("{}: {e}", cache.display()),
+                }
+            }
+        });
         for f in AiFeature::ALL {
             if !f.available() {
                 self.ai_downloads.quiet.push(f);
@@ -213,7 +220,7 @@ impl App {
                 // Not tried again by itself: only when the user asks for the feature again.
                 self.status = format!("{}: Laden des KI-Modells abgebrochen", f.label());
                 match f {
-                    AiFeature::Denoise | AiFeature::Deblur => self.product_download_cancelled(f),
+                    AiFeature::Denoise => self.denoise_download_cancelled(),
                     AiFeature::Depth => self.depth_download_cancelled(),
                     _ => {}
                 }
