@@ -54,6 +54,8 @@ fn file_size(bytes: usize) -> String {
 const DRAFT_MS: f32 = 40.0;
 /// Pixel budget of a view draft while dragging a control, until the speed is measured.
 const DRAFT_PIXELS: usize = 700_000;
+/// Shadow of the paper sheet in the print preview, on a background in the paper's color.
+const SHEET_SHADOW: egui::Shadow = egui::Shadow { offset: [0, 2], blur: 14, spread: 0, color: Color32::from_black_alpha(45) };
 
 impl App {
     pub fn viewer(&mut self, ui: &mut Ui) {
@@ -213,12 +215,13 @@ impl App {
         let shown = proof.map_or(tex_id, |p| p.texture.id());
         let paper_rect = paper.as_ref().map(|p| Rect::from_center_size(img_rect.center(), img_rect.size() * p.rel));
         if let (Some(p), Some(r)) = (&paper, paper_rect) {
-            painter.rect_filled(r, 0.0, p.color);
-            // On a background in the paper's color, a fine line shows the format (filling, the
-            // image is the format).
-            if p.color == bg && r.contains_rect(img_rect) {
-                painter.rect_stroke(r, 0.0, egui::Stroke::new(1.0, Color32::from_gray(185)), egui::StrokeKind::Outside);
+            // On a background in the paper's color, a soft shadow shows the sheet (filling, the
+            // printed part of the image is the sheet).
+            if p.color == bg {
+                let sheet = if r.contains_rect(img_rect) { r } else { r.intersect(img_rect) };
+                painter.add(SHEET_SHADOW.as_shape(sheet, 0));
             }
+            painter.rect_filled(r, 0.0, p.color);
         }
         painter.image(shown, img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         let proof_ready = proof.is_some();
@@ -339,6 +342,10 @@ impl App {
             ] {
                 if r.is_positive() {
                     painter.rect_filled(r, 0.0, dim);
+                    // The sheet's shadow, painted over here, only outside the sheet.
+                    if !show_cut && paper.as_ref().is_some_and(|p| p.color == bg) {
+                        painter.with_clip_rect(r.intersect(painter.clip_rect())).add(SHEET_SHADOW.as_shape(cut, 0));
+                    }
                 }
             }
             if show_cut {
