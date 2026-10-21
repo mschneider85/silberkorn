@@ -204,6 +204,7 @@ impl App {
         self.command_item(ui, "select-all");
         ui.separator();
         self.command_item(ui, "gpu");
+        self.command_item(ui, "storage");
     }
 
     /// Organizing: rating, labels, metadata, names, variants, stacks, where the files are.
@@ -688,6 +689,7 @@ impl App {
         self.rename_dialog(ctx);
         self.import_dialog(ctx);
         self.gpu_dialog(ctx);
+        self.storage_dialog(ctx);
         self.licenses_dialog(ctx);
         self.update_dialog(ctx);
         self.copy_dialog(ctx);

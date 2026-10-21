@@ -130,7 +130,8 @@ pub const COMMANDS: &[Command] = &[
     cmd!("paste-adjustments", icon::CLIPBOARD_TEXT, "Anpassungen einfügen", "Bearbeiten", [CTRL_SHIFT => Key::V], "paste anwenden auswahl", |a| a.clipboard.is_some() && !a.on_layer(), |a, _| a.paste_adjustments()),
     cmd!("reset", icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", "Bearbeiten", [], "reset", image_tool, |a, _| a.reset_adjustments()),
     cmd!("select-all", icon::CHECK_SQUARE, "Alle auswählen", "Bearbeiten", [CTRL => Key::A], "select all", has_images, |a, _| a.select_all()),
-    cmd!("gpu", icon::LIGHTNING, "Grafikkarte …", "Bearbeiten", [], "gpu grafikkarte ki beschleunigung directml zwischenspeicher", always, |a, _| a.show_gpu_dialog = true),
+    cmd!("gpu", icon::LIGHTNING, "Grafikkarte …", "Bearbeiten", [], "gpu grafikkarte ki beschleunigung directml", always, |a, _| a.show_gpu_dialog = true),
+    cmd!("storage", icon::HARD_DRIVES, "Speicherplatz …", "Bearbeiten", [], "zwischenspeicher cache festplatte leeren vorschauen tiefenkarten entrauschen", always, |a, _| a.show_storage_dialog = true),
     // Foto und Entwickeln
     cmd!("rotate-left", icon::ARROW_COUNTER_CLOCKWISE, "Links drehen", "Entwickeln", [CTRL => Key::OpenBracket], "rotate", image_tool, |a, _| a.rotate(3)),
     cmd!("rotate-right", icon::ARROW_CLOCKWISE, "Rechts drehen", "Entwickeln", [CTRL => Key::CloseBracket], "rotate", image_tool, |a, _| a.rotate(1)),

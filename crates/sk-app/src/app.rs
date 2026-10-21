@@ -556,6 +556,9 @@ pub struct App {
     pub inpaint_busy: bool,
     pub removal_progress: f32,
     pub show_gpu_dialog: bool,
+    pub show_storage_dialog: bool,
+    /// Sizes of the caches while "Speicherplatz" is open (see `storage.rs`).
+    pub(crate) storage_sizes: Option<[u64; 3]>,
     pub ai_busy: bool,
     /// The image whose subject mask was last asked for ahead, and the image shown in the Ebenen
     /// tab since when (see `prepare_subject`).
@@ -1027,6 +1030,8 @@ impl App {
             inpaint_busy: false,
             removal_progress: 0.0,
             show_gpu_dialog: false,
+            show_storage_dialog: false,
+            storage_sizes: None,
             ai_busy: false,
             subject_prepared: None,
             subject_shown: None,
@@ -1200,6 +1205,7 @@ impl App {
             Ok("licenses") => app.show_licenses = true,
             Ok("about") => app.splash = Some(crate::splash::Splash::about()),
             Ok("gpu") => app.show_gpu_dialog = true,
+            Ok("storage") => app.show_storage_dialog = true,
             Ok("update") => app.update_dialog_open(),
             // `calibrate` or `calibrate:<dpi>`.
             Ok(d) if d.starts_with("calibrate") => {

@@ -46,6 +46,7 @@ mod side_column;
 mod softproof;
 mod splash;
 mod stacks;
+mod storage;
 mod style_grid;
 mod subject_worker;
 mod theme;

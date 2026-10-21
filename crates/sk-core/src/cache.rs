@@ -140,6 +140,22 @@ pub fn user_cache_limit() -> u64 {
     std::env::var("SILBERKORN_CACHE_MB").ok().and_then(|v| v.parse::<u64>().ok()).map_or(USER_CACHE_LIMIT, |mb| mb << 20)
 }
 
+/// Size of the per-user cache (thumbnails and previews of images outside sessions), in bytes.
+pub fn user_cache_size() -> u64 {
+    Kind::ALL
+        .iter()
+        .flat_map(|k| std::fs::read_dir(k.user_dir()).into_iter().flatten().flatten())
+        .filter(|e| e.path().extension().is_some_and(|x| x == "jpg" || x == "key"))
+        .filter_map(|e| e.metadata().ok())
+        .map(|m| m.len())
+        .sum()
+}
+
+/// Empties the per-user cache (sessions keep theirs); returns the bytes removed.
+pub fn clear_user_cache() -> u64 {
+    trim_user_cache(0)
+}
+
 /// Keeps the per-user cache within `limit` bytes: if it is larger, the images used longest ago
 /// are removed until it is at 80 % of the limit. Session caches are left alone (they belong to
 /// their session). Returns the bytes removed.

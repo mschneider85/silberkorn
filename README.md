@@ -838,6 +838,9 @@ beziehen sich aber nur auf die Bilder der Session.
   höchstens 4 GB (`SILBERKORN_CACHE_MB` ändert das); beim Start werden die am längsten nicht
   genutzten entfernt. Session-Caches sind davon ausgenommen. Sichtbare Vorschaubilder werden vor
   denen berechnet, an denen man schon vorbeigescrollt ist.
+- **Speicherplatz** (Bearbeiten → „Speicherplatz …“): zeigt die Zwischenspeicher auf der Festplatte
+  mit Füllstand – Vorschauen und Miniaturen (4 GB), Tiefenkarten (2 GB), KI-Entrauschen (20 GB) –
+  und leert sie einzeln. Alles darin wird bei Bedarf neu berechnet.
 
 Sidecars bleiben die maßgebliche Quelle; der Katalog ist ein Index und kann jederzeit neu aufgebaut werden.
 

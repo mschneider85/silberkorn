@@ -252,35 +252,16 @@ impl App {
         changed
     }
 
-    /// The cache of denoised data (in the dialog for the graphics card): how full, and emptying it.
-    pub(crate) fn denoise_cache_ui(&mut self, ui: &mut egui::Ui) {
-        let used = sk_core::ai_denoise::cache_size();
-        let limit = sk_core::ai_denoise::CACHE_LIMIT;
-        let mut clear = false;
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.spacing_mut().item_spacing.y = 3.0;
-                ui.label(RichText::new(format!("KI-Entrauschen · {:.1} von {} GB", used as f64 / 1e9, limit >> 30)).size(12.0).color(crate::theme::TEXT));
-                ui.add(egui::ProgressBar::new((used as f64 / limit as f64) as f32).desired_width(260.0).desired_height(4.0));
-                crate::dialog::note(ui, "Die ältesten Ergebnisse fallen heraus, wenn er voll ist.");
-            });
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let can = used > 0 && self.denoise.running.is_none();
-                if ui.add_enabled(can, crate::dialog::secondary("Leeren")).clicked() {
-                    clear = true;
-                }
-            });
-        });
-        if clear {
-            match sk_core::ai_denoise::clear_cache() {
-                Ok(()) => {
-                    self.status = "KI-Entrauschen: Zwischenspeicher geleert".into();
-                    // Images still set to denoise compute again when shown.
-                    self.denoise.checked = None;
-                    self.request_render();
-                }
-                Err(e) => self.status = format!("Zwischenspeicher nicht geleert: {e:#}"),
-            }
-        }
+    /// Whether denoised data is being computed (the cache can't be emptied meanwhile).
+    pub(crate) fn denoise_running(&self) -> bool {
+        self.denoise.running.is_some()
+    }
+
+    /// Empties the cache of denoised data; images still set to denoise compute again when shown.
+    pub(crate) fn clear_denoise_cache(&mut self) -> anyhow::Result<()> {
+        sk_core::ai_denoise::clear_cache()?;
+        self.denoise.checked = None;
+        self.request_render();
+        Ok(())
     }
 }

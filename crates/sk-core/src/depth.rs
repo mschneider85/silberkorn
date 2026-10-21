@@ -208,6 +208,21 @@ pub fn load(path: &Path) -> Option<Arc<DepthMap>> {
 }
 
 /// Removes the least recently used maps until the folder fits in `limit` bytes.
+/// Size of the stored depth maps, in bytes.
+pub fn cache_size() -> u64 {
+    std::fs::read_dir(cache_dir()).into_iter().flatten().flatten().filter(|e| e.path().extension().is_some_and(|x| x == "skdp")).filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum()
+}
+
+/// Removes all stored depth maps (they are computed again when needed).
+pub fn clear_cache() -> Result<()> {
+    for e in std::fs::read_dir(cache_dir()).into_iter().flatten().flatten() {
+        if e.path().extension().is_some_and(|x| x == "skdp") {
+            std::fs::remove_file(e.path())?;
+        }
+    }
+    Ok(())
+}
+
 fn prune(dir: &Path, limit: u64) {
     let mut files: Vec<(std::time::SystemTime, u64, PathBuf)> = std::fs::read_dir(dir)
         .into_iter()
