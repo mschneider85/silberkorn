@@ -1290,10 +1290,7 @@ impl Processor {
     fn range_weight(&self, mask: &Mask, disp: [f32; 3]) -> f32 {
         let mut w = 1.0;
         if let Some(r) = &mask.luma_range {
-            let l = srgb_encode(dot(disp, LUMA).clamp(0.0, 1.0));
-            let f = r.falloff.max(1e-3);
-            let inside = smoothstep(r.low - f, r.low, l) * (1.0 - smoothstep(r.high, r.high + f, l));
-            w *= if r.invert { 1.0 - inside } else { inside };
+            w *= r.weight(srgb_encode(dot(disp, LUMA).clamp(0.0, 1.0)));
         }
         if let Some(c) = &mask.color_range {
             let [_, a, b] = self.oklab.from_linear(disp);
@@ -2573,7 +2570,7 @@ mod tests {
     fn luma_range_restricts_layer_to_shadows() {
         let src = LinearImage::new(20, 1, (0..20).map(|i| [0.005 + i as f32 * 0.05; 3]).collect());
         let mut adj = plain();
-        let mask = Mask { fill: true, luma_range: Some(crate::params::LumaRange { low: 0.0, high: 0.3, falloff: 0.05, invert: false }), ..Default::default() };
+        let mask = Mask { fill: true, luma_range: Some(crate::params::LumaRange { falloff_low: 0.0, low: 0.0, high: 0.3, falloff_high: 0.35 }), ..Default::default() };
         adj.layers.push(layer(mask, LayerAdjustments { exposure: 1.0, ..Default::default() }));
         let base = Processor::new(&meta(), &plain()).render(&src, None, None);
         let r = Processor::new(&meta(), &adj).render(&src, None, None);

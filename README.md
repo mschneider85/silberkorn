@@ -242,6 +242,9 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
   den Decoder (etwa 0,2 s). tract rechnet nur dessen 256er-Maske, Silberkorn skaliert sie selbst hoch und
   verfeinert die Kanten am Bild. Jeder Klick ist ein Rückgängig-Schritt.
 - **Helligkeitsbereich** und **Farbbereich** (mit Pipette, unter „Maske“ → „Eingrenzen“) beschränken jede Maske.
+  Der Helligkeitsbereich ist wie in Capture One ein Trapez über dem Histogramm: Zwischen den oberen
+  Griffen wirkt die Ebene voll, zu den unteren läuft sie aus. Das Trapez lässt sich als Ganzes
+  verschieben; die Werte stehen darunter (0–255).
 - **Stilpinsel** (+ unter der Ebenenliste → „Neue Ebene mit Stilpinsel“): Stilpinsel (Aufhellen, Abdunkeln, Wärmer, Haut glätten, Dunst entfernen, …).
 
 ### KI-Werkzeuge: Entrauschen und Entfernen

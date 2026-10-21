@@ -462,20 +462,73 @@ pub struct RadialGradient {
     pub angle: f32,
 }
 
-/// Luminance range refinement of a mask (0..1 display luminance).
+/// Luminance range refinement of a mask (0..1 display luminance): fully in between `low` and
+/// `high`, fading out towards `falloff_low` and `falloff_high` (as Capture One's Luma Range).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(from = "LumaRangeStored")]
 pub struct LumaRange {
+    pub falloff_low: f32,
     pub low: f32,
     pub high: f32,
-    /// Soft transition width.
-    pub falloff: f32,
-    pub invert: bool,
+    pub falloff_high: f32,
 }
 
 impl Default for LumaRange {
     fn default() -> Self {
-        Self { low: 0.0, high: 1.0, falloff: 0.1, invert: false }
+        Self { falloff_low: 0.0, low: 0.0, high: 1.0, falloff_high: 1.0 }
+    }
+}
+
+impl LumaRange {
+    /// The edges of the soft transitions, at least a hair outside the range (a hard edge).
+    pub fn edges(&self) -> [f32; 4] {
+        [self.falloff_low.min(self.low - 1e-3), self.low, self.high, self.falloff_high.max(self.high + 1e-3)]
+    }
+
+    /// How much of a display luminance `l` (0..1) is in the range.
+    pub fn weight(&self, l: f32) -> f32 {
+        let smoothstep = |e0: f32, e1: f32, x: f32| {
+            let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+            t * t * (3.0 - 2.0 * t)
+        };
+        let [a, b, c, d] = self.edges();
+        smoothstep(a, b, l) * (1.0 - smoothstep(c, d, l))
+    }
+}
+
+/// A luminance range as stored: before 0.2.11 one soft width for both sides and an "invert".
+#[derive(Deserialize)]
+#[serde(default)]
+struct LumaRangeStored {
+    falloff_low: Option<f32>,
+    low: f32,
+    high: f32,
+    falloff_high: Option<f32>,
+    falloff: f32,
+    invert: bool,
+}
+
+impl Default for LumaRangeStored {
+    fn default() -> Self {
+        Self { falloff_low: None, low: 0.0, high: 1.0, falloff_high: None, falloff: 0.1, invert: false }
+    }
+}
+
+impl From<LumaRangeStored> for LumaRange {
+    fn from(s: LumaRangeStored) -> Self {
+        if let (Some(falloff_low), Some(falloff_high)) = (s.falloff_low, s.falloff_high) {
+            return Self { falloff_low, low: s.low, high: s.high, falloff_high };
+        }
+        let (lo, hi, f) = (s.low, s.high, s.falloff.max(1e-3));
+        // Inverted, what was outside the range: the part above it, or below it. Both at once is
+        // no longer possible; the larger part is kept.
+        if s.invert {
+            if lo <= 0.0 || (hi < 1.0 && 1.0 - hi >= lo) {
+                return Self { falloff_low: hi, low: (hi + f).min(1.0), high: 1.0, falloff_high: 1.0 };
+            }
+            return Self { falloff_low: 0.0, low: 0.0, high: (lo - f).max(0.0), falloff_high: lo };
+        }
+        Self { falloff_low: lo - f, low: lo, high: hi, falloff_high: hi + f }
     }
 }
 
@@ -1305,6 +1358,35 @@ impl Adjustments {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn luma_range_from_before_0_2_11() {
+        let load = |json: &str| serde_json::from_str::<LumaRange>(json).unwrap();
+        let close = |a: LumaRange, b: [f32; 4]| {
+            let v = [a.falloff_low, a.low, a.high, a.falloff_high];
+            assert!(v.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5), "{v:?} != {b:?}");
+        };
+        // One soft width on both sides.
+        close(load(r#"{"low":0.2,"high":0.6,"falloff":0.1,"invert":false}"#), [0.1, 0.2, 0.6, 0.7]);
+        // Inverted, open at the bottom: what was above the range.
+        let r = load(r#"{"low":0.0,"high":0.4,"falloff":0.1,"invert":true}"#);
+        close(r, [0.4, 0.5, 1.0, 1.0]);
+        // Inverted, open at the top: what was below it; the same weights as before.
+        let r = load(r#"{"low":0.7,"high":1.0,"falloff":0.1,"invert":true}"#);
+        close(r, [0.0, 0.0, 0.6, 0.7]);
+        let smooth = |t: f32| t * t * (3.0 - 2.0 * t);
+        for l in [0.0, 0.5, 0.62, 0.65, 0.68, 0.9] {
+            let old = 1.0 - smooth(((l - 0.6) / 0.1f32).clamp(0.0, 1.0));
+            assert!((r.weight(l) - old).abs() < 1e-3, "{l}: {} vs {old}", r.weight(l));
+        }
+        // Stored anew: as it is.
+        let r = LumaRange { falloff_low: 0.1, low: 0.3, high: 0.5, falloff_high: 0.9 };
+        assert_eq!(load(&serde_json::to_string(&r).unwrap()), r);
+        // A hard edge.
+        let r = LumaRange { falloff_low: 0.3, low: 0.3, high: 1.0, falloff_high: 1.0 };
+        assert_eq!(r.weight(0.29), 0.0);
+        assert_eq!(r.weight(0.31), 1.0);
+    }
 
     /// A damaged crop (NaN, too big) becomes a valid one instead of panicking in `clamp`.
     #[test]

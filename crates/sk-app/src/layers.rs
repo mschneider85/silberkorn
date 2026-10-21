@@ -11,7 +11,7 @@ use crate::theme::{self, icon};
 
 use crate::ai_models::AiFeature;
 use crate::app::{App, CurveChannel, Tab};
-use crate::widgets::{RAIL_LUMA, SliderOpts, hue_rail, slider_row, slider_row_with, subheading};
+use crate::widgets::{SliderOpts, hue_rail, slider_row, slider_row_with, subheading};
 
 /// How long an image stays in the Ebenen tab before its subject mask is computed ahead.
 const SUBJECT_AHEAD_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
@@ -1000,6 +1000,7 @@ impl App {
             active.and_then(|li| c.adjustments.layers.get(li)).is_some_and(|l| l.mask.ai.as_ref().is_some_and(|a| a.depth.is_some()))
         });
         let depth_map = if depth_mask { self.current_path().and_then(|p| self.depth_mask_map(&p)) } else { None };
+        let luma_bins: Option<Vec<f32>> = self.histogram.as_ref().map(|h| h.luma.iter().map(|&n| n as f32).collect());
         let show_mask = &mut self.show_mask;
         let Some(cur) = self.current.as_mut() else { return };
         // The background has no mask: its controls are shown, but disabled.
@@ -1080,11 +1081,7 @@ impl App {
                 // Switched off: the range is shown, but disabled.
                 let mut r = m.luma_range.unwrap_or_default();
                 ui.add_enabled_ui(luma_on, |ui| {
-                    let luma = SliderOpts { rail: Some(RAIL_LUMA), ..Default::default() };
-                    *changed |= crate::widgets::unit_percent_row(ui, "Von", &mut r.low, 0.0..=1.0, 0.0, luma);
-                    *changed |= crate::widgets::unit_percent_row(ui, "Bis", &mut r.high, 0.0..=1.0, 1.0, luma);
-                    *changed |= crate::widgets::unit_percent_row(ui, "Weichheit", &mut r.falloff, 0.0..=0.5, 0.1, Default::default());
-                    *changed |= crate::widgets::checkbox(ui, &mut r.invert, "Bereich umkehren").changed();
+                    *changed |= crate::widgets::luma_range_editor(ui, &mut r, luma_bins.as_deref());
                 });
                 if luma_on {
                     m.luma_range = Some(r);

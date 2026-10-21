@@ -463,8 +463,6 @@ pub const RAIL_SATURATION: &[Color32] = &[Color32::from_rgb(140, 140, 140), Colo
 
 /// Rail colors for tones (dark to light).
 pub const RAIL_TONE: &[Color32] = &[Color32::from_rgb(40, 40, 40), Color32::from_rgb(125, 125, 125), Color32::from_rgb(215, 215, 215)];
-/// Rail colors for a luminance from black to white.
-pub const RAIL_LUMA: &[Color32] = &[Color32::from_rgb(0, 0, 0), Color32::from_rgb(255, 255, 255)];
 
 /// Zoom factor for a scroll of `scroll` points: a wheel notch (50 points) zooms by about 1.19,
 /// four of them double the size.
@@ -1486,6 +1484,156 @@ pub fn levels_editor(ui: &mut Ui, set: &mut LevelSet, bins: Option<&[f32]>, colo
         });
     });
     *set != before
+}
+
+/// The luminance range of a mask as in Capture One: a trapezoid over the histogram, fully in
+/// between the upper handles (the range), fading out to the lower ones (the falloff). Dragging
+/// the trapezoid moves all four; double-click resets.
+pub fn luma_range_editor(ui: &mut Ui, r: &mut sk_core::params::LumaRange, bins: Option<&[f32]>) -> bool {
+    const MIN_GAP: f32 = 1.0 / 255.0;
+    let before = *r;
+    let width = ui.available_width();
+    let spacing = ui.spacing().item_spacing.y;
+    let (top, _) = ui.allocate_exact_size(vec2(width, 12.0), Sense::hover());
+    ui.spacing_mut().item_spacing.y = 0.0;
+    let (graph, _) = ui.allocate_exact_size(vec2(width, 56.0), Sense::hover());
+    let (bottom, _) = ui.allocate_exact_size(vec2(width, 12.0), Sense::hover());
+    ui.spacing_mut().item_spacing.y = spacing;
+    let x_of = |v: f32| graph.left() + v.clamp(0.0, 1.0) * graph.width();
+    let v_of = |x: f32| ((x - graph.left()) / graph.width()).clamp(0.0, 1.0);
+    let id = ui.id().with("luma-range");
+
+    // Moving the whole range.
+    let body = ui.interact(graph, id.with("body"), Sense::click_and_drag());
+    if body.dragged() {
+        let d = body.drag_delta().x / graph.width();
+        let d = d.clamp(-r.falloff_low.min(r.low), 1.0 - r.falloff_high.max(r.high));
+        r.falloff_low += d;
+        r.low += d;
+        r.high += d;
+        r.falloff_high += d;
+    }
+    if body.double_clicked() {
+        *r = Default::default();
+    }
+    if body.hovered() || body.dragged() {
+        ui.ctx().set_cursor_icon(if body.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+    }
+    let body = body.on_hover_text("Ziehen: Bereich verschieben – Doppelklick: ganzer Bereich");
+
+    let painter = ui.painter();
+    painter.rect_filled(graph, 3.0, theme::BROWSER);
+    if let Some(bins) = bins.filter(|b| b.len() >= 256) {
+        let max = bins[1..255].iter().copied().fold(0.0, f32::max).max(1e-6);
+        let fill = Color32::from_gray(150).gamma_multiply(0.25);
+        let mut mesh = egui::Mesh::default();
+        for (i, &n) in bins.iter().enumerate().take(256) {
+            let h = graph.height() * (n / max).sqrt().min(1.0);
+            let x = x_of((i as f32 + 0.5) / 256.0);
+            mesh.colored_vertex(pos2(x, graph.bottom()), fill);
+            mesh.colored_vertex(pos2(x, graph.bottom() - h), fill);
+        }
+        for i in 0..255u32 {
+            let k = i * 2;
+            mesh.add_triangle(k, k + 1, k + 2);
+            mesh.add_triangle(k + 1, k + 2, k + 3);
+        }
+        painter.add(mesh);
+    }
+    let hot = body.hovered() || body.dragged();
+    let shape = vec![
+        pos2(x_of(r.falloff_low), graph.bottom()),
+        pos2(x_of(r.low), graph.top()),
+        pos2(x_of(r.high), graph.top()),
+        pos2(x_of(r.falloff_high), graph.bottom()),
+    ];
+    let edge = if hot { theme::ACCENT } else { theme::ACCENT.gamma_multiply(0.8) };
+    painter.add(Shape::convex_polygon(shape, theme::ACCENT.gamma_multiply(if hot { 0.35 } else { 0.25 }), Stroke::new(1.0, edge)));
+    for v in [r.low, r.high] {
+        painter.vline(x_of(v), graph.y_range(), Stroke::new(1.0, Color32::from_white_alpha(110)));
+    }
+    // From black to white, along the bottom.
+    let strip = Rect::from_min_max(pos2(graph.left(), graph.bottom() - 4.0), graph.max);
+    let mut mesh = egui::Mesh::default();
+    for (x, g) in [(strip.left(), 0u8), (strip.right(), 255)] {
+        mesh.colored_vertex(pos2(x, strip.top()), Color32::from_gray(g));
+        mesh.colored_vertex(pos2(x, strip.bottom()), Color32::from_gray(g));
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 2, 3);
+    painter.add(mesh);
+
+    // A triangle pointing at the graph, `down` on the upper track.
+    let handle = |ui: &mut Ui, track: Rect, v: f32, down: bool, name: &str| -> Option<Option<f32>> {
+        let x = x_of(v);
+        let rect = Rect::from_center_size(pos2(x, track.center().y), vec2(14.0, track.height()));
+        let resp = ui.interact(rect, id.with(name), Sense::click_and_drag());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, name));
+        let resp = resp.on_hover_text(format!("{name} – Doppelklick: zurücksetzen"));
+        let hot = resp.hovered() || resp.dragged();
+        let s = if hot { 6.0 } else { 5.0 };
+        let (tip, base) = if down { (track.bottom(), track.bottom() - s * 1.6) } else { (track.top(), track.top() + s * 1.6) };
+        let tri = vec![pos2(x, tip), pos2(x + s, base), pos2(x - s, base)];
+        let fill = Color32::from_gray((40.0 + v.clamp(0.0, 1.0) * 200.0) as u8);
+        ui.painter().add(Shape::convex_polygon(tri, fill, Stroke::new(1.0, if hot { theme::ACCENT } else { Color32::from_gray(150) })));
+        if hot {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        if resp.double_clicked() {
+            Some(None)
+        } else if resp.dragged() {
+            resp.interact_pointer_pos().map(|p| Some(v_of(p.x)))
+        } else {
+            None
+        }
+    };
+    let d = sk_core::params::LumaRange::default();
+    if let Some(v) = handle(ui, top, r.low, true, "Bereich Anfang") {
+        r.low = v.unwrap_or(d.low).min(r.high - MIN_GAP).max(0.0);
+        r.falloff_low = r.falloff_low.min(r.low);
+    }
+    if let Some(v) = handle(ui, top, r.high, true, "Bereich Ende") {
+        r.high = v.unwrap_or(d.high).max(r.low + MIN_GAP).min(1.0);
+        r.falloff_high = r.falloff_high.max(r.high);
+    }
+    if let Some(v) = handle(ui, bottom, r.falloff_low, false, "Übergang Anfang") {
+        r.falloff_low = v.unwrap_or(d.falloff_low).min(r.low);
+    }
+    if let Some(v) = handle(ui, bottom, r.falloff_high, false, "Übergang Ende") {
+        r.falloff_high = v.unwrap_or(d.falloff_high).max(r.high);
+    }
+
+    // The values as numbers (0–255, as in Levels), for exact input.
+    let byte = |ui: &mut Ui, v: &mut f32, lo: f32, hi: f32| -> bool {
+        let mut n = (v.clamp(0.0, 1.0) * 255.0).round() as i32;
+        let resp = ui.add(egui::DragValue::new(&mut n).range((lo.max(0.0) * 255.0).ceil() as i32..=(hi.min(1.0) * 255.0).floor() as i32).speed(0.5));
+        if resp.changed() {
+            *v = n as f32 / 255.0;
+        }
+        resp.changed()
+    };
+    ui.add_space(4.0);
+    for (label, inner) in [("Bereich", true), ("Übergang", false)] {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(label).color(theme::TEXT_DIM));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if inner {
+                    let (lo, hi) = (r.low, r.high);
+                    if byte(ui, &mut r.high, lo + MIN_GAP, 1.0) {
+                        r.falloff_high = r.falloff_high.max(r.high);
+                    }
+                    if byte(ui, &mut r.low, 0.0, hi - MIN_GAP) {
+                        r.falloff_low = r.falloff_low.min(r.low);
+                    }
+                } else {
+                    let (lo, hi) = (r.low, r.high);
+                    byte(ui, &mut r.falloff_high, hi, 1.0);
+                    byte(ui, &mut r.falloff_low, 0.0, lo);
+                }
+            });
+        });
+    }
+    *r != before
 }
 
 /// `bins` (256, over 0..1) after the monotonic `f`: each bin spread over the range it lands in.

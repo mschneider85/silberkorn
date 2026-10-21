@@ -108,13 +108,13 @@ struct Layer {
     has_bitmap: u32,
     invert: u32,
     has_luma: u32,
-    luma_invert: u32,
     has_color: u32,
     neutral: u32,
     opacity: f32,
+    luma_falloff_low: f32,
     luma_low: f32,
     luma_high: f32,
-    luma_falloff: f32,
+    luma_falloff_high: f32,
     color_hue: f32,
     color_width: f32,
     color_falloff: f32,
@@ -624,9 +624,7 @@ fn range_weight(l: Layer, disp: vec3<f32>) -> f32 {
     var w = 1.0;
     if l.has_luma != 0u {
         let y = srgb_encode(clamp(dot(disp, LUMA), 0.0, 1.0));
-        let f = max(l.luma_falloff, 1e-3);
-        let inside = sstep(l.luma_low - f, l.luma_low, y) * (1.0 - sstep(l.luma_high, l.luma_high + f, y));
-        w *= select(inside, 1.0 - inside, l.luma_invert != 0u);
+        w *= sstep(l.luma_falloff_low, l.luma_low, y) * (1.0 - sstep(l.luma_high, l.luma_falloff_high, y));
     }
     if l.has_color != 0u {
         let lab = oklab_from_linear(disp);

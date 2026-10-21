@@ -394,12 +394,11 @@ struct LayerGpu {
     has_bitmap: u32,
     invert: u32,
     has_luma: u32,
-    luma_invert: u32,
     has_color: u32,
     neutral: u32,
     opacity: f32,
-    /// low, high, falloff
-    luma: [f32; 3],
+    /// Edges: falloff low, low, high, falloff high (`LumaRange::edges`).
+    luma: [f32; 4],
     /// hue, width, falloff, minimum chroma
     color: [f32; 4],
     /// exposure, contrast, brightness, saturation, highlights, shadows, clarity, structure,
@@ -876,8 +875,7 @@ impl Processor {
             lg.invert = l.mask.invert as u32;
             if let Some(r) = &l.mask.luma_range {
                 lg.has_luma = 1;
-                lg.luma_invert = r.invert as u32;
-                lg.luma = [r.low, r.high, r.falloff];
+                lg.luma = r.edges();
             }
             if let Some(c) = &l.mask.color_range {
                 lg.has_color = 1;
@@ -1740,7 +1738,7 @@ mod tests {
                         layer(LayerAdjustments { exposure: 0.8, saturation: -30.0, temperature: 40.0, clarity: 30.0, ..Default::default() }, radial.clone()),
                         layer(
                             LayerAdjustments { brightness: 30.0, shadows: 40.0, dehaze: 30.0, ..Default::default() },
-                            Mask { fill: true, luma_range: Some(LumaRange { low: 0.3, high: 0.8, falloff: 0.1, invert: false }), ..Default::default() },
+                            Mask { fill: true, luma_range: Some(LumaRange { falloff_low: 0.2, low: 0.3, high: 0.8, falloff_high: 0.9 }), ..Default::default() },
                         ),
                         layer(
                             LayerAdjustments { contrast: 40.0, tint: -30.0, ..Default::default() },
@@ -1765,7 +1763,7 @@ mod tests {
                     both.curves.luma = Curve { points: vec![[0.0, 0.0], [0.4, 0.55], [1.0, 1.0]] };
                     a.layers = vec![
                         layer(only, radial.clone()),
-                        layer(both, Mask { fill: true, luma_range: Some(LumaRange { low: 0.2, high: 0.7, falloff: 0.1, invert: false }), ..Default::default() }),
+                        layer(both, Mask { fill: true, luma_range: Some(LumaRange { falloff_low: 0.1, low: 0.2, high: 0.7, falloff_high: 0.8 }), ..Default::default() }),
                     ];
                     a
                 },
