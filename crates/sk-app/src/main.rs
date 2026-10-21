@@ -3,6 +3,7 @@
 
 mod activity;
 mod ai_models;
+mod ai_products;
 mod app;
 mod auto_tools;
 #[cfg(test)]
@@ -16,7 +17,6 @@ mod crop;
 mod culling;
 mod deletion;
 mod dialog;
-mod denoise;
 mod depth;
 mod develop_tools;
 mod focus;
@@ -215,6 +215,7 @@ mod tests {
         let sources = [
             include_str!("activity.rs"),
             include_str!("ai_models.rs"),
+            include_str!("ai_products.rs"),
             include_str!("app.rs"),
             include_str!("auto_tools.rs"),
             include_str!("browser.rs"),
@@ -225,7 +226,6 @@ mod tests {
             include_str!("crop.rs"),
             include_str!("culling.rs"),
             include_str!("deletion.rs"),
-            include_str!("denoise.rs"),
             include_str!("depth.rs"),
             include_str!("develop_tools.rs"),
             include_str!("dialog.rs"),

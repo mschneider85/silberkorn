@@ -585,7 +585,7 @@ impl Workers {
         {
             let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
             crate::guard::spawn("KI-Maske", move || {
-                let mut model: Option<(sk_ai::SubjectModel, u64)> = None;
+                let mut model: Option<(sk_ai::subject::SubjectNet, u64)> = None;
                 let mut object: Option<(sk_ai::segment::ObjectModel, u64)> = None;
                 // The encoder's result for the last image (by its guide), reused for every click.
                 let mut embedding: Option<(u64, sk_ai::segment::Embedding)> = None;
@@ -632,11 +632,11 @@ impl Workers {
                             AiKind::Magic { seeds, tolerance } => Ok(sk_ai::magic_mask(&guide, &seeds, tolerance)),
                             AiKind::Subject => {
                                 let generation = sk_ai::runtime::config_generation();
-                                if model.as_ref().is_none_or(|(_, g)| *g != generation) {
-                                    model = sk_ai::SubjectModel::load(&sk_ai::default_model_path()).map_err(|e| log::warn!("{e:#}")).ok().map(|m| (m, generation));
+                                if model.as_ref().is_none_or(|(_, g)| *g != generation) && sk_ai::subject::available() {
+                                    model = sk_ai::subject::SubjectNet::load().map_err(|e| log::warn!("{e:#}")).ok().map(|m| (m, generation));
                                 }
                                 match &model {
-                                    Some((m, _)) => m.subject_mask(&guide).map_err(|e| format!("{e:#}")),
+                                    Some((m, _)) => m.mask(&guide).map_err(|e| format!("{e:#}")),
                                     None => Err("MODEL_MISSING".into()),
                                 }
                             }

@@ -1076,8 +1076,10 @@ impl App {
             });
         }
         match ai_action {
-            Some(k @ (1 | 2)) => {
-                let kind = if k == 1 { crate::workers::AiKind::Subject } else { crate::workers::AiKind::Sky };
+            // Found without a model.
+            Some(2) => self.request_ai(crate::workers::AiKind::Sky),
+            Some(1) => {
+                let kind = crate::workers::AiKind::Subject;
                 let generation = self.generation();
                 // The layer chosen now, even if another one is active when the model is there.
                 let layer = self.ensure_layer().and_then(|i| self.layer_id(i));

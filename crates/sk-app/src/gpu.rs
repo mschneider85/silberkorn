@@ -104,7 +104,7 @@ impl App {
                 }
             });
 
-            dialog::card(ui, "Zwischenspeicher", None, |ui| self.denoise_cache_ui(ui));
+            dialog::card(ui, "Zwischenspeicher", None, |ui| self.product_cache_ui(ui));
             dialog::footer(ui, |ui| {
                 if dialog::default_button(ui, true, dialog::primary("Schließen")) {
                     close = true;

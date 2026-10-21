@@ -607,7 +607,7 @@ impl Processor {
         let input = if self.adj.retouch.is_empty() && self.adj.removals.is_empty() {
             let win = plan.geo.source_window(ext);
             args.win = [win.0 as u32, win.1 as u32, win.2 as u32, win.3 as u32];
-            let k = key(&format!("{:p}|{}x{}|{}|{win:?}", src.data.as_ptr(), src.width, src.height, crate::ai_denoise::fingerprint(src)));
+            let k = key(&format!("{:p}|{}x{}|{}|{win:?}", src.data.as_ptr(), src.width, src.height, crate::ai_product::fingerprint(src)));
             let mut c = cache.map(|c| c.gpu.lock().unwrap_or_else(|e| e.into_inner()));
             match c.as_mut().and_then(|c| c.source.as_ref().filter(|(ck, _)| *ck == k).map(|(_, b)| b.clone())) {
                 Some(b) => b,
@@ -632,7 +632,7 @@ impl Processor {
                 src.data.as_ptr(),
                 src.width,
                 src.height,
-                crate::ai_denoise::fingerprint(src),
+                crate::ai_product::fingerprint(src),
                 self.retouch_relevant()
             ));
             let mut c = cache.map(|c| c.gpu.lock().unwrap_or_else(|e| e.into_inner()));

@@ -1,6 +1,7 @@
-//! The AI functions and the models they need. All models (and on Windows the AI acceleration)
+//! The AI functions and the models they need. The models (and on Windows the AI acceleration)
 //! are fetched quietly at startup, without asking; the start screen shows the progress, then the
-//! status bar. A function used before its model is there downloads it first and then carries on.
+//! status bar.
+//! A function used before its model is there downloads it first and then carries on.
 //! Model names and licenses appear in the licenses dialog (see `licenses`).
 
 use sk_ai::models::{self, ModelInfo};
@@ -15,20 +16,22 @@ pub enum AiFeature {
     Inpaint,
     Depth,
     Faces,
+    Deblur,
 }
 
 impl AiFeature {
-    pub const ALL: [AiFeature; 6] = [Self::Denoise, Self::Subject, Self::Object, Self::Inpaint, Self::Depth, Self::Faces];
+    pub const ALL: [AiFeature; 7] = [Self::Denoise, Self::Subject, Self::Object, Self::Inpaint, Self::Depth, Self::Faces, Self::Deblur];
 
     /// What the user uses it for.
     pub fn label(self) -> &'static str {
         match self {
             Self::Denoise => "KI-Entrauschen",
-            Self::Subject => "Motiv und Himmel auswählen",
+            Self::Subject => "Motiv auswählen",
             Self::Object => "Objekt auswählen",
             Self::Inpaint => "Entfernen",
             Self::Depth => "Tiefenkarte",
             Self::Faces => "Gesichter und Augen",
+            Self::Deblur => "Verwacklung entfernen",
         }
     }
 
@@ -37,6 +40,7 @@ impl AiFeature {
             Self::Inpaint => &[&models::INPAINT],
             Self::Depth => &[&models::DEPTH],
             Self::Faces => &sk_ai::faces::NEEDED,
+            Self::Deblur => &[&models::DEBLUR, &models::DEBLUR_WEIGHTS],
             Self::Denoise | Self::Subject | Self::Object => &[],
         }
     }
@@ -44,7 +48,7 @@ impl AiFeature {
     pub fn available(self) -> bool {
         match self {
             Self::Denoise => sk_ai::denoise::available(),
-            Self::Subject => sk_ai::model_available(),
+            Self::Subject => sk_ai::model_available() && models::available(&models::SUBJECT_EDGES),
             Self::Object => sk_ai::segment::available(),
             _ => self.files().iter().all(|m| models::available(m)),
         }
@@ -53,7 +57,8 @@ impl AiFeature {
     pub fn download_mb(self) -> u64 {
         match self {
             Self::Denoise => sk_ai::denoise::download_mb(),
-            Self::Subject => models::SUBJECT.size_mb(),
+            Self::Subject => (models::SUBJECT.bytes + models::SUBJECT_EDGES.bytes).div_ceil(1_000_000),
+            Self::Deblur => sk_ai::deblur::download_mb(),
             Self::Object => sk_ai::segment::download_mb(),
             _ => self.files().iter().map(|m| m.bytes).sum::<u64>().div_ceil(1_000_000),
         }
@@ -62,7 +67,15 @@ impl AiFeature {
     fn download(self, progress: &dyn Fn(f32)) -> anyhow::Result<()> {
         match self {
             Self::Denoise => sk_ai::denoise::download(progress),
-            Self::Subject => sk_ai::download_model(progress).map(|_| ()),
+            Self::Subject => {
+                // U²-Net for automatic adjustments, BiRefNet for the subject mask.
+                let total = (models::SUBJECT.bytes + models::SUBJECT_EDGES.bytes) as f32;
+                let first = models::SUBJECT.bytes as f32 / total;
+                if !sk_ai::model_available() {
+                    sk_ai::download_model(&|p| progress(p * first))?;
+                }
+                models::download(&models::SUBJECT_EDGES, &|p| progress(first + p * (1.0 - first))).map(|_| ())
+            }
             Self::Object => sk_ai::segment::download(progress),
             _ => {
                 let files: Vec<_> = self.files().iter().filter(|m| !models::available(m)).collect();
@@ -200,7 +213,7 @@ impl App {
                 // Not tried again by itself: only when the user asks for the feature again.
                 self.status = format!("{}: Laden des KI-Modells abgebrochen", f.label());
                 match f {
-                    AiFeature::Denoise => self.denoise_download_cancelled(),
+                    AiFeature::Denoise | AiFeature::Deblur => self.product_download_cancelled(f),
                     AiFeature::Depth => self.depth_download_cancelled(),
                     _ => {}
                 }

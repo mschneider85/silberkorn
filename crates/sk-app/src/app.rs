@@ -803,7 +803,9 @@ pub struct App {
     /// Background jobs whose end is not reported in the status bar.
     pub quiet_jobs: Vec<String>,
     /// Images waiting for their AI denoised data.
-    pub denoise: crate::denoise::DenoiseQueue,
+    pub denoise: crate::ai_products::ProductQueue,
+    /// Images waiting for the removal of camera shake.
+    pub deblur: crate::ai_products::ProductQueue,
     /// Depth maps being computed (lens blur, depth masks).
     pub depth: crate::depth::DepthQueue,
 }
@@ -843,6 +845,7 @@ impl App {
         }
         sk_ai::runtime::set_gpu_enabled(settings.ai_gpu.unwrap_or(true));
         sk_ai::denoise::register();
+        sk_ai::deblur::register();
         sk_ai::depth::register();
         sk_core::gpu::set_enabled(settings.develop_gpu.unwrap_or(true));
         // Sets up the graphics card and compiles the shaders while the window opens.
@@ -1155,6 +1158,7 @@ impl App {
             ai_downloads: Default::default(),
             quiet_jobs: Vec::new(),
             denoise: Default::default(),
+            deblur: Default::default(),
             depth: Default::default(),
         };
         app.reload_styles();
@@ -2215,7 +2219,7 @@ impl App {
             self.status = format!("{panic} (Details in panic.log)");
         }
         self.load_full_when_due(ctx);
-        self.pump_denoise();
+        self.pump_products();
         self.pump_hot_folder(ctx);
         self.pump_depth();
         self.poll_spot_search();
@@ -2439,7 +2443,7 @@ impl App {
                             self.status = "Objekt auswählen: das KI-Modell wird noch geladen …".into();
                         }
                         Err(e) if e == "MODEL_MISSING" => {
-                            self.status = "Motiv und Himmel: das KI-Modell wird noch geladen …".into();
+                            self.status = "Motiv auswählen: das KI-Modell wird noch geladen …".into();
                         }
                         Err(e) => self.report_error(format!("Maske fehlgeschlagen: {e}")),
                     }

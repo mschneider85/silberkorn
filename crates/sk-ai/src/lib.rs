@@ -1,6 +1,7 @@
 //! Masks computed from image content:
 //!
-//! - subject selection with a salient-object network (U²-Net, ONNX, run with tract),
+//! - subject selection with a salient-object network (U²-Net, ONNX, for the automatic
+//!   adjustments; the mask tool uses BiRefNet, see `subject`),
 //! - sky selection (heuristic: bright, smooth, blue or neutral regions connected to the top),
 //! - "magic brush" region growing from a seed point,
 //!
@@ -8,12 +9,14 @@
 
 pub mod denoise;
 pub mod auto;
+pub mod deblur;
 pub mod depth;
 pub mod faces;
 pub mod inpaint;
 pub mod models;
 pub mod runtime;
 pub mod segment;
+pub mod subject;
 pub mod tiles;
 pub mod worker;
 
@@ -45,7 +48,12 @@ pub struct Guide {
 impl Guide {
     /// Resamples to the mask resolution (area average).
     fn at_mask_resolution(&self) -> Guide {
-        let k = MASK_EDGE as f32 / self.width.max(self.height) as f32;
+        self.at_edge(MASK_EDGE)
+    }
+
+    /// Resamples to at most `edge` pixels on the long side (area average).
+    fn at_edge(&self, edge: usize) -> Guide {
+        let k = edge as f32 / self.width.max(self.height) as f32;
         let (w, h) = (((self.width as f32 * k).round() as usize).max(1), ((self.height as f32 * k).round() as usize).max(1));
         let img = sk_core::image::LinearImage::new(self.width, self.height, self.rgb.clone());
         let r = if k < 1.0 { img.resize_area(w, h) } else { img };

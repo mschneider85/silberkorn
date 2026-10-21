@@ -941,6 +941,9 @@ pub struct Detail {
     pub dehaze: f32,
     /// AI denoising (see `ai_denoise`): how much of the cleaned raw data replaces the plain one, 0..100.
     pub ai_denoise: f32,
+    /// Camera shake and motion blur removed by a network (see `ai_deblur`), 0..100.
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub ai_deblur: f32,
     /// Glow (Orton effect): a blurred copy of the bright parts screened over the image, 0..100.
     #[serde(skip_serializing_if = "is_zero_f32")]
     pub glow_amount: f32,
@@ -975,6 +978,7 @@ impl Default for Detail {
             vignette_amount: 0.0,
             dehaze: 0.0,
             ai_denoise: 0.0,
+            ai_deblur: 0.0,
             glow_amount: 0.0,
             glow_size: GLOW_SIZE,
         }

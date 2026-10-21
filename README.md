@@ -222,8 +222,12 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
 
 ### Auswahl aus Bildinhalt
 
-- **Motiv auswählen:** neuronales Netz U²-Net-p (Apache-2.0, 4,6 MB). Das Modell wird beim Programmstart
-  still nach `~/.local/share/silberkorn/models/` geladen (oder `SILBERKORN_MODEL=<pfad>`).
+- **Motiv auswählen:** neuronales Netz BiRefNet lite (MIT, 224 MB, Export von onnx-community). Es sieht das
+  ganze Bild auf 1024 × 1024 gestreckt und trennt auch Haare, Fell und dünne Teile; die Maske hat 1024 Pixel
+  an der langen Seite (andere Masken 768). Etwa 1–2 s auf der Grafikkarte, 15 s mit ONNX Runtime und
+  45 s mit tract auf dem Prozessor. Automatisch anpassen und Look angleichen nehmen weiter das schnelle
+  U²-Net-p (Apache-2.0, 4,6 MB; `SILBERKORN_MODEL=<pfad>`). Beide werden beim Programmstart still nach
+  `~/.local/share/silberkorn/models/` geladen.
 - **Himmel auswählen:** helle, strukturarme, blaue oder neutrale Bereiche, die mit dem oberen Rand verbunden sind.
 - **Zauberpinsel (J):** über den Bereich malen; gewählt wird, was zusammenhängt und einer der überstrichenen Farben ähnelt (Größe und Toleranz einstellbar).
 - **Objekt (Umschalt+J):** auf ein Objekt klicken, es wird ausgewählt; weitere Klicks verfeinern, Alt+Klick
@@ -235,11 +239,11 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
 - **Helligkeitsbereich** und **Farbbereich** (mit Pipette, unter „Maske“ → „Eingrenzen“) beschränken jede Maske.
 - **Stilpinsel** (+ unter der Ebenenliste → „Neue Ebene mit Stilpinsel“): Stilpinsel (Aufhellen, Abdunkeln, Wärmer, Haut glätten, Dunst entfernen, …).
 
-### KI-Werkzeuge: Entrauschen und Entfernen
+### KI-Werkzeuge: Entrauschen, Verwacklung entfernen und Entfernen
 
 Die neuronalen Netze werden nicht mitgeliefert, sondern nach `~/.local/share/silberkorn/models/`
-geladen (`SILBERKORN_MODELS=<ordner>` überschreibt den Ort), und zwar alle still beim Programmstart, ohne
-Nachfrage (zusammen etwa 310 MB, unter Windows samt KI-Beschleunigung). Der Startbildschirm zeigt den
+geladen (`SILBERKORN_MODELS=<ordner>` überschreibt den Ort), und zwar still beim Programmstart, ohne
+Nachfrage (zusammen etwa 780 MB, unter Windows samt KI-Beschleunigung). Der Startbildschirm zeigt den
 Fortschritt, danach läuft der Download in der Statusleiste weiter; man kann sofort arbeiten. Wird eine
 Funktion benutzt, bevor ihr Modell da ist (oder fehlte beim Start das Internet), sieht man den Fortschritt
 am Werkzeug, danach läuft die Funktion von selbst weiter; ein fehlgeschlagener Download wird beim
@@ -248,7 +252,7 @@ festgelegt); ein abgebrochener Download wird beim nächsten Versuch fortgesetzt.
 
 **Kennzeichnung:** KI-Funktionen tragen ein gelbes Funken-Symbol hinter ihrem Namen, in den
 Werkzeugbereichen (Objektivunschärfe, Neu ausleuchten, Atmosphäre, Entfernen, Gesichter & Sichtung),
-an Werkzeugen und Knöpfen (Objekt, Motiv, Himmel, Tiefe, KI-Entrauschen), in den Menüs
+an Werkzeugen und Knöpfen (Objekt, Motiv, Himmel, Tiefe, KI-Entrauschen, Verwacklung entfernen), in den Menüs
 und in der Befehlspalette.
 
 **KI-Beschleunigung** (Bearbeiten → „Grafikkarte …“, Abschnitt „KI-Berechnung“, Windows): Die Netze rechnen dann über
@@ -287,6 +291,17 @@ erscheint zusätzlich oben im Bild.
   in die RAW-Daten: nicht-destruktiv, rückgängig zu machen, gilt für Vorschau, Export und
   Thumbnails. Fehlt es beim Export, wird es dort berechnet – nie wird stillschweigend ohne
   exportiert. Kommandozeile: `cargo run --release -p sk-ai --example denoise -- <raw> <ordner> [stärke] [--linear]`
+- **Verwacklung entfernen** (Tab „Details“, Abschnitt „Schärfen“): NAFNet (Liangyu Chen et al., Megvii,
+  MIT), trainiert auf REDS, im ONNX-Export von Qualcomm AI Hub (Netz und Gewichte als zwei Dateien, 273 MB,
+  per Teil-Download aus dem Archiv). Das Netz kennt 8-Bit-sRGB-Fotos:
+  Die demosaicten Daten werden weißabgeglichen, in den Arbeitsfarbraum gebracht und sRGB-kodiert, in
+  Kacheln zu 640 × 360 mit 48 Überlappung geschärft und wieder dekodiert; übersteuerte Lichter bleiben.
+  Gespeichert wird nur, was das Netz geändert hat (`~/.cache/silberkorn/deblur/`, höchstens 10 GB;
+  `SILBERKORN_DEBLUR_CACHE`), und **Stärke** addiert es nach dem KI-Entrauschen. Sonst wie dort:
+  einmal je Bild im Hintergrund, nicht-destruktiv, beim Export notfalls nachberechnet. Rechenaufwand:
+  24 MP etwa 8 min mit ONNX Runtime auf 12 Kernen, mit tract etwa dreimal so lang; auf der Grafikkarte
+  deutlich schneller. Für verwackelte oder bewegte Aufnahmen gedacht: Bei scharfen Bildern glättet das
+  Netz feine Details und Rauschen. Kommandozeile: `cargo run --release -p sk-ai --example deblur -- <raw> <ordner> [stärke]`
 - **Entfernen** (X, Tab „Retusche“): Über Störendes malen; beim Loslassen füllt MI-GAN
   (Picsart, MIT, 30 MB) die Stelle passend zur Umgebung. Gefüllt wird in voller Auflösung, bei
   größeren Markierungen in mehreren 512er-Fenstern nacheinander; erst sehr große Flächen werden
@@ -958,3 +973,4 @@ Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verklei
 - **Phase 11 (fertig):** XMP-Austausch, Stapel, Viewer auf dem Zweitmonitor, Softproof, HDR und Panorama, KI-Entrauschen, Entfernen, Gesichter und Sichtung
 - **Phase 12 (fertig):** Anpassungen werkzeugweise kopieren und übertragen, Stile mit Werkzeugauswahl (übereinander anwendbar), eigene Tastenkürzel, eigene Farbbereiche im Farbeditor, Luma-Kurve
 - **Phase 13 (fertig):** Neu ausleuchten und Atmosphäre über die Tiefenkarte, Leuchten (Orton), Stile als Vorschau-Raster, Focus Stacking
+- **Phase 14 (fertig):** Motiv auswählen mit BiRefNet (genaue Kanten), Verwacklung entfernen (NAFNet)
