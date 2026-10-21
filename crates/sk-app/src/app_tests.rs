@@ -1168,6 +1168,15 @@ fn proof_shows_the_image_as_the_recipe_writes_it() {
     f.app.edit(|adj| adj.exposure = 1.0); // (unchanged value, but a new edit version)
     proof_ready(&mut f, "Proof mit anderer Qualität");
     assert!(f.app.proof.as_ref().unwrap().file_size > size, "Qualität 95 > 70");
+
+    // Back to the first state: its proof is shown again at once, without computing it.
+    let exposure = f.app.current.as_ref().unwrap().adjustments.exposure;
+    f.app.recipes[0].quality = 70;
+    f.app.edit(|adj| adj.exposure = 0.0);
+    assert_ne!(exposure, 0.0);
+    f.app.update_proof(&f.ctx.clone());
+    let p = f.app.proof.as_ref().expect("Proof aus dem Zwischenspeicher");
+    assert_eq!((p.version, p.key, p.file_size), (f.app.edit_version, key, size));
 }
 
 #[test]

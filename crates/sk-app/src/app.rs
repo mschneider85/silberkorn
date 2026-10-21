@@ -241,9 +241,12 @@ struct ProofKeyCache {
 }
 
 /// A finished proof of the current image (see `App::proof_view`).
+#[derive(Clone)]
 pub struct ProofView {
     pub version: u64,
     pub key: u64,
+    /// The image and its settings the proof was made of (see `proof_state`).
+    pub state: Option<(PathBuf, u64)>,
     pub texture: TextureHandle,
     /// Size of the exported image and its file.
     pub width: usize,
@@ -251,6 +254,8 @@ pub struct ProofView {
     pub file_size: usize,
 }
 
+/// How many proofs are kept (each a texture of up to the export size).
+const PROOF_CACHE_MAX: usize = 3;
 /// How many recently viewed or prefetched images are kept in memory.
 const READY_MAX: usize = 6;
 /// The full resolution is only decoded once the user stays on an image this long (or zooms in),
@@ -760,6 +765,9 @@ pub struct App {
     pub(crate) proof: Option<ProofView>,
     /// (generation, edit version, recipe key) of the last proof request.
     proof_requested: Option<(u64, u64, u64)>,
+    /// Recent proofs, newest last: back on an image (or undone to a state) they are shown again
+    /// without computing them anew.
+    proof_cache: Vec<ProofView>,
     proof_key_cache: std::cell::RefCell<ProofKeyCache>,
     pub show_shortcuts: bool,
     pub show_licenses: bool,
@@ -1064,6 +1072,7 @@ impl App {
             proof_view: false,
             proof: None,
             proof_requested: None,
+            proof_cache: Vec::new(),
             proof_key_cache: Default::default(),
             show_shortcuts: false,
             show_licenses: false,
@@ -1713,6 +1722,13 @@ impl App {
         c.key
     }
 
+    /// The current image and a hash of its settings, to find a proof of it again.
+    fn proof_state(&self) -> Option<(PathBuf, u64)> {
+        let path = self.current_path()?;
+        let json = serde_json::to_string(&self.current.as_ref()?.adjustments).ok()?;
+        Some((path, sk_core::cache::fnv1a(json.as_bytes())))
+    }
+
     /// Requests a proof of the current state when the proof view is on.
     pub(crate) fn update_proof(&mut self, ctx: &egui::Context) {
         if !self.proof_view || self.pointer_down || self.style_preview.is_some() {
@@ -1729,6 +1745,11 @@ impl App {
             return;
         }
         self.proof_requested = Some(want);
+        let state = self.proof_state();
+        if let Some(p) = self.proof_cache.iter().rev().find(|p| p.key == key && p.state.is_some() && p.state == state) {
+            self.proof = Some(ProofView { version: self.edit_version, ..p.clone() });
+            return;
+        }
         self.workers.proof(crate::workers::ProofJob {
             generation: self.generation,
             version: self.edit_version,
@@ -2339,7 +2360,17 @@ impl App {
                     match result {
                         Ok(p) => {
                             let texture = ctx.load_texture("proof", p.image, TextureOptions::LINEAR);
-                            self.proof = Some(ProofView { version, key, texture, width: p.width, height: p.height, file_size: p.file_size });
+                            // Only a proof of the state still shown can be found again.
+                            let state = if version == self.edit_version { self.proof_state() } else { None };
+                            let proof = ProofView { version, key, state, texture, width: p.width, height: p.height, file_size: p.file_size };
+                            if proof.state.is_some() {
+                                self.proof_cache.retain(|c| c.state != proof.state || c.key != key);
+                                self.proof_cache.push(proof.clone());
+                                if self.proof_cache.len() > PROOF_CACHE_MAX {
+                                    self.proof_cache.remove(0);
+                                }
+                            }
+                            self.proof = Some(proof);
                         }
                         Err(e) => self.report_error(format!("Ausgabevorschau fehlgeschlagen: {e}")),
                     }
