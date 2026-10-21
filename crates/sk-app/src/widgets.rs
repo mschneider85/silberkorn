@@ -346,7 +346,7 @@ fn section_inner(
         let b = egui::Button::new(RichText::new(theme::icon::ARROWS_COUNTER_CLOCKWISE).size(13.0).color(color)).frame_when_inactive(false);
         // With Shift the tool is only left out of the view while the button is held.
         let peek = eye_tool.filter(|_| ui.input(|i| i.modifiers.shift));
-        let hover = if eye_tool.is_some() { "Werkzeug zurücksetzen\nShift gedrückt halten: Wirkung vorübergehend ausblenden" } else { "Werkzeug zurücksetzen" };
+        let hover = if eye_tool.is_some() { "Werkzeug zurücksetzen\nUmschalt gedrückt halten: Wirkung vorübergehend ausblenden" } else { "Werkzeug zurücksetzen" };
         let br = ui.put(r, b).on_hover_text(hover);
         if let Some(tool) = peek.filter(|_| br.is_pointer_button_down_on()) {
             ui.data_mut(|d| d.insert_temp(peek_id(), tool));

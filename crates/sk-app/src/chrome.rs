@@ -24,11 +24,17 @@ impl App {
     }
 
     pub fn reset_adjustments(&mut self) {
-        // As a new image starts: with the camera's look, if new images get it.
+        let reset = self.reset_target();
+        self.edit(|a| *a = reset.clone());
+    }
+
+    /// What "Alle Anpassungen zurücksetzen" gives: as a new image starts, with the camera's
+    /// look if new images get it.
+    fn reset_target(&self) -> Adjustments {
         let looked = self.current.as_ref().and_then(|c| {
             sk_core::camera_look::apply_if_wanted(&c.meta, &c.preview, &Adjustments::default(), sk_core::camera_look::for_new())
         });
-        self.edit(|a| *a = looked.clone().unwrap_or_default());
+        looked.unwrap_or_default()
     }
 
     pub fn toggle_crop(&mut self) {
@@ -453,7 +459,15 @@ impl App {
             if tool(ui, icon::CLIPBOARD_TEXT, &paste_hover, false, self.clipboard.is_some() && !on_layer).clicked() {
                 self.paste_adjustments();
             }
-            if tool(ui, icon::ARROWS_COUNTER_CLOCKWISE, &image_hover("Alle Anpassungen zurücksetzen"), false, image).clicked() {
+            // With Umschalt the image is only shown reset while the button is held (as the reset
+            // of a tool).
+            let reset_hover = image_hover("Alle Anpassungen zurücksetzen\nUmschalt gedrückt halten: Bild vorübergehend ohne Anpassungen");
+            let reset = tool(ui, icon::ARROWS_COUNTER_CLOCKWISE, &reset_hover, false, image);
+            let peek = ui.input(|i| i.modifiers.shift);
+            if peek && image && reset.is_pointer_button_down_on() {
+                self.preview_style(self.reset_target());
+            }
+            if reset.clicked() && !peek {
                 self.reset_adjustments();
             }
 
