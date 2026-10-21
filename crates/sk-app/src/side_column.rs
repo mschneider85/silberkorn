@@ -45,12 +45,23 @@ impl App {
             SideColumn::Off => false,
             SideColumn::Always => true,
             SideColumn::Auto => {
+                // Several images side by side fill the viewer whatever their shape: keep the
+                // current state, else it comes and goes while stepping through them.
+                if !self.compare_cells().is_empty() {
+                    return self.side_column_shown;
+                }
+                // While the next image loads, the texture is still the previous one's.
+                let loading = self.loading.is_some();
                 let size = match (&self.texture, &self.placeholder) {
+                    (_, Some(ph)) if loading => ph.size_vec2(),
+                    (Some(_), _) if loading => return self.side_column_shown,
                     (Some(tex), _) => self.view_size.unwrap_or(tex.size_vec2()),
                     (None, Some(ph)) => ph.size_vec2(),
                     // Nothing to measure (image loading): keep the current state.
                     (None, None) => return self.side_column_shown,
                 };
+                // With the print preview, the paper around the image counts.
+                let size = size * self.paper_frame(size).map_or(Vec2::splat(1.0), |p| p.rel.max(Vec2::splat(1.0)));
                 let Some(r) = self.viewer_rect else { return false };
                 // Viewer width without the column; last frame's rect may already exclude it.
                 let w = r.width() + if self.side_column_shown { WIDTH } else { 0.0 };
