@@ -1486,11 +1486,25 @@ pub fn levels_editor(ui: &mut Ui, set: &mut LevelSet, bins: Option<&[f32]>, colo
     *set != before
 }
 
+/// Sets edge `i` of a luminance range (falloff low, low, high, falloff high) to `v`; the edges it
+/// runs into are pushed along, keeping the range at least one level wide.
+fn push_luma_edge(r: &mut sk_core::params::LumaRange, i: usize, v: f32) {
+    const GAPS: [f32; 3] = [0.0, 1.0 / 255.0, 0.0];
+    let mut e = [r.falloff_low, r.low, r.high, r.falloff_high];
+    e[i] = v.clamp(GAPS[..i].iter().sum(), 1.0 - GAPS[i..].iter().sum::<f32>());
+    for j in (0..i).rev() {
+        e[j] = e[j].min(e[j + 1] - GAPS[j]);
+    }
+    for j in i + 1..4 {
+        e[j] = e[j].max(e[j - 1] + GAPS[j - 1]);
+    }
+    [r.falloff_low, r.low, r.high, r.falloff_high] = e;
+}
+
 /// The luminance range of a mask as in Capture One: a trapezoid over the histogram, fully in
 /// between the upper handles (the range), fading out to the lower ones (the falloff). Dragging
 /// the trapezoid moves all four; double-click resets.
 pub fn luma_range_editor(ui: &mut Ui, r: &mut sk_core::params::LumaRange, bins: Option<&[f32]>) -> bool {
-    const MIN_GAP: f32 = 1.0 / 255.0;
     let before = *r;
     let width = ui.available_width();
     let spacing = ui.spacing().item_spacing.y;
@@ -1587,49 +1601,31 @@ pub fn luma_range_editor(ui: &mut Ui, r: &mut sk_core::params::LumaRange, bins: 
             None
         }
     };
+    let set = push_luma_edge;
     let d = sk_core::params::LumaRange::default();
-    if let Some(v) = handle(ui, top, r.low, true, "Bereich Anfang") {
-        r.low = v.unwrap_or(d.low).min(r.high - MIN_GAP).max(0.0);
-        r.falloff_low = r.falloff_low.min(r.low);
-    }
-    if let Some(v) = handle(ui, top, r.high, true, "Bereich Ende") {
-        r.high = v.unwrap_or(d.high).max(r.low + MIN_GAP).min(1.0);
-        r.falloff_high = r.falloff_high.max(r.high);
-    }
-    if let Some(v) = handle(ui, bottom, r.falloff_low, false, "Übergang Anfang") {
-        r.falloff_low = v.unwrap_or(d.falloff_low).min(r.low);
-    }
-    if let Some(v) = handle(ui, bottom, r.falloff_high, false, "Übergang Ende") {
-        r.falloff_high = v.unwrap_or(d.falloff_high).max(r.high);
+    let defaults = [d.falloff_low, d.low, d.high, d.falloff_high];
+    for (i, track, down, name) in [(1, top, true, "Bereich Anfang"), (2, top, true, "Bereich Ende"), (0, bottom, false, "Übergang Anfang"), (3, bottom, false, "Übergang Ende")] {
+        let value = [r.falloff_low, r.low, r.high, r.falloff_high][i];
+        if let Some(v) = handle(ui, track, value, down, name) {
+            set(r, i, v.unwrap_or(defaults[i]));
+        }
     }
 
-    // The values as numbers (0–255, as in Levels), for exact input.
-    let byte = |ui: &mut Ui, v: &mut f32, lo: f32, hi: f32| -> bool {
+    // The values as numbers (0–255, as in Levels), for exact input; they push the others too.
+    let byte = |ui: &mut Ui, r: &mut sk_core::params::LumaRange, i: usize| {
+        let v = [r.falloff_low, r.low, r.high, r.falloff_high][i];
         let mut n = (v.clamp(0.0, 1.0) * 255.0).round() as i32;
-        let resp = ui.add(egui::DragValue::new(&mut n).range((lo.max(0.0) * 255.0).ceil() as i32..=(hi.min(1.0) * 255.0).floor() as i32).speed(0.5));
-        if resp.changed() {
-            *v = n as f32 / 255.0;
+        if ui.add(egui::DragValue::new(&mut n).range(0..=255).speed(0.5)).changed() {
+            set(r, i, n as f32 / 255.0);
         }
-        resp.changed()
     };
     ui.add_space(4.0);
-    for (label, inner) in [("Bereich", true), ("Übergang", false)] {
+    for (label, [left, right]) in [("Bereich", [1, 2]), ("Übergang", [0, 3])] {
         ui.horizontal(|ui| {
             ui.label(RichText::new(label).color(theme::TEXT_DIM));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if inner {
-                    let (lo, hi) = (r.low, r.high);
-                    if byte(ui, &mut r.high, lo + MIN_GAP, 1.0) {
-                        r.falloff_high = r.falloff_high.max(r.high);
-                    }
-                    if byte(ui, &mut r.low, 0.0, hi - MIN_GAP) {
-                        r.falloff_low = r.falloff_low.min(r.low);
-                    }
-                } else {
-                    let (lo, hi) = (r.low, r.high);
-                    byte(ui, &mut r.falloff_high, hi, 1.0);
-                    byte(ui, &mut r.falloff_low, 0.0, lo);
-                }
+                byte(ui, r, right);
+                byte(ui, r, left);
             });
         });
     }
@@ -1845,6 +1841,22 @@ pub fn images_dative(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn luma_edges_push_each_other() {
+        use sk_core::params::LumaRange;
+        let mut r = LumaRange { falloff_low: 0.0, low: 70.0 / 255.0, high: 239.0 / 255.0, falloff_high: 239.0 / 255.0 };
+        // The end of the falloff dragged left takes the range's end along, and then its start.
+        push_luma_edge(&mut r, 3, 0.5);
+        assert_eq!((r.high, r.falloff_high), (0.5, 0.5));
+        push_luma_edge(&mut r, 3, 0.1);
+        assert!((r.low - (0.1 - 1.0 / 255.0)).abs() < 1e-6 && r.high == 0.1, "{r:?}");
+        assert!(r.falloff_low <= r.low);
+        // From the other side, down to the last levels.
+        push_luma_edge(&mut r, 0, 1.0);
+        assert!(r.falloff_low <= r.low && r.low < r.high && r.high <= r.falloff_high && r.falloff_high <= 1.0, "{r:?}");
+        assert!((r.high - 1.0).abs() < 1e-6 && (r.low - (1.0 - 1.0 / 255.0)).abs() < 1e-6, "{r:?}");
+    }
 
     /// The colors of the hue bands look like their names: red is red, not pink.
     #[test]
