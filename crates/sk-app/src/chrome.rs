@@ -285,6 +285,7 @@ impl App {
         }
         self.command_item(ui, "match-look");
         self.command_item(ui, "look-add-image");
+        self.command_item(ui, "look-add-reference");
         self.command_item(ui, "look-add-file");
         ui.separator();
         let process = self.current.as_ref().map(|c| c.adjustments.process);

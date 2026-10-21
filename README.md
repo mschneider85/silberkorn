@@ -409,9 +409,10 @@ bleiben unberührt. Die Bereiche rechnen auf Grafikkarte und Prozessor gleich.
 - **Referenzbild** (Umschalt+Enter oder Rechtsklick in der Vergleichsansicht): Es bleibt links neben
   dem aktuellen Bild stehen, auch beim Durchblättern.
 - **Look angleichen** (Tab „Farbe“ oder Menü „Entwickeln“): Die Auswahl bekommt den Look einer oder
-  mehrerer Referenzen. Referenzen sind Bilddateien (JPEG, PNG, TIFF, WebP, etwa ein Filmstill; auch per
-  Ziehen und Ablegen) oder Bilder der Bibliothek, so wie sie bearbeitet sind. Die Liste zeigt jede
-  Referenz mit Vorschau und ihrer Ähnlichkeit zum aktuellen Bild. Verglichen wird, wie die Bilder
+  mehrerer Vorlagen. „Vorlage hinzufügen“ bietet eine Bilddatei (JPEG, PNG, TIFF, WebP, etwa ein
+  Filmstill; auch per Ziehen und Ablegen), das geöffnete Bild oder das Referenzbild der
+  Vergleichsansicht an, Bilder der Bibliothek so, wie sie bearbeitet sind. Jede Vorlage erscheint als
+  Kachel mit ihrer Ähnlichkeit zum aktuellen Bild. Verglichen wird, wie die Bilder
   aussehen, über Statistiken, die keine gleichen Motive brauchen:
   - Belichtung: mittlere Helligkeit.
   - Weißabgleich: Farbstich der fast neutralen Töne.
@@ -424,7 +425,7 @@ bleiben unberührt. Die Bereiche rechnen auf Grafikkarte und Prozessor gleich.
 
   Die **Ähnlichkeit** vergleicht Bildaufbau (ein grobes Helligkeitsraster nach Rang, unabhängig von
   Belichtung und Kurven, tolerant gegen etwas anderen Ausschnitt und Zoom), Helligkeitsverteilung, Farben (mit herausgerechnetem Farbstich) und
-  Himmelsanteil. Sie wirkt zweifach: Mehrere Referenzen werden nach Ähnlichkeit gewichtet. Und ein ähnliches Bild, etwa aus derselben Serie, wird vollständig
+  Himmelsanteil. Sie wirkt zweifach: Mehrere Vorlagen werden nach Ähnlichkeit gewichtet. Und ein ähnliches Bild, etwa aus derselben Serie, wird vollständig
   angeglichen. Bei einem anderen Motiv werden Belichtung, Tonwerte und Farben nur teilweise
   übernommen, damit z. B. ein Foto mit viel hellem Himmel nicht jedes Bild ausfrisst.
 

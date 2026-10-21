@@ -174,13 +174,17 @@ pub const COMMANDS: &[Command] = &[
         a.tab = Tab::Color;
         a.match_look_selection();
     }),
-    cmd!("look-add-file", icon::IMAGE, "Look-Referenz aus Bilddatei …", "Entwickeln", [], "match look datei jpeg film still referenz hinzufügen", always, |a, _| {
+    cmd!("look-add-file", icon::IMAGE, "Vorlage aus Bilddatei …", "Entwickeln", [], "match look datei jpeg film still referenz vorlage hinzufügen", always, |a, _| {
         if a.pick_look_files() {
             a.tab = Tab::Color;
         }
     }),
-    cmd!("look-add-image", icon::PLUS, "Dieses Bild als Look-Referenz", "Entwickeln", [], "match look referenz hinzufügen bibliothek", has_image, |a, _| {
+    cmd!("look-add-image", icon::PLUS, "Dieses Bild als Vorlage", "Entwickeln", [], "match look referenz vorlage hinzufügen bibliothek", has_image, |a, _| {
         a.add_current_as_look_ref();
+        a.tab = Tab::Color;
+    }),
+    cmd!("look-add-reference", icon::PUSH_PIN, "Referenzbild als Vorlage", "Entwickeln", [], "match look referenz vorlage hinzufügen vergleich", |a| a.reference_for_look().is_some(), |a, _| {
+        a.add_reference_as_look_ref();
         a.tab = Tab::Color;
     }),
     cmd!("previous", icon::CARET_LEFT, "Vorheriges Bild", "Foto", [NONE => Key::ArrowLeft], "zurück previous", has_images, |a, ctx| a.step(-1, shift(ctx))),

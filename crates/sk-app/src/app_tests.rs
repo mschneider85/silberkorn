@@ -1277,7 +1277,7 @@ fn compare_view_and_matching() {
 
     // With the first image as look reference, "Look angleichen" changes exposure and white
     // balance of the current image (the same scene: matched fully), as one undo step.
-    assert!(!f.app.can_match_look(), "noch keine Referenz");
+    assert!(!f.app.can_match_look(), "noch keine Vorlage");
     f.app.add_look_ref(crate::look::LookRef::Image(a.clone()));
     assert!(f.app.can_match_look());
     f.app.match_look_selection();
@@ -1312,7 +1312,7 @@ fn look_from_a_picture_file_with_strength() {
     .save(&file)
     .unwrap();
     f.app.add_look_ref(crate::look::LookRef::File(file.clone()));
-    f.pump("Referenz gemessen", |app| matches!(app.look_ref_state.get(&crate::look::LookRef::File(file.clone())), Some(crate::look::LookRefState::Ready(_))));
+    f.pump("Vorlage gemessen", |app| matches!(app.look_ref_state.get(&crate::look::LookRef::File(file.clone())), Some(crate::look::LookRefState::Ready(_))));
     assert!(f.app.can_match_look());
     // Twice the same: kept once.
     f.app.add_look_ref(crate::look::LookRef::File(file.clone()));

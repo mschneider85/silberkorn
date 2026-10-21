@@ -122,7 +122,7 @@ fn run(rx: &Receiver<LookRequest>, ev_tx: &Sender<Event>, ctx: &egui::Context, a
                         activity.touch();
                         let path = item.path.clone();
                         let result = if usable.is_empty() {
-                            Err(if failed.is_empty() { "Keine Referenz".to_string() } else { failed.join("; ") })
+                            Err(if failed.is_empty() { "Keine Vorlage".to_string() } else { failed.join("; ") })
                         } else {
                             let stats: Vec<LookStats> = usable.iter().filter_map(|r| cache.get(r).map(|m| m.stats.clone())).collect();
                             match_one(item, &stats, opts, &mut models).map(|m| LookResult {
