@@ -327,10 +327,7 @@ impl App {
             if let Some(p) = &l.profile {
                 ui.add(egui::Label::new(RichText::new(format!("Profil: {p}")).color(Color32::from_gray(170))).truncate()).on_hover_text(p.as_str());
             } else if loading {
-                ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label("Lade Objektivprofile …");
-                });
+                ui.label("Lade Objektivprofile …");
             }
             if let Some(f) = &focal {
                 crate::widgets::hint(ui, format!("Brennweite {f}"));

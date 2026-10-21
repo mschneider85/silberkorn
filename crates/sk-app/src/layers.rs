@@ -326,14 +326,25 @@ impl App {
 
     /// Index of the active layer, creating one if there is none.
     pub(crate) fn ensure_layer(&mut self) -> Option<usize> {
+        self.ensure_layer_named(None)
+    }
+
+    /// [`Self::ensure_layer`]; a new layer is called `name` (numbered if taken), e.g. after the
+    /// automatic selection that made it. The active layer keeps its name.
+    pub(crate) fn ensure_layer_named(&mut self, name: Option<&str>) -> Option<usize> {
         let cur = self.current.as_mut()?;
         if let Some(i) = self.active_layer
             && i < cur.adjustments.layers.len()
         {
             return Some(i);
         }
-        let n = cur.adjustments.layers.len() + 1;
-        cur.adjustments.layers.push(Layer { name: format!("Ebene {n}"), ..Default::default() });
+        let layers = &cur.adjustments.layers;
+        let taken = |n: &str| layers.iter().any(|l| l.name == n);
+        let name = match name {
+            Some(base) => (1..).map(|k| if k == 1 { base.to_string() } else { format!("{base} {k}") }).find(|n| !taken(n)).unwrap_or_default(),
+            None => format!("Ebene {}", layers.len() + 1),
+        };
+        cur.adjustments.layers.push(Layer { name, ..Default::default() });
         cur.adjustments.assign_layer_ids();
         self.active_layer = Some(cur.adjustments.layers.len() - 1);
         self.active_layer
@@ -1034,9 +1045,6 @@ impl App {
             {
                 ai_action = Some(6);
             }
-            if busy {
-                ui.spinner();
-            }
         });
         if let Some(layer) = layer.as_deref_mut() {
             if let Some(range) = layer.mask.ai.as_ref().and_then(|a| a.depth) {
@@ -1104,12 +1112,16 @@ impl App {
         }
         match ai_action {
             // Found without a model.
-            Some(2) => self.request_ai(crate::workers::AiKind::Sky),
+            Some(2) => {
+                if let Some(layer) = self.ensure_layer_named(Some("Himmel")) {
+                    self.request_ai_on(layer, crate::workers::AiKind::Sky);
+                }
+            }
             Some(1) => {
                 let kind = crate::workers::AiKind::Subject;
                 let generation = self.generation();
                 // The layer chosen now, even if another one is active when the model is there.
-                let layer = self.ensure_layer().and_then(|i| self.layer_id(i));
+                let layer = self.ensure_layer_named(Some("Motiv")).and_then(|i| self.layer_id(i));
                 self.with_ai(AiFeature::Subject, move |app| {
                     if app.generation() == generation
                         && let Some(i) = layer.and_then(|id| app.layer_index(id))
@@ -1119,7 +1131,7 @@ impl App {
                 });
             }
             Some(6) => {
-                if let Some(layer) = self.ensure_layer() {
+                if let Some(layer) = self.ensure_layer_named(Some("Tiefe")) {
                     self.object_session = None;
                     self.set_depth_mask(layer, None);
                 }
@@ -1758,7 +1770,6 @@ impl App {
                     find = true;
                 }
                 if searching {
-                    ui.spinner();
                     if let Some(c) = &self.spot_cancel {
                         crate::widgets::cancel_button(ui, c);
                     }

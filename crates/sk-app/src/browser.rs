@@ -726,6 +726,21 @@ impl App {
         Some((g.out_w as f32, g.out_h as f32))
     }
 
+    /// The view is at 100 % (not only zoomed in somehow): for the "100 %" switches.
+    pub fn at_zoom_100(&self) -> bool {
+        self.zoom.is_some() && self.zoom_pct.is_some_and(|p| (p - 100.0).abs() < 0.5)
+    }
+
+    /// The "100 %" switches: from the fitted view to 100 % at the middle, from another zoom to
+    /// 100 % around the spot in the middle of the view.
+    pub fn zoom_to_100(&mut self) {
+        if self.zoom.is_some() {
+            self.set_zoom_pct(100.0);
+        } else {
+            self.toggle_zoom_100();
+        }
+    }
+
     /// Zoom to 100 % (one full-resolution pixel per physical screen pixel) or back to fit.
     pub fn toggle_zoom_100(&mut self) {
         self.print.zoom = false;

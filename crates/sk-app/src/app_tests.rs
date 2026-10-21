@@ -991,6 +991,40 @@ fn zoom_percent_can_be_set_and_keeps_the_middle() {
     assert!((pct - 100.0).abs() < 0.5, "{pct}");
 }
 
+/// A layer made by Motiv, Himmel or Tiefe is named after it (numbered when taken); the active
+/// layer keeps its name.
+#[test]
+fn automatic_selection_names_its_new_layer() {
+    let Some(mut f) = Fixture::new("layer-names") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let names = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.layers.iter().map(|l| l.name.clone()).collect::<Vec<_>>();
+    f.app.ensure_layer_named(Some("Motiv"));
+    f.app.active_layer = None;
+    f.app.ensure_layer_named(Some("Motiv"));
+    f.app.active_layer = None;
+    f.app.ensure_layer();
+    assert_eq!(names(&f), ["Motiv", "Motiv 2", "Ebene 3"]);
+    // On the active layer: no new one, the name stays.
+    f.app.ensure_layer_named(Some("Himmel"));
+    assert_eq!(names(&f), ["Motiv", "Motiv 2", "Ebene 3"]);
+}
+
+/// The "100 %" switches are on only at 100 %, not at another zoom (221 %), and bring the view
+/// there from it.
+#[test]
+fn hundred_percent_switch_only_at_100() {
+    let Some(mut f) = Fixture::new("zoom_100") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    viewer_frame(&mut f, vec![]);
+    assert!(!f.app.at_zoom_100(), "eingepasst");
+    f.app.set_zoom_pct(221.0);
+    viewer_frame(&mut f, vec![]);
+    assert!(!f.app.at_zoom_100(), "{:?}", f.app.zoom_pct);
+    f.app.zoom_to_100();
+    viewer_frame(&mut f, vec![]);
+    assert!(f.app.at_zoom_100(), "{:?}", f.app.zoom_pct);
+}
+
 /// The slider keeps two decimals of log2: its upper end and 100 % still come out exactly.
 #[test]
 fn zoom_slider_reaches_whole_percents() {
