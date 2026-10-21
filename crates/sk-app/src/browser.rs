@@ -323,10 +323,13 @@ impl App {
             }
         }
 
-        // Filling the paper: what the print cuts off is dimmed.
-        if let Some(paper) = paper_rect.filter(|r| !r.contains_rect(img_rect)) {
-            let cut = paper.intersect(img_rect);
-            let dim = Color32::from_black_alpha(170);
+        // Filling the paper: the image as printed, cut to the paper; with Alt held, what the print
+        // cuts off is dimmed instead.
+        let mut printed_rect = img_rect;
+        if let Some(sheet) = paper_rect.filter(|r| !r.contains_rect(img_rect)) {
+            let cut = sheet.intersect(img_rect);
+            let show_cut = ui.input(|i| i.modifiers.alt);
+            let dim = if show_cut { Color32::from_black_alpha(170) } else { bg };
             for r in [
                 Rect::from_min_max(img_rect.min, pos2(img_rect.max.x, cut.min.y)),
                 Rect::from_min_max(pos2(img_rect.min.x, cut.max.y), img_rect.max),
@@ -337,16 +340,24 @@ impl App {
                     painter.rect_filled(r, 0.0, dim);
                 }
             }
-            painter.rect_stroke(cut, 0.0, egui::Stroke::new(1.0, Color32::from_white_alpha(140)), egui::StrokeKind::Outside);
+            if show_cut {
+                painter.rect_stroke(cut, 0.0, egui::Stroke::new(1.0, Color32::from_white_alpha(140)), egui::StrokeKind::Outside);
+            } else {
+                printed_rect = cut;
+                // The fine line of the format, covered by the image before.
+                if paper.as_ref().is_some_and(|p| p.color == bg) {
+                    painter.rect_stroke(cut, 0.0, egui::Stroke::new(1.0, Color32::from_gray(185)), egui::StrokeKind::Outside);
+                }
+            }
         }
 
         // Over the before image of the divider view as well.
         // The crop and straighten tools draw their own guides.
         if self.crop_tool.is_none() && self.straighten_tool.is_none() {
-            self.draw_guides(&painter, img_rect);
+            self.draw_guides(&painter, printed_rect);
             let now = ui.input(|i| i.time);
             if now < self.slider_grid_until {
-                crate::crop::draw_fine_grid(&painter, img_rect);
+                crate::crop::draw_fine_grid(&painter, printed_rect);
                 ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(self.slider_grid_until - now));
             }
         }
