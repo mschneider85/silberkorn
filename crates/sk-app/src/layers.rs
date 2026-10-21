@@ -1570,9 +1570,13 @@ impl App {
         let Some(cur) = self.current.as_ref() else { return };
         let names: Vec<String> = cur.adjustments.layers.iter().map(|l| l.name.clone()).collect();
         let active = self.active_layer.filter(|i| *i < names.len());
+        let shown = active.is_some_and(|i| cur.adjustments.layers[i].enabled);
         let mut pick: Option<Option<usize>> = None;
         let mut add = false;
         let mut toggle_mask = false;
+        let mut toggle_layer = false;
+        // Over the buttons the mask is not shown, else what they do can't be seen.
+        let mut over_buttons = false;
         let (fill, text) = if active.is_some() { (theme::ACCENT_SOFT, Color32::WHITE) } else { (theme::CONTROL, theme::TEXT_DIM) };
         let frame = egui::Frame::new().fill(fill).corner_radius(5).inner_margin(egui::Margin { left: 10, right: 4, top: 2, bottom: 2 });
         let r = frame.show(ui, |ui| {
@@ -1616,13 +1620,23 @@ impl App {
                 if active.is_some() {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let close = egui::Button::new(RichText::new(icon::X).size(13.0).color(text)).frame_when_inactive(false);
-                        if ui.add(close).on_hover_text(crate::commands::hint("Hintergrund bearbeiten", "edit-background")).clicked() {
+                        let close = ui.add(close);
+                        over_buttons |= close.hovered();
+                        if close.on_hover_text(crate::commands::hint("Hintergrund bearbeiten", "edit-background")).clicked() {
                             pick = Some(None);
                         }
-                        let ic = if self.show_mask { icon::EYE } else { icon::EYE_SLASH };
-                        let eye = egui::Button::new(RichText::new(ic).size(13.0).color(text)).frame_when_inactive(false).selected(self.show_mask);
-                        if ui.add(eye).on_hover_text(crate::commands::hint("Maske anzeigen", "show-mask")).clicked() {
+                        let mask = egui::Button::new(RichText::new(icon::SELECTION_FOREGROUND).size(13.0).color(text)).frame_when_inactive(false).selected(self.show_mask);
+                        let mask = ui.add(mask);
+                        over_buttons |= mask.hovered();
+                        if mask.on_hover_text(crate::commands::hint("Maske anzeigen", "show-mask")).clicked() {
                             toggle_mask = true;
+                        }
+                        let ic = if shown { icon::EYE } else { icon::EYE_CLOSED };
+                        let eye = egui::Button::new(RichText::new(ic).size(13.0).color(text)).frame_when_inactive(false);
+                        let eye = ui.add(eye);
+                        over_buttons |= eye.hovered();
+                        if eye.on_hover_text(if shown { "Ebene ausblenden" } else { "Ebene einblenden" }).clicked() {
+                            toggle_layer = true;
                         }
                     });
                 }
@@ -1633,11 +1647,14 @@ impl App {
             ui.painter().rect_filled(Rect::from_min_size(rect.left_top(), vec2(3.0, rect.height())), egui::CornerRadius { nw: 5, sw: 5, ne: 0, se: 0 }, theme::ACCENT);
         }
         ui.add_space(6.0);
-        let peek = active.is_some() && ui.rect_contains_pointer(r.response.rect);
+        let peek = active.is_some() && ui.rect_contains_pointer(r.response.rect) && !over_buttons;
         self.set_peek_mask(peek);
         if toggle_mask {
             self.show_mask = !self.show_mask;
             self.request_render();
+        }
+        if toggle_layer && let Some(li) = active {
+            self.apply_layer_action(Some(LayerAction::Toggle(li)));
         }
         if let Some(layer) = pick {
             self.select_layer(layer);

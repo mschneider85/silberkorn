@@ -206,7 +206,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("tool-remove", icon::SPARKLE, "Entfernen", "Retusche", [NONE => Key::X], "entfernen remove objekt", image_tool, |a, _| tool(a, LocalTool::Remove)),
     cmd!("brush-smaller", icon::MINUS, "Pinsel kleiner", "Ebenen", [NONE => Key::OpenBracket], "größe", always, |a, _| brush_size(a, 1.0 / 1.2)),
     cmd!("brush-larger", icon::PLUS, "Pinsel größer", "Ebenen", [NONE => Key::CloseBracket], "größe", always, |a, _| brush_size(a, 1.2)),
-    cmd!("show-mask", icon::EYE, "Maske anzeigen", "Ebenen", [NONE => Key::M], "mask", always, |a, _| {
+    cmd!("show-mask", icon::SELECTION_FOREGROUND, "Maske anzeigen", "Ebenen", [NONE => Key::M], "mask", always, |a, _| {
         a.show_mask = !a.show_mask;
         if a.show_mask && !a.on_layer() {
             a.status = "Maske anzeigen: keine Ebene gewählt".into();
