@@ -77,7 +77,8 @@ pub enum Event {
     AutoAdjusted { run: u64, path: PathBuf, kind: crate::auto_tools::AutoKind, result: Result<Option<Box<Adjustments>>, String> },
     /// Part of an image of the compare view at a higher resolution than its preview. `uv` is the
     /// part (0..1 of the output), `width` the whole output's width at this resolution.
-    CompareDetail { path: PathBuf, version: Option<u64>, uv: [f32; 4], width: f32, full_res: bool, image: ColorImage, focus: Option<Arc<Vec<u8>>> },
+    /// `before`: of the image without adjustments (see `DetailJob::before`).
+    CompareDetail { path: PathBuf, version: Option<u64>, uv: [f32; 4], width: f32, full_res: bool, image: ColorImage, focus: Option<Arc<Vec<u8>>>, before: bool },
     /// A style applied to the current image, for the style grid (see `style_grid`).
     StyleThumb { key: u64, id: String, image: ColorImage },
     /// Sharpness map of a displayed image for the focus mask.
@@ -184,6 +185,8 @@ pub struct DetailJob {
     /// Wanted width of the whole output in pixels (the full resolution at most).
     pub width: f32,
     pub focus: bool,
+    /// The image without adjustments (only its framing), for the before/after views.
+    pub before: bool,
 }
 
 /// Renders the image exactly as an export recipe would (size, color space, format).
@@ -1456,6 +1459,13 @@ fn render_detail(job: DetailJob, fulls: &mut Vec<(PathBuf, Arc<RawMeta>, Arc<Lin
             mf
         }
     };
+    let adj = if job.before {
+        let mut a = Adjustments::default();
+        a.keep_framing_from(&adj);
+        a
+    } else {
+        adj
+    };
     let p = Processor::new(&meta, &adj);
     let (fw, _) = p.output_size(full.width, full.height);
     let level = ((fw as f32 / job.width.max(1.0)).floor() as usize).max(1);
@@ -1479,6 +1489,7 @@ fn render_detail(job: DetailJob, fulls: &mut Vec<(PathBuf, Arc<RawMeta>, Arc<Lin
         full_res: level == 1,
         image,
         focus,
+        before: job.before,
     })
 }
 

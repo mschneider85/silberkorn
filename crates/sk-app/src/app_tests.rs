@@ -4154,3 +4154,31 @@ fn side_column_stays_while_the_next_image_loads() {
     f.app.loading = None;
     assert!(!f.app.side_column_wanted(false), "ohne Bild nicht");
 }
+
+/// Zoomed in on a split view, the before image gets the same sharpness as the after image: its
+/// visible part is rendered from the full resolution too.
+#[test]
+fn split_view_renders_the_before_image_sharp_when_zoomed_in() {
+    let Some(mut f) = Fixture::new("before-detail") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    f.app.edit(|a| a.exposure = 1.0);
+    f.app.toggle_split();
+    f.app.send_render();
+    f.pump("Vorher", |a| a.before_texture.is_some());
+    f.app.want_full_now();
+    f.pump("volle Auflösung", |a| {
+        a.current.as_ref().is_some_and(|c| c.full.is_some())
+    });
+    // Zoomed in far: the preview is magnified on screen.
+    f.app.zoom = Some(4.0);
+    let start = Instant::now();
+    while f.app.before_detail.is_none() {
+        assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: Vorher scharf");
+        viewer_frame(&mut f, vec![]);
+        f.app.handle_events(&f.ctx.clone());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let d = f.app.before_detail.as_ref().unwrap();
+    assert_eq!(d.version, f.app.before_key);
+    assert!(d.width > f.app.before_texture.as_ref().unwrap().size_vec2().x, "schärfer als die Vorschau");
+}

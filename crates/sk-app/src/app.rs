@@ -546,7 +546,11 @@ pub struct App {
     pub speed_message: Option<String>,
     pub zoom_blocked_until: f64,
     pub before_texture: Option<TextureHandle>,
-    before_key: Option<u64>,
+    pub(crate) before_key: Option<u64>,
+    /// The visible part of the before image at a higher resolution than its preview (zoomed
+    /// in), rendered for `before_key`; and the part last asked for (key, part, width).
+    pub(crate) before_detail: Option<crate::compare::CompareDetail>,
+    pub(crate) before_detail_requested: Option<(u64, egui::Rect, f32)>,
     pub magic_tolerance: f32,
     /// Strokes of the remove tool not yet filled (or being filled).
     pub remove_strokes: Vec<sk_core::params::BrushStroke>,
@@ -1020,6 +1024,8 @@ impl App {
             zoom_blocked_until: 0.0,
             before_texture: None,
             before_key: None,
+            before_detail: None,
+            before_detail_requested: None,
             magic_tolerance: 0.3,
             object_session: None,
             spot_search: None,
@@ -1296,6 +1302,8 @@ impl App {
         self.split_dragging = false;
         self.show_before = false;
         self.before_key = None;
+        self.before_detail = None;
+        self.before_detail_requested = None;
         self.request_render();
     }
 
@@ -1456,6 +1464,8 @@ impl App {
         self.selected_removal = None;
         self.before_texture = None;
         self.before_key = None;
+        self.before_detail = None;
+        self.before_detail_requested = None;
         self.local_drag = Default::default();
         self.snapshot_rename = None;
         // Areas painted for removal belong to the previous image.
@@ -2515,7 +2525,8 @@ impl App {
                         }
                     }
                 }
-                Event::CompareDetail { path, version, uv, width, full_res, image, focus } => {
+                Event::CompareDetail { version, uv, width, full_res, image, before: true, .. } => self.before_detail_received(ctx, version, uv, width, full_res, image),
+                Event::CompareDetail { path, version, uv, width, full_res, image, focus, before: false } => {
                     self.detail_received(ctx, path, version, uv, width, full_res, image, focus);
                 }
                 Event::LookMatched { run, path, opts, result } => self.look_matched(run, path, opts, result),

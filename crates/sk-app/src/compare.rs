@@ -45,7 +45,7 @@ fn covers(outer: Rect, inner: Rect) -> bool {
 
 impl CompareDetail {
     /// Shows `visible` sharply enough for a whole-image width of `width` on screen.
-    fn serves(&self, visible: Rect, width: f32, focus: bool) -> bool {
+    pub(crate) fn serves(&self, visible: Rect, width: f32, focus: bool) -> bool {
         covers(self.uv, visible) && (self.full_res || self.width >= width * 0.9) && (!focus || self.focus.is_some())
     }
 }
@@ -160,6 +160,60 @@ impl App {
         }
     }
 
+    /// The visible part of the before image (split views) has been rendered sharper.
+    pub(crate) fn before_detail_received(&mut self, ctx: &egui::Context, version: Option<u64>, uv: [f32; 4], width: f32, full_res: bool, image: egui::ColorImage) {
+        self.before_detail_requested = None;
+        if version.is_none() || version != self.before_key {
+            return;
+        }
+        let uv = Rect::from_min_max(pos2(uv[0], uv[1]), pos2(uv[2], uv[3]));
+        match &mut self.before_detail {
+            Some(d) => {
+                d.texture.set(image, egui::TextureOptions::LINEAR);
+                (d.version, d.uv, d.width, d.full_res) = (version, uv, width, full_res);
+            }
+            None => {
+                let texture = ctx.load_texture("before detail", image, egui::TextureOptions::LINEAR);
+                self.before_detail = Some(CompareDetail { version, uv, width, full_res, texture, focus: None });
+            }
+        }
+    }
+
+    /// Zoomed in on a split view: the before image as sharp as the after image. `r` is where
+    /// the whole before image lies on screen, `clip` the part of the screen it shows in. Draws
+    /// the sharper part it has and asks for the visible one if it isn't covered yet.
+    pub(crate) fn before_detail(&mut self, painter: &egui::Painter, r: Rect, clip: Rect) {
+        let (Some(key), Some(cur)) = (self.before_key, &self.current) else { return };
+        let vis = clip.intersect(r);
+        if !vis.is_positive() {
+            return;
+        }
+        let to_uv = |p: egui::Pos2| ((p - r.min) / r.size()).to_pos2();
+        let visible = Rect::from_min_max(to_uv(vis.min), to_uv(vis.max));
+        let width = r.width() * self.pixels_per_point;
+        let detail = self.before_detail.as_ref().filter(|d| d.version == Some(key));
+        if let Some(d) = detail {
+            let at = Rect::from_min_max(r.min + d.uv.min.to_vec2() * r.size(), r.min + d.uv.max.to_vec2() * r.size());
+            painter.with_clip_rect(clip.intersect(painter.clip_rect())).image(d.texture.id(), at, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        let served = detail.is_some_and(|d| d.serves(visible, width, false));
+        let pending = self.before_detail_requested.is_some_and(|(k, padded, w)| k == key && covers(padded, visible) && w >= width * 0.9);
+        if served || pending || self.pointer_down {
+            return;
+        }
+        // A little more than visible, so that panning a bit needs no new one.
+        let padded = visible.expand2(visible.size() * 0.25).intersect(Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)));
+        self.workers.compare_details(vec![crate::workers::DetailJob {
+            path: cur.meta.path.clone(),
+            live: Some((cur.meta.clone(), cur.full.clone(), cur.adjustments.clone(), key)),
+            uv: [padded.min.x, padded.min.y, padded.max.x, padded.max.y],
+            width,
+            focus: false,
+            before: true,
+        }]);
+        self.before_detail_requested = Some((key, padded, width));
+    }
+
     /// Asks for the zoomed-in parts that aren't shown sharply yet, once zooming and panning
     /// pause. Each request replaces the previous one.
     fn request_details(&mut self, wants: Vec<DetailWant>, busy: bool) {
@@ -184,6 +238,7 @@ impl App {
                 uv: [w.padded.min.x, w.padded.min.y, w.padded.max.x, w.padded.max.y],
                 width: w.width,
                 focus: w.focus,
+                before: false,
             })
             .collect();
         self.workers.compare_details(jobs);

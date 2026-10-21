@@ -282,7 +282,11 @@ impl App {
             if let Some(before) = &self.before_texture
                 && before.size_vec2() == size
             {
-                ui.painter_at(left).image(before.id(), img_rect.translate(left.center() - right.center()), full_uv, Color32::WHITE);
+                let at = img_rect.translate(left.center() - right.center());
+                ui.painter_at(left).image(before.id(), at, full_uv, Color32::WHITE);
+                if magnified {
+                    self.before_detail(&ui.painter_at(left), at, left);
+                }
             }
             for (text, half) in [("Vorher", left), ("Nachher", right)] {
                 let galley = painter.layout_no_wrap(text.into(), egui::FontId::proportional(12.0), Color32::WHITE);
@@ -298,6 +302,9 @@ impl App {
             let x = img_rect.left() + img_rect.width() * self.split_pos;
             let left = Rect::from_min_max(img_rect.min, pos2(x, img_rect.bottom()));
             painter.image(before.id(), left, Rect::from_min_max(pos2(0.0, 0.0), pos2(self.split_pos, 1.0)), Color32::WHITE);
+            if magnified {
+                self.before_detail(&painter, img_rect, left.intersect(rect));
+            }
             painter.line_segment([pos2(x, img_rect.top()), pos2(x, img_rect.bottom())], egui::Stroke::new(2.0, Color32::WHITE));
             painter.circle_filled(pos2(x, img_rect.center().y), 7.0, Color32::WHITE);
             for (text, align, dx) in [("Vorher", egui::Align2::RIGHT_TOP, -10.0), ("Nachher", egui::Align2::LEFT_TOP, 10.0)] {
