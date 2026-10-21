@@ -335,8 +335,9 @@ erscheint zusätzlich oben im Bild.
   Verteilung der Tiefen ein, wie beim Helligkeitsbereich: von fern (links) bis nah (rechts), mit
   getrenntem Übergang nach vorne und hinten (gespeichert mit der Maske, rückgängig zu machen).
 - **Neu ausleuchten** (Tab „Belichtung“): **Belichtung** und **Wärme** für
-  Vorder- und Hintergrund getrennt, etwa um ein Motiv im Gegenlicht aufzuhellen. **Grenze** legt fest,
-  wo der Vordergrund aufhört (0 fern … 1 nah), **Übergang**, wie weich er in den Hintergrund übergeht.
+  Vorder- und Hintergrund getrennt, etwa um ein Motiv im Gegenlicht aufzuhellen. Die **Trennung**
+  liegt über der Verteilung der Tiefen (links fern, rechts nah): Die Linie ist die **Grenze**, die
+  gestrichelten Linien sind Anfang und Ende des **Übergangs**, jede einzeln zu ziehen.
 - **Atmosphäre** (Tab „Effekte“): Dunst, der mit der Entfernung dichter
   wird. **Reichweite** bestimmt, wie weit nach vorn er reicht, **Helligkeit** und **Wärme** färben ihn.
 

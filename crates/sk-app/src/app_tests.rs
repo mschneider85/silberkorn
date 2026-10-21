@@ -4128,3 +4128,14 @@ fn storage_dialog_measures_the_caches_once() {
     f.ctx.run_ui(Default::default(), |ui| app.storage_dialog(ui.ctx())).textures_delta.clear();
     assert!(f.app.storage_sizes.is_none());
 }
+
+#[test]
+fn relight_split_is_drawn_without_a_depth_map() {
+    let Some(mut f) = Fixture::new("relight") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.edit(|a| a.relight.near = 0.5);
+    let app = &mut f.app;
+    f.ctx.run_ui(Default::default(), |ui| app.relight_section(ui)).textures_delta.clear();
+    // Drawing changes nothing.
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.relight.split, sk_core::params::Relight::default().split);
+}

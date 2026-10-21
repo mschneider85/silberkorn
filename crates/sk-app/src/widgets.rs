@@ -1524,13 +1524,9 @@ pub fn luma_range_editor(ui: &mut Ui, r: &mut sk_core::params::LumaRange, bins: 
     changed
 }
 
-/// A range on a scale from 0 to 1 (`e`: falloff start, start, end, falloff end) as a trapezoid
-/// over the distribution of the values (`bins`, 256): fully in between the upper handles, fading
-/// out to the lower ones. A handle pushes the ones it runs into; dragging the trapezoid moves
-/// all four; double-click resets.
-pub fn range_editor(ui: &mut Ui, salt: &str, e: &mut [f32; 4], bins: Option<&[f32]>, scale: &RangeScale) -> bool {
-    let gap = if scale.percent { 0.01 } else { 1.0 / 255.0 };
-    let before = *e;
+/// The three rows of a [`range_editor`] or [`split_editor`]: the upper track for handles, the
+/// graph, the lower track.
+fn scale_rows(ui: &mut Ui) -> (Rect, Rect, Rect) {
     let width = ui.available_width();
     let spacing = ui.spacing().item_spacing.y;
     let (top, _) = ui.allocate_exact_size(vec2(width, 12.0), Sense::hover());
@@ -1538,119 +1534,229 @@ pub fn range_editor(ui: &mut Ui, salt: &str, e: &mut [f32; 4], bins: Option<&[f3
     let (graph, _) = ui.allocate_exact_size(vec2(width, 56.0), Sense::hover());
     let (bottom, _) = ui.allocate_exact_size(vec2(width, 12.0), Sense::hover());
     ui.spacing_mut().item_spacing.y = spacing;
-    let x_of = |v: f32| graph.left() + v.clamp(0.0, 1.0) * graph.width();
-    let v_of = |x: f32| ((x - graph.left()) / graph.width()).clamp(0.0, 1.0);
-    let color_at = |v: f32| {
-        let [a, b] = scale.colors;
-        let t = v.clamp(0.0, 1.0);
-        let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t) as u8;
-        Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
-    };
-    let id = ui.id().with(salt);
+    (top, graph, bottom)
+}
 
-    // Moving the whole range.
+/// The graph's background with the distribution of the values (`bins`, 256 over 0..1).
+fn paint_distribution(painter: &egui::Painter, graph: Rect, bins: Option<&[f32]>) {
+    painter.rect_filled(graph, 3.0, theme::BROWSER);
+    let Some(bins) = bins.filter(|b| b.len() >= 256) else { return };
+    let max = bins[1..255].iter().copied().fold(0.0, f32::max).max(1e-6);
+    let fill = Color32::from_gray(150).gamma_multiply(0.25);
+    let mut mesh = egui::Mesh::default();
+    for (i, &n) in bins.iter().enumerate().take(256) {
+        let h = graph.height() * (n / max).sqrt().min(1.0);
+        let x = graph.left() + (i as f32 + 0.5) / 256.0 * graph.width();
+        mesh.colored_vertex(pos2(x, graph.bottom()), fill);
+        mesh.colored_vertex(pos2(x, graph.bottom() - h), fill);
+    }
+    for i in 0..255u32 {
+        let k = i * 2;
+        mesh.add_triangle(k, k + 1, k + 2);
+        mesh.add_triangle(k + 1, k + 2, k + 3);
+    }
+    painter.add(mesh);
+}
+
+/// A horizontal band from `left` to `right` in `rect`, colored from `colors[0]` to `colors[1]`.
+fn paint_gradient(painter: &egui::Painter, rect: Rect, colors: [Color32; 2]) {
+    let mut mesh = egui::Mesh::default();
+    for (x, c) in [(rect.left(), colors[0]), (rect.right(), colors[1])] {
+        mesh.colored_vertex(pos2(x, rect.top()), c);
+        mesh.colored_vertex(pos2(x, rect.bottom()), c);
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(1, 2, 3);
+    painter.add(mesh);
+}
+
+/// The color of the scale at `v` (0..1).
+fn scale_color(colors: [Color32; 2], v: f32) -> Color32 {
+    let [a, b] = colors;
+    let t = v.clamp(0.0, 1.0);
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t) as u8;
+    Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
+}
+
+/// A triangle on a track pointing at the graph (`down` on the upper one), for the value `v`
+/// at `x`: `Some(Some(v))` while dragged, `Some(None)` on a double click (reset).
+fn track_handle(ui: &mut Ui, id: egui::Id, track: Rect, graph: Rect, v: f32, down: bool, fill: Color32, name: &str) -> Option<Option<f32>> {
+    let x = graph.left() + v.clamp(0.0, 1.0) * graph.width();
+    let rect = Rect::from_center_size(pos2(x, track.center().y), vec2(14.0, track.height()));
+    let resp = ui.interact(rect, id.with(name), Sense::click_and_drag());
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, name));
+    let resp = resp.on_hover_text(format!("{name} – Doppelklick: zurücksetzen"));
+    let hot = resp.hovered() || resp.dragged();
+    let s = if hot { 6.0 } else { 5.0 };
+    let (tip, base) = if down { (track.bottom(), track.bottom() - s * 1.6) } else { (track.top(), track.top() + s * 1.6) };
+    let tri = vec![pos2(x, tip), pos2(x + s, base), pos2(x - s, base)];
+    ui.painter().add(Shape::convex_polygon(tri, fill, Stroke::new(1.0, if hot { theme::ACCENT } else { Color32::from_gray(150) })));
+    if hot {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    if resp.double_clicked() {
+        Some(None)
+    } else if resp.dragged() {
+        resp.interact_pointer_pos().map(|p| Some(((p.x - graph.left()) / graph.width()).clamp(0.0, 1.0)))
+    } else {
+        None
+    }
+}
+
+/// The graph as a handle for moving everything: the shift (in 0..1) while dragged, `Some(None)`
+/// on a double click (reset); and whether the pointer is on it.
+fn graph_drag(ui: &mut Ui, id: egui::Id, graph: Rect, hint: &str) -> (Option<Option<f32>>, bool) {
     let body = ui.interact(graph, id.with("body"), Sense::click_and_drag());
-    if body.dragged() {
-        let d = body.drag_delta().x / graph.width();
-        let d = d.clamp(-e[0].min(e[1]), 1.0 - e[3].max(e[2]));
-        for v in e.iter_mut() {
-            *v += d;
-        }
-    }
-    if body.double_clicked() {
-        *e = scale.defaults;
-    }
-    if body.hovered() || body.dragged() {
+    let hot = body.hovered() || body.dragged();
+    if hot {
         ui.ctx().set_cursor_icon(if body.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
     }
-    let body = body.on_hover_text(scale.hint);
+    let out = if body.double_clicked() {
+        Some(None)
+    } else if body.dragged() {
+        Some(Some(body.drag_delta().x / graph.width()))
+    } else {
+        None
+    };
+    body.on_hover_text(hint);
+    (out, hot)
+}
+
+/// A value of the scale as a number field (0–255 or percent).
+fn scale_number(ui: &mut Ui, v: f32, percent: bool) -> Option<f32> {
+    let max = if percent { 100 } else { 255 };
+    let mut n = (v.clamp(0.0, 1.0) * max as f32).round() as i32;
+    let field = egui::DragValue::new(&mut n).range(0..=max).speed(0.5).suffix(if percent { " %" } else { "" });
+    ui.add(field).changed().then(|| n as f32 / max as f32)
+}
+
+/// A range on a scale from 0 to 1 (`e`: falloff start, start, end, falloff end) as a trapezoid
+/// over the distribution of the values (`bins`, 256): fully in between the upper handles, fading
+/// out to the lower ones. A handle pushes the ones it runs into; dragging the trapezoid moves
+/// all four; double-click resets.
+pub fn range_editor(ui: &mut Ui, salt: &str, e: &mut [f32; 4], bins: Option<&[f32]>, scale: &RangeScale) -> bool {
+    let gap = if scale.percent { 0.01 } else { 1.0 / 255.0 };
+    let before = *e;
+    let (top, graph, bottom) = scale_rows(ui);
+    let x_of = |v: f32| graph.left() + v.clamp(0.0, 1.0) * graph.width();
+    let id = ui.id().with(salt);
+
+    let (moved, hot) = graph_drag(ui, id, graph, scale.hint);
+    match moved {
+        Some(Some(d)) => {
+            let d = d.clamp(-e[0].min(e[1]), 1.0 - e[3].max(e[2]));
+            for v in e.iter_mut() {
+                *v += d;
+            }
+        }
+        Some(None) => *e = scale.defaults,
+        None => {}
+    }
 
     let painter = ui.painter();
-    painter.rect_filled(graph, 3.0, theme::BROWSER);
-    if let Some(bins) = bins.filter(|b| b.len() >= 256) {
-        let max = bins[1..255].iter().copied().fold(0.0, f32::max).max(1e-6);
-        let fill = Color32::from_gray(150).gamma_multiply(0.25);
-        let mut mesh = egui::Mesh::default();
-        for (i, &n) in bins.iter().enumerate().take(256) {
-            let h = graph.height() * (n / max).sqrt().min(1.0);
-            let x = x_of((i as f32 + 0.5) / 256.0);
-            mesh.colored_vertex(pos2(x, graph.bottom()), fill);
-            mesh.colored_vertex(pos2(x, graph.bottom() - h), fill);
-        }
-        for i in 0..255u32 {
-            let k = i * 2;
-            mesh.add_triangle(k, k + 1, k + 2);
-            mesh.add_triangle(k + 1, k + 2, k + 3);
-        }
-        painter.add(mesh);
-    }
-    let hot = body.hovered() || body.dragged();
+    paint_distribution(painter, graph, bins);
     let shape = vec![pos2(x_of(e[0]), graph.bottom()), pos2(x_of(e[1]), graph.top()), pos2(x_of(e[2]), graph.top()), pos2(x_of(e[3]), graph.bottom())];
     let edge = if hot { theme::ACCENT } else { theme::ACCENT.gamma_multiply(0.8) };
     painter.add(Shape::convex_polygon(shape, theme::ACCENT.gamma_multiply(if hot { 0.35 } else { 0.25 }), Stroke::new(1.0, edge)));
     for v in [e[1], e[2]] {
         painter.vline(x_of(v), graph.y_range(), Stroke::new(1.0, Color32::from_white_alpha(110)));
     }
-    // The scale's colors, along the bottom.
-    let strip = Rect::from_min_max(pos2(graph.left(), graph.bottom() - 4.0), graph.max);
-    let mut mesh = egui::Mesh::default();
-    for (x, c) in [(strip.left(), scale.colors[0]), (strip.right(), scale.colors[1])] {
-        mesh.colored_vertex(pos2(x, strip.top()), c);
-        mesh.colored_vertex(pos2(x, strip.bottom()), c);
-    }
-    mesh.add_triangle(0, 1, 2);
-    mesh.add_triangle(1, 2, 3);
-    painter.add(mesh);
+    paint_gradient(painter, Rect::from_min_max(pos2(graph.left(), graph.bottom() - 4.0), graph.max), scale.colors);
 
-    // A triangle pointing at the graph, `down` on the upper track.
-    let handle = |ui: &mut Ui, track: Rect, v: f32, down: bool, name: &str| -> Option<Option<f32>> {
-        let x = x_of(v);
-        let rect = Rect::from_center_size(pos2(x, track.center().y), vec2(14.0, track.height()));
-        let resp = ui.interact(rect, id.with(name), Sense::click_and_drag());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, name));
-        let resp = resp.on_hover_text(format!("{name} – Doppelklick: zurücksetzen"));
-        let hot = resp.hovered() || resp.dragged();
-        let s = if hot { 6.0 } else { 5.0 };
-        let (tip, base) = if down { (track.bottom(), track.bottom() - s * 1.6) } else { (track.top(), track.top() + s * 1.6) };
-        let tri = vec![pos2(x, tip), pos2(x + s, base), pos2(x - s, base)];
-        ui.painter().add(Shape::convex_polygon(tri, color_at(v), Stroke::new(1.0, if hot { theme::ACCENT } else { Color32::from_gray(150) })));
-        if hot {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-        }
-        if resp.double_clicked() {
-            Some(None)
-        } else if resp.dragged() {
-            resp.interact_pointer_pos().map(|p| Some(v_of(p.x)))
-        } else {
-            None
-        }
-    };
     for (i, track, down, name) in [(1, top, true, "Bereich Anfang"), (2, top, true, "Bereich Ende"), (0, bottom, false, "Übergang Anfang"), (3, bottom, false, "Übergang Ende")] {
-        if let Some(v) = handle(ui, track, e[i], down, name) {
+        if let Some(v) = track_handle(ui, id, track, graph, e[i], down, scale_color(scale.colors, e[i]), name) {
             push_edge(e, i, v.unwrap_or(scale.defaults[i]), gap);
         }
     }
 
     // The values as numbers, for exact input; they push the others too.
-    let max = if scale.percent { 100 } else { 255 };
-    let number = |ui: &mut Ui, e: &mut [f32; 4], i: usize| {
-        let mut n = (e[i].clamp(0.0, 1.0) * max as f32).round() as i32;
-        let field = egui::DragValue::new(&mut n).range(0..=max).speed(0.5).suffix(if scale.percent { " %" } else { "" });
-        if ui.add(field).changed() {
-            push_edge(e, i, n as f32 / max as f32, gap);
-        }
-    };
     ui.add_space(4.0);
     for (label, [left, right]) in [("Bereich", [1, 2]), ("Übergang", [0, 3])] {
         ui.horizontal(|ui| {
             ui.label(RichText::new(label).color(theme::TEXT_DIM));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                number(ui, e, right);
-                number(ui, e, left);
+                for i in [right, left] {
+                    if let Some(v) = scale_number(ui, e[i], scale.percent) {
+                        push_edge(e, i, v, gap);
+                    }
+                }
             });
         });
     }
     *e != before
+}
+
+/// A division of a scale from 0 to 1 into two parts, at `split` with a transition `width` wide,
+/// over the distribution of the values (`bins`, 256): the line of the split with a handle above,
+/// the transition's ends with handles below, the parts in their `colors` (from 0 and from 1).
+/// Dragging the graph moves the split; double-click resets to `defaults` (split, width).
+pub fn split_editor(ui: &mut Ui, salt: &str, split: &mut f32, width: &mut f32, bins: Option<&[f32]>, colors: [Color32; 2], defaults: (f32, f32), min_width: f32) -> bool {
+    let before = (*split, *width);
+    let (top, graph, bottom) = scale_rows(ui);
+    let x_of = |v: f32| graph.left() + v.clamp(0.0, 1.0) * graph.width();
+    let id = ui.id().with(salt);
+
+    let (moved, hot) = graph_drag(ui, id, graph, "Ziehen: Grenze verschieben – Doppelklick: zurücksetzen");
+    match moved {
+        Some(Some(d)) => *split = (*split + d).clamp(0.0, 1.0),
+        Some(None) => (*split, *width) = defaults,
+        None => {}
+    }
+
+    let painter = ui.painter();
+    paint_distribution(painter, graph, bins);
+    // The parts, with the transition from one to the other.
+    let (a, b) = (*split - *width / 2.0, *split + *width / 2.0);
+    let tint = |c: Color32| c.gamma_multiply(if hot { 0.30 } else { 0.22 });
+    let (xa, xb) = (x_of(a), x_of(b));
+    painter.rect_filled(Rect::from_min_max(graph.min, pos2(xa, graph.bottom())), 0.0, tint(colors[0]));
+    painter.rect_filled(Rect::from_min_max(pos2(xb, graph.top()), graph.max), 0.0, tint(colors[1]));
+    if xb > xa {
+        paint_gradient(painter, Rect::from_min_max(pos2(xa, graph.top()), pos2(xb, graph.bottom())), [tint(colors[0]), tint(colors[1])]);
+    }
+    let dashed = Stroke::new(1.0, Color32::from_white_alpha(120));
+    for x in [xa, xb] {
+        painter.extend(Shape::dashed_line(&[pos2(x, graph.top()), pos2(x, graph.bottom())], dashed, 3.0, 3.0));
+    }
+    painter.vline(x_of(*split), graph.y_range(), Stroke::new(1.5, if hot { theme::ACCENT } else { Color32::from_white_alpha(200) }));
+    paint_gradient(painter, Rect::from_min_max(pos2(graph.left(), graph.bottom() - 4.0), graph.max), colors);
+
+    // The ends of the transition move one at a time; the split stays in its middle.
+    let set_ends = |split: &mut f32, width: &mut f32, a: f32, b: f32| {
+        *width = (b - a).max(min_width);
+        *split = (a + b) / 2.0;
+    };
+    if let Some(v) = track_handle(ui, id, top, graph, *split, true, Color32::from_gray(230), "Grenze") {
+        *split = v.unwrap_or(defaults.0);
+    }
+    if let Some(v) = track_handle(ui, id, bottom, graph, a, false, scale_color(colors, a), "Übergang Anfang") {
+        let a = v.map_or(*split - defaults.1 / 2.0, |v| v.min(b - min_width));
+        set_ends(split, width, a, b);
+    }
+    let a = *split - *width / 2.0;
+    if let Some(v) = track_handle(ui, id, bottom, graph, b, false, scale_color(colors, b), "Übergang Ende") {
+        let b = v.map_or(*split + defaults.1 / 2.0, |v| v.max(a + min_width));
+        set_ends(split, width, a, b);
+    }
+
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Grenze").color(theme::TEXT_DIM));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if let Some(v) = scale_number(ui, *split, true) {
+                *split = v;
+            }
+        });
+    });
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Übergang").color(theme::TEXT_DIM));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if let Some(v) = scale_number(ui, *width, true) {
+                *width = v.max(min_width);
+            }
+        });
+    });
+    (*split, *width) != before
 }
 
 /// `bins` (256, over 0..1) after the monotonic `f`: each bin spread over the range it lands in.

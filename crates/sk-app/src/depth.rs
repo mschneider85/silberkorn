@@ -307,7 +307,9 @@ impl App {
         let mut reset = false;
         let state = self.depth_state(&path);
         let cancel = self.depth_cancel();
-        let help = "Hellt Vorder- und Hintergrund getrennt auf oder ab und färbt sie wärmer oder kühler, etwa bei Gegenlicht.\n\nGrenze: wo der Vordergrund aufhört (0 fern, 1 nah). Übergang: wie weich er in den Hintergrund übergeht.";
+        let help = "Hellt Vorder- und Hintergrund getrennt auf oder ab und färbt sie wärmer oder kühler, etwa bei Gegenlicht.\n\nTrennung: über der Verteilung der Tiefen, links fern, rechts nah. Die Linie ist die Grenze, die gestrichelten Linien Anfang und Ende des Übergangs.";
+        // The distribution of the depths, once the map exists.
+        let bins = if self.depth_ready(&path) { self.depth_mask_map(&path).and_then(|_| self.depth_mask_bins()) } else { None };
         crate::widgets::tool_section_help(ui, sk_core::tools::Tool::Relight, help, Some(&mut || reset = true), |ui| {
             let d = Relight::default();
             ui.add_space(4.0);
@@ -316,9 +318,15 @@ impl App {
             relight_card(ui, icon::MOUNTAINS, "Hintergrund", FAR_COLOR, &mut rl.far, &mut rl.far_warmth);
             ui.add_space(4.0);
             ui.add_enabled_ui(!rl.is_off(), |ui| {
-                crate::widgets::subheading(ui, "Trennung");
-                crate::widgets::unit_percent_row(ui, "Grenze", &mut rl.split, 0.0..=1.0, d.split, Default::default());
-                crate::widgets::unit_percent_row(ui, "Übergang", &mut rl.falloff, 0.02..=1.0, d.falloff, Default::default());
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Trennung").size(11.5).strong().color(crate::theme::TEXT_DIM));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new("fern 0 % … 100 % nah").small().color(crate::theme::TEXT_FAINT));
+                    });
+                });
+                let bins = bins.as_deref().map(|b| b.as_slice());
+                crate::widgets::split_editor(ui, "relight-split", &mut rl.split, &mut rl.falloff, bins, [FAR_COLOR, NEAR_COLOR], (d.split, d.falloff), 0.02);
             });
             depth_status(ui, &state, !rl.is_off(), cancel.as_ref());
         });
