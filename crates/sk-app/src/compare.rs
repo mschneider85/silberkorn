@@ -216,7 +216,10 @@ impl App {
         self.zoom_pct = None;
         self.view_magnified = false;
         let gap = 6.0;
-        let aspect = self.image_size().map_or(1.5, |s| s.x / s.y.max(1.0));
+        // The mean aspect of all images shown (not that of the one being edited), so the grid
+        // stays when stepping through the selection from a landscape to a portrait image.
+        let logs: Vec<f32> = cells.iter().filter_map(|p| self.cell_texture(p)).map(|(_, size, _)| (size.x / size.y.max(1.0)).ln()).collect();
+        let aspect = if logs.is_empty() { self.image_size().map_or(1.5, |s| s.x / s.y.max(1.0)) } else { (logs.iter().sum::<f32>() / logs.len() as f32).exp() };
         let (cols, rows) = grid_shape(cells.len(), rect.size() - Vec2::splat(gap), aspect);
         let cell_size = vec2(
             (rect.width() - gap * (cols as f32 + 1.0)) / cols as f32,
