@@ -88,21 +88,21 @@ impl DepthMap {
 /// Masks made recently from depth maps (relight and atmosphere ask for the same ones with
 /// every rendering): by map, kind and parameters, sharing the bitmap so the mask cache
 /// recognizes it.
-type RangeKey = (usize, [u32; 4]);
+type RangeKey = (usize, [u32; 5]);
 static RANGE_MASKS: Mutex<Vec<(RangeKey, Arc<DepthMap>, crate::params::AiMask)>> = Mutex::new(Vec::new());
 
 /// [`DepthMap::range_mask`], reused while the map and the range stay the same.
 pub fn range_mask_cached(map: &Arc<DepthMap>, r: &crate::params::DepthRange) -> crate::params::AiMask {
-    mask_cached(map, [r.near, r.far, r.falloff].map(f32::to_bits), 0, || map.range_mask(r))
+    mask_cached(map, r.edges().map(f32::to_bits), 0, || map.range_mask(r))
 }
 
 /// [`DepthMap::haze_mask`], reused while the map and the reach stay the same.
 pub fn haze_mask_cached(map: &Arc<DepthMap>, at: &crate::params::Atmosphere) -> crate::params::AiMask {
-    mask_cached(map, [at.reach.to_bits(), 0, 0], 1, || map.haze_mask(at))
+    mask_cached(map, [at.reach.to_bits(), 0, 0, 0], 1, || map.haze_mask(at))
 }
 
-fn mask_cached(map: &Arc<DepthMap>, params: [u32; 3], kind: u32, make: impl FnOnce() -> crate::params::AiMask) -> crate::params::AiMask {
-    let key = (Arc::as_ptr(map) as usize, [params[0], params[1], params[2], kind]);
+fn mask_cached(map: &Arc<DepthMap>, params: [u32; 4], kind: u32, make: impl FnOnce() -> crate::params::AiMask) -> crate::params::AiMask {
+    let key = (Arc::as_ptr(map) as usize, [params[0], params[1], params[2], params[3], kind]);
     let mut done = RANGE_MASKS.lock().unwrap_or_else(|e| e.into_inner());
     // The map is held with its key, so the address can't be reused by another one.
     if let Some(e) = done.iter().find(|(k, m, _)| *k == key && Arc::ptr_eq(m, map)) {
@@ -299,13 +299,14 @@ mod tests {
 
     #[test]
     fn range_takes_the_near_part() {
-        let r = DepthRange { near: 1.0, far: 0.6, falloff: 0.1 };
+        let r = DepthRange { falloff_far: 0.5, far: 0.6, near: 1.0, falloff_near: 1.0 };
         assert_eq!(r.weight(1.0), 1.0);
         assert_eq!(r.weight(0.8), 1.0);
         assert!(r.weight(0.55) > 0.2 && r.weight(0.55) < 0.8);
         assert_eq!(r.weight(0.3), 0.0);
-        // A middle band, with the ends given either way round.
-        let mid = DepthRange { near: 0.4, far: 0.6, falloff: 0.05 };
+        // A middle band, stored before 0.2.12 with the ends the other way round.
+        let mid: DepthRange = serde_json::from_str(r#"{"near":0.4,"far":0.6,"falloff":0.05}"#).unwrap();
+        assert_eq!([mid.falloff_far, mid.far, mid.near, mid.falloff_near].map(|v| (v * 100.0).round()), [35.0, 40.0, 60.0, 65.0]);
         assert_eq!(mid.weight(0.5), 1.0);
         assert_eq!(mid.weight(0.9), 0.0);
         assert_eq!(mid.weight(0.1), 0.0);

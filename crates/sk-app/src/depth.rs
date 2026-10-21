@@ -41,6 +41,8 @@ pub struct DepthQueue {
     /// The viewer image's map at mask size, with the "Fern" of a new depth mask: the depth mask
     /// sliders reuse it, so it is neither resized nor its range masks remade per frame.
     small: Option<(PathBuf, Arc<DepthMap>, f32)>,
+    /// How the depths of that map are distributed (256 bins, far to near), for the range editor.
+    small_bins: Option<Arc<Vec<f32>>>,
 }
 
 /// Whether an image's computed file exists, looked up on disk at most once a second (panels ask
@@ -120,6 +122,11 @@ impl App {
         let map = sk_core::depth::load(path)?;
         let far = (map.quantile(0.8) * 100.0).round() / 100.0;
         let small = Arc::new(map.resized(MASK_EDGE));
+        let mut bins = vec![0.0f32; 256];
+        for d in &small.data {
+            bins[((d.clamp(0.0, 1.0) * 255.0).round()) as usize] += 1.0;
+        }
+        self.depth.small_bins = Some(Arc::new(bins));
         self.depth.small = Some((path.to_path_buf(), small.clone(), far));
         Some((small, far))
     }
@@ -369,7 +376,7 @@ impl App {
             return;
         };
         // By default the nearest fifth of the image (usually the subject).
-        let range = range.unwrap_or(DepthRange { near: 1.0, far, ..Default::default() });
+        let range = range.unwrap_or(DepthRange::nearer_than(far));
         let mask = sk_core::depth::range_mask_cached(&small, &range);
         self.edit(|a| {
             if let Some(l) = a.layers.get_mut(layer) {
@@ -378,17 +385,32 @@ impl App {
         });
     }
 
-    /// Range sliders of a layer's depth mask; returns the changed range. A double click sets
-    /// "Fern" back to `far`, the value of a new depth mask on this image.
-    pub(crate) fn depth_mask_controls(ui: &mut Ui, range: &DepthRange, far: f32) -> Option<DepthRange> {
-        let mut r = *range;
-        let d = DepthRange { near: 1.0, far, ..Default::default() };
-        let mut changed = false;
-        ui.label(RichText::new("Tiefe (0 % fern, 100 % nah)").strong());
-        changed |= crate::widgets::unit_percent_row(ui, "Nah", &mut r.near, 0.0..=1.0, d.near, Default::default());
-        changed |= crate::widgets::unit_percent_row(ui, "Fern", &mut r.far, 0.0..=1.0, d.far, Default::default());
-        changed |= crate::widgets::unit_percent_row(ui, "Weichheit", &mut r.falloff, 0.0..=0.5, d.falloff, Default::default());
-        changed.then_some(r)
+    /// How the depths of the viewer image's map are distributed (see `depth_mask_map`).
+    pub(crate) fn depth_mask_bins(&self) -> Option<Arc<Vec<f32>>> {
+        self.depth.small_bins.clone().filter(|_| self.depth.small.is_some())
+    }
+
+    /// The range of a layer's depth mask as a trapezoid over the image's depths, far (cool, left)
+    /// to near (warm, right); returns the changed range. Resetting gives the range of a new
+    /// depth mask on this image (everything nearer than `far`).
+    pub(crate) fn depth_mask_controls(ui: &mut Ui, range: &DepthRange, far: f32, bins: Option<&[f32]>) -> Option<DepthRange> {
+        let d = DepthRange::nearer_than(far);
+        let scale = crate::widgets::RangeScale {
+            defaults: [d.falloff_far, d.far, d.near, d.falloff_near],
+            colors: [FAR_COLOR, NEAR_COLOR],
+            percent: true,
+            hint: "Ziehen: Bereich verschieben – Doppelklick: der nahe Teil des Bildes",
+        };
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Tiefe").strong());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new("fern 0 % … 100 % nah").small().color(crate::theme::TEXT_FAINT));
+            });
+        });
+        let mut e = [range.falloff_far, range.far, range.near, range.falloff_near];
+        let changed = crate::widgets::range_editor(ui, "depth-range", &mut e, bins, &scale);
+        let [falloff_far, far, near, falloff_near] = e;
+        changed.then_some(DepthRange { falloff_far, far, near, falloff_near })
     }
 }
 

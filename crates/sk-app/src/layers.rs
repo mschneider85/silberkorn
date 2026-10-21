@@ -1000,6 +1000,7 @@ impl App {
             active.and_then(|li| c.adjustments.layers.get(li)).is_some_and(|l| l.mask.ai.as_ref().is_some_and(|a| a.depth.is_some()))
         });
         let depth_map = if depth_mask { self.current_path().and_then(|p| self.depth_mask_map(&p)) } else { None };
+        let depth_bins = if depth_mask { self.depth_mask_bins() } else { None };
         let luma_bins: Option<Vec<f32>> = self.histogram.as_ref().map(|h| h.luma.iter().map(|&n| n as f32).collect());
         let show_mask = &mut self.show_mask;
         let Some(cur) = self.current.as_mut() else { return };
@@ -1050,7 +1051,7 @@ impl App {
         if let Some(layer) = layer.as_deref_mut() {
             if let Some(range) = layer.mask.ai.as_ref().and_then(|a| a.depth) {
                 let far = depth_map.as_ref().map_or(sk_core::params::DepthRange::default().far, |m| m.1);
-                if let Some(r) = App::depth_mask_controls(ui, &range, far)
+                if let Some(r) = App::depth_mask_controls(ui, &range, far, depth_bins.as_deref().map(|b| b.as_slice()))
                     && let Some((map, _)) = &depth_map
                 {
                     layer.mask.ai = Some(sk_core::depth::range_mask_cached(map, &r));

@@ -1486,26 +1486,51 @@ pub fn levels_editor(ui: &mut Ui, set: &mut LevelSet, bins: Option<&[f32]>, colo
     *set != before
 }
 
-/// Sets edge `i` of a luminance range (falloff low, low, high, falloff high) to `v`; the edges it
-/// runs into are pushed along, keeping the range at least one level wide.
-fn push_luma_edge(r: &mut sk_core::params::LumaRange, i: usize, v: f32) {
-    const GAPS: [f32; 3] = [0.0, 1.0 / 255.0, 0.0];
-    let mut e = [r.falloff_low, r.low, r.high, r.falloff_high];
-    e[i] = v.clamp(GAPS[..i].iter().sum(), 1.0 - GAPS[i..].iter().sum::<f32>());
+/// Sets edge `i` of a range (falloff start, start, end, falloff end, on 0..1) to `v`; the edges
+/// it runs into are pushed along, keeping the range at least `gap` wide.
+fn push_edge(e: &mut [f32; 4], i: usize, v: f32, gap: f32) {
+    let gaps = [0.0, gap, 0.0];
+    e[i] = v.clamp(gaps[..i].iter().sum(), 1.0 - gaps[i..].iter().sum::<f32>());
     for j in (0..i).rev() {
-        e[j] = e[j].min(e[j + 1] - GAPS[j]);
+        e[j] = e[j].min(e[j + 1] - gaps[j]);
     }
     for j in i + 1..4 {
-        e[j] = e[j].max(e[j - 1] + GAPS[j - 1]);
+        e[j] = e[j].max(e[j - 1] + gaps[j - 1]);
     }
-    [r.falloff_low, r.low, r.high, r.falloff_high] = e;
 }
 
-/// The luminance range of a mask as in Capture One: a trapezoid over the histogram, fully in
-/// between the upper handles (the range), fading out to the lower ones (the falloff). Dragging
-/// the trapezoid moves all four; double-click resets.
+/// What a [`range_editor`] edits: its reset values, the colors of the scale from 0 to 1, and its
+/// numbers (0–255 or percent).
+pub struct RangeScale {
+    pub defaults: [f32; 4],
+    pub colors: [Color32; 2],
+    pub percent: bool,
+    /// Hover text of the trapezoid.
+    pub hint: &'static str,
+}
+
+/// The luminance range of a mask as in Capture One.
 pub fn luma_range_editor(ui: &mut Ui, r: &mut sk_core::params::LumaRange, bins: Option<&[f32]>) -> bool {
-    let before = *r;
+    let d = sk_core::params::LumaRange::default();
+    let scale = RangeScale {
+        defaults: [d.falloff_low, d.low, d.high, d.falloff_high],
+        colors: [Color32::BLACK, Color32::WHITE],
+        percent: false,
+        hint: "Ziehen: Bereich verschieben – Doppelklick: ganzer Bereich",
+    };
+    let mut e = [r.falloff_low, r.low, r.high, r.falloff_high];
+    let changed = range_editor(ui, "luma-range", &mut e, bins, &scale);
+    [r.falloff_low, r.low, r.high, r.falloff_high] = e;
+    changed
+}
+
+/// A range on a scale from 0 to 1 (`e`: falloff start, start, end, falloff end) as a trapezoid
+/// over the distribution of the values (`bins`, 256): fully in between the upper handles, fading
+/// out to the lower ones. A handle pushes the ones it runs into; dragging the trapezoid moves
+/// all four; double-click resets.
+pub fn range_editor(ui: &mut Ui, salt: &str, e: &mut [f32; 4], bins: Option<&[f32]>, scale: &RangeScale) -> bool {
+    let gap = if scale.percent { 0.01 } else { 1.0 / 255.0 };
+    let before = *e;
     let width = ui.available_width();
     let spacing = ui.spacing().item_spacing.y;
     let (top, _) = ui.allocate_exact_size(vec2(width, 12.0), Sense::hover());
@@ -1515,25 +1540,30 @@ pub fn luma_range_editor(ui: &mut Ui, r: &mut sk_core::params::LumaRange, bins: 
     ui.spacing_mut().item_spacing.y = spacing;
     let x_of = |v: f32| graph.left() + v.clamp(0.0, 1.0) * graph.width();
     let v_of = |x: f32| ((x - graph.left()) / graph.width()).clamp(0.0, 1.0);
-    let id = ui.id().with("luma-range");
+    let color_at = |v: f32| {
+        let [a, b] = scale.colors;
+        let t = v.clamp(0.0, 1.0);
+        let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t) as u8;
+        Color32::from_rgb(mix(a.r(), b.r()), mix(a.g(), b.g()), mix(a.b(), b.b()))
+    };
+    let id = ui.id().with(salt);
 
     // Moving the whole range.
     let body = ui.interact(graph, id.with("body"), Sense::click_and_drag());
     if body.dragged() {
         let d = body.drag_delta().x / graph.width();
-        let d = d.clamp(-r.falloff_low.min(r.low), 1.0 - r.falloff_high.max(r.high));
-        r.falloff_low += d;
-        r.low += d;
-        r.high += d;
-        r.falloff_high += d;
+        let d = d.clamp(-e[0].min(e[1]), 1.0 - e[3].max(e[2]));
+        for v in e.iter_mut() {
+            *v += d;
+        }
     }
     if body.double_clicked() {
-        *r = Default::default();
+        *e = scale.defaults;
     }
     if body.hovered() || body.dragged() {
         ui.ctx().set_cursor_icon(if body.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
     }
-    let body = body.on_hover_text("Ziehen: Bereich verschieben – Doppelklick: ganzer Bereich");
+    let body = body.on_hover_text(scale.hint);
 
     let painter = ui.painter();
     painter.rect_filled(graph, 3.0, theme::BROWSER);
@@ -1555,23 +1585,18 @@ pub fn luma_range_editor(ui: &mut Ui, r: &mut sk_core::params::LumaRange, bins: 
         painter.add(mesh);
     }
     let hot = body.hovered() || body.dragged();
-    let shape = vec![
-        pos2(x_of(r.falloff_low), graph.bottom()),
-        pos2(x_of(r.low), graph.top()),
-        pos2(x_of(r.high), graph.top()),
-        pos2(x_of(r.falloff_high), graph.bottom()),
-    ];
+    let shape = vec![pos2(x_of(e[0]), graph.bottom()), pos2(x_of(e[1]), graph.top()), pos2(x_of(e[2]), graph.top()), pos2(x_of(e[3]), graph.bottom())];
     let edge = if hot { theme::ACCENT } else { theme::ACCENT.gamma_multiply(0.8) };
     painter.add(Shape::convex_polygon(shape, theme::ACCENT.gamma_multiply(if hot { 0.35 } else { 0.25 }), Stroke::new(1.0, edge)));
-    for v in [r.low, r.high] {
+    for v in [e[1], e[2]] {
         painter.vline(x_of(v), graph.y_range(), Stroke::new(1.0, Color32::from_white_alpha(110)));
     }
-    // From black to white, along the bottom.
+    // The scale's colors, along the bottom.
     let strip = Rect::from_min_max(pos2(graph.left(), graph.bottom() - 4.0), graph.max);
     let mut mesh = egui::Mesh::default();
-    for (x, g) in [(strip.left(), 0u8), (strip.right(), 255)] {
-        mesh.colored_vertex(pos2(x, strip.top()), Color32::from_gray(g));
-        mesh.colored_vertex(pos2(x, strip.bottom()), Color32::from_gray(g));
+    for (x, c) in [(strip.left(), scale.colors[0]), (strip.right(), scale.colors[1])] {
+        mesh.colored_vertex(pos2(x, strip.top()), c);
+        mesh.colored_vertex(pos2(x, strip.bottom()), c);
     }
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(1, 2, 3);
@@ -1588,8 +1613,7 @@ pub fn luma_range_editor(ui: &mut Ui, r: &mut sk_core::params::LumaRange, bins: 
         let s = if hot { 6.0 } else { 5.0 };
         let (tip, base) = if down { (track.bottom(), track.bottom() - s * 1.6) } else { (track.top(), track.top() + s * 1.6) };
         let tri = vec![pos2(x, tip), pos2(x + s, base), pos2(x - s, base)];
-        let fill = Color32::from_gray((40.0 + v.clamp(0.0, 1.0) * 200.0) as u8);
-        ui.painter().add(Shape::convex_polygon(tri, fill, Stroke::new(1.0, if hot { theme::ACCENT } else { Color32::from_gray(150) })));
+        ui.painter().add(Shape::convex_polygon(tri, color_at(v), Stroke::new(1.0, if hot { theme::ACCENT } else { Color32::from_gray(150) })));
         if hot {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
@@ -1601,22 +1625,19 @@ pub fn luma_range_editor(ui: &mut Ui, r: &mut sk_core::params::LumaRange, bins: 
             None
         }
     };
-    let set = push_luma_edge;
-    let d = sk_core::params::LumaRange::default();
-    let defaults = [d.falloff_low, d.low, d.high, d.falloff_high];
     for (i, track, down, name) in [(1, top, true, "Bereich Anfang"), (2, top, true, "Bereich Ende"), (0, bottom, false, "Übergang Anfang"), (3, bottom, false, "Übergang Ende")] {
-        let value = [r.falloff_low, r.low, r.high, r.falloff_high][i];
-        if let Some(v) = handle(ui, track, value, down, name) {
-            set(r, i, v.unwrap_or(defaults[i]));
+        if let Some(v) = handle(ui, track, e[i], down, name) {
+            push_edge(e, i, v.unwrap_or(scale.defaults[i]), gap);
         }
     }
 
-    // The values as numbers (0–255, as in Levels), for exact input; they push the others too.
-    let byte = |ui: &mut Ui, r: &mut sk_core::params::LumaRange, i: usize| {
-        let v = [r.falloff_low, r.low, r.high, r.falloff_high][i];
-        let mut n = (v.clamp(0.0, 1.0) * 255.0).round() as i32;
-        if ui.add(egui::DragValue::new(&mut n).range(0..=255).speed(0.5)).changed() {
-            set(r, i, n as f32 / 255.0);
+    // The values as numbers, for exact input; they push the others too.
+    let max = if scale.percent { 100 } else { 255 };
+    let number = |ui: &mut Ui, e: &mut [f32; 4], i: usize| {
+        let mut n = (e[i].clamp(0.0, 1.0) * max as f32).round() as i32;
+        let field = egui::DragValue::new(&mut n).range(0..=max).speed(0.5).suffix(if scale.percent { " %" } else { "" });
+        if ui.add(field).changed() {
+            push_edge(e, i, n as f32 / max as f32, gap);
         }
     };
     ui.add_space(4.0);
@@ -1624,12 +1645,12 @@ pub fn luma_range_editor(ui: &mut Ui, r: &mut sk_core::params::LumaRange, bins: 
         ui.horizontal(|ui| {
             ui.label(RichText::new(label).color(theme::TEXT_DIM));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                byte(ui, r, right);
-                byte(ui, r, left);
+                number(ui, e, right);
+                number(ui, e, left);
             });
         });
     }
-    *r != before
+    *e != before
 }
 
 /// `bins` (256, over 0..1) after the monotonic `f`: each bin spread over the range it lands in.
@@ -1843,19 +1864,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn luma_edges_push_each_other() {
-        use sk_core::params::LumaRange;
-        let mut r = LumaRange { falloff_low: 0.0, low: 70.0 / 255.0, high: 239.0 / 255.0, falloff_high: 239.0 / 255.0 };
+    fn range_edges_push_each_other() {
+        let gap = 1.0 / 255.0;
+        let mut e = [0.0, 70.0 / 255.0, 239.0 / 255.0, 239.0 / 255.0];
         // The end of the falloff dragged left takes the range's end along, and then its start.
-        push_luma_edge(&mut r, 3, 0.5);
-        assert_eq!((r.high, r.falloff_high), (0.5, 0.5));
-        push_luma_edge(&mut r, 3, 0.1);
-        assert!((r.low - (0.1 - 1.0 / 255.0)).abs() < 1e-6 && r.high == 0.1, "{r:?}");
-        assert!(r.falloff_low <= r.low);
-        // From the other side, down to the last levels.
-        push_luma_edge(&mut r, 0, 1.0);
-        assert!(r.falloff_low <= r.low && r.low < r.high && r.high <= r.falloff_high && r.falloff_high <= 1.0, "{r:?}");
-        assert!((r.high - 1.0).abs() < 1e-6 && (r.low - (1.0 - 1.0 / 255.0)).abs() < 1e-6, "{r:?}");
+        push_edge(&mut e, 3, 0.5, gap);
+        assert_eq!((e[2], e[3]), (0.5, 0.5));
+        push_edge(&mut e, 3, 0.1, gap);
+        assert!((e[1] - (0.1 - gap)).abs() < 1e-6 && e[2] == 0.1, "{e:?}");
+        assert!(e[0] <= e[1]);
+        // From the other side, up to the last levels.
+        push_edge(&mut e, 0, 1.0, gap);
+        assert!(e[0] <= e[1] && e[1] < e[2] && e[2] <= e[3] && e[3] <= 1.0, "{e:?}");
+        assert!((e[2] - 1.0).abs() < 1e-6 && (e[1] - (1.0 - gap)).abs() < 1e-6, "{e:?}");
     }
 
     /// The colors of the hue bands look like their names: red is red, not pink.

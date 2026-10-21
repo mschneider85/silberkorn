@@ -487,13 +487,17 @@ impl LumaRange {
 
     /// How much of a display luminance `l` (0..1) is in the range.
     pub fn weight(&self, l: f32) -> f32 {
-        let smoothstep = |e0: f32, e1: f32, x: f32| {
-            let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
-            t * t * (3.0 - 2.0 * t)
-        };
-        let [a, b, c, d] = self.edges();
-        smoothstep(a, b, l) * (1.0 - smoothstep(c, d, l))
+        trapezoid(self.edges(), l)
     }
+}
+
+/// 1 between the inner `edges` (1 and 2), fading out smoothly to the outer ones (0 and 3).
+fn trapezoid([a, b, c, d]: [f32; 4], x: f32) -> f32 {
+    let smoothstep = |e0: f32, e1: f32, x: f32| {
+        let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    smoothstep(a, b, x) * (1.0 - smoothstep(c, d, x))
 }
 
 /// A luminance range as stored: before 0.2.11 one soft width for both sides and an "invert".
@@ -565,31 +569,65 @@ pub struct AiMask {
 }
 
 /// A range of the depth map (see `depth`): 0 is the farthest part of the image, 1 the nearest.
+/// Fully in between `far` and `near`, fading out towards `falloff_far` and `falloff_near` (as
+/// the luminance range).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(from = "DepthRangeStored")]
 pub struct DepthRange {
-    pub near: f32,
+    pub falloff_far: f32,
     pub far: f32,
-    /// Soft transition width.
-    pub falloff: f32,
+    pub near: f32,
+    pub falloff_near: f32,
 }
 
 impl Default for DepthRange {
     fn default() -> Self {
-        Self { near: 1.0, far: 0.6, falloff: 0.1 }
+        Self::nearer_than(0.6)
     }
 }
 
 impl DepthRange {
+    /// Everything nearer than `far`, with a soft edge behind it.
+    pub fn nearer_than(far: f32) -> Self {
+        Self { falloff_far: far - 0.1, far, near: 1.0, falloff_near: 1.0 }
+    }
+
+    /// The edges of the soft transitions, at least a hair outside the range (a hard edge).
+    pub fn edges(&self) -> [f32; 4] {
+        [self.falloff_far.min(self.far - 1e-3), self.far, self.near, self.falloff_near.max(self.near + 1e-3)]
+    }
+
     /// Mask value at depth `d`.
     pub fn weight(&self, d: f32) -> f32 {
-        let (lo, hi) = (self.far.min(self.near), self.far.max(self.near));
-        let f = self.falloff.max(1e-3);
-        let rise = ((d - (lo - f)) / f).clamp(0.0, 1.0);
-        let fall = (((hi + f) - d) / f).clamp(0.0, 1.0);
-        let s = |t: f32| t * t * (3.0 - 2.0 * t);
-        // An end at the limit of the scale takes everything beyond it.
-        (if lo <= 0.0 { 1.0 } else { s(rise) }) * (if hi >= 1.0 { 1.0 } else { s(fall) })
+        trapezoid(self.edges(), d)
+    }
+}
+
+/// A depth range as stored: before 0.2.12 one soft width for both sides, and the ends either
+/// way round.
+#[derive(Deserialize)]
+#[serde(default)]
+struct DepthRangeStored {
+    falloff_far: Option<f32>,
+    far: f32,
+    near: f32,
+    falloff_near: Option<f32>,
+    falloff: f32,
+}
+
+impl Default for DepthRangeStored {
+    fn default() -> Self {
+        Self { falloff_far: None, far: 0.6, near: 1.0, falloff_near: None, falloff: 0.1 }
+    }
+}
+
+impl From<DepthRangeStored> for DepthRange {
+    fn from(s: DepthRangeStored) -> Self {
+        if let (Some(falloff_far), Some(falloff_near)) = (s.falloff_far, s.falloff_near) {
+            return Self { falloff_far, far: s.far, near: s.near, falloff_near };
+        }
+        let (lo, hi, f) = (s.far.min(s.near), s.far.max(s.near), s.falloff.max(1e-3));
+        Self { falloff_far: lo - f, far: lo, near: hi, falloff_near: hi + f }
     }
 }
 
@@ -660,8 +698,9 @@ impl Relight {
     /// The depth ranges of the near and the far part; their weights add up to one.
     pub fn ranges(&self) -> (DepthRange, DepthRange) {
         let f = self.falloff.max(0.02);
-        let near = DepthRange { near: 1.0, far: self.split + f / 2.0, falloff: f };
-        let far = DepthRange { near: self.split - f / 2.0, far: 0.0, falloff: f };
+        let (a, b) = (self.split - f / 2.0, self.split + f / 2.0);
+        let near = DepthRange { falloff_far: a, far: b, near: 1.0, falloff_near: 1.0 };
+        let far = DepthRange { falloff_far: 0.0, far: 0.0, near: a, falloff_near: b };
         (near, far)
     }
 }

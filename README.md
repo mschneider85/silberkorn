@@ -331,8 +331,9 @@ erscheint zusätzlich oben im Bild.
   gerechnet: 24 MP etwa 1,2 s. Fehlt die Tiefenkarte beim Export, wird sie dort berechnet.
   Kommandozeile: `cargo run --release -p sk-ai --example depth -- <raw> <ordner> [stärke] [fokus] [lichter]`
 - **Tiefe auswählen** (Tab „Ebenen“, Maske → Automatisch auswählen): eine Maske aus derselben
-  Tiefenkarte, anfangs das nächste Fünftel des Bildes; **Nah**, **Fern** und **Weichheit** stellen
-  den Bereich danach ein (gespeichert mit der Maske, rückgängig zu machen).
+  Tiefenkarte, anfangs das nächste Fünftel des Bildes. Den Bereich stellt danach ein Trapez über der
+  Verteilung der Tiefen ein, wie beim Helligkeitsbereich: von fern (links) bis nah (rechts), mit
+  getrenntem Übergang nach vorne und hinten (gespeichert mit der Maske, rückgängig zu machen).
 - **Neu ausleuchten** (Tab „Belichtung“): **Belichtung** und **Wärme** für
   Vorder- und Hintergrund getrennt, etwa um ein Motiv im Gegenlicht aufzuhellen. **Grenze** legt fest,
   wo der Vordergrund aufhört (0 fern … 1 nah), **Übergang**, wie weich er in den Hintergrund übergeht.
