@@ -38,7 +38,8 @@ impl SideColumn {
 impl App {
     /// Whether the column should be shown this frame (`grid`: the grid fills the center).
     pub(crate) fn side_column_wanted(&self, grid: bool) -> bool {
-        if grid || self.current.is_none() {
+        // While the next image loads there is no current one for a moment: the column stays.
+        if grid || (self.current.is_none() && self.loading.is_none()) {
             return false;
         }
         match self.side_column {

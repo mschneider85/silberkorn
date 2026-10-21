@@ -4139,3 +4139,18 @@ fn relight_split_is_drawn_without_a_depth_map() {
     // Drawing changes nothing.
     assert_eq!(f.app.current.as_ref().unwrap().adjustments.relight.split, sk_core::params::Relight::default().split);
 }
+
+#[test]
+fn side_column_stays_while_the_next_image_loads() {
+    let Some(mut f) = Fixture::new("side-column") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.side_column = crate::side_column::SideColumn::Always;
+    assert!(f.app.side_column_wanted(false));
+    // Between two images: the previous one put aside, the next one not loaded yet.
+    let path = f.app.current_path();
+    f.app.current = None;
+    f.app.loading = path;
+    assert!(f.app.side_column_wanted(false), "bleibt beim Laden");
+    f.app.loading = None;
+    assert!(!f.app.side_column_wanted(false), "ohne Bild nicht");
+}
