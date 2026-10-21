@@ -28,6 +28,7 @@ impl Cache {
         }
     }
 
+    /// What it is for (tooltip of its name).
     fn note(self) -> &'static str {
         match self {
             Cache::Previews => "Für die Bibliothek; Sessions haben ihre eigenen im Session-Ordner",
@@ -76,14 +77,17 @@ impl App {
             dialog::card(ui, "Zwischenspeicher", None, |ui| {
                 dialog::note(ui, "Alles hier lässt sich jederzeit leeren: es wird bei Bedarf neu berechnet. Ist ein Speicher voll, fallen die ältesten Einträge heraus.");
                 for (cache, used) in Cache::ALL.into_iter().zip(sizes) {
-                    ui.add_space(8.0);
+                    ui.add_space(6.0);
                     ui.horizontal(|ui| {
+                        // Room for the button on the right.
+                        let width = (ui.available_width() - 110.0).max(80.0);
                         ui.vertical(|ui| {
-                            ui.spacing_mut().item_spacing.y = 3.0;
+                            ui.set_width(width);
+                            ui.spacing_mut().item_spacing.y = 4.0;
                             let limit = cache.limit();
-                            ui.label(RichText::new(format!("{} · {} von {}", cache.title(), amount(used), amount(limit))).size(12.0).color(theme::TEXT));
-                            ui.add(egui::ProgressBar::new((used as f64 / limit.max(1) as f64).min(1.0) as f32).desired_width(300.0).desired_height(4.0));
-                            dialog::note(ui, cache.note());
+                            ui.label(RichText::new(format!("{} · {} von {}", cache.title(), amount(used), amount(limit))).size(12.0).color(theme::TEXT))
+                                .on_hover_text(cache.note());
+                            ui.add(egui::ProgressBar::new((used as f64 / limit.max(1) as f64).min(1.0) as f32).desired_width(width).desired_height(4.0));
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let busy = matches!(cache, Cache::Denoise) && denoising;
