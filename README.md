@@ -332,11 +332,11 @@ erscheint zusätzlich oben im Bild.
   Kommandozeile: `cargo run --release -p sk-ai --example depth -- <raw> <ordner> [stärke] [fokus] [lichter]`
 - **Tiefe auswählen** (Tab „Ebenen“, Maske → Automatisch auswählen): eine Maske aus derselben
   Tiefenkarte, anfangs das nächste Fünftel des Bildes. Den Bereich stellt danach ein Trapez über der
-  Verteilung der Tiefen ein, wie beim Helligkeitsbereich: von fern (links) bis nah (rechts), mit
+  Verteilung der Entfernungen ein, wie beim Helligkeitsbereich: von nah (links) bis fern (rechts), mit
   getrenntem Übergang nach vorne und hinten (gespeichert mit der Maske, rückgängig zu machen).
 - **Neu ausleuchten** (Tab „Belichtung“): **Belichtung** und **Wärme** für
   Vorder- und Hintergrund getrennt, etwa um ein Motiv im Gegenlicht aufzuhellen. Die **Trennung**
-  liegt über der Verteilung der Tiefen (links fern, rechts nah): Die Linie ist die **Grenze**, die
+  liegt über der Verteilung der Entfernungen (links nah, rechts fern): Die Linie ist die **Grenze**, die
   gestrichelten Linien sind Anfang und Ende des **Übergangs**, jede einzeln zu ziehen.
 - **Atmosphäre** (Tab „Effekte“): Dunst, der mit der Entfernung dichter
   wird. **Reichweite** bestimmt, wie weit nach vorn er reicht, **Helligkeit** und **Wärme** färben ihn.

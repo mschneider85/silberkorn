@@ -1507,6 +1507,8 @@ pub struct RangeScale {
     pub percent: bool,
     /// Hover text of the trapezoid.
     pub hint: &'static str,
+    /// Symbols for the two ends of the scale, drawn in their colors.
+    pub ends: Option<[&'static str; 2]>,
 }
 
 /// The luminance range of a mask as in Capture One.
@@ -1517,6 +1519,7 @@ pub fn luma_range_editor(ui: &mut Ui, r: &mut sk_core::params::LumaRange, bins: 
         colors: [Color32::BLACK, Color32::WHITE],
         percent: false,
         hint: "Ziehen: Bereich verschieben – Doppelklick: ganzer Bereich",
+        ends: None,
     };
     let mut e = [r.falloff_low, r.low, r.high, r.falloff_high];
     let changed = range_editor(ui, "luma-range", &mut e, bins, &scale);
@@ -1568,6 +1571,14 @@ fn paint_gradient(painter: &egui::Painter, rect: Rect, colors: [Color32; 2]) {
     mesh.add_triangle(0, 1, 2);
     mesh.add_triangle(1, 2, 3);
     painter.add(mesh);
+}
+
+/// Symbols for the ends of the scale in the graph's upper corners, in the colors of the ends.
+fn paint_ends(painter: &egui::Painter, graph: Rect, ends: Option<[&str; 2]>, colors: [Color32; 2]) {
+    let Some([left, right]) = ends else { return };
+    let font = egui::FontId::proportional(13.0);
+    painter.text(graph.left_top() + vec2(7.0, 6.0), egui::Align2::LEFT_TOP, left, font.clone(), colors[0]);
+    painter.text(graph.right_top() + vec2(-7.0, 6.0), egui::Align2::RIGHT_TOP, right, font, colors[1]);
 }
 
 /// The color of the scale at `v` (0..1).
@@ -1662,6 +1673,7 @@ pub fn range_editor(ui: &mut Ui, salt: &str, e: &mut [f32; 4], bins: Option<&[f3
         painter.vline(x_of(v), graph.y_range(), Stroke::new(1.0, Color32::from_white_alpha(110)));
     }
     paint_gradient(painter, Rect::from_min_max(pos2(graph.left(), graph.bottom() - 4.0), graph.max), scale.colors);
+    paint_ends(painter, graph, scale.ends, scale.colors);
 
     for (i, track, down, name) in [(1, top, true, "Bereich Anfang"), (2, top, true, "Bereich Ende"), (0, bottom, false, "Übergang Anfang"), (3, bottom, false, "Übergang Ende")] {
         if let Some(v) = track_handle(ui, id, track, graph, e[i], down, scale_color(scale.colors, e[i]), name) {
@@ -1690,7 +1702,18 @@ pub fn range_editor(ui: &mut Ui, salt: &str, e: &mut [f32; 4], bins: Option<&[f3
 /// over the distribution of the values (`bins`, 256): the line of the split with a handle above,
 /// the transition's ends with handles below, the parts in their `colors` (from 0 and from 1).
 /// Dragging the graph moves the split; double-click resets to `defaults` (split, width).
-pub fn split_editor(ui: &mut Ui, salt: &str, split: &mut f32, width: &mut f32, bins: Option<&[f32]>, colors: [Color32; 2], defaults: (f32, f32), min_width: f32) -> bool {
+#[allow(clippy::too_many_arguments)]
+pub fn split_editor(
+    ui: &mut Ui,
+    salt: &str,
+    split: &mut f32,
+    width: &mut f32,
+    bins: Option<&[f32]>,
+    colors: [Color32; 2],
+    ends: Option<[&str; 2]>,
+    defaults: (f32, f32),
+    min_width: f32,
+) -> bool {
     let before = (*split, *width);
     let (top, graph, bottom) = scale_rows(ui);
     let x_of = |v: f32| graph.left() + v.clamp(0.0, 1.0) * graph.width();
@@ -1720,6 +1743,7 @@ pub fn split_editor(ui: &mut Ui, salt: &str, split: &mut f32, width: &mut f32, b
     }
     painter.vline(x_of(*split), graph.y_range(), Stroke::new(1.5, if hot { theme::ACCENT } else { Color32::from_white_alpha(200) }));
     paint_gradient(painter, Rect::from_min_max(pos2(graph.left(), graph.bottom() - 4.0), graph.max), colors);
+    paint_ends(painter, graph, ends, colors);
 
     // The ends of the transition move one at a time; the split stays in its middle.
     let set_ends = |split: &mut f32, width: &mut f32, a: f32, b: f32| {

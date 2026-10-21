@@ -307,7 +307,7 @@ impl App {
         let mut reset = false;
         let state = self.depth_state(&path);
         let cancel = self.depth_cancel();
-        let help = "Hellt Vorder- und Hintergrund getrennt auf oder ab und färbt sie wärmer oder kühler, etwa bei Gegenlicht.\n\nTrennung: über der Verteilung der Tiefen, links fern, rechts nah. Die Linie ist die Grenze, die gestrichelten Linien Anfang und Ende des Übergangs.";
+        let help = "Hellt Vorder- und Hintergrund getrennt auf oder ab und färbt sie wärmer oder kühler, etwa bei Gegenlicht.\n\nTrennung: über der Verteilung der Entfernungen, links nah, rechts fern. Die Linie ist die Grenze, die gestrichelten Linien Anfang und Ende des Übergangs.";
         // The distribution of the depths, once the map exists.
         let bins = if self.depth_ready(&path) { self.depth_mask_map(&path).and_then(|_| self.depth_mask_bins()) } else { None };
         crate::widgets::tool_section_help(ui, sk_core::tools::Tool::Relight, help, Some(&mut || reset = true), |ui| {
@@ -322,11 +322,16 @@ impl App {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Trennung").size(11.5).strong().color(crate::theme::TEXT_DIM));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.label(RichText::new("fern 0 % … 100 % nah").small().color(crate::theme::TEXT_FAINT));
+                        ui.label(RichText::new(DISTANCE_SCALE).small().color(crate::theme::TEXT_FAINT));
                     });
                 });
-                let bins = bins.as_deref().map(|b| b.as_slice());
-                crate::widgets::split_editor(ui, "relight-split", &mut rl.split, &mut rl.falloff, bins, [FAR_COLOR, NEAR_COLOR], (d.split, d.falloff), 0.02);
+                // As the distance (the map counts 1 near): turned for display.
+                let bins: Option<Vec<f32>> = bins.as_deref().map(|b| b.iter().rev().copied().collect());
+                let mut split = 1.0 - rl.split;
+                let ends = Some([icon::PERSON_SIMPLE, icon::MOUNTAINS]);
+                if crate::widgets::split_editor(ui, "relight-split", &mut split, &mut rl.falloff, bins.as_deref(), [NEAR_COLOR, FAR_COLOR], ends, (1.0 - d.split, d.falloff), 0.02) {
+                    rl.split = 1.0 - split;
+                }
             });
             depth_status(ui, &state, !rl.is_off(), cancel.as_ref());
         });
@@ -398,27 +403,30 @@ impl App {
         self.depth.small_bins.clone().filter(|_| self.depth.small.is_some())
     }
 
-    /// The range of a layer's depth mask as a trapezoid over the image's depths, far (cool, left)
-    /// to near (warm, right); returns the changed range. Resetting gives the range of a new
-    /// depth mask on this image (everything nearer than `far`).
+    /// The range of a layer's depth mask as a trapezoid over the image's depths, near (warm,
+    /// left) to far (cool, right), as the distance: the map counts the other way round (1 near),
+    /// so the values are turned for display. Returns the changed range. Resetting gives the
+    /// range of a new depth mask on this image (everything nearer than `far`).
     pub(crate) fn depth_mask_controls(ui: &mut Ui, range: &DepthRange, far: f32, bins: Option<&[f32]>) -> Option<DepthRange> {
-        let d = DepthRange::nearer_than(far);
+        let turn = |r: &DepthRange| [1.0 - r.falloff_near, 1.0 - r.near, 1.0 - r.far, 1.0 - r.falloff_far];
         let scale = crate::widgets::RangeScale {
-            defaults: [d.falloff_far, d.far, d.near, d.falloff_near],
-            colors: [FAR_COLOR, NEAR_COLOR],
+            defaults: turn(&DepthRange::nearer_than(far)),
+            colors: [NEAR_COLOR, FAR_COLOR],
             percent: true,
             hint: "Ziehen: Bereich verschieben – Doppelklick: der nahe Teil des Bildes",
+            ends: Some([icon::PERSON_SIMPLE, icon::MOUNTAINS]),
         };
         ui.horizontal(|ui| {
             ui.label(RichText::new("Tiefe").strong());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new("fern 0 % … 100 % nah").small().color(crate::theme::TEXT_FAINT));
+                ui.label(RichText::new(DISTANCE_SCALE).small().color(crate::theme::TEXT_FAINT));
             });
         });
-        let mut e = [range.falloff_far, range.far, range.near, range.falloff_near];
-        let changed = crate::widgets::range_editor(ui, "depth-range", &mut e, bins, &scale);
-        let [falloff_far, far, near, falloff_near] = e;
-        changed.then_some(DepthRange { falloff_far, far, near, falloff_near })
+        let mut e = turn(range);
+        let bins: Option<Vec<f32>> = bins.map(|b| b.iter().rev().copied().collect());
+        let changed = crate::widgets::range_editor(ui, "depth-range", &mut e, bins.as_deref(), &scale);
+        let [a, b, c, d] = e;
+        changed.then_some(DepthRange { falloff_far: 1.0 - d, far: 1.0 - c, near: 1.0 - b, falloff_near: 1.0 - a })
     }
 }
 
@@ -427,6 +435,8 @@ impl App {
 /// a landscape painting.
 const NEAR_COLOR: Color32 = Color32::from_rgb(232, 170, 92);
 const FAR_COLOR: Color32 = Color32::from_rgb(118, 150, 220);
+/// The scale of the depth editors: the distance, near on the left (as the cards: foreground first).
+const DISTANCE_SCALE: &str = "nah 0 % … 100 % fern";
 
 /// One part of "Neu ausleuchten": a card with a colored edge, its name and its two sliders.
 fn relight_card(ui: &mut Ui, symbol: &str, title: &str, color: Color32, ev: &mut f32, warmth: &mut f32) {
