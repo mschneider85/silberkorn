@@ -47,6 +47,7 @@ mod softproof;
 mod splash;
 mod stacks;
 mod style_grid;
+mod subject_worker;
 mod theme;
 mod thumb_queue;
 mod tools;
@@ -258,6 +259,7 @@ mod tests {
             include_str!("splash.rs"),
             include_str!("stacks.rs"),
             include_str!("style_grid.rs"),
+            include_str!("subject_worker.rs"),
             include_str!("theme.rs"),
             include_str!("thumb_queue.rs"),
             include_str!("tools.rs"),

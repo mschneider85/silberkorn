@@ -470,8 +470,10 @@ impl App {
                 }
                 group_gap(ui);
                 // Right to left: the segments are listed in reverse.
+                // 100 % only when it is 100 % (zoomed otherwise, neither segment is on).
+                let at_100 = self.zoom.is_some() && self.zoom_pct.is_some_and(|p| (p - 100.0).abs() < 0.5);
                 let zoom = [
-                    Seg { icon: icon::MAGNIFYING_GLASS_PLUS, label: "", hover: &crate::commands::hint("100 % (auch Doppelklick ins Bild)", "zoom-100"), active: self.zoom.is_some(), enabled: has },
+                    Seg { icon: icon::MAGNIFYING_GLASS_PLUS, label: "", hover: &crate::commands::hint("100 % (auch Doppelklick ins Bild)", "zoom-100"), active: at_100, enabled: has },
                     Seg { icon: icon::CORNERS_OUT, label: "", hover: "Einpassen", active: self.zoom.is_none(), enabled: has },
                 ];
                 match segmented(ui, &zoom) {

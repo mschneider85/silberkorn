@@ -437,12 +437,15 @@ impl Net {
     }
 
     /// [`Self::load`], but never on the graphics card: for networks too large for the graphics
-    /// memory of smaller cards (Windows resets a card that takes too long for one command).
+    /// memory of smaller cards (Windows resets a card that takes too long for one command). Such
+    /// a network takes many seconds per run, so it gets a worker process of its own.
     pub fn load_processor(path: &Path, inputs: &[Input]) -> Result<Net> {
         Self::load_with(path, inputs, None, false)
     }
 
+    /// `gpu` false: on the processor, in the worker process for long runs.
     fn load_with(path: &Path, inputs: &[Input], keep: Option<&[usize]>, gpu: bool) -> Result<Net> {
+        let lane = if gpu { crate::worker::Lane::Quick } else { crate::worker::Lane::Long };
         let gpu = gpu && !GPU_RESET.load(Ordering::Relaxed);
         let net = |backend| Net { backend, inputs: inputs.to_vec(), path: path.to_path_buf(), keep: keep.map(<[usize]>::to_vec) };
         // ONNX Runtime and DirectML in the separate process if there is one (a crash in them or
@@ -450,7 +453,7 @@ impl Net {
         let ort = if !gpu_enabled() || !gpu_installed() {
             None
         } else if crate::worker::configured() {
-            crate::worker::usable().then(|| crate::worker::load(path, gpu).map(|(session, gpu, dml)| (Backend::Remote { session, gpu, fallback: Mutex::default() }, gpu, dml)))
+            crate::worker::usable().then(|| crate::worker::load(path, gpu, lane).map(|(session, gpu, dml)| (Backend::Remote { session, gpu, fallback: Mutex::default() }, gpu, dml)))
         } else {
             Some(ort_session(path, gpu).map(|(session, gpu, dml)| (Backend::Ort { session: Mutex::new(session), gpu }, gpu, dml)))
         };

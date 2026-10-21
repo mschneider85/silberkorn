@@ -552,6 +552,12 @@ pub struct App {
     pub removal_progress: f32,
     pub show_gpu_dialog: bool,
     pub ai_busy: bool,
+    /// The image whose subject mask was last asked for ahead, and the image shown in the Ebenen
+    /// tab since when (see `prepare_subject`).
+    pub(crate) subject_prepared: Option<u64>,
+    pub(crate) subject_shown: Option<(u64, Instant)>,
+    /// Masks are computed ahead (not in tests: each would load BiRefNet).
+    pub(crate) subject_ahead: bool,
     /// Clicks of the object tool on the active layer (see `layers::ObjectSession`).
     pub object_session: Option<crate::layers::ObjectSession>,
     /// Running search for dust and blemishes: the image and the heal spots found.
@@ -1014,6 +1020,9 @@ impl App {
             removal_progress: 0.0,
             show_gpu_dialog: false,
             ai_busy: false,
+            subject_prepared: None,
+            subject_shown: None,
+            subject_ahead: opts.persist_settings,
             tiles: Tiles::default(),
             tiles_requested: None,
             edited_at: Instant::now(),

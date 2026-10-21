@@ -2343,7 +2343,7 @@ fn heal_clone_and_magic_brush_are_painted() {
 
 
 /// Object selection (with the downloaded MobileSAM models): a click selects the object, an
-/// Alt+click takes part of it away, and "next object" keeps the result while starting anew.
+/// Alt+click takes part of it away, and Shift+click starts another object, keeping the first.
 #[test]
 #[ignore = "langsam: läuft mit cargo t-all"]
 fn object_clicks_select_and_refine() {
@@ -2383,6 +2383,19 @@ fn object_clicks_select_and_refine() {
     f.app.commit_and_save();
     f.app.undo();
     assert_eq!(mask(&f).map(|m| covered(&m)), Some(n));
+
+    // Shift+click elsewhere: a new object of its own (one click), added to the first.
+    let shift = egui::Modifiers::SHIFT;
+    let d = egui::pos2(300.0, 250.0);
+    viewer_frame_with(&mut f, vec![egui::Event::PointerMoved(d)], shift);
+    viewer_frame_with(&mut f, vec![egui::Event::PointerButton { pos: d, button: egui::PointerButton::Primary, pressed: true, modifiers: shift }], shift);
+    viewer_frame_with(&mut f, vec![egui::Event::PointerButton { pos: d, button: egui::PointerButton::Primary, pressed: false, modifiers: shift }], shift);
+    viewer_frame_with(&mut f, vec![], egui::Modifiers::NONE);
+    assert_eq!(f.app.object_session.as_ref().map(|s| s.clicks.len()), Some(1), "neues Objekt");
+    f.pump("weiteres Objekt", |a| !a.ai_busy);
+    let both = mask(&f).unwrap();
+    let kept = first.data.iter().zip(both.data.iter()).filter(|(a, b)| **a > 128 && **b > 128).count();
+    assert!(kept * 10 >= n * 9, "das erste Objekt bleibt: {kept} von {n}");
 }
 
 /// Lens blur: switching it on computes the image's depth map in the background, the focus
@@ -3862,6 +3875,8 @@ fn delete_in_layer_tab_ignores_hidden_spot() {
     assert_eq!(f.app.selected_spot, Some(0), "Reparieren und Klonen zeigen die Bereiche weiter");
     f.app.set_local_tool(LocalTool::Brush);
     assert_eq!(f.app.selected_spot, None);
+    assert!(f.app.current.as_ref().unwrap().adjustments.layers.is_empty(), "das Werkzeug allein legt keine Ebene an");
+    f.app.ensure_layer();
     // Left over (as from before this fix): the layer goes, the area stays.
     f.app.end_viewer_tools();
     f.app.tab = Tab::Layers;

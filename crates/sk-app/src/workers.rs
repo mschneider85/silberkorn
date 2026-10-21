@@ -250,7 +250,12 @@ pub enum AiKind {
     Object { clicks: Vec<sk_ai::segment::Click> },
     /// Analyzes the image for `Object` before the first click (no result event).
     ObjectPrepare,
+    /// Computes the subject mask ahead and keeps it (no result event).
+    SubjectPrepare,
 }
+
+/// The subject mask comes from the subject thread (see `subject_worker`), not as the answer.
+const SUBJECT_PENDING: &str = "SUBJECT_PENDING";
 
 /// Computes a content-based mask for a layer.
 pub struct AiJob {
@@ -584,13 +589,15 @@ impl Workers {
         let (ai_tx, ai_rx) = channel::<AiJob>();
         {
             let (ev_tx, ctx) = (ev_tx.clone(), ctx.clone());
+            let (subject_tx, subject_rx) = channel::<crate::subject_worker::SubjectJob>();
+            let subjects = crate::subject_worker::SubjectCache::default();
+            crate::subject_worker::spawn(subject_rx, subjects.clone(), ev_tx.clone(), ctx.clone());
             crate::guard::spawn("KI-Maske", move || {
-                let mut model: Option<(sk_ai::subject::SubjectNet, u64)> = None;
                 let mut object: Option<(sk_ai::segment::ObjectModel, u64)> = None;
                 // The encoder's result for the last image (by its guide), reused for every click.
                 let mut embedding: Option<(u64, sk_ai::segment::Embedding)> = None;
                 while let Ok(job) = ai_rx.recv() {
-                    let prepare = matches!(job.kind, AiKind::ObjectPrepare);
+                    let prepare = matches!(job.kind, AiKind::ObjectPrepare | AiKind::SubjectPrepare);
                     // A panic must still answer: the layer panel waits for the result.
                     let result = crate::guard::catch(|| {
                         // Guide: the image in source orientation, only white balance and exposure applied.
@@ -630,20 +637,21 @@ impl Workers {
                             }
                             AiKind::Sky => Ok(sk_ai::sky_mask(&guide)),
                             AiKind::Magic { seeds, tolerance } => Ok(sk_ai::magic_mask(&guide, &seeds, tolerance)),
-                            AiKind::Subject => {
-                                let generation = sk_ai::runtime::config_generation();
-                                if model.as_ref().is_none_or(|(_, g)| *g != generation) && sk_ai::subject::available() {
-                                    model = sk_ai::subject::SubjectNet::load().map_err(|e| log::warn!("{e:#}")).ok().map(|m| (m, generation));
+                            AiKind::Subject | AiKind::SubjectPrepare => {
+                                let key = crate::subject_worker::key(&job.meta.path, job.preview.width, job.preview.height);
+                                if let Some(m) = subjects.get(key) {
+                                    return Ok(m);
                                 }
-                                match &model {
-                                    Some((m, _)) => m.mask(&guide).map_err(|e| format!("{e:#}")),
-                                    None => Err("MODEL_MISSING".into()),
-                                }
+                                let click = matches!(job.kind, AiKind::Subject);
+                                let deliver = click.then_some(crate::subject_worker::Deliver { generation: job.generation, layer: job.layer });
+                                let _ = subject_tx.send(crate::subject_worker::SubjectJob { key, guide, deliver });
+                                Err(SUBJECT_PENDING.to_string())
                             }
                         }
                     })
                     .and_then(|r| r);
-                    if prepare {
+                    // (Without a coarse mask the subject thread answers.)
+                    if prepare || result.as_ref().is_err_and(|e| e == SUBJECT_PENDING) {
                         continue;
                     }
                     let _ = ev_tx.send(Event::AiMask { generation: job.generation, layer: job.layer, result });

@@ -226,13 +226,17 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
   ganze Bild auf 1024 × 1024 gestreckt und trennt auch Haare, Fell und dünne Teile; die Maske hat 1024 Pixel
   an der langen Seite (andere Masken 768). Es rechnet immer auf dem Prozessor (unter Windows 10–30 s mit
   ONNX Runtime, etwa 45 s mit tract): Auf einer GTX 1650 Ti mit 4 GB rechnete es Minuten, bis Windows die
-  Grafikkarte zurücksetzte. Automatisch anpassen und Look angleichen nehmen weiter das schnelle
+  Grafikkarte zurücksetzte. Damit man nicht wartet: Zeigt der Tab „Ebenen“ ein Bild, rechnet BiRefNet
+  still im Hintergrund in einem eigenen Thread (Objekt, Himmel und Zauberpinsel warten nicht darauf), und die
+  Masken der letzten acht Bilder bleiben im Speicher. Kommt der Klick vorher, setzt U²-Net-p sofort eine grobe
+  Maske; die genaue ersetzt sie, sobald sie fertig ist, auch im Verlauf (kein eigener Rückgängig-Schritt; wurde
+  die Maske inzwischen geändert, bleibt die Änderung). Automatisch anpassen und Look angleichen nehmen weiter das schnelle
   U²-Net-p (Apache-2.0, 4,6 MB; `SILBERKORN_MODEL=<pfad>`). Beide werden beim Programmstart still nach
   `~/.local/share/silberkorn/models/` geladen.
 - **Himmel auswählen:** helle, strukturarme, blaue oder neutrale Bereiche, die mit dem oberen Rand verbunden sind.
 - **Zauberpinsel (J):** über den Bereich malen; gewählt wird, was zusammenhängt und einer der überstrichenen Farben ähnelt (Größe und Toleranz einstellbar).
 - **Objekt (Umschalt+J):** auf ein Objekt klicken, es wird ausgewählt; weitere Klicks verfeinern, Alt+Klick
-  nimmt Teile aus, „Nächstes Objekt“ wählt ein weiteres dazu. MobileSAM (Apache-2.0; Bild-Encoder und
+  nimmt Teile aus, Umschalt+Klick wählt ein weiteres Objekt dazu. MobileSAM (Apache-2.0; Bild-Encoder und
   Masken-Decoder von Segment Anything als ONNX, 45 MB, geladen beim ersten Wählen des Werkzeugs). Der Encoder analysiert das Bild
   einmal, sobald das Werkzeug gewählt wird (etwa 4 s auf dem Prozessor); jeder Klick braucht dann nur noch
   den Decoder (etwa 0,2 s). tract rechnet nur dessen 256er-Maske, Silberkorn skaliert sie selbst hoch und

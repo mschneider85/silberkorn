@@ -4,6 +4,10 @@
 //! processor (see `runtime::Net`), later ones start a new process. After [`MAX_CRASHES`] the
 //! graphics card is not used for networks until the program is started again.
 //!
+//! There are two such processes ([`Lane`]): one for the networks that answer quickly, and one for
+//! those that take many seconds per run (BiRefNet, 10–30 s on the processor), which would
+//! otherwise hold up every other network: each process works through one request after the other.
+//!
 //! The process is the program itself, started with [`ARG`] (see [`set_command`]); without that
 //! (tests, examples) ONNX Runtime runs in the calling process as before. Requests and replies go
 //! through stdin and stdout, each a length (u64) and the message; numbers are little-endian.
@@ -41,7 +45,18 @@ const ERR: u8 = 1;
 
 /// How to start the worker process.
 static COMMAND: OnceLock<(PathBuf, Vec<OsString>)> = OnceLock::new();
-static CONN: Mutex<Option<Conn>> = Mutex::new(None);
+static CONNS: [Mutex<Option<Conn>>; 2] = [Mutex::new(None), Mutex::new(None)];
+/// The generation of each lane's running process (0: none), readable while the other lane waits.
+static LIVE: [AtomicU64; 2] = [AtomicU64::new(0), AtomicU64::new(0)];
+
+/// Which worker process a network runs in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Lane {
+    /// Networks that answer within a second or a few.
+    Quick = 0,
+    /// Networks that take many seconds per run.
+    Long = 1,
+}
 /// Counts the started processes: sessions belong to one of them.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 static CRASHES: AtomicU32 = AtomicU32::new(0);
@@ -65,13 +80,16 @@ pub(crate) fn usable() -> bool {
 
 /// Ends the worker process (before an update replaces the program file it runs from).
 pub fn shutdown() {
-    if let Some(mut c) = CONN.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        c.kill();
+    for conn in &CONNS {
+        if let Some(mut c) = conn.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            c.kill();
+        }
     }
 }
 
 /// A network loaded in the worker process.
 pub(crate) struct Session {
+    lane: Lane,
     generation: u64,
     id: u32,
 }
@@ -86,13 +104,14 @@ struct Conn {
     child: Child,
     stdin: BufWriter<ChildStdin>,
     replies: Receiver<Vec<u8>>,
+    lane: Lane,
     generation: u64,
     /// `runtime::config_generation` when started: the runtime it loaded may be outdated.
     config: u64,
 }
 
 impl Conn {
-    fn start(config: u64) -> Result<Conn> {
+    fn start(lane: Lane, config: u64) -> Result<Conn> {
         let (exe, args) = COMMAND.get().context("Kein KI-Prozess eingerichtet")?;
         let mut cmd = Command::new(exe);
         cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::inherit());
@@ -119,8 +138,9 @@ impl Conn {
             }
         })?;
         let generation = GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
-        log::info!("KI-Prozess gestartet");
-        Ok(Conn { child, stdin: BufWriter::new(stdin), replies, generation, config })
+        LIVE[lane as usize].store(generation, Ordering::Relaxed);
+        log::info!("KI-Prozess gestartet ({lane:?})");
+        Ok(Conn { child, stdin: BufWriter::new(stdin), replies, lane, generation, config })
     }
 
     fn kill(&mut self) {
@@ -132,9 +152,11 @@ impl Conn {
     /// then drops it); an error reported by it is an `Ok` reply starting with [`ERR`].
     fn request(&mut self, message: &[u8]) -> Result<Vec<u8>> {
         let released: Vec<u32> = {
+            // Those of the other process stay for it; those of ended processes go.
             let mut r = RELEASED.lock().unwrap_or_else(|e| e.into_inner());
             let mine = r.iter().filter(|(g, _)| *g == self.generation).map(|(_, id)| *id).collect();
-            r.clear();
+            let other = LIVE[1 - self.lane as usize].load(Ordering::Relaxed);
+            r.retain(|(g, _)| *g == other);
             mine
         };
         let sent = released
@@ -162,8 +184,8 @@ impl Conn {
 /// Sends `message` to the current process (`generation`: only if it is still that one; `None`
 /// starts one if needed). The process's generation and the reply without its status byte; an
 /// error the process reported is returned as `Err` too.
-fn request(generation: Option<u64>, message: &[u8]) -> Result<(u64, Vec<u8>)> {
-    let mut conn = CONN.lock().unwrap_or_else(|e| e.into_inner());
+fn request(lane: Lane, generation: Option<u64>, message: &[u8]) -> Result<(u64, Vec<u8>)> {
+    let mut conn = CONNS[lane as usize].lock().unwrap_or_else(|e| e.into_inner());
     let config = crate::runtime::config_generation();
     match (&mut *conn, generation) {
         (Some(c), Some(g)) if c.generation != g => bail!("KI-Prozess wurde neu gestartet"),
@@ -176,7 +198,7 @@ fn request(generation: Option<u64>, message: &[u8]) -> Result<(u64, Vec<u8>)> {
         _ => {}
     }
     if conn.is_none() {
-        *conn = Some(Conn::start(config)?);
+        *conn = Some(Conn::start(lane, config)?);
     }
     let Some(c) = conn.as_mut() else { bail!("KI-Prozess fehlt") };
     match c.request(message) {
@@ -203,14 +225,14 @@ fn request(generation: Option<u64>, message: &[u8]) -> Result<(u64, Vec<u8>)> {
 
 /// Loads a network in the worker process: the session, whether it runs on the graphics card,
 /// and why DirectML could not be used.
-pub(crate) fn load(path: &Path, gpu: bool) -> Result<(Session, bool, Option<String>)> {
+pub(crate) fn load(path: &Path, gpu: bool, lane: Lane) -> Result<(Session, bool, Option<String>)> {
     let mut m = vec![LOAD, gpu as u8];
     m.extend(path.to_string_lossy().as_bytes());
-    let (generation, reply) = request(None, &m)?;
+    let (generation, reply) = request(lane, None, &m)?;
     let mut r = Reader(&reply);
     let (id, gpu) = (r.u32()?, r.u8()? != 0);
     let dml_error = (r.u8()? != 0).then(|| String::from_utf8_lossy(r.rest()).into_owned());
-    Ok((Session { generation, id }, gpu, dml_error))
+    Ok((Session { lane, generation, id }, gpu, dml_error))
 }
 
 pub(crate) fn run(session: &Session, data: Vec<Tensor>) -> Result<Vec<Output>> {
@@ -218,7 +240,7 @@ pub(crate) fn run(session: &Session, data: Vec<Tensor>) -> Result<Vec<Output>> {
     m.extend(session.id.to_le_bytes());
     encode_tensors(&mut m, &data);
     drop(data);
-    let (_, reply) = request(Some(session.generation), &m)?;
+    let (_, reply) = request(session.lane, Some(session.generation), &m)?;
     let mut r = Reader(&reply);
     let n = r.u32()? as usize;
     (0..n)

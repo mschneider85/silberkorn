@@ -13,6 +13,9 @@ use crate::ai_models::AiFeature;
 use crate::app::{App, CurveChannel, Tab};
 use crate::widgets::{RAIL_LUMA, SliderOpts, hue_rail, slider_row, slider_row_with, subheading};
 
+/// How long an image stays in the Ebenen tab before its subject mask is computed ahead.
+const SUBJECT_AHEAD_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LocalTool {
     Brush,
@@ -97,10 +100,6 @@ impl LocalTool {
             LocalTool::Heal | LocalTool::Clone | LocalTool::Remove => Tab::Retouch,
             _ => Tab::Layers,
         }
-    }
-
-    pub fn is_mask_tool(self) -> bool {
-        matches!(self, LocalTool::Brush | LocalTool::Eraser | LocalTool::Linear | LocalTool::Radial | LocalTool::Magic | LocalTool::Object)
     }
 }
 
@@ -419,9 +418,7 @@ impl App {
         }
         self.local_tool = new;
         self.object_session = None;
-        if self.local_tool.is_some_and(|t| t.is_mask_tool()) {
-            self.ensure_layer();
-        }
+        // No layer yet: the first stroke or click makes one (choosing a tool alone leaves none).
         match new {
             Some(LocalTool::Object) => self.with_ai(AiFeature::Object, |app| {
                 if app.local_tool == Some(LocalTool::Object) {
@@ -436,16 +433,48 @@ impl App {
         self.request_render();
     }
 
+    /// Computes the image's subject mask in the background (once per image, without notice), so
+    /// that Motiv is there at once when clicked (see `subject_worker`). Only for an image that
+    /// stays in the Ebenen tab a moment: leafing through images computes nothing.
+    fn prepare_subject(&mut self, ctx: &egui::Context) {
+        let Some(cur) = &self.current else { return };
+        let key = crate::subject_worker::key(&cur.meta.path, cur.preview.width, cur.preview.height);
+        if !self.subject_ahead || self.subject_prepared == Some(key) || !sk_ai::subject::available() {
+            return;
+        }
+        let since = match self.subject_shown {
+            Some((k, t)) if k == key => t,
+            _ => {
+                self.subject_shown = Some((key, std::time::Instant::now()));
+                ctx.request_repaint_after(SUBJECT_AHEAD_AFTER);
+                return;
+            }
+        };
+        if since.elapsed() < SUBJECT_AHEAD_AFTER {
+            ctx.request_repaint_after(SUBJECT_AHEAD_AFTER.saturating_sub(since.elapsed()));
+            return;
+        }
+        self.subject_prepared = Some(key);
+        self.workers.ai_mask(crate::workers::AiJob {
+            generation: self.generation(),
+            layer: 0,
+            kind: crate::workers::AiKind::SubjectPrepare,
+            meta: cur.meta.clone(),
+            preview: cur.preview.clone(),
+            adjustments: cur.adjustments.clone(),
+        });
+    }
+
     /// Analyzes the image for object selection in the background, before the first click.
     fn prepare_object(&mut self) {
         if !sk_ai::segment::available() {
             return;
         }
-        let Some(layer) = self.active_layer.and_then(|i| self.layer_id(i)) else { return };
         let Some(cur) = &self.current else { return };
         self.workers.ai_mask(crate::workers::AiJob {
             generation: self.generation(),
-            layer,
+            // (No result goes to a layer.)
+            layer: 0,
             kind: crate::workers::AiKind::ObjectPrepare,
             meta: cur.meta.clone(),
             preview: cur.preview.clone(),
@@ -460,13 +489,11 @@ impl App {
             crate::ai_models::download_progress(ui, AiFeature::Object, p, self.job_cancel(None, Some(&AiFeature::Object.job_label())));
             return;
         }
-        ui.label(faint("Klick: Objekt auswählen · weitere Klicks verfeinern · Alt+Klick: Teil ausnehmen"));
-        if self.object_session.is_some() && ui.button("Nächstes Objekt").on_hover_text("Der nächste Klick wählt ein weiteres Objekt dazu").clicked() {
-            self.object_session = None;
-        }
+        ui.label(faint("Klick: Objekt auswählen · weitere Klicks verfeinern · Umschalt+Klick: weiteres Objekt · Alt+Klick: Teil ausnehmen"));
     }
 
-    /// Object selection: a click adds the object under it, Alt+click takes the part under it away.
+    /// Object selection: a click adds the object under it, Alt+click takes the part under it away,
+    /// Shift+click starts another object (all clicks of one go to the network together).
     fn object_interaction(&mut self, ui: &mut Ui, response: &Response, img_rect: Rect, scale: f32) {
         let painter = ui.painter_at(response.rect);
         if response.hover_pos().is_some() {
@@ -481,9 +508,9 @@ impl App {
                 self.status = "Objekt auswählen: das KI-Modell wird noch geladen …".into();
                 return;
             }
-            let include = !ui.input(|i| i.modifiers.alt);
+            let (include, another) = ui.input(|i| (!i.modifiers.alt, i.modifiers.shift));
             let path = self.current_path().unwrap_or_default();
-            let fresh = self.object_session.as_ref().is_none_or(|s| s.layer != layer || s.path != path);
+            let fresh = another || self.object_session.as_ref().is_none_or(|s| s.layer != layer || s.path != path);
             if fresh {
                 if !include {
                     self.status = "Zuerst auf das Objekt klicken; Alt+Klick nimmt danach Teile aus".into();
@@ -1632,9 +1659,10 @@ impl App {
             crate::widgets::no_image(ui);
             return;
         }
+        self.prepare_subject(&ui.ctx().clone());
         let action = self.layer_list(ui);
         let mut changed = false;
-        let help = "Wo die gewählte Ebene wirkt: mit Pinsel, Verlauf, Zauberpinsel oder Objekt malen bzw. auswählen.\n\n[ und ] oder Ziehen mit der rechten Maustaste: Pinselgröße und Härte. Bei Objekt nimmt Alt+Klick Teile aus. Eingrenzen beschränkt auf einen Helligkeits- oder Farbbereich.";
+        let help = "Wo die gewählte Ebene wirkt: mit Pinsel, Verlauf, Zauberpinsel oder Objekt malen bzw. auswählen.\n\n[ und ] oder Ziehen mit der rechten Maustaste: Pinselgröße und Härte. Bei Objekt wählt Umschalt+Klick ein weiteres Objekt, Alt+Klick nimmt Teile aus. Eingrenzen beschränkt auf einen Helligkeits- oder Farbbereich.";
         let mut reset_mask = false;
         crate::widgets::section_help(ui, "Maske", help, Some(&mut || reset_mask = true), |ui| self.mask_body(ui, &mut changed));
         if reset_mask && let Some(li) = self.active_layer {
