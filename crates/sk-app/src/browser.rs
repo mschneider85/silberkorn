@@ -214,8 +214,9 @@ impl App {
         let paper_rect = paper.as_ref().map(|p| Rect::from_center_size(img_rect.center(), img_rect.size() * p.rel));
         if let (Some(p), Some(r)) = (&paper, paper_rect) {
             painter.rect_filled(r, 0.0, p.color);
-            // On a background in the paper's color, a fine line shows the format.
-            if p.color == bg {
+            // On a background in the paper's color, a fine line shows the format (filling, the
+            // image is the format).
+            if p.color == bg && r.contains_rect(img_rect) {
                 painter.rect_stroke(r, 0.0, egui::Stroke::new(1.0, Color32::from_gray(185)), egui::StrokeKind::Outside);
             }
         }
@@ -344,10 +345,6 @@ impl App {
                 painter.rect_stroke(cut, 0.0, egui::Stroke::new(1.0, Color32::from_white_alpha(140)), egui::StrokeKind::Outside);
             } else {
                 printed_rect = cut;
-                // The fine line of the format, covered by the image before.
-                if paper.as_ref().is_some_and(|p| p.color == bg) {
-                    painter.rect_stroke(cut, 0.0, egui::Stroke::new(1.0, Color32::from_gray(185)), egui::StrokeKind::Outside);
-                }
             }
         }
 
