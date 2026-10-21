@@ -127,7 +127,7 @@ impl App {
         };
         let mut hints = Vec::new();
         if s.fit == Fit::Fill && !off.is_empty() {
-            hints.push("Alt gedrückt halten: zeigt, was abgeschnitten wird".to_string());
+            hints.push("Umschalt gedrückt halten: zeigt, was abgeschnitten wird".to_string());
         }
         let zoom = match (self.print.zoom, self.screen_px_per_mm(ctx).1) {
             (false, _) => "",

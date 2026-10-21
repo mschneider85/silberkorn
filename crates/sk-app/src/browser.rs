@@ -327,12 +327,12 @@ impl App {
             }
         }
 
-        // Filling the paper: the image as printed, cut to the paper; with Alt held, what the print
+        // Filling the paper: the image as printed, cut to the paper; with Shift held, what the print
         // cuts off is dimmed instead.
         let mut printed_rect = img_rect;
         if let Some(sheet) = paper_rect.filter(|r| !r.contains_rect(img_rect)) {
             let cut = sheet.intersect(img_rect);
-            let show_cut = ui.input(|i| i.modifiers.alt);
+            let show_cut = ui.input(|i| i.modifiers.shift);
             let dim = if show_cut { Color32::from_black_alpha(170) } else { bg };
             for r in [
                 Rect::from_min_max(img_rect.min, pos2(img_rect.max.x, cut.min.y)),
