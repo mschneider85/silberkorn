@@ -1485,6 +1485,8 @@ impl App {
         self.redo_seq.clear();
         self.zoom = None;
         self.pan = Vec2::ZERO;
+        // With the print preview, each image starts at its printed size (zooming stays possible).
+        self.print.zoom = self.print.on;
         match rendered {
             Some((_, texture, histogram)) if !self.clip_warning && !self.show_before && !self.split_view => {
                 self.view_size = Some(texture.size_vec2());
