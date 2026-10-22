@@ -562,10 +562,8 @@ impl App {
 
         match tool {
             LocalTool::Brush | LocalTool::Eraser => {
-                // Alt held: the brush erases (with the eraser's settings), as in Lightroom; Shift:
-                // a straight line from where the last stroke ended.
-                let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
-                let erasing = tool == LocalTool::Eraser || alt;
+                // Alt held: the brush erases (with the eraser's settings), as in Lightroom.
+                let erasing = tool == LocalTool::Eraser || ui.input(|i| i.modifiers.alt);
                 let b = self.brushes.of(Some(if erasing { LocalTool::Eraser } else { tool })).clone();
                 if let Some(p) = hover.filter(|_| !self.adjusting_brush()) {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::None);
@@ -579,13 +577,8 @@ impl App {
                     && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
                     && let Some(li) = self.ensure_layer()
                 {
-                    let last_end = self.current.as_ref().and_then(|c| c.adjustments.layers.get(li)?.mask.strokes.last()?.points.last().copied());
-                    let points = match last_end.filter(|_| shift) {
-                        Some(from) => vec![from, uv],
-                        None => vec![uv],
-                    };
                     let stroke = BrushStroke {
-                        points,
+                        points: vec![uv],
                         radius: self.radius_norm(b.size, scale),
                         hardness: b.hardness,
                         flow: b.flow,
@@ -595,9 +588,8 @@ impl App {
                         build_up: true,
                         tolerance: b.tolerance,
                     };
-                    let line_from = (stroke.points.len() == 2).then(|| self.uv_mapper(img_rect, scale).map(|m| m.map(stroke.points[0]))).flatten();
                     self.edit(|a| a.layers[li].mask.strokes.push(stroke));
-                    self.note_painted(img_rect, &line_from.into_iter().chain([p]).collect::<Vec<_>>(), b.size);
+                    self.note_painted(img_rect, &[p], b.size);
                     self.paint_prev = None;
                     self.local_drag = LocalDrag::Stroke(p);
                 }

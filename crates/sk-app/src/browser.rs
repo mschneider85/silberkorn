@@ -532,8 +532,7 @@ impl App {
             // Brushes, gradients, retouching: the tool, the layer it paints on, how to leave it.
             let (_, name, _) = t.tile();
             let keys = match t {
-                crate::layers::LocalTool::Brush => "  ·  Alt radiert  ·  Umschalt-Klick: gerade Linie",
-                crate::layers::LocalTool::Eraser => "  ·  Umschalt-Klick: gerade Linie",
+                crate::layers::LocalTool::Brush => "  ·  Alt radiert",
                 crate::layers::LocalTool::Heal | crate::layers::LocalTool::Clone => "  ·  Alt-Klick: Quelle festlegen",
                 _ => "",
             };

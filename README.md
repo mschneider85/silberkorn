@@ -209,8 +209,7 @@ baut sich die Deckung auf). **Kanten beachten** beschränkt den Strich auf Berei
 Stelle unter der Pinselmitte in Farbe und Helligkeit ähneln, sodass Kanten erhalten bleiben; verglichen
 wird in der Auflösung der Maske (3072 Pixel), **Toleranz** bestimmt, wie verschieden es sein darf (50
 wie früher; jeder Schritt von 50 halbiert bzw. vervierfacht den erlaubten Abstand bis 0 bzw. 100).
-Mit gehaltenem **Alt** radiert der Pinsel (mit den Einstellungen des Radierers), **Umschalt-Klick**
-zieht eine gerade Linie vom Ende des letzten Strichs (Pinsel und Radierer). Striche
+Mit gehaltenem **Alt** radiert der Pinsel (mit den Einstellungen des Radierers). Striche
 werden dicht aufgezeichnet und als Catmull-Rom-Kurve mit Abdrücken im Abstand von 15 % des
 Radius gerastert; Masken haben 3072 Pixel an der langen Kante. Beim Malen wird nur der aktuelle
 Strich neu gerastert. Striche aus älteren Sidecars sehen aus wie zuvor. Sie werden in Quellkoordinaten gespeichert und bleiben deshalb nach Zuschnitt,
@@ -1014,13 +1013,13 @@ die Leertaste und die Tasten der Schnellbearbeitung.
 | I | Bildinfo über dem Bild: kurz / ausführlich / aus |
 | Umschalt+P | Softproof |
 | W | Weißabgleich-Pipette |
-| Z / Doppelklick | Einpassen ↔ 100 % · Mausrad: zoomen · Ziehen: verschieben |
+| Z / Doppelklick | Einpassen ↔ 100 % · Mausrad: zoomen · Ziehen: verschieben (höchstens bis zum Bildrand, das Bild bleibt im Blick) |
 | C / Enter / Esc | Zuschnitt-Werkzeug / übernehmen / abbrechen · beim Ziehen Alt: von der Mitte aus, Umschalt: Seitenverhältnis beibehalten (wenn frei) |
 | Esc | beendet der Reihe nach Werkzeug, Ansicht (Vorher/Nachher, Vergleich, Ausgabevorschau, 100 %) und Vollbild |
 | B / N / L / R | Pinsel / Radierer / linearer / radialer Verlauf |
 | H / S | Reparieren / Klonen · Entf: Punkt löschen · Umschalt/Alt beim Malen: gewählten Bereich erweitern/verkleinern |
 | X | Entfernen (KI-Funktion) |
-| M | Maske anzeigen · [ / ]: Pinselgröße · rechte Maustaste ziehen: Größe (links/rechts) und Härte (hoch/runter) · mittlere Maustaste: verschieben · Alt: radieren · Umschalt-Klick: gerade Linie |
+| M | Maske anzeigen · [ / ]: Pinselgröße · rechte Maustaste ziehen: Größe (links/rechts) und Härte (hoch/runter) · mittlere Maustaste: verschieben · Alt: radieren |
 | J | Zauberpinsel |
 | U / Umschalt+U | Vorher/Nachher geteilt / nebeneinander |
 | O | Hilfslinien wechseln |

@@ -705,10 +705,9 @@ fn right_drag_changes_brush_size_and_hardness() {
     assert!(f.app.remove_strokes.is_empty() && !f.app.inpaint_busy);
 }
 
-/// With the brush, Alt held erases (with the eraser's settings), and Shift-click draws a straight
-/// line from where the last stroke ended.
+/// With the brush, Alt held erases (with the eraser's settings).
 #[test]
-fn brush_erases_with_alt_and_draws_lines_with_shift() {
+fn brush_erases_with_alt() {
     let Some(mut f) = Fixture::new("brush-keys") else { return };
     f.pump("Bild gerendert", |a| a.current.is_some() && a.texture.is_some());
     f.app.set_local_tool(crate::layers::LocalTool::Brush);
@@ -721,18 +720,11 @@ fn brush_erases_with_alt_and_draws_lines_with_shift() {
         viewer_frame_with(f, vec![button(false)], m);
         viewer_frame_with(f, vec![], egui::Modifiers::NONE);
     };
-    let (a, b, c) = (egui::pos2(500.0, 400.0), egui::pos2(650.0, 420.0), egui::pos2(700.0, 300.0));
-    click(&mut f, a, egui::Modifiers::NONE);
-    click(&mut f, b, egui::Modifiers::SHIFT);
+    click(&mut f, egui::pos2(500.0, 400.0), egui::Modifiers::NONE);
+    click(&mut f, egui::pos2(700.0, 300.0), egui::Modifiers::ALT);
     let s = strokes(&f);
-    assert_eq!(s.len(), 2);
-    assert_eq!(s[1].points.len(), 2, "gerade Linie");
-    assert_eq!(s[1].points[0], *s[0].points.last().unwrap(), "vom Ende des letzten Strichs");
-    assert!(!s[1].erase);
-    click(&mut f, c, egui::Modifiers::ALT);
-    let s = strokes(&f);
-    assert!(s[2].erase, "Alt radiert");
-    assert!(s[2].radius < s[0].radius, "mit der Größe des Radierers: {} {}", s[2].radius, s[0].radius);
+    assert!(!s[0].erase && s[1].erase, "Alt radiert");
+    assert!(s[1].radius < s[0].radius, "mit der Größe des Radierers: {} {}", s[1].radius, s[0].radius);
 }
 
 fn key(k: egui::Key, pressed: bool) -> egui::Event {
