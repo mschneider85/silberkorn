@@ -23,10 +23,15 @@ pub struct Inpainter {
 impl Inpainter {
     pub fn load(path: &std::path::Path) -> Result<Self> {
         use crate::runtime::{Input, Net};
-        // On the processor: DirectML fails on the matrix products of LaMa's Fourier convolutions
-        // ("Falscher Parameter", ONNX Runtime 1.24 on a GTX 1650 Ti); ONNX Runtime on the
-        // processor is about twice as fast as tract.
-        Ok(Self { net: Net::load_processor(path, &[Input::F32([1, 3, NET, NET]), Input::F32([1, 1, NET, NET])])? })
+        // On the graphics card if possible (0.4 s per window on a GTX 1650 Ti, 3.8 s on the
+        // processor; about 800 MB of graphics memory).
+        let me = Self { net: Net::load(path, &[Input::F32([1, 3, NET, NET]), Input::F32([1, 1, NET, NET])])? };
+        // The first run on the graphics card compiles its shaders (seconds): now, while the tool
+        // is chosen, not with the first stroke.
+        if me.net.on_gpu() {
+            me.fill(&vec![[128; 3]; NET * NET], &vec![false; NET * NET])?;
+        }
+        Ok(me)
     }
 
     /// Fills the holes (`hole[i]` true) of an 8-bit RGB image of NET x NET pixels.

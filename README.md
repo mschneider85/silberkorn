@@ -336,10 +336,13 @@ erscheint zusätzlich oben im Bild.
   exportiert. Kommandozeile: `cargo run --release -p sk-ai --example denoise -- <raw> <ordner> [stärke] [--linear]`
 - **Entfernen** (X, Tab „Retusche“): Über Störendes malen; beim Loslassen füllt LaMa (Roman Suvorov
   et al., Samsung AI Center, Apache-2.0; ONNX von Carve, 208 MB, auch mit tract lauffähig) die Stelle
-  passend zur Umgebung; bis 0.2.14 war es MI-GAN, dessen Datei der Start nun löscht. Es rechnet immer
-  auf dem Prozessor: DirectML scheitert an den Matrixprodukten seiner Fourier-Faltungen („Falscher
-  Parameter“, GTX 1650 Ti). Pro 512er-Fenster etwa 2.6 s mit ONNX Runtime unter Windows (eine ganze
-  Entfernung knapp 3 s), 10 s mit tract; in den Speicher geladen wird das Netz (gut 10 s, etwa 1 GB) im Hintergrund,
+  passend zur Umgebung; bis 0.2.14 war es MI-GAN. DirectML lehnte die Matrixprodukte seiner
+  Fourier-Faltungen ab (eine 2-D-Matrix mal einen 5-D-Tensor, „Falscher Parameter“); Silberkorn lädt
+  darum eine angepasste Datei aus einem eigenen Release, in der sie als gleichwertige 4-D-Produkte
+  stehen (gleiche Ergebnisse, `crates/sk-ai/models/lama_dml.py`). Carves unveränderte Datei (bis 0.2.18)
+  löscht der Start. Unter Windows rechnet es so auf der Grafikkarte: etwa 0.4 s pro 512er-Fenster auf
+  einer GTX 1650 Ti (auf dem Prozessor 3.8 s, mit tract 10 s), gut 800 MB Grafikspeicher. Geladen wird
+  das Netz (gut 10 s, auf der Grafikkarte samt erstem Lauf, der die Shader übersetzt) im Hintergrund,
   sobald das Werkzeug gewählt wird, nicht erst mit dem ersten Strich. Das Netz rechnet so verkleinert, dass die
   Markierung höchstens gut ein Drittel seines 512er-Fensters einnimmt (es sieht dann genug Umgebung,
   im Maßstab der Bilder, an denen es lernte); größere Flächen in mehreren Fenstern. Danach in voller
