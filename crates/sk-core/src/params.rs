@@ -272,7 +272,10 @@ impl Curves {
 ///    texture keep their contrast.
 /// 4. Partly clipped highlights are reconstructed from the unclipped channels and the color of
 ///    their surroundings (instead of all made white).
-pub const PROCESS_LATEST: u32 = 4;
+/// 5. The unsharp mask blurs with an exact gaussian of the radius (instead of three box blurs,
+///    which made every radius below about 1.4 the same), fading out below a pixel instead of
+///    stopping at a quarter.
+pub const PROCESS_LATEST: u32 = 5;
 /// Version of settings saved before process versions existed.
 pub const PROCESS_LEGACY: u32 = 1;
 
@@ -1428,6 +1431,16 @@ impl Adjustments {
     /// Partly clipped highlights reconstructed (process version 4, see `highlights`).
     pub fn process_4(&self) -> bool {
         self.process >= 4
+    }
+
+    /// Sharpening with an exact gaussian of the radius (process version 5).
+    pub fn process_5(&self) -> bool {
+        self.process >= 5
+    }
+
+    /// Below this blur (in pixels of the rendering) the unsharp mask is left out.
+    pub fn min_sharpen_sigma(&self) -> f32 {
+        if self.process_5() { 0.05 } else { 0.25 }
     }
 
     /// Copies the image-specific settings (rotation, crop, layers, retouching) from `other`.

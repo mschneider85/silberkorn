@@ -25,6 +25,7 @@ macro_rules! kernel {
 const RESAMPLE: Kernel = kernel!("resample");
 const BOX_H: Kernel = kernel!("box_h");
 const BOX_V: Kernel = kernel!("box_v");
+const GAUSS: Kernel = kernel!("gauss");
 const PLANE_OP: Kernel = kernel!("plane_op");
 const IMG_PLANES: Kernel = kernel!("img_planes");
 const DOWNSAMPLE: Kernel = kernel!("downsample");
@@ -40,8 +41,8 @@ const DISPLAY: Kernel = kernel!("display");
 const OUTPUT: Kernel = kernel!("output");
 const MEDIAN: Kernel = kernel!("median");
 
-const ALL: [Kernel; 17] =
-    [RESAMPLE, BOX_H, BOX_V, PLANE_OP, IMG_PLANES, DOWNSAMPLE, UPSAMPLE_APPLY, NR_COMBINE, DEFRINGE, DARK_POOL, DEVELOP, SHARPEN, GLOW, FINISH, DISPLAY, OUTPUT, MEDIAN];
+const ALL: [Kernel; 18] =
+    [RESAMPLE, BOX_H, BOX_V, GAUSS, PLANE_OP, IMG_PLANES, DOWNSAMPLE, UPSAMPLE_APPLY, NR_COMBINE, DEFRINGE, DARK_POOL, DEVELOP, SHARPEN, GLOW, FINISH, DISPLAY, OUTPUT, MEDIAN];
 
 /// Sets up the graphics card and compiles all kernels (takes a moment; call it early in
 /// the background so that the first rendering does not wait for it).
@@ -265,6 +266,30 @@ impl<'a> Ops<'a> {
         self.box_pass(&a, &b, w, h, r);
         self.box_pass(&b, &a, w, h, r);
         a
+    }
+
+    /// detail::gaussian_blur_exact
+    fn gaussian_exact(&mut self, p: &Buffer, w: usize, h: usize, sigma: f32) -> Buffer {
+        if sigma <= 0.0 || w == 0 || h == 0 {
+            return self.copy_plane(p, w * h);
+        }
+        #[repr(C)]
+        #[derive(Clone, Copy, Pod, Zeroable)]
+        struct Args {
+            w: u32,
+            h: u32,
+            r: u32,
+            vertical: u32,
+            sigma: f32,
+        }
+        let r = crate::detail::exact_radius(sigma) as u32;
+        let tmp = self.plane(w * h);
+        let out = self.plane(w * h);
+        let a = self.args(&Args { w: w as u32, h: h as u32, r, vertical: 0, sigma });
+        self.enc.run_1d(GAUSS, &[&a, p, &tmp], w * h);
+        let a = self.args(&Args { w: w as u32, h: h as u32, r, vertical: 1, sigma });
+        self.enc.run_1d(GAUSS, &[&a, &tmp, &out], w * h);
+        out
     }
 
     /// Guided filter coefficients (mean a, mean b) of `p` with radius `r`.
@@ -1021,9 +1046,9 @@ impl Processor {
         let unsharp = d.sharpen_split().0;
         if unsharp > 0.0 {
             let sigma = d.sharpen_radius * plan.scale;
-            if sigma >= 0.25 {
+            if sigma >= adj.min_sharpen_sigma() {
                 let y = ops.img_planes(IMG_LUMA, &out, n).0;
-                let blur = ops.gaussian(&y, ext.w, ext.h, sigma);
+                let blur = if adj.process_5() { ops.gaussian_exact(&y, ext.w, ext.h, sigma) } else { ops.gaussian(&y, ext.w, ext.h, sigma) };
                 #[repr(C)]
                 #[derive(Clone, Copy, Pod, Zeroable)]
                 struct Args {

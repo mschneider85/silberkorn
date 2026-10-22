@@ -1254,9 +1254,9 @@ impl Processor {
         let unsharp = d.sharpen_split().0;
         if unsharp > 0.0 {
             let sigma = d.sharpen_radius * scale;
-            if sigma >= 0.25 {
+            if sigma >= self.adj.min_sharpen_sigma() {
                 let y = Plane::new(w, h, out.par_iter().map(|p| dot(*p, LUMA)).collect());
-                let blur = gaussian_blur(&y, sigma);
+                let blur = if self.adj.process_5() { crate::detail::gaussian_blur_exact(&y, sigma) } else { gaussian_blur(&y, sigma) };
                 let amount = unsharp / 100.0;
                 let thr = d.sharpen_threshold / 255.0;
                 let mask = self.opts.slider_view == Some(SliderView::SharpenMask);
@@ -1271,7 +1271,7 @@ impl Processor {
         // The mask alone, without what comes after (nothing else to see); white everywhere
         // without an unsharp mask.
         let mask_view = self.opts.slider_view == Some(SliderView::SharpenMask);
-        if mask_view && (unsharp <= 0.0 || d.sharpen_radius * scale < 0.25) {
+        if mask_view && (unsharp <= 0.0 || d.sharpen_radius * scale < self.adj.min_sharpen_sigma()) {
             out.fill([1.0; 3]);
         }
 

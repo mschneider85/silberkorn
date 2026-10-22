@@ -576,8 +576,6 @@ impl App {
                 });
                 changed |= widgets::slider_row_with(ui, "Details", &mut d.sharpen_detail, 0.0..=100.0, defaults.sharpen_detail, 0, widgets::SliderOpts { help: Some(SHARPEN_DETAIL_HELP), ..opts(3) });
             });
-            crate::widgets::hint(ui, crate::commands::hint("Wirkung bei 100 % prüfen", "zoom-100"));
-            crate::widgets::hint(ui, "Alt beim Ziehen: Wirkung in Grau");
         });
         let view = match held.iter().position(|h| h.get()) {
             Some(0) => Some(SliderView::Grey),

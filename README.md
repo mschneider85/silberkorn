@@ -850,6 +850,11 @@ stellt die Auswahl um; Stile und eingefügte Anpassungen übernehmen die Version
   ist, bleibt so blau statt cyan; die Helligkeit steigt weiter an (Werte über 1, die der
   Lichter-Regler zurückholen kann). Nur wo alle Kanäle voll sind, wird wie bisher Weiß daraus.
   Etwa 0.1 s für 24 MP; immer aktiv, ohne Regler.
+- **5:** Schärfen weichzeichnet für die Unschärfemaske mit einer echten Gauß-Kurve des Radius
+  statt mit drei Kastenfiltern, die unterhalb von etwa 1.4 jeden Radius gleich machten: Der
+  Radius wirkt jetzt über den ganzen Bereich, und wird er kleiner als ein Pixel der Darstellung
+  (in der eingepassten Ansicht unterhalb von etwa 0.8), lässt die Wirkung allmählich nach, statt
+  schlagartig zu verschwinden.
 
 Unabhängig von der Prozessversion werden **Hotpixel** entfernt: Ein Fotosit des Bayer-Mosaiks,
 das mehr als dreimal so hell ist wie alle acht gleichfarbigen Nachbarn und alle acht direkt

@@ -140,6 +140,39 @@ fn box_line(src: &[f32], dst: &mut [f32], r: usize) {
     }
 }
 
+/// Radius of the kernel of [`gaussian_blur_exact`].
+pub fn exact_radius(sigma: f32) -> usize {
+    (sigma * 3.0).ceil().max(1.0) as usize
+}
+
+/// Gaussian blur with sampled weights, radius 3 sigma, clamped edges: exact also for small
+/// sigma, where [`gaussian_blur`] can't go below about 1.4 (one box pass of radius 1, three
+/// times) and leaves the plane as it is below 0.3. Fades smoothly to no blur at all.
+pub fn gaussian_blur_exact(p: &Plane, sigma: f32) -> Plane {
+    if p.w == 0 || p.h == 0 || sigma <= 0.0 {
+        return p.clone();
+    }
+    let r = exact_radius(sigma) as isize;
+    let weights: Vec<f32> = (-r..=r).map(|k| (-((k * k) as f32) / (2.0 * sigma * sigma)).exp()).collect();
+    let norm: f32 = weights.iter().sum();
+    let weights: Vec<f32> = weights.iter().map(|w| w / norm).collect();
+    let (w, h) = (p.w as isize, p.h as isize);
+    let mut tmp = vec![0.0f32; p.data.len()];
+    tmp.par_chunks_mut(p.w).enumerate().for_each(|(y, row)| {
+        let src = &p.data[y * p.w..(y + 1) * p.w];
+        for (x, o) in row.iter_mut().enumerate() {
+            *o = weights.iter().enumerate().map(|(k, wt)| wt * src[(x as isize + k as isize - r).clamp(0, w - 1) as usize]).sum();
+        }
+    });
+    let mut out = vec![0.0f32; p.data.len()];
+    out.par_chunks_mut(p.w).enumerate().for_each(|(y, row)| {
+        for (x, o) in row.iter_mut().enumerate() {
+            *o = weights.iter().enumerate().map(|(k, wt)| wt * tmp[(y as isize + k as isize - r).clamp(0, h - 1) as usize * p.w + x]).sum();
+        }
+    });
+    Plane::new(p.w, p.h, out)
+}
+
 /// Gaussian approximation by three box blurs.
 pub fn gaussian_blur(p: &Plane, sigma: f32) -> Plane {
     if sigma < 0.3 {
@@ -260,6 +293,30 @@ pub fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The exact gaussian spreads a point by its sigma, also below a pixel (where the box
+    /// approximation is stuck at about 1.4), and fades to no blur.
+    #[test]
+    fn exact_gaussian_follows_small_sigmas() {
+        let mut p = Plane::new(21, 21, vec![0.0; 21 * 21]);
+        p.data[10 * 21 + 10] = 1.0;
+        let spread = |sigma: f32| {
+            let b = gaussian_blur_exact(&p, sigma);
+            let row = &b.data[10 * 21..11 * 21];
+            let sum: f32 = row.iter().sum();
+            (row.iter().enumerate().map(|(x, v)| (x as f32 - 10.0).powi(2) * v).sum::<f32>() / sum).sqrt()
+        };
+        for sigma in [0.8, 1.5] {
+            assert!((spread(sigma) - sigma).abs() < 0.02, "{sigma}: {}", spread(sigma));
+        }
+        // Sampled, a sigma below a pixel spreads less, but steadily more with the sigma.
+        let small: Vec<f32> = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8].iter().map(|&s| spread(s)).collect();
+        assert!(small.windows(2).all(|w| w[1] > w[0]), "{small:?}");
+        assert!(small[0] < 0.01);
+        assert!((gaussian_blur(&p, 0.5).data[10 * 21 + 10] - gaussian_blur(&p, 1.2).data[10 * 21 + 10]).abs() < 1e-6, "Kastenfilter: gleich");
+        let total: f32 = gaussian_blur_exact(&p, 0.8).data.iter().sum();
+        assert!((total - 1.0).abs() < 1e-5);
+    }
 
     #[test]
     fn median_hv_matches_a_direct_median() {
