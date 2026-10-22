@@ -1423,7 +1423,7 @@ mod tests {
             detail: Detail { clarity: 40.0, structure: 30.0, dehaze: 30.0, sharpen_amount: 120.0, sharpen_radius: 1.0, nr_luma: 20.0, ..Default::default() },
             ..Default::default()
         };
-        let stroke = BrushStroke { points: vec![[0.3, 0.4], [0.6, 0.5]], radius: 0.08, hardness: 0.3, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true };
+        let stroke = BrushStroke { points: vec![[0.3, 0.4], [0.6, 0.5]], radius: 0.08, hardness: 0.3, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true, tolerance: 50.0 };
         let mut layer = Layer { adjustments: LayerAdjustments { exposure: 1.0, ..Default::default() }, ..Default::default() };
         layer.mask.strokes.push(stroke);
         adj.layers.push(layer);

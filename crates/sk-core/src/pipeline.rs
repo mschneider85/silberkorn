@@ -2169,7 +2169,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let stroke = crate::params::BrushStroke { points: vec![[0.3, 0.4], [0.6, 0.5]], radius: 0.08, hardness: 0.3, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true };
+        let stroke = crate::params::BrushStroke { points: vec![[0.3, 0.4], [0.6, 0.5]], radius: 0.08, hardness: 0.3, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true, tolerance: 50.0 };
         let mut layer = crate::params::Layer { adjustments: LayerAdjustments { exposure: 1.0, clarity: 30.0, ..Default::default() }, ..Default::default() };
         layer.mask.strokes.push(stroke);
         adj.layers.push(layer);

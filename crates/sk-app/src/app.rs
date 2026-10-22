@@ -3201,7 +3201,7 @@ impl App {
                     let t = i as f32 / 59.0;
                     [0.15 + 0.7 * t, y + amp * (t * 9.0).sin()]
                 }).collect::<Vec<_>>();
-                let stroke = |pts, r, hard, flow, op| sk_core::params::BrushStroke { points: pts, radius: r, hardness: hard, flow, erase: false, opacity: op, auto_mask: false, build_up: true };
+                let stroke = |pts, r, hard, flow, op| sk_core::params::BrushStroke { points: pts, radius: r, hardness: hard, flow, erase: false, opacity: op, auto_mask: false, build_up: true, tolerance: 50.0 };
                 self.set_local_tool(crate::layers::LocalTool::Remove);
                 self.remove_strokes = vec![stroke(curve(0.3, 0.08), 0.012, 0.8, 1.0, 1.0)];
                 // Automatic masking: a big brush along the sky above the trees.

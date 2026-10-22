@@ -116,11 +116,13 @@ pub struct BrushSettings {
     pub flow: f32,
     /// Only where the image resembles what is under the brush's center.
     pub auto_mask: bool,
+    /// How different it may be and still be painted, 0..100 (see `BrushStroke::tolerance`).
+    pub tolerance: f32,
 }
 
 impl Default for BrushSettings {
     fn default() -> Self {
-        Self { size: 40.0, hardness: 0.5, opacity: 1.0, flow: 1.0, auto_mask: false }
+        Self { size: 40.0, hardness: 0.5, opacity: 1.0, flow: 1.0, auto_mask: false, tolerance: sk_core::params::DEFAULT_TOLERANCE }
     }
 }
 
@@ -184,6 +186,12 @@ pub fn brush_controls(ui: &mut Ui, b: &mut BrushSettings, tool: Option<LocalTool
         crate::widgets::unit_percent_row(ui, "Fluss", &mut b.flow, 0.02..=1.0, d.flow, Default::default());
         crate::widgets::checkbox(ui, &mut b.auto_mask, "Kanten beachten")
             .on_hover_text("Wirkt nur, wo das Bild der Pinselmitte ähnelt – hält Kanten wie den Horizont sauber");
+        // Without it, the tolerance is shown but disabled.
+        ui.add_enabled_ui(b.auto_mask, |ui| {
+            slider_row(ui, "Toleranz", &mut b.tolerance, 0.0..=100.0, d.tolerance, 0);
+        })
+        .response
+        .on_hover_text("Wie verschieden das Bild von der Pinselmitte sein darf und trotzdem gemalt wird");
     }
     *b != before
 }
@@ -554,11 +562,15 @@ impl App {
 
         match tool {
             LocalTool::Brush | LocalTool::Eraser => {
-                let b = self.brushes.of(Some(tool)).clone();
+                // Alt held: the brush erases (with the eraser's settings), as in Lightroom; Shift:
+                // a straight line from where the last stroke ended.
+                let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
+                let erasing = tool == LocalTool::Eraser || alt;
+                let b = self.brushes.of(Some(if erasing { LocalTool::Eraser } else { tool })).clone();
                 if let Some(p) = hover.filter(|_| !self.adjusting_brush()) {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::None);
                     brush_cursor(&painter, p, &b);
-                    if tool == LocalTool::Eraser {
+                    if erasing {
                         painter.text(p, egui::Align2::CENTER_CENTER, "−", egui::FontId::proportional(16.0), Color32::WHITE);
                     }
                 }
@@ -567,18 +579,25 @@ impl App {
                     && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
                     && let Some(li) = self.ensure_layer()
                 {
+                    let last_end = self.current.as_ref().and_then(|c| c.adjustments.layers.get(li)?.mask.strokes.last()?.points.last().copied());
+                    let points = match last_end.filter(|_| shift) {
+                        Some(from) => vec![from, uv],
+                        None => vec![uv],
+                    };
                     let stroke = BrushStroke {
-                        points: vec![uv],
+                        points,
                         radius: self.radius_norm(b.size, scale),
                         hardness: b.hardness,
                         flow: b.flow,
-                        erase: tool == LocalTool::Eraser,
+                        erase: erasing,
                         opacity: b.opacity,
                         auto_mask: b.auto_mask,
                         build_up: true,
+                        tolerance: b.tolerance,
                     };
+                    let line_from = (stroke.points.len() == 2).then(|| self.uv_mapper(img_rect, scale).map(|m| m.map(stroke.points[0]))).flatten();
                     self.edit(|a| a.layers[li].mask.strokes.push(stroke));
-                    self.note_painted(img_rect, &[p], b.size);
+                    self.note_painted(img_rect, &line_from.into_iter().chain([p]).collect::<Vec<_>>(), b.size);
                     self.paint_prev = None;
                     self.local_drag = LocalDrag::Stroke(p);
                 }

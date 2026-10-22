@@ -522,9 +522,14 @@ impl App {
         } else if let Some(t) = self.local_tool {
             // Brushes, gradients, retouching: the tool, the layer it paints on, how to leave it.
             let (_, name, _) = t.tile();
+            let keys = match t {
+                crate::layers::LocalTool::Brush => "  ·  Alt radiert  ·  Umschalt-Klick: gerade Linie",
+                crate::layers::LocalTool::Eraser => "  ·  Umschalt-Klick: gerade Linie",
+                _ => "",
+            };
             Some(match self.edit_layer_name() {
-                Some(layer) => format!("{name} auf Ebene „{layer}“ – Esc beendet"),
-                None => format!("{name} – Esc beendet"),
+                Some(layer) => format!("{name} auf Ebene „{layer}“ – Esc beendet{keys}"),
+                None => format!("{name} – Esc beendet{keys}"),
             })
         } else if self.show_before {
             Some("Vorher".into())

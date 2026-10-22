@@ -694,6 +694,36 @@ fn right_drag_changes_brush_size_and_hardness() {
     assert!(f.app.remove_strokes.is_empty() && !f.app.inpaint_busy);
 }
 
+/// With the brush, Alt held erases (with the eraser's settings), and Shift-click draws a straight
+/// line from where the last stroke ended.
+#[test]
+fn brush_erases_with_alt_and_draws_lines_with_shift() {
+    let Some(mut f) = Fixture::new("brush-keys") else { return };
+    f.pump("Bild gerendert", |a| a.current.is_some() && a.texture.is_some());
+    f.app.set_local_tool(crate::layers::LocalTool::Brush);
+    f.app.brushes.eraser.size = 17.0;
+    let strokes = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.layers.last().map(|l| l.mask.strokes.clone()).unwrap_or_default();
+    let click = |f: &mut Fixture, p: egui::Pos2, m: egui::Modifiers| {
+        let button = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: m };
+        viewer_frame_with(f, vec![egui::Event::PointerMoved(p)], m);
+        viewer_frame_with(f, vec![button(true)], m);
+        viewer_frame_with(f, vec![button(false)], m);
+        viewer_frame_with(f, vec![], egui::Modifiers::NONE);
+    };
+    let (a, b, c) = (egui::pos2(500.0, 400.0), egui::pos2(650.0, 420.0), egui::pos2(700.0, 300.0));
+    click(&mut f, a, egui::Modifiers::NONE);
+    click(&mut f, b, egui::Modifiers::SHIFT);
+    let s = strokes(&f);
+    assert_eq!(s.len(), 2);
+    assert_eq!(s[1].points.len(), 2, "gerade Linie");
+    assert_eq!(s[1].points[0], *s[0].points.last().unwrap(), "vom Ende des letzten Strichs");
+    assert!(!s[1].erase);
+    click(&mut f, c, egui::Modifiers::ALT);
+    let s = strokes(&f);
+    assert!(s[2].erase, "Alt radiert");
+    assert!(s[2].radius < s[0].radius, "mit der Größe des Radierers: {} {}", s[2].radius, s[0].radius);
+}
+
 fn key(k: egui::Key, pressed: bool) -> egui::Event {
     egui::Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers: Default::default() }
 }
@@ -2316,7 +2346,7 @@ fn remove_tool_fills_the_painted_area() {
     let Some(mut f) = Fixture::new("remove") else { return };
     f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
     f.app.set_local_tool(crate::layers::LocalTool::Remove);
-    f.app.remove_strokes = vec![sk_core::params::BrushStroke { points: vec![[0.4, 0.5], [0.45, 0.52]], radius: 0.01, hardness: 0.7, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true }];
+    f.app.remove_strokes = vec![sk_core::params::BrushStroke { points: vec![[0.4, 0.5], [0.45, 0.52]], radius: 0.01, hardness: 0.7, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true, tolerance: 50.0 }];
     f.app.request_removal();
     assert!(f.app.inpaint_busy);
     // Shown in the viewer and the status bar while it runs.

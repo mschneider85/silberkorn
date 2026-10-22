@@ -144,7 +144,7 @@ pub fn make_removal(full: &LinearImage, wb: [f32; 3], strokes: &[BrushStroke], m
         })
         .collect();
     let norm = [rect[0] / fw, rect[1] / fh, rect[2] / fw, rect[3] / fh];
-    let guide = strokes.iter().any(|s| s.auto_mask).then(|| sk_core::brush::AutoGuide::from_image(full, 1024));
+    let guide = strokes.iter().any(|s| s.auto_mask).then(|| sk_core::brush::AutoGuide::from_image(full, sk_core::mask::MASK_RES));
     let cover = rasterize_strokes_in(strokes, norm, w, h, aspect, guide.as_ref());
     let mut work = Work { rect, w, h, rgb, cover };
     fill_windows(&mut work, &|rgb, hole| model.fill(rgb, hole), progress)?;
@@ -326,7 +326,7 @@ mod tests {
             }
         }
         let img = LinearImage::new(w, h, data);
-        let stroke = BrushStroke { points: vec![[0.5, 0.5]], radius: 30.0 / 1200.0, hardness: 0.8, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true };
+        let stroke = BrushStroke { points: vec![[0.5, 0.5]], radius: 30.0 / 1200.0, hardness: 0.8, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true, tolerance: 50.0 };
         let r = make_removal(&img, [1.0, 1.0, 1.0], &[stroke], &model, &|_| {}).unwrap();
         let p = Patch::decode(&r.patch, r.scale).unwrap();
         // The patch covers the blob and is bright there.

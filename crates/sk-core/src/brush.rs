@@ -39,12 +39,19 @@ impl AutoGuide {
     }
 }
 
-/// How much a pixel resembles the color under the brush (1 = same, 0 = different).
+/// How much a pixel resembles the color under the brush (1 = same, 0 = different); `reach`
+/// widens (above 1) or narrows what counts as alike (see [`tolerance_reach`]).
 #[inline]
-fn similarity(p: [f32; 3], r: [f32; 3]) -> f32 {
+fn similarity(p: [f32; 3], r: [f32; 3], reach: f32) -> f32 {
     // Brightness and color differences in log space (exposure independent).
     let d: f32 = (0..3).map(|k| (p[k] - r[k]).powi(2)).sum();
-    1.0 - smoothstep(0.03, 0.15, d)
+    1.0 - smoothstep(0.03 * reach, 0.15 * reach, d)
+}
+
+/// The tolerance of a stroke (0..100, 50 as before it could be set) as the factor on the
+/// squared color distance that still counts as alike: a quarter to four times.
+fn tolerance_reach(tolerance: f32) -> f32 {
+    4f32.powf((tolerance.clamp(0.0, 100.0) - 50.0) / 50.0)
 }
 
 #[inline]
@@ -135,6 +142,7 @@ struct Dabber<'a> {
     inner: f32,
     flow: f32,
     guide: Option<&'a AutoGuide>,
+    reach: f32,
 }
 
 impl<'a> Dabber<'a> {
@@ -142,7 +150,8 @@ impl<'a> Dabber<'a> {
         let (kx, ky) = if aspect >= 1.0 { (1.0, 1.0 / aspect) } else { (aspect, 1.0) };
         let r = stroke.radius.max(1e-5);
         let inner = r * stroke.hardness.clamp(0.0, 0.99);
-        Self { w, h, rect, kx, ky, r, inner, flow: stroke.flow.clamp(0.0, 1.0), guide: guide.filter(|_| stroke.auto_mask) }
+        let (flow, reach) = (stroke.flow.clamp(0.0, 1.0), tolerance_reach(stroke.tolerance));
+        Self { w, h, rect, kx, ky, r, inner, flow, guide: guide.filter(|_| stroke.auto_mask), reach }
     }
 
     /// Dabs every 15 % of the radius along the smoothed path, and how many stay the same when
@@ -208,7 +217,7 @@ impl<'a> Dabber<'a> {
                 if let Some(g) = self.guide
                     && f > 0.0
                 {
-                    f *= similarity(g.at(u / self.kx, v / self.ky), refs[k]);
+                    f *= similarity(g.at(u / self.kx, v / self.ky), refs[k], self.reach);
                 }
                 let c = &mut row[x - x_off];
                 c[0] += self.flow * f * (1.0 - c[0]);
@@ -352,7 +361,7 @@ mod tests {
     use super::*;
 
     fn stroke(points: Vec<[f32; 2]>) -> BrushStroke {
-        BrushStroke { points, radius: 0.05, hardness: 0.5, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true }
+        BrushStroke { points, radius: 0.05, hardness: 0.5, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true, tolerance: 50.0 }
     }
 
     #[test]
@@ -414,5 +423,23 @@ mod tests {
         paint_stroke(&mut m, w, h, [0.0, 0.0, 1.0, 1.0], 2.0, &s, Some(&guide));
         assert!(m[50 * w + 80] > 0.9, "links {}", m[50 * w + 80]);
         assert!(m[50 * w + 120] < 0.05, "rechts {}", m[50 * w + 120]);
+    }
+
+    /// The tolerance decides how different a neighbor may be: a slightly lighter green is left
+    /// out with a low one and painted with a high one.
+    #[test]
+    fn tolerance_widens_what_counts_as_alike() {
+        let (w, h) = (200, 100);
+        let img = LinearImage::new(w, h, (0..w * h).map(|i| if i % w < w / 2 { [0.02, 0.1, 0.03] } else { [0.024, 0.12, 0.036] }).collect());
+        let guide = AutoGuide::from_image(&img, 256);
+        let right = |tolerance: f32| {
+            let mut m = vec![0.0; w * h];
+            let s = BrushStroke { radius: 0.2, auto_mask: true, tolerance, ..stroke(vec![[0.35, 0.5], [0.4, 0.5]]) };
+            paint_stroke(&mut m, w, h, [0.0, 0.0, 1.0, 1.0], 2.0, &s, Some(&guide));
+            // Well inside the brush (its edge is at 120).
+            m[50 * w + 105]
+        };
+        let (low, mid, high) = (right(0.0), right(50.0), right(100.0));
+        assert!(low < 0.05 && mid > 0.2 && high > mid + 0.2, "{low} {mid} {high}");
     }
 }

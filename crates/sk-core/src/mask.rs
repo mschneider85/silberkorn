@@ -336,20 +336,23 @@ fn paint_live(
     out
 }
 
-type GuideCache = Mutex<Option<(u64, Arc<crate::brush::AutoGuide>)>>;
+/// The guides of the last two sources (the preview and the full resolution alternate).
+type GuideCache = Mutex<Vec<(u64, Arc<crate::brush::AutoGuide>)>>;
 
 /// Automatic masking's view of the image, made once per image (not on every update of a stroke).
 fn cached_guide(src: &LinearImage) -> Arc<crate::brush::AutoGuide> {
-    static GUIDE: LazyLock<GuideCache> = LazyLock::new(|| Mutex::new(None));
+    static GUIDE: LazyLock<GuideCache> = LazyLock::new(|| Mutex::new(Vec::new()));
     let key = image_fingerprint(src);
     let mut g = GUIDE.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((k, guide)) = g.as_ref()
-        && *k == key
-    {
+    if let Some((_, guide)) = g.iter().find(|(k, _)| *k == key) {
         return guide.clone();
     }
-    let guide = Arc::new(crate::brush::AutoGuide::from_image(src, 1024));
-    *g = Some((key, guide.clone()));
+    // As fine as the mask, so that edges are kept as exactly as it can show them.
+    let guide = Arc::new(crate::brush::AutoGuide::from_image(src, MASK_RES));
+    g.push((key, guide.clone()));
+    if g.len() > 2 {
+        g.remove(0);
+    }
     guide
 }
 
@@ -1049,13 +1052,13 @@ mod tests {
     #[test]
     fn brush_stroke_draws_and_erases() {
         let mut m = Mask {
-            strokes: vec![BrushStroke { points: vec![[0.2, 0.5], [0.8, 0.5]], radius: 0.05, hardness: 0.5, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true }],
+            strokes: vec![BrushStroke { points: vec![[0.2, 0.5], [0.8, 0.5]], radius: 0.05, hardness: 0.5, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true, tolerance: 50.0 }],
             ..Default::default()
         };
         let b = rasterize(&m, 1.5, None);
         assert!(b.sample(0.5, 0.5) > 0.99);
         assert!(b.sample(0.5, 0.1) < 0.01);
-        m.strokes.push(BrushStroke { points: vec![[0.5, 0.5]], radius: 0.05, hardness: 0.9, flow: 1.0, erase: true, opacity: 1.0, auto_mask: false, build_up: true });
+        m.strokes.push(BrushStroke { points: vec![[0.5, 0.5]], radius: 0.05, hardness: 0.9, flow: 1.0, erase: true, opacity: 1.0, auto_mask: false, build_up: true, tolerance: 50.0 });
         assert!(rasterize(&m, 1.5, None).sample(0.5, 0.5) < 0.05);
         assert!(rasterize(&m, 1.5, None).sample(0.3, 0.5) > 0.99);
     }
@@ -1107,6 +1110,7 @@ mod tests {
             opacity,
             auto_mask: false,
             build_up: true,
+            tolerance: 50.0,
         };
         let path = |i: usize| [0.15 + i as f32 * 0.01, 0.45 + 0.15 * (i as f32 * 0.15).sin()];
         let mut m = Mask { strokes: vec![st(vec![[0.2, 0.3], [0.7, 0.6]], false, 1.0)], ..Default::default() };
@@ -1334,7 +1338,7 @@ mod tests {
 
     #[test]
     fn painting_stroke_by_stroke_matches_full_rasterization() {
-        let st = |pts: Vec<[f32; 2]>, erase: bool| BrushStroke { points: pts, radius: 0.04, hardness: 0.3, flow: 0.4, erase, opacity: 0.8, auto_mask: false, build_up: true };
+        let st = |pts: Vec<[f32; 2]>, erase: bool| BrushStroke { points: pts, radius: 0.04, hardness: 0.3, flow: 0.4, erase, opacity: 0.8, auto_mask: false, build_up: true, tolerance: 50.0 };
         let mut m = Mask { linear: vec![crate::params::LinearGradient { start: [0.0, 0.0], end: [0.0, 0.3] }], ..Default::default() };
         m.strokes.push(st(vec![[0.2, 0.5], [0.4, 0.55]], false));
         let _ = cached_bitmap(&m, 1.5, None);

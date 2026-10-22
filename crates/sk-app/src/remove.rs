@@ -85,6 +85,7 @@ impl App {
                 opacity: b.opacity,
                 auto_mask: b.auto_mask,
                 build_up: true,
+                tolerance: b.tolerance,
             });
             self.local_drag = LocalDrag::Stroke(p);
         }
@@ -113,7 +114,7 @@ impl App {
         let cur = self.current.as_ref()?;
         let generation = self.generation();
         if self.auto_guide.as_ref().is_none_or(|(g, _)| *g != generation) {
-            self.auto_guide = Some((generation, Arc::new(AutoGuide::from_image(&cur.preview, 1024))));
+            self.auto_guide = Some((generation, Arc::new(AutoGuide::from_image(&cur.preview, sk_core::mask::MASK_RES))));
         }
         self.auto_guide.as_ref().map(|(_, g)| g.clone())
     }
@@ -269,7 +270,7 @@ fn strokes_key(strokes: &[sk_core::params::BrushStroke]) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
     let mut add = |v: u32| h = (h ^ v as u64).wrapping_mul(0x0100_0000_01b3);
     for s in strokes {
-        for v in [s.radius, s.hardness, s.flow, s.opacity] {
+        for v in [s.radius, s.hardness, s.flow, s.opacity, s.tolerance] {
             add(v.to_bits());
         }
         add(s.erase as u32 | (s.auto_mask as u32) << 1 | (s.build_up as u32) << 2);

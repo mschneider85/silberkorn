@@ -437,6 +437,21 @@ pub struct BrushStroke {
     /// had a polyline with `flow` as opacity; they are drawn as before.
     #[serde(default)]
     pub build_up: bool,
+    /// How different the image may be from what is under the brush's center and still be
+    /// painted (`auto_mask`), 0..100.
+    #[serde(default = "default_tolerance", skip_serializing_if = "is_default_tolerance")]
+    pub tolerance: f32,
+}
+
+/// The tolerance of automatic masking strokes had before it could be set.
+pub const DEFAULT_TOLERANCE: f32 = 50.0;
+
+fn default_tolerance() -> f32 {
+    DEFAULT_TOLERANCE
+}
+
+fn is_default_tolerance(v: &f32) -> bool {
+    *v == DEFAULT_TOLERANCE
 }
 
 fn one() -> f32 {

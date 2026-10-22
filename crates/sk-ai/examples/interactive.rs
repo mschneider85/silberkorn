@@ -149,7 +149,7 @@ fn main() -> anyhow::Result<()> {
     match sk_ai::inpaint::Inpainter::load(&sk_ai::models::path(&sk_ai::models::INPAINT)) {
         Ok(model) => {
             let points: Vec<[f32; 2]> = (0..=20).map(|i| [0.3, 0.4 + 0.1 * i as f32 / 20.0]).collect();
-            let stroke = BrushStroke { points, radius: 0.01, hardness: 0.7, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true };
+            let stroke = BrushStroke { points, radius: 0.01, hardness: 0.7, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true, tolerance: 50.0 };
             let (_, t) = timed(|| sk_ai::inpaint::make_removal(&full, meta.as_shot_wb, &[stroke], &model, &|_| {}));
             row("Entfernen (kleiner Strich)", t, None);
         }

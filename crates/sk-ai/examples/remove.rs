@@ -8,7 +8,7 @@ fn main() -> anyhow::Result<()> {
     let (meta, full) = sk_core::raw::load_full(&path)?;
     let model = sk_ai::inpaint::Inpainter::load(&sk_ai::models::path(&sk_ai::models::INPAINT))?;
     let points: Vec<[f32; 2]> = (0..=20).map(|i| [u, v0 + (v1 - v0) * i as f32 / 20.0]).collect();
-    let stroke = sk_core::params::BrushStroke { points, radius: r, hardness: 0.7, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true };
+    let stroke = sk_core::params::BrushStroke { points, radius: r, hardness: 0.7, flow: 1.0, erase: false, opacity: 1.0, auto_mask: false, build_up: true, tolerance: 50.0 };
     let t = std::time::Instant::now();
     let removal = sk_ai::inpaint::make_removal(&full, meta.as_shot_wb, &[stroke], &model, &|_| {})?;
     eprintln!("Entfernt in {:.1} s, Flicken {} Zeichen", t.elapsed().as_secs_f32(), removal.patch.len());
