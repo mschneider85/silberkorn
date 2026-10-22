@@ -19,6 +19,7 @@ fn sections() -> [(&'static str, Vec<Entry>); 3] {
         (
             "KI-Modelle",
             vec![
+                ("DemosaicNet (Michaël Gharbi et al.), © 2016 Michael Gharbi", "Raw-Details (mitgeliefert)", "MIT"),
                 ("RawNIND (Benoit Brummer, UCLouvain)", "KI-Entrauschen", models::DENOISE_BAYER.license),
                 ("BiRefNet (Peng Zheng et al.)", "Motiv auswählen", models::SUBJECT_EDGES.license),
                 ("U²-Net (Xuebin Qin et al.)", "Automatisch anpassen, Look angleichen", models::SUBJECT.license),
@@ -56,7 +57,11 @@ impl App {
                         for (name, used_for, license) in entries {
                             ui.vertical(|ui| {
                                 ui.spacing_mut().item_spacing.y = 1.0;
-                                ui.label(RichText::new(name).color(theme::TEXT));
+                                let r = ui.label(RichText::new(name).color(theme::TEXT));
+                                // Comes with the program: its license text with it.
+                                if name.starts_with("DemosaicNet") {
+                                    r.on_hover_text(sk_ai::demosaic::LICENSE);
+                                }
                                 ui.label(RichText::new(used_for).size(11.5).color(theme::TEXT_DIM));
                             });
                             dialog::tag(ui, license);
@@ -65,7 +70,7 @@ impl App {
                     });
                 });
             }
-            dialog::note(ui, "Die KI-Modelle, die Objektivprofile und die KI-Beschleunigung werden nicht mitgeliefert, sondern bei Bedarf geladen.");
+            dialog::note(ui, "Die KI-Modelle (außer DemosaicNet), die Objektivprofile und die KI-Beschleunigung werden nicht mitgeliefert, sondern bei Bedarf geladen.");
             dialog::footer(ui, |ui| {
                 if dialog::default_button(ui, true, dialog::primary("Schließen")) {
                     close = true;

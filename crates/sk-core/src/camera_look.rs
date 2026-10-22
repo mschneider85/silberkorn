@@ -220,7 +220,7 @@ mod tests {
             orientation: Orientation::Normal,
             hdr: false,
             lens: None,
-            lens_corrected: false,
+            lens_corrected: false, bayer: false,
         }
     }
 

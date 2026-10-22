@@ -16,7 +16,9 @@ mod crop;
 mod culling;
 mod deletion;
 mod dialog;
-mod denoise;
+mod ai_products;
+mod noise;
+mod target_tool;
 mod depth;
 mod develop_tools;
 mod focus;
@@ -217,6 +219,7 @@ mod tests {
         let sources = [
             include_str!("activity.rs"),
             include_str!("ai_models.rs"),
+            include_str!("ai_products.rs"),
             include_str!("app.rs"),
             include_str!("auto_tools.rs"),
             include_str!("browser.rs"),
@@ -227,7 +230,6 @@ mod tests {
             include_str!("crop.rs"),
             include_str!("culling.rs"),
             include_str!("deletion.rs"),
-            include_str!("denoise.rs"),
             include_str!("depth.rs"),
             include_str!("develop_tools.rs"),
             include_str!("dialog.rs"),
@@ -249,6 +251,7 @@ mod tests {
             include_str!("look_worker.rs"),
             include_str!("main.rs"),
             include_str!("merge.rs"),
+            include_str!("noise.rs"),
             include_str!("palette.rs"),
             include_str!("print_preview.rs"),
             include_str!("remove.rs"),
@@ -261,6 +264,7 @@ mod tests {
             include_str!("stacks.rs"),
             include_str!("style_grid.rs"),
             include_str!("subject_worker.rs"),
+            include_str!("target_tool.rs"),
             include_str!("theme.rs"),
             include_str!("thumb_queue.rs"),
             include_str!("tools.rs"),

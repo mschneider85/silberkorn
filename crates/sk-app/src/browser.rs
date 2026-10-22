@@ -40,6 +40,16 @@ pub(crate) fn slider_pct(log: f32) -> f32 {
     [100.0, ZOOM_SLIDER_MAX].into_iter().find(|t| (pct / t - 1.0).abs() < 0.005).unwrap_or(pct.round().min(ZOOM_SLIDER_MAX))
 }
 
+/// "2024:05:17 14:03:22" (EXIF) as "17.05.2024 14:03"; anything else as it is.
+pub(crate) fn exif_date(d: &str) -> String {
+    let p: Vec<&str> = d.split([':', ' ', '-', 'T']).collect();
+    match p.as_slice() {
+        [y, m, day, hh, mm, ..] if y.len() == 4 => format!("{day}.{m}.{y} {hh}:{mm}"),
+        [y, m, day] if y.len() == 4 => format!("{day}.{m}.{y}"),
+        _ => d.to_string(),
+    }
+}
+
 /// "850 KB", "3.4 MB"
 fn file_size(bytes: usize) -> String {
     if bytes < 1024 * 1024 {
@@ -76,8 +86,7 @@ impl App {
         // The print preview judges the image against the paper, as it will be seen.
         let bg = match self.print_background().filter(|_| cells.is_empty()) {
             Some(c) => c,
-            None if self.fullscreen => Color32::from_gray(10),
-            None => theme::VIEWER,
+            None => self.viewer_background.color(self.fullscreen),
         };
         painter.rect_filled(rect, 0.0, bg);
         if !cells.is_empty() {
@@ -195,7 +204,7 @@ impl App {
         if space_pan && (response.hovered() || response.dragged()) {
             ui.ctx().set_cursor_icon(if response.dragged() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
         }
-        if (response.dragged() && (space_pan || (!self.picking_wb && !self.picking_skin && !self.picking_focus && !tools_active && !self.split_dragging)))
+        if (response.dragged() && (space_pan || (!self.picking_wb && !self.picking_skin && !self.picking_focus && self.target_tool.is_none() && !tools_active && !self.split_dragging)))
             || response.dragged_by(egui::PointerButton::Middle)
         {
             self.pan += response.drag_delta();
@@ -209,6 +218,25 @@ impl App {
         let img_rect = Rect::from_center_size(rect.center() + self.pan, size * scale);
         let img_rect = img_rect.translate((img_rect.min.to_vec2() * ppp).round() / ppp - img_rect.min.to_vec2());
         self.view_geometry = Some((rect, img_rect));
+        let over = response.hover_pos().filter(|p| img_rect.contains(*p)).map(|p| (p - img_rect.min) / scale);
+        self.hover_image(ui.ctx(), over);
+        // Right-click (no tool takes it): what the image is shown on.
+        if !self.viewer_tool_active() {
+            let mut chosen = None;
+            response.context_menu(|ui| {
+                ui.label(egui::RichText::new("Hintergrund").color(theme::TEXT_DIM));
+                for b in crate::app::ViewerBackground::ALL {
+                    if ui.radio(self.viewer_background == b, b.label()).clicked() {
+                        chosen = Some(b);
+                        ui.close();
+                    }
+                }
+            });
+            if let Some(b) = chosen {
+                self.viewer_background = b;
+                self.save_settings();
+            }
+        }
         // Proof view: the exported image instead of the preview, once it is ready.
         // The key (recipe as JSON, logo file) only when there is a proof to check.
         let proof = self.proof.as_ref().filter(|p| self.proof_view && p.version == self.edit_version && Some(p.key) == self.proof_key());
@@ -387,6 +415,7 @@ impl App {
             && !self.picking_wb
             && !self.picking_skin
             && !self.picking_focus
+            && self.target_tool.is_none()
             && !split_drag
             && !space_pan
             && in_after
@@ -414,6 +443,8 @@ impl App {
                 && img_rect.contains(pos)
             {
                 self.pick_white_balance((pos - img_rect.min) / scale);
+            } else if let Some(pos) = response.hover_pos().filter(|p| img_rect.contains(*p)) {
+                self.white_balance_hover(ui, pos, img_rect, scale, shown);
             }
         } else if self.picking_skin {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -430,6 +461,20 @@ impl App {
                 && img_rect.contains(pos)
             {
                 self.pick_focus((pos - img_rect.min) / scale);
+            }
+        } else if self.target_tool.is_some() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+            if response.drag_started()
+                && let Some(pos) = ui.input(|i| i.pointer.press_origin())
+                && img_rect.contains(pos)
+            {
+                self.target_grip_at((pos - img_rect.min) / scale);
+            }
+            if response.dragged() {
+                self.target_drag(response.drag_delta().y);
+            }
+            if response.drag_stopped() {
+                self.target_grip = None;
             }
         } else {
             // No tool: zoomed in, the image can be moved; fitted, it can be magnified
@@ -469,6 +514,11 @@ impl App {
             })
         } else if self.picking_focus {
             Some("Fokus – auf die Stelle klicken, die scharf bleiben soll, Esc beendet".into())
+        } else if let Some(t) = self.target_tool {
+            Some(match t {
+                crate::target_tool::TargetTool::Curve => "Gradationskurve – im Bild nach oben oder unten ziehen, Esc beendet".into(),
+                crate::target_tool::TargetTool::Colors(_) => "Farbeditor – auf einer Farbe nach oben oder unten ziehen, Esc beendet".into(),
+            })
         } else if let Some(t) = self.local_tool {
             // Brushes, gradients, retouching: the tool, the layer it paints on, how to leave it.
             let (_, name, _) = t.tile();
@@ -521,6 +571,7 @@ impl App {
         if let Some(label) = self.print_label(ui.ctx(), size) {
             labels.push(label);
         }
+        let below = labels.len();
         // Active output previews, one below the other.
         for (i, (text, fill, tip)) in labels.into_iter().enumerate() {
             let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), Color32::WHITE);
@@ -530,6 +581,25 @@ impl App {
             painter.galley(pos, galley, Color32::WHITE);
             if let Some(tip) = tip {
                 ui.interact(r, ui.id().with(("output-label", i)), Sense::hover()).on_hover_text(tip);
+            }
+        }
+        // Information about the picture (I), below the output previews.
+        if let Some(lines) = self.info_lines() {
+            let font = egui::FontId::proportional(12.5);
+            let galleys: Vec<_> = lines
+                .into_iter()
+                .enumerate()
+                .map(|(i, l)| painter.layout_no_wrap(l, if i == 0 { egui::FontId::proportional(14.0) } else { font.clone() }, if i == 0 { Color32::WHITE } else { Color32::from_gray(215) }))
+                .collect();
+            let w = galleys.iter().map(|g| g.size().x).fold(0.0, f32::max);
+            let h: f32 = galleys.iter().map(|g| g.size().y + 2.0).sum();
+            let pos = rect.left_top() + vec2(14.0, 12.0 + 28.0 * below as f32);
+            painter.rect_filled(Rect::from_min_size(pos, vec2(w, h)).expand2(vec2(10.0, 7.0)), 6.0, Color32::from_black_alpha(150));
+            let mut y = pos.y;
+            for g in galleys {
+                let gh = g.size().y;
+                painter.galley(pos2(pos.x, y), g, Color32::WHITE);
+                y += gh + 2.0;
             }
         }
         if let Some(until) = self.fullscreen_hint_until {
@@ -543,6 +613,24 @@ impl App {
                 ui.ctx().request_repaint();
             }
         }
+    }
+
+    /// The lines of the picture's information (see `InfoOverlay`), `None` when off.
+    pub(crate) fn info_lines(&self) -> Option<Vec<String>> {
+        use crate::app::InfoOverlay;
+        let cur = self.current.as_ref().filter(|_| self.info_overlay != InfoOverlay::Off)?;
+        let info = &cur.meta.info;
+        let exposure: Vec<String> = [info.exposure_time.clone(), info.aperture.clone(), info.iso.map(|i| format!("ISO {i}")), info.focal_length.clone()].into_iter().flatten().collect();
+        let mut lines = vec![sk_core::variant::display_name(&cur.meta.path), exposure.join("  ·  ")];
+        if self.info_overlay == InfoOverlay::Full {
+            lines.push(format!("{} {}", info.make, info.model).trim().to_string());
+            lines.extend(info.lens.clone());
+            let date = info.date.as_deref().map(exif_date).unwrap_or_default();
+            let size = format!("{} × {} px", info.width, info.height);
+            lines.push(if date.is_empty() { size } else { format!("{date}  ·  {size}") });
+        }
+        lines.retain(|l| !l.is_empty());
+        Some(lines)
     }
 
     /// Minimap of the whole image in the corner of the viewer, with the visible part framed.
@@ -635,6 +723,44 @@ impl App {
         self.pan *= new / old.max(f32::EPSILON);
         self.zoom = Some(new);
         self.print.zoom = false;
+    }
+
+    /// The histogram with the color under the mouse and the range of the slider under it;
+    /// dragging in it moves the slider of that range (on the active layer, or the background).
+    pub(crate) fn histogram_widget(&mut self, ui: &mut egui::Ui) -> egui::Rect {
+        let marks = widgets::HistogramMarks { rgb: self.hover_rgb, zone: self.hover_zone };
+        let (rect, moved) = widgets::histogram(ui, self.histogram.as_ref(), marks);
+        if let Some((zone, way)) = moved {
+            self.move_tone_zone(zone, way);
+        }
+        rect
+    }
+
+    /// Moves the slider of a tonal range by `way` histogram widths (the whole width: half its range).
+    pub fn move_tone_zone(&mut self, zone: widgets::ToneZone, way: f32) {
+        use widgets::ToneZone as Z;
+        let layer = self.active_layer;
+        let Some(cur) = self.current.as_mut() else { return };
+        let adj = &mut cur.adjustments;
+        let (exposure, highlights, shadows, whites, blacks) = match layer.and_then(|i| adj.layers.get_mut(i)) {
+            Some(l) => {
+                let a = &mut l.adjustments;
+                (&mut a.exposure, &mut a.highlights, &mut a.shadows, &mut a.whites, &mut a.blacks)
+            }
+            None => (&mut adj.exposure, &mut adj.highlights, &mut adj.shadows, &mut adj.whites, &mut adj.blacks),
+        };
+        let (v, lo, hi, decimals) = match zone {
+            Z::Exposure => (exposure, -4.0, 4.0, 2),
+            Z::Highlights => (highlights, -100.0, 100.0, 0),
+            Z::Shadows => (shadows, -100.0, 100.0, 0),
+            Z::Whites => (whites, -100.0, 100.0, 0),
+            Z::Blacks => (blacks, -100.0, 100.0, 0),
+        };
+        let q = 10f32.powi(decimals);
+        *v = ((*v + way * (hi - lo) / 2.0).clamp(lo, hi) * q).round() / q;
+        let shown = if zone == Z::Exposure { format!("{:+.2} EV", *v) } else { format!("{:+.0}", *v) };
+        self.speed_message = Some(format!("   {}: {shown}", zone.label()));
+        self.request_render();
     }
 
     /// Changes a value by one step: on the active layer, or on the background.
@@ -917,6 +1043,7 @@ impl App {
             full: full.clone(),
             adjustments: cur.adjustments.clone(),
             clip_warning: self.clip_warning,
+            slider_view: self.slider_view,
             mask_overlay: self.mask_overlay(),
             before: self.show_before,
             view,
@@ -1232,12 +1359,12 @@ impl App {
 }
 
 /// Whether `now` differs from `before` only in settings that act on single pixels (sharpening,
-/// noise reduction, grain), which a reduced draft can't show.
+/// noise reduction, Raw-Details, grain), which a reduced draft can't show.
 fn only_fine_detail_changed(before: &sk_core::params::Adjustments, now: &sk_core::params::Adjustments) -> bool {
     let mut a = before.clone();
     let (d, n) = (&mut a.detail, &now.detail);
     (d.sharpen_amount, d.sharpen_radius, d.sharpen_threshold) = (n.sharpen_amount, n.sharpen_radius, n.sharpen_threshold);
-    (d.nr_luma, d.nr_color, d.ai_denoise) = (n.nr_luma, n.nr_color, n.ai_denoise);
+    (d.nr_luma, d.nr_color, d.ai_denoise, d.raw_details, d.sharpen_detail) = (n.nr_luma, n.nr_color, n.ai_denoise, n.raw_details, n.sharpen_detail);
     (d.grain_amount, d.grain_size) = (n.grain_amount, n.grain_size);
     a == *now && before != now
 }

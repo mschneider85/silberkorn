@@ -128,6 +128,8 @@ pub struct RenderJob {
     pub preview: Arc<LinearImage>,
     pub adjustments: Adjustments,
     pub clip_warning: bool,
+    /// The grey view of the sharpening (while a slider of Schärfen is held with Strg).
+    pub slider_view: Option<sk_core::pipeline::SliderView>,
     pub before: bool,
     /// Render the whole frame (crop tool active).
     pub ignore_crop: bool,
@@ -158,6 +160,8 @@ pub struct TileRequest {
     pub full: Arc<LinearImage>,
     pub adjustments: Adjustments,
     pub clip_warning: bool,
+    /// See [`RenderJob::slider_view`].
+    pub slider_view: Option<sk_core::pipeline::SliderView>,
     /// Layer whose mask is tinted (as in the preview rendering).
     pub mask_overlay: Option<usize>,
     pub before: bool,
@@ -524,7 +528,7 @@ impl Workers {
                         } else {
                             req.adjustments.clone()
                         };
-                        let opts = RenderOptions { clip_warning: req.clip_warning, mask_overlay: req.mask_overlay, softproof: req.softproof.clone(), ..Default::default() };
+                        let opts = RenderOptions { clip_warning: req.clip_warning, mask_overlay: req.mask_overlay, softproof: req.softproof.clone(), slider_view: req.slider_view, ..Default::default() };
                         let p = Processor::with_options(&req.meta, &adj, opts);
                         let (fw, fh) = p.output_size(req.full.width, req.full.height);
                         let job = match req.view.take() {
@@ -731,7 +735,7 @@ impl Workers {
                     } else {
                         job.adjustments.clone()
                     };
-                    let opts = RenderOptions { clip_warning: job.clip_warning, ignore_crop: job.ignore_crop, mask_overlay: job.mask_overlay, softproof: job.softproof.clone() };
+                    let opts = RenderOptions { clip_warning: job.clip_warning, ignore_crop: job.ignore_crop, mask_overlay: job.mask_overlay, softproof: job.softproof.clone(), slider_view: job.slider_view };
                     let processor = Processor::with_options(&job.meta, &adj, opts);
                     if let Some(part) = job.part {
                         // Sharpening and glow carry the change a little beyond what was painted.
@@ -773,7 +777,7 @@ impl Workers {
                     };
                     let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
                     // Thumbnails and cached previews only from regular renderings (no drafts, overlays, warnings or crop tool view).
-                    let plain = !draft && !job.before && !job.clip_warning && job.mask_overlay.is_none() && !job.ignore_crop && job.softproof.is_none();
+                    let plain = !draft && !job.before && !job.clip_warning && job.slider_view.is_none() && job.mask_overlay.is_none() && !job.ignore_crop && job.softproof.is_none();
                     let full = plain
                         .then(|| ::image::RgbaImage::from_raw(r.width as u32, r.height as u32, r.rgba))
                         .flatten()

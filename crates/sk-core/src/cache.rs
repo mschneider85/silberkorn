@@ -67,12 +67,13 @@ pub fn thumb_key(path: &Path, adj: &Adjustments) -> String {
     let meta = std::fs::metadata(crate::variant::file_of(path)).ok();
     let mtime = meta.as_ref().and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
     let size = meta.map_or(0, |m| m.len());
-    // AI denoising shows once its data has been computed.
-    let denoised = if adj.detail.ai_denoise > 0.0 && crate::ai_denoise::is_ready(path) { "|dn" } else { "" };
+    // Raw-Details and AI denoising show once their data has been computed.
+    let detailed = if adj.detail.effective_raw_details() > 0.0 && crate::ai_products::DETAILS.is_ready(path) { "|rd" } else { "" };
+    let denoised = if adj.detail.ai_denoise > 0.0 && crate::ai_products::DENOISE.is_ready(path) { "|dn" } else { "" };
     // So does what uses the depth map once it exists.
     let blurred = if adj.needs_depth() && crate::depth::is_ready(path) { "|lb" } else { "" };
     let adj = if *adj == Adjustments::default() { String::new() } else { serde_json::to_string(adj).unwrap_or_default() };
-    format!("{:016x}", fnv1a(format!("{mtime}|{size}|{adj}{denoised}{blurred}").as_bytes()))
+    format!("{:016x}", fnv1a(format!("{mtime}|{size}|{adj}{detailed}{denoised}{blurred}").as_bytes()))
 }
 
 /// Thumbnail file of an image (without extension). `session` is the root of the open session, if any.

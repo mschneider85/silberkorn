@@ -45,6 +45,28 @@ pub struct RenderOptions {
     pub mask_overlay: Option<usize>,
     /// Show the image as in this output space or on this printer (display rendering only).
     pub softproof: Option<Arc<crate::softproof::SoftProof>>,
+    /// Show what a slider does (display rendering only), see [`SliderView`].
+    pub slider_view: Option<SliderView>,
+}
+
+/// What a slider held with Strg shows instead of the image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SliderView {
+    /// The image in grey, without the distraction of color (Schärfen: Stärke).
+    Grey,
+    /// Only what the sharpening adds, as a relief on middle grey (Schärfen: Radius, Details).
+    Sharpening,
+    /// Where the unsharp mask acts, white, and where the threshold spares, black (Schwelle).
+    SharpenMask,
+    /// Black, and where the highlights clip: white where all channels do, in the color of the
+    /// clipped channels where some do (Belichtung, Lichter, Weiß, white point of Tonwerte).
+    ClipHighlights,
+    /// White, and where the shadows clip: black where all channels do, colored where some do
+    /// (Tiefen, Schwarz, black point of Tonwerte).
+    ClipShadows,
+    /// What the noise reduction takes away, as a relief on middle grey: grain and specks where
+    /// it works as it should, outlines of detail where it goes too far (Rauschreduzierung).
+    NoiseRemoved,
 }
 
 /// Result of a display rendering: 8-bit sRGB RGBA plus histogram.
@@ -359,6 +381,7 @@ impl ToneParams {
 }
 
 /// A layer ready for per-pixel evaluation.
+#[derive(Clone)]
 struct PreparedLayer {
     /// Index in `Adjustments::layers`.
     index: usize,
@@ -383,6 +406,7 @@ const VEIL_MAX: f32 = 0.75;
 
 /// A layer's curves as tables: the RGB curve followed by the channel's, then the luma curve
 /// (as the background's curves in `encode`).
+#[derive(Clone)]
 struct LayerCurve {
     channels: Option<[Vec<f32>; 3]>,
     luma: Option<Vec<f32>>,
@@ -455,6 +479,7 @@ fn depth_layers_with(map: &Arc<crate::depth::DepthMap>, adj: &Adjustments) -> Ve
     out
 }
 
+#[derive(Clone)]
 pub struct Processor {
     adj: Adjustments,
     /// The camera's lens correction (applied if `adj.lens.camera`).
@@ -479,9 +504,14 @@ pub struct Processor {
     sensor_long_edge: f32,
     /// Unclipped floating point data: no highlight reconstruction.
     hdr: bool,
+    /// Partly clipped highlights are reconstructed before (process 4, see `highlights`): only
+    /// where all channels clipped does `to_working` make them white.
+    rebuilt: bool,
     opts: RenderOptions,
-    /// Image and amount (0..1) of AI denoising (see `ai_denoise`).
-    ai_denoise: Option<(std::path::PathBuf, f32)>,
+    /// Image and amounts (0..1) of Raw-Details and AI denoising (see `ai_products`).
+    ai_products: Option<(std::path::PathBuf, f32, f32)>,
+    /// Image and amount (0..1) of the sharpening by deconvolution (see `deconvolution`).
+    deconvolution: Option<(std::path::PathBuf, f32)>,
     /// Image and settings of the lens blur (see `lens_blur`).
     lens_blur: Option<(std::path::PathBuf, crate::params::LensBlur)>,
     /// The depth map while the atmosphere is on: its color comes from the far part (see `veil`).
@@ -565,8 +595,11 @@ impl Processor {
             }),
             sensor_long_edge: meta.info.width.max(meta.info.height).max(1) as f32,
             hdr: meta.hdr,
+            rebuilt: adj.process_4() && !meta.hdr,
             opts,
-            ai_denoise: (adj.detail.ai_denoise > 0.0 && !meta.hdr).then(|| (meta.path.clone(), adj.detail.ai_denoise / 100.0)),
+            ai_products: ((adj.detail.effective_raw_details() > 0.0 || adj.detail.ai_denoise > 0.0) && !meta.hdr)
+                .then(|| (meta.path.clone(), adj.detail.effective_raw_details() / 100.0, adj.detail.ai_denoise / 100.0)),
+            deconvolution: Some(adj.detail.sharpen_split().1).filter(|a| *a > 0.0).map(|a| (meta.path.clone(), a)),
             lens_blur: (!adj.lens_blur.is_off()).then(|| (meta.path.clone(), adj.lens_blur)),
             haze_map,
             adj: adj.clone(),
@@ -592,7 +625,7 @@ impl Processor {
         let (w, h) = self.output_size(src_w, src_h);
         let scale = src_w.max(src_h) as f32 / self.sensor_long_edge;
         let mut spread: f32 = 0.0;
-        if d.sharpen_amount > 0.0 {
+        if d.sharpen_split().0 > 0.0 {
             spread = spread.max(d.sharpen_radius * scale * 4.0 + 2.0);
         }
         if d.glow_amount > 0.0 {
@@ -608,13 +641,15 @@ impl Processor {
     fn to_working(&self, raw: [f32; 3]) -> [f32; 3] {
         let mut b = [raw[0] * self.wb[0], raw[1] * self.wb[1], raw[2] * self.wb[2]];
         let max_raw = raw[0].max(raw[1]).max(raw[2]);
-        if max_raw > 0.95 && !self.hdr {
+        if max_raw > crate::highlights::CLIP && !self.hdr {
             // Clipped channels are unreliable: estimate them as at least as bright as the
             // brightest channel, which keeps blown highlights neutral (not magenta) while
-            // retaining the gradient of unclipped channels.
+            // retaining the gradient of unclipped channels. Reconstructed before: only as far
+            // as all channels clipped.
             let hi = b[0].max(b[1]).max(b[2]);
+            let all = if self.rebuilt { raw.map(crate::highlights::clipped).into_iter().fold(1.0f32, f32::min) } else { 1.0 };
             for c in 0..3 {
-                let t = smoothstep(0.95, 1.0, raw[c]);
+                let t = crate::highlights::clipped(raw[c]) * all;
                 b[c] += (b[c].max(hi) - b[c]) * t;
             }
         }
@@ -876,7 +911,7 @@ impl Processor {
     /// Key of what depends on `src` and the settings in `relevant` for `region`.
     fn source_key(src: &LinearImage, region: Region, relevant: &serde_json::Value) -> u64 {
         // The address alone could be that of a freed image whose memory went to the next one.
-        let key = format!("{:p}|{}x{}|{}|{region:?}|{relevant}", src.data.as_ptr(), src.width, src.height, crate::ai_denoise::fingerprint(src));
+        let key = format!("{:p}|{}x{}|{}|{region:?}|{relevant}", src.data.as_ptr(), src.width, src.height, crate::ai_products::fingerprint(src));
         crate::cache::fnv1a(key.as_bytes())
     }
 
@@ -1004,7 +1039,7 @@ impl Processor {
             local = local.max(long_edge / 64.0);
         }
         margin += local;
-        if d.sharpen_amount > 0.0 {
+        if d.sharpen_split().0 > 0.0 {
             margin += d.sharpen_radius * scale * 4.0 + 2.0;
         }
         if d.glow_amount > 0.0 {
@@ -1216,30 +1251,38 @@ impl Processor {
             }),
         }
 
-        if d.sharpen_amount > 0.0 {
+        let unsharp = d.sharpen_split().0;
+        if unsharp > 0.0 {
             let sigma = d.sharpen_radius * scale;
             if sigma >= 0.25 {
                 let y = Plane::new(w, h, out.par_iter().map(|p| dot(*p, LUMA)).collect());
                 let blur = gaussian_blur(&y, sigma);
-                let amount = d.sharpen_amount / 100.0;
+                let amount = unsharp / 100.0;
                 let thr = d.sharpen_threshold / 255.0;
+                let mask = self.opts.slider_view == Some(SliderView::SharpenMask);
                 out.par_iter_mut().enumerate().for_each(|(i, p)| {
                     let diff = y.data[i] - blur.data[i];
                     let soft = if thr > 0.0 { (diff.abs() / thr).min(1.0) } else { 1.0 };
                     let delta = diff * amount * soft;
-                    *p = p.map(|v| (v + delta).clamp(0.0, 1.0));
+                    *p = if mask { [soft; 3] } else { p.map(|v| (v + delta).clamp(0.0, 1.0)) };
                 });
             }
         }
+        // The mask alone, without what comes after (nothing else to see); white everywhere
+        // without an unsharp mask.
+        let mask_view = self.opts.slider_view == Some(SliderView::SharpenMask);
+        if mask_view && (unsharp <= 0.0 || d.sharpen_radius * scale < 0.25) {
+            out.fill([1.0; 3]);
+        }
 
-        if d.glow_amount > 0.0 {
+        if d.glow_amount > 0.0 && !mask_view {
             let sigma = glow_sigma(d, full.0.max(full.1) as f32);
             let blurred: Vec<Plane> = (0..3).into_par_iter().map(|c| gaussian_blur(&Plane::new(w, h, out.iter().map(|p| p[c]).collect()), sigma)).collect();
             let k = d.glow_amount / 100.0;
             out.par_iter_mut().enumerate().for_each(|(i, p)| *p = glow(*p, [blurred[0].data[i], blurred[1].data[i], blurred[2].data[i]], k));
         }
 
-        if d.vignette_amount != 0.0 || d.grain_amount > 0.0 {
+        if (d.vignette_amount != 0.0 || d.grain_amount > 0.0) && !mask_view {
             let (cx, cy) = (full.0 as f32 / 2.0, full.1 as f32 / 2.0);
             let half_diag = (cx * cx + cy * cy).sqrt();
             let va = d.vignette_amount / 100.0;
@@ -1304,13 +1347,29 @@ impl Processor {
         w
     }
 
-    /// The source with the AI denoised data blended in and the lens blur, as far as wanted and
-    /// available (`None`: the source as it is).
+    /// The source with Raw-Details and the AI denoised data blended in, highlights reconstructed,
+    /// sharpened by deconvolution and the lens blur, as far as wanted and available (`None`: the source
+    /// as it is).
     fn prepared(&self, src: &LinearImage) -> Option<Arc<LinearImage>> {
-        let denoised = self.ai_denoise.as_ref().and_then(|(path, amount)| crate::ai_denoise::blended(path, src, *amount));
-        let base = denoised.as_deref().unwrap_or(src);
+        let denoised = self.ai_products.as_ref().and_then(|(path, details, denoise)| crate::ai_products::prepared(path, src, *details, *denoise));
+        let rebuilt = self.rebuilt(denoised.as_deref().unwrap_or(src)).or(denoised);
+        let sharp = self.deconvolved(rebuilt.as_deref().unwrap_or(src)).or(rebuilt);
+        let base = sharp.as_deref().unwrap_or(src);
         let blurred = self.lens_blur.as_ref().and_then(|(path, p)| crate::lens_blur::blurred(path, base, p, !self.hdr));
-        blurred.or(denoised)
+        blurred.or(sharp)
+    }
+
+    /// The source sharpened by deconvolution, with the image's radius at the source's size
+    /// (`None`: as it is).
+    fn deconvolved(&self, src: &LinearImage) -> Option<Arc<LinearImage>> {
+        let (path, amount) = self.deconvolution.as_ref()?;
+        let sigma = crate::deconvolution::sigma_of(path, src, self.sensor_long_edge);
+        crate::deconvolution::sharpened(src, sigma * src.width.max(src.height) as f32 / self.sensor_long_edge, *amount)
+    }
+
+    /// The source with its partly clipped highlights reconstructed (process 4; `None`: as it is).
+    fn rebuilt(&self, src: &LinearImage) -> Option<Arc<LinearImage>> {
+        if self.rebuilt { crate::highlights::reconstructed(src, self.wb) } else { None }
     }
 
     /// Full processing into an output color space (encoded 0..1 floats), for export.
@@ -1354,6 +1413,9 @@ impl Processor {
 
     /// Display rendering (sRGB, 8-bit) with histogram.
     pub fn render(&self, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Rendered {
+        if let Some(view) = self.opts.slider_view {
+            return self.render_slider_view(view, src, region, cache);
+        }
         let prepared = self.prepared(src);
         let src = prepared.as_deref().unwrap_or(src);
         if let Some(g) = crate::gpu::active() {
@@ -1366,6 +1428,68 @@ impl Processor {
         self.display(enc, full, mask)
     }
 
+    /// What a slider does instead of the image (see [`SliderView`]).
+    fn render_slider_view(&self, view: SliderView, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Rendered {
+        // The views of the whole rendering: from the usual one (on the graphics card if there).
+        let without = |f: &dyn Fn(&mut Processor)| {
+            let mut p = self.clone();
+            p.opts.slider_view = None;
+            f(&mut p);
+            p
+        };
+        match view {
+            SliderView::ClipHighlights | SliderView::ClipShadows => {
+                let mut r = without(&|_| {}).render(src, region, cache);
+                let high = view == SliderView::ClipHighlights;
+                // The limits of the Belichtungswarnung (see `display`).
+                r.rgba.par_chunks_mut(4).for_each(|p| {
+                    for v in &mut p[..3] {
+                        *v = match (high, *v) {
+                            (true, v) => if v == 255 { 255 } else { 0 },
+                            (false, v) => if v == 0 { 0 } else { 255 },
+                        };
+                    }
+                });
+                return r;
+            }
+            SliderView::NoiseRemoved => {
+                let mut r = without(&|_| {}).render(src, region, cache);
+                let p = without(&|p| (p.adj.detail.nr_luma, p.adj.detail.nr_color) = (0.0, 0.0)).render(src, region, None);
+                r.rgba.par_chunks_mut(4).zip(p.rgba.par_chunks(4)).for_each(|(s, p)| {
+                    for c in 0..3 {
+                        s[c] = (128.0 + (p[c] as f32 - s[c] as f32) * 4.0).clamp(0.0, 255.0).round() as u8;
+                    }
+                });
+                return r;
+            }
+            _ => {}
+        }
+        let mut r = self.render_cpu(src, region, cache);
+        let luma = |p: &[u8]| 0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32;
+        match view {
+            // The stage drew it already (see `process_encoded`).
+            SliderView::SharpenMask => {}
+            SliderView::Grey => r.rgba.par_chunks_mut(4).for_each(|p| {
+                let y = luma(p).round() as u8;
+                p[..3].fill(y);
+            }),
+            SliderView::Sharpening => {
+                let p = without(&|p| {
+                    p.adj.detail.sharpen_amount = 0.0;
+                    p.deconvolution = None;
+                })
+                .render_cpu(src, region, None);
+                r.rgba.par_chunks_mut(4).zip(p.rgba.par_chunks(4)).for_each(|(s, p)| {
+                    // Fine differences of a few levels, made visible.
+                    let y = (128.0 + (luma(s) - luma(p)) * 4.0).clamp(0.0, 255.0).round() as u8;
+                    s[..3].fill(y);
+                });
+            }
+            _ => unreachable!("handled above"),
+        }
+        r
+    }
+
     /// [`Self::render`] without the graphics card.
     pub fn render_cpu(&self, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Rendered {
         let prepared = self.prepared(src);
@@ -1376,7 +1500,8 @@ impl Processor {
     /// Encoded working RGB (sRGB transfer, 0..1) without the graphics card, the source as it is
     /// (no AI denoising or lens blur): for measuring renderings (see `auto`).
     pub(crate) fn encoded_cpu(&self, src: &LinearImage, cache: Option<&StageCache>) -> LinearImage {
-        self.process_encoded(src, None, cache).0
+        let rebuilt = self.rebuilt(src);
+        self.process_encoded(rebuilt.as_deref().unwrap_or(src), None, cache).0
     }
 
     /// Encoded working RGB -> display sRGB (or soft proof), clip warning, mask overlay, histogram.
@@ -1852,7 +1977,7 @@ mod tests {
             color,
             as_shot_wb: [1.0, 1.0, 1.0],
             orientation: Orientation::Normal,
-            hdr: false, lens: None, lens_corrected: false,
+            hdr: false, lens: None, lens_corrected: false, bayer: false,
         }
     }
 
@@ -1916,6 +2041,78 @@ mod tests {
         // Unclipped pixels keep their white balance.
         let u = p.to_working([0.2, 0.2, 0.2]);
         assert!((u[0] - 0.4).abs() < 1e-4 && (u[2] - 0.32).abs() < 1e-4);
+    }
+
+    /// The grey views of the sharpening: grey image, relief on middle grey (flat areas stay
+    /// there, edges stand out), mask (white where the unsharp mask acts).
+    #[test]
+    fn sharpening_shows_itself_in_grey() {
+        let (w, h) = (64, 48);
+        let src = LinearImage::new(w, h, (0..w * h).map(|i| if i % w < 32 { [0.05, 0.08, 0.04] } else { [0.3, 0.2, 0.1] }).collect());
+        let adj = Adjustments { detail: Detail { sharpen_amount: 150.0, sharpen_radius: 1.0, nr_color: 0.0, ..Default::default() }, ..Default::default() };
+        let view = |v| Processor::with_options(&meta(), &adj, RenderOptions { slider_view: Some(v), ..Default::default() }).render(&src, None, None);
+        fn at(r: &Rendered, x: usize) -> &[u8] {
+            &r.rgba[(24 * r.width + x) * 4..][..3]
+        }
+        let grey = |p: &[u8]| p[0] == p[1] && p[1] == p[2];
+        let image = view(SliderView::Grey);
+        assert!(grey(at(&image, 10)) && grey(at(&image, 50)) && at(&image, 10)[0] < at(&image, 50)[0]);
+        let relief = view(SliderView::Sharpening);
+        assert_eq!(at(&relief, 10)[0], 128, "Fläche");
+        assert!(at(&relief, 31)[0] < 120 && at(&relief, 32)[0] > 136, "Kante: {:?} {:?}", at(&relief, 31), at(&relief, 32));
+        let mask = view(SliderView::SharpenMask);
+        assert!(at(&mask, 10)[0] < 20 && at(&mask, 32)[0] > 200, "{:?} {:?}", at(&mask, 10), at(&mask, 32));
+    }
+
+    /// Clipping views: black with the clipped highlights, white with the clipped shadows; the
+    /// noise view: middle grey where nothing was removed.
+    #[test]
+    fn slider_views_show_clipping_and_removed_noise() {
+        let (w, h) = (64, 48);
+        // Left black, middle grey, right far beyond white.
+        let src = LinearImage::new(w, h, (0..w * h).map(|i| match i % w { 0..20 => [0.0; 3], 20..44 => [0.1; 3], _ => [5.0; 3] }).collect());
+        let view = |v, adj: &Adjustments| Processor::with_options(&meta(), adj, RenderOptions { slider_view: Some(v), ..Default::default() }).render(&src, None, None);
+        fn at(r: &Rendered, x: usize) -> &[u8] {
+            &r.rgba[(24 * r.width + x) * 4..][..3]
+        }
+        // (The tone curve brings even clipped camera data just below white: brighter.)
+        let high = view(SliderView::ClipHighlights, &Adjustments { exposure: 1.0, ..plain() });
+        assert_eq!((at(&high, 10), at(&high, 30), at(&high, 60)), (&[0u8; 3][..], &[0u8; 3][..], &[255u8; 3][..]));
+        let low = view(SliderView::ClipShadows, &plain());
+        assert_eq!((at(&low, 10), at(&low, 30), at(&low, 60)), (&[0u8; 3][..], &[255u8; 3][..], &[255u8; 3][..]));
+        // A flat area: nothing to remove.
+        let noisy = Adjustments { detail: Detail { nr_luma: 60.0, nr_color: 60.0, ..plain().detail }, ..plain() };
+        let removed = view(SliderView::NoiseRemoved, &noisy);
+        assert!(at(&removed, 30).iter().all(|&v| v.abs_diff(128) <= 2), "{:?}", at(&removed, 30));
+    }
+
+    /// Process 4: a bright blue sky whose green channel clipped (the camera's most sensitive one,
+    /// as in daylight) stays blue; before, green was raised to blue and the sky turned cyan.
+    #[test]
+    fn partly_clipped_sky_stays_blue_from_process_4() {
+        let mut m = meta();
+        m.as_shot_wb = [2.0, 1.0, 3.0];
+        let (w, h) = (64, 48);
+        // Camera data of a blue sky, brighter to the right; green clips in the right part.
+        let sky = |x: usize| {
+            let s = 0.4 + 2.8 * x as f32 / w as f32;
+            [0.2 * s / 2.0, (0.35 * s).min(1.0), 0.8 * s / 3.0]
+        };
+        let src = LinearImage::new(w, h, (0..w * h).map(|i| sky(i % w)).collect());
+        assert!(src.data[60][1] == 1.0 && src.data[60][2] < 0.9, "Testaufbau");
+        let blue_over_green = |process: u32| {
+            let adj = Adjustments { process, exposure: -2.0, ..plain() };
+            let r = Processor::new(&m, &adj).render_cpu(&src, None, None);
+            let p = &r.rgba[(24 * w + 60) * 4..][..3];
+            p[2] as i32 - p[1] as i32
+        };
+        let (old, new) = (blue_over_green(3), blue_over_green(4));
+        // The unclipped part of the sky for comparison.
+        let adj = Adjustments { exposure: -2.0, ..plain() };
+        let r = Processor::new(&m, &adj).render_cpu(&src, None, None);
+        let p = &r.rgba[(24 * w + 30) * 4..][..3];
+        eprintln!("Blau über Grün: vorher {old}, jetzt {new}, ungeclippt {}", p[2] as i32 - p[1] as i32);
+        assert!(old < 10 && new > 40, "Blau über Grün: vorher {old}, jetzt {new}");
     }
 
     #[test]

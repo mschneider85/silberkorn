@@ -186,17 +186,233 @@ fn library_workflow() {
     assert_eq!(f.app.entries[f.app.visible[0]].path, b);
 }
 
+/// Raw-Details: disabled for images without a Bayer mosaic (the samples are linear DNGs); on,
+/// the viewer's image is computed in the background, and what goes wrong is shown at the slider.
 #[test]
-fn noise_settings_carry_over_to_the_selection() {
-    let Some(mut f) = Fixture::new("noise") else { return };
+fn raw_details_needs_a_bayer_mosaic() {
+    use crate::ai_products::{AiProduct, ProductState};
+    let Some(mut f) = Fixture::new("raw-details") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.tab = crate::app::Tab::Details;
+    let amount = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.detail.raw_details;
+    // (The samples count as HDR, which is not available either.)
+    std::sync::Arc::make_mut(&mut f.app.current.as_mut().unwrap().meta).hdr = false;
+    let meta = f.app.current.as_ref().unwrap().meta.clone();
+    let d = sk_core::params::Detail::default();
+    assert!(AiProduct::Details.unavailable(&meta, &d).is_some_and(|why| why.starts_with("Nur für Bayer-Sensoren")));
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    click_slider(&mut f, slider(&nodes, "Raw-Details"));
+    assert_eq!(amount(&f), 0.0, "gesperrt");
+
+    // As if it were a raw file with a mosaic: the slider works and the computation starts (and
+    // fails for this file, which has none).
+    std::sync::Arc::make_mut(&mut f.app.current.as_mut().unwrap().meta).bayer = true;
+    let meta = f.app.current.as_ref().unwrap().meta.clone();
+    assert!(AiProduct::Details.unavailable(&meta, &d).is_none());
+    // Under full KI-Entrauschen it does nothing: disabled.
+    let full = sk_core::params::Detail { ai_denoise: 100.0, raw_details: 80.0, ..d.clone() };
+    assert!(AiProduct::Details.unavailable(&meta, &full).is_some_and(|why| why.starts_with("Bei 100 %")));
+    assert_eq!(full.effective_raw_details(), 0.0);
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    click_slider(&mut f, slider(&nodes, "Raw-Details"));
+    assert!(amount(&f) > 50.0, "{}", amount(&f));
+    let path = f.app.current_path().unwrap();
+    f.pump("Raw-Details versucht", |a| matches!(a.product_state(AiProduct::Details, &path), ProductState::Failed(_)));
+    let ProductState::Failed(e) = f.app.product_state(AiProduct::Details, &path) else { unreachable!() };
+    assert!(e.contains("nur für Bayer-Sensoren"), "{e}");
+}
+
+/// The white balance pipette previews the balance of the spot under it; a click sets it.
+#[test]
+fn white_balance_pipette_previews_before_the_click() {
+    use sk_core::params::WbMode;
+    let Some(mut f) = Fixture::new("wb-hover") else { return };
+    f.pump("Bild gerendert", |a| a.current.is_some() && a.texture.is_some());
+    f.app.toggle_wb_picker();
+    // Somewhere neither too dark nor clipped.
+    let spots = [(600.0, 420.0), (400.0, 300.0), (800.0, 500.0), (300.0, 600.0)].map(|(x, y)| egui::pos2(x, y));
+    let at = spots.into_iter().find(|p| {
+        viewer_frame(&mut f, vec![egui::Event::PointerMoved(*p)]);
+        viewer_frame(&mut f, vec![]);
+        f.app.style_preview.is_some()
+    });
+    let at = at.expect("eine brauchbare Stelle");
+    let preview = f.app.style_preview.as_ref().unwrap().white_balance.clone();
+    assert_eq!(preview.mode, WbMode::Custom);
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.white_balance.mode, WbMode::AsShot, "nur Vorschau");
+    viewer_frame(&mut f, vec![press(at, true)]);
+    viewer_frame(&mut f, vec![press(at, false)]);
+    let wb = &f.app.current.as_ref().unwrap().adjustments.white_balance;
+    assert_eq!((wb.mode, wb.kelvin.round()), (WbMode::Custom, preview.kelvin.round()));
+    assert!(!f.app.picking_wb);
+}
+
+/// I shows the picture's information, short, then with everything, then not.
+#[test]
+fn info_overlay_cycles_with_i() {
+    use crate::app::InfoOverlay;
+    let Some(mut f) = Fixture::new("info-overlay") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    assert_eq!(f.app.info_lines(), None);
+    f.app.info_overlay = InfoOverlay::Short;
+    let short = f.app.info_lines().unwrap();
+    assert!(short[0].starts_with("_DSC00"), "{short:?}");
+    f.app.info_overlay = InfoOverlay::Full;
+    let full = f.app.info_lines().unwrap();
+    assert!(full.len() > short.len() && full.iter().any(|l| l.contains("px")), "{full:?}");
+    assert_eq!(crate::browser::exif_date("2024:05:17 14:03:22"), "17.05.2024 14:03");
+    assert_eq!(crate::browser::exif_date("irgendwann"), "irgendwann");
+}
+
+/// Zielkorrektur: dragging up in the image raises the curve at the tone there, or the
+/// saturation of the color there; the image itself is not moved.
+#[test]
+fn target_tool_changes_what_is_under_the_mouse() {
+    use crate::develop_tools::ColorView;
+    use crate::target_tool::TargetTool;
+    let Some(mut f) = Fixture::new("target-tool") else { return };
+    f.pump("Bild gerendert", |a| a.current.is_some() && a.texture.is_some());
+    let adj = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.clone();
+    f.app.toggle_target_tool(TargetTool::Curve);
+    viewer_frame(&mut f, vec![]);
+    drag(&mut f, egui::pos2(600.0, 420.0), egui::pos2(600.0, 360.0), 6);
+    let curve = adj(&f).curves.rgb;
+    assert_eq!(curve.points.len(), 3, "{:?}", curve.points);
+    let p = curve.points[2];
+    assert!(p[1] > p[0] + 0.1, "angehoben: {p:?}");
+    assert_eq!(f.app.pan, egui::Vec2::ZERO, "Bild nicht verschoben");
+
+    f.app.toggle_target_tool(TargetTool::Colors(ColorView::Saturation));
+    assert_eq!(f.app.target_tool, Some(TargetTool::Colors(ColorView::Saturation)));
+    // Somewhere with color (not every spot of the samples has some).
+    let spot = [(600.0, 420.0), (400.0, 300.0), (800.0, 500.0), (300.0, 600.0)].into_iter().map(|(x, y)| egui::pos2(x, y));
+    let mut changed = false;
+    for at in spot {
+        drag(&mut f, at, at - egui::vec2(0.0, 40.0), 4);
+        if adj(&f).color_editor.bands.iter().any(|b| b.saturation > 0.0) {
+            changed = true;
+            break;
+        }
+    }
+    assert!(changed, "{:?}", adj(&f).color_editor.bands);
+    assert!(adj(&f).color_editor.bands.iter().all(|b| b.saturation >= 0.0 && b.hue == 0.0 && b.lightness == 0.0));
+}
+
+/// Hovering a step of the history shows it in the image without going there.
+#[test]
+fn hovering_a_history_step_previews_it() {
+    let Some(mut f) = Fixture::new("history-hover") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.edit(|a| a.exposure = 1.0);
+    f.app.commit_and_save();
+    f.app.tab = crate::app::Tab::History;
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let (_, row) = nodes.iter().find(|(l, _)| l == "Geöffnet").expect("Schritt „Geöffnet“");
+    let at = row.center();
+    tool_panel_frame(&mut f, vec![egui::Event::PointerMoved(at)]);
+    tool_panel_frame(&mut f, vec![]);
+    assert_eq!(f.app.style_preview.as_ref().map(|a| a.exposure), Some(0.0));
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.exposure, 1.0, "nur Vorschau");
+}
+
+/// The color under the mouse is noted for the histogram; a slider of a tonal range marks it
+/// there, and dragging in the histogram moves that slider.
+#[test]
+fn histogram_shows_the_color_under_the_mouse_and_moves_tone_sliders() {
+    use crate::widgets::ToneZone;
+    let Some(mut f) = Fixture::new("histogram") else { return };
+    f.pump("Bild gerendert", |a| a.current.is_some() && a.texture.is_some());
+    // (egui knows what is under the mouse from the frame before.)
+    viewer_frame(&mut f, vec![egui::Event::PointerMoved(egui::pos2(600.0, 400.0))]);
+    viewer_frame(&mut f, vec![]);
+    let rgb = f.app.hover_rgb.expect("Farbe unter der Maus");
+    assert!(rgb.iter().any(|v| *v > 0), "{rgb:?}");
+    viewer_frame(&mut f, vec![egui::Event::PointerGone]);
+    viewer_frame(&mut f, vec![]);
+    assert_eq!(f.app.hover_rgb, None);
+
+    f.app.tab = crate::app::Tab::Exposure;
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let rail = slider(&nodes, "Lichter");
+    tool_panel_frame(&mut f, vec![egui::Event::PointerMoved(rail.center())]);
+    tool_panel_frame(&mut f, vec![]);
+    assert_eq!(f.app.hover_zone, Some(ToneZone::Highlights));
+
+    let before = f.app.current.as_ref().unwrap().adjustments.exposure;
+    f.app.move_tone_zone(ToneZone::Exposure, 0.25);
+    assert!((f.app.current.as_ref().unwrap().adjustments.exposure - before - 1.0).abs() < 1e-4);
+    f.app.move_tone_zone(ToneZone::Whites, -0.1);
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.whites, -10.0);
+}
+
+/// Holding a slider with Strg shows what it does instead of the image, as long as it is held.
+#[test]
+fn sliders_show_their_effect_with_ctrl() {
+    use sk_core::pipeline::SliderView;
+    let Some(mut f) = Fixture::new("sharpen-view") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.tab = crate::app::Tab::Details;
+    let ctrl = egui::Modifiers::COMMAND;
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: ctrl };
+    for (label, view) in [("Stärke", SliderView::Grey), ("Radius", SliderView::Sharpening), ("Schwelle", SliderView::SharpenMask), ("Details", SliderView::Sharpening)] {
+        let nodes = tool_panel_frame(&mut f, vec![]);
+        let rail = slider(&nodes, label);
+        let at = egui::pos2(rail.left() + 7.0 + (rail.width() - 14.0) * 0.3, rail.center().y);
+        tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at)], ctrl);
+        tool_panel_frame_with(&mut f, vec![button(at, true)], ctrl);
+        tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at + egui::vec2(3.0, 0.0))], ctrl);
+        assert_eq!(f.app.slider_view, Some(view), "{label}");
+        tool_panel_frame_with(&mut f, vec![button(at, false)], ctrl);
+        tool_panel_frame(&mut f, vec![]);
+        f.app.handle_events(&f.ctx);
+        assert_eq!(f.app.slider_view, None, "{label} losgelassen");
+    }
+    // Belichtung, Lichter & Tiefen: where it clips; Rauschreduzierung: what it removes.
+    f.app.tab = crate::app::Tab::Exposure;
+    for (label, view) in [("Belichtung", SliderView::ClipHighlights), ("Weiß", SliderView::ClipHighlights), ("Tiefen", SliderView::ClipShadows), ("Schwarz", SliderView::ClipShadows)] {
+        let nodes = tool_panel_frame(&mut f, vec![]);
+        let rail = slider(&nodes, label);
+        let at = egui::pos2(rail.left() + 7.0 + (rail.width() - 14.0) * 0.5, rail.center().y);
+        tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at)], ctrl);
+        tool_panel_frame_with(&mut f, vec![button(at, true)], ctrl);
+        tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at + egui::vec2(2.0, 0.0))], ctrl);
+        assert_eq!(f.app.slider_view, Some(view), "{label}");
+        tool_panel_frame_with(&mut f, vec![button(at, false)], ctrl);
+        tool_panel_frame(&mut f, vec![]);
+        f.app.handle_events(&f.ctx);
+        assert_eq!(f.app.slider_view, None, "{label} losgelassen");
+    }
+    f.app.tab = crate::app::Tab::Details;
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let rail = slider(&nodes, "Luminanz");
+    let at = egui::pos2(rail.left() + 20.0, rail.center().y);
+    tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at)], ctrl);
+    tool_panel_frame_with(&mut f, vec![button(at, true)], ctrl);
+    assert_eq!(f.app.slider_view, Some(SliderView::NoiseRemoved));
+    tool_panel_frame_with(&mut f, vec![button(at, false)], ctrl);
+    tool_panel_frame(&mut f, vec![]);
+    f.app.handle_events(&f.ctx);
+
+    // Without Strg: no grey view.
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let rail = slider(&nodes, "Stärke");
+    let at = egui::pos2(rail.left() + 20.0, rail.center().y);
+    tool_panel_frame(&mut f, vec![egui::Event::PointerMoved(at)]);
+    tool_panel_frame(&mut f, vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() }]);
+    assert_eq!(f.app.slider_view, None);
+}
+
+#[test]
+fn enhance_settings_carry_over_to_the_selection() {
+    let Some(mut f) = Fixture::new("enhance") else { return };
     f.pump("Bild geladen", |a| a.current.is_some());
     let other = f.app.entries.iter().map(|e| e.path.clone()).find(|p| Some(p) != f.app.current_path().as_ref()).unwrap();
     f.app.selection = f.app.entries.iter().map(|e| e.path.clone()).collect();
-    f.app.transfer_noise((40.0, 25.0, 30.0));
+    f.app.transfer_enhance((60.0, 40.0));
     let d = sidecar::load(&other).adjustments.detail;
-    assert_eq!((d.ai_denoise, d.nr_luma, d.nr_color), (40.0, 25.0, 30.0));
+    assert_eq!((d.raw_details, d.ai_denoise), (60.0, 40.0));
     let d = &f.app.current.as_ref().unwrap().adjustments.detail;
-    assert_eq!((d.ai_denoise, d.nr_luma, d.nr_color), (40.0, 25.0, 30.0));
+    assert_eq!((d.raw_details, d.ai_denoise), (60.0, 40.0));
     assert!(f.app.can_undo());
 }
 

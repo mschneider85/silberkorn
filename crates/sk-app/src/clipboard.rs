@@ -97,9 +97,9 @@ impl App {
     /// Carries one tool of the current image over to the other selected images.
     pub(crate) fn transfer_tool(&mut self, tool: Tool) {
         let Some(cur) = &self.current else { return };
-        if tool == Tool::NoiseReduction {
+        if tool == Tool::Enhance {
             let d = &cur.adjustments.detail;
-            return self.transfer_noise((d.ai_denoise, d.nr_luma, d.nr_color));
+            return self.transfer_enhance((d.raw_details, d.ai_denoise));
         }
         let from = cur.adjustments.clone();
         let others = self.other_selected();

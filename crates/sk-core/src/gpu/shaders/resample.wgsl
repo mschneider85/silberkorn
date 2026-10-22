@@ -16,6 +16,8 @@ struct Args {
     cam: array<f32, 9>,
     hdr: u32,
     to_working: u32,
+    // Partly clipped highlights were reconstructed: only where all channels clipped made white.
+    rebuilt: u32,
 }
 
 @group(0) @binding(0) var<storage, read> a: Args;
@@ -53,8 +55,12 @@ fn to_working(raw: vec3<f32>) -> vec3<f32> {
     var b = raw * vec3<f32>(a.wb[0], a.wb[1], a.wb[2]);
     if max3(raw) > 0.95 && a.hdr == 0u {
         let hi = max3(b);
+        var all = 1.0;
+        if a.rebuilt != 0u {
+            all = min(sstep(0.95, 1.0, raw.x), min(sstep(0.95, 1.0, raw.y), sstep(0.95, 1.0, raw.z)));
+        }
         for (var c = 0; c < 3; c++) {
-            let t = sstep(0.95, 1.0, raw[c]);
+            let t = sstep(0.95, 1.0, raw[c]) * all;
             b[c] += (max(b[c], hi) - b[c]) * t;
         }
     }

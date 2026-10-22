@@ -77,7 +77,7 @@ impl App {
             ui.add_space(10.0);
             self.side_navigator(ui);
             ui.add_space(8.0);
-            let r = widgets::histogram(ui, self.histogram.as_ref());
+            let r = self.histogram_widget(ui);
             if widgets::clip_triangles(ui, r, self.histogram.as_ref(), self.clip_warning) {
                 self.toggle_clip_warning();
             }
@@ -227,13 +227,16 @@ impl App {
         let start = steps.len().saturating_sub(SHOWN);
         let rows: Vec<(usize, String)> =
             (start..steps.len()).rev().map(|j| (j, if j == 0 { "Geöffnet".to_string() } else { describe(steps[j - 1], steps[j]) })).collect();
-        let mut jump = None;
+        let (mut jump, mut hovered) = (None, None);
         let mut all = false;
         widgets::section_counted(ui, "Verlauf", None, steps.len() - 1, |ui| {
             for (j, label) in rows {
                 let text = if j > now { RichText::new(label).color(theme::TEXT_FAINT).italics() } else { RichText::new(label) };
-                if ui.selectable_label(j == now, text).clicked() && j != now {
+                let r = ui.selectable_label(j == now, text);
+                if r.clicked() && j != now {
                     jump = Some(j);
+                } else if r.hovered() && j != now {
+                    hovered = Some(j);
                 }
             }
             if start > 0 && ui.small_button("Alle Schritte …").clicked() {
@@ -242,6 +245,8 @@ impl App {
         });
         if let Some(j) = jump {
             self.jump_history(j);
+        } else if let Some(j) = hovered {
+            self.preview_history_step(j);
         }
         if all {
             self.tab = Tab::History;
@@ -313,8 +318,9 @@ fn tool_of(name: &'static str) -> Option<(Tab, Option<&'static str>)> {
         "Objektivkorrektur" => (Tab::Lens, Some("Objektivkorrektur")),
         "Neu ausleuchten" => (Tab::Exposure, Some("Neu ausleuchten")),
         "Schärfen" | "Dunst entfernen" => (Tab::Details, Some(name)),
+        "Raw-Details" | "KI-Entrauschen" => (Tab::Details, Some(crate::ai_products::ENHANCE_SECTION)),
         "Körnung" | "Leuchten" | "Atmosphäre" => (Tab::Effects, Some(name)),
-        "Rauschreduzierung" | "KI-Entrauschen" => (Tab::Details, Some(crate::denoise::NOISE_SECTION)),
+        "Rauschreduzierung" => (Tab::Details, Some(crate::noise::NOISE_SECTION)),
         "Klarheit" | "Struktur" => (Tab::Details, Some("Klarheit")),
         "Vignette" => (Tab::Effects, Some("Vignette")),
         "Objektivunschärfe" => (Tab::Effects, Some("Objektivunschärfe")),

@@ -22,6 +22,8 @@ pub enum Tool {
     Levels,
     Curves,
     Sharpening,
+    /// Raw-Details and KI-Entrauschen (the "Verbessern" section).
+    Enhance,
     NoiseReduction,
     Clarity,
     Dehaze,
@@ -43,7 +45,7 @@ pub enum Tool {
 pub const GROUPS: &[(&str, &[Tool])] = &[
     ("Farbe", &[Tool::BaseCurve, Tool::WhiteBalance, Tool::Color, Tool::ColorEditor, Tool::SkinTone, Tool::ColorBalance, Tool::BlackWhite]),
     ("Belichtung", &[Tool::Exposure, Tool::HighlightsShadows, Tool::Relight, Tool::Levels, Tool::Curves]),
-    ("Details", &[Tool::NoiseReduction, Tool::Sharpening, Tool::Clarity, Tool::Dehaze]),
+    ("Details", &[Tool::Enhance, Tool::NoiseReduction, Tool::Sharpening, Tool::Clarity, Tool::Dehaze]),
     ("Effekte", &[Tool::LensBlur, Tool::Atmosphere, Tool::Glow, Tool::Vignette, Tool::Grain]),
     ("Objektiv", &[Tool::LensCorrection, Tool::Crop, Tool::Rotation, Tool::Perspective]),
     ("Ebenen und Retusche", &[Tool::Layers, Tool::Retouch]),
@@ -61,7 +63,7 @@ pub enum LayerSupport {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 27] = [
+    pub const ALL: [Tool; 28] = [
         Tool::WhiteBalance,
         Tool::BaseCurve,
         Tool::Color,
@@ -74,6 +76,7 @@ impl Tool {
         Tool::Levels,
         Tool::Curves,
         Tool::Sharpening,
+        Tool::Enhance,
         Tool::NoiseReduction,
         Tool::Clarity,
         Tool::Dehaze,
@@ -91,9 +94,10 @@ impl Tool {
         Tool::Retouch,
     ];
 
-    /// Works with an AI model (the depth map): marked as such in the tool tabs.
+    /// Works with an AI model (the depth map, Raw-Details' and the denoising networks): marked as
+    /// such in the tool tabs.
     pub fn is_ai(self) -> bool {
-        matches!(self, Tool::LensBlur | Tool::Relight | Tool::Atmosphere)
+        matches!(self, Tool::Enhance | Tool::LensBlur | Tool::Relight | Tool::Atmosphere)
     }
 
     /// The title of the tool's section.
@@ -111,6 +115,7 @@ impl Tool {
             Tool::Levels => "Tonwerte",
             Tool::Curves => "Gradationskurve",
             Tool::Sharpening => "Schärfen",
+            Tool::Enhance => "Verbessern",
             Tool::NoiseReduction => "Rauschreduzierung",
             Tool::Clarity => "Klarheit",
             Tool::Dehaze => "Dunst entfernen",
@@ -166,12 +171,10 @@ impl Tool {
             Tool::Curves => to.curves = from.curves.clone(),
             Tool::Sharpening => {
                 let (f, t) = (&from.detail, &mut to.detail);
-                (t.sharpen_amount, t.sharpen_radius, t.sharpen_threshold) = (f.sharpen_amount, f.sharpen_radius, f.sharpen_threshold);
+                (t.sharpen_amount, t.sharpen_radius, t.sharpen_threshold, t.sharpen_detail) = (f.sharpen_amount, f.sharpen_radius, f.sharpen_threshold, f.sharpen_detail);
             }
-            Tool::NoiseReduction => {
-                let (f, t) = (&from.detail, &mut to.detail);
-                (t.ai_denoise, t.nr_luma, t.nr_color) = (f.ai_denoise, f.nr_luma, f.nr_color);
-            }
+            Tool::Enhance => (to.detail.raw_details, to.detail.ai_denoise) = (from.detail.raw_details, from.detail.ai_denoise),
+            Tool::NoiseReduction => (to.detail.nr_luma, to.detail.nr_color) = (from.detail.nr_luma, from.detail.nr_color),
             Tool::Clarity => (to.detail.clarity, to.detail.structure) = (from.detail.clarity, from.detail.structure),
             Tool::Dehaze => to.detail.dehaze = from.detail.dehaze,
             Tool::Vignette => to.detail.vignette_amount = from.detail.vignette_amount,

@@ -452,6 +452,12 @@ pub struct SliderOpts<'a> {
     pub rail: Option<&'a [Color32]>,
     /// An AI function: the label gets the yellow mark.
     pub ai: bool,
+    /// How it works, behind an info icon after the label.
+    pub help: Option<&'a str>,
+    /// Set while the slider is held with Strg (for a view of what it does, as in Schärfen).
+    pub held_with_ctrl: Option<&'a std::cell::Cell<bool>>,
+    /// Set while the mouse is over the row (or it is dragged).
+    pub hovered: Option<&'a std::cell::Cell<bool>>,
 }
 
 /// Rail colors for color temperature (cool to warm).
@@ -583,7 +589,15 @@ pub fn slider_row_with(
                 } else {
                     RichText::new(label).color(color).into()
                 };
-                ui.add(egui::Label::new(text).sense(Sense::click()).truncate())
+                let lbl = ui.add(egui::Label::new(text).sense(Sense::click()).truncate());
+                if let Some(help) = opts.help {
+                    let i = ui.add(egui::Label::new(RichText::new(theme::icon::INFO).size(12.0).color(theme::TEXT_FAINT)).sense(Sense::hover()));
+                    i.on_hover_ui(|ui| {
+                        ui.set_max_width(280.0);
+                        ui.label(help);
+                    });
+                }
+                lbl
             })
             .inner;
         if lbl.on_hover_text("Doppelklick: zurücksetzen").double_clicked() && modified {
@@ -598,7 +612,19 @@ pub fn slider_row_with(
             .fold(0.0, f32::max);
         let value_w = (text_w + 2.0 * ui.spacing().button_padding.x + 4.0).max(44.0);
         let slider_w = (ui.available_width() - value_w - 8.0).max(60.0);
-        changed |= rail_slider(ui, label, value, range.clone(), default, decimals, slider_w, opts.rail);
+        let (moved, held) = rail_slider(ui, label, value, range.clone(), default, decimals, slider_w, opts.rail);
+        changed |= moved;
+        if let Some(cell) = opts.held_with_ctrl
+            && held
+            && ui.input(|i| i.modifiers.command)
+        {
+            cell.set(true);
+        }
+        if let Some(cell) = opts.hovered
+            && (held || ui.rect_contains_pointer(ui.min_rect()))
+        {
+            cell.set(true);
+        }
         // The number: plain text until hovered, then an editable field (drag or type).
         ui.scope(|ui| {
             let w = &mut ui.visuals_mut().widgets;
@@ -645,7 +671,8 @@ fn stable_id(ui: &Ui, name: &str) -> egui::Id {
 /// Grabbing the handle moves it from where it is; a click elsewhere on the rail jumps there.
 /// Shift while dragging for fine steps; double-click resets. After a click the arrow keys and,
 /// over the rail, the mouse wheel change the value (Shift: coarse, Alt: fine). Without that
-/// click the wheel scrolls the panel, so scrolling past a slider never changes it.
+/// click the wheel scrolls the panel, so scrolling past a slider never changes it. Returns
+/// whether the value changed and whether the slider is held.
 #[allow(clippy::too_many_arguments)]
 fn rail_slider(
     ui: &mut Ui,
@@ -656,7 +683,7 @@ fn rail_slider(
     decimals: usize,
     width: f32,
     rail: Option<&[Color32]>,
-) -> bool {
+) -> (bool, bool) {
     let (lo, hi) = (*range.start(), *range.end());
     let span = (hi - lo).max(f32::EPSILON);
     let fill_from = default.clamp(lo, hi);
@@ -822,7 +849,7 @@ fn rail_slider(
             painter.circle_stroke(c, r + 2.5, Stroke::new(1.5, theme::ACCENT));
         }
     }
-    *value != before
+    (*value != before, resp.is_pointer_button_down_on())
 }
 
 /// Where a slider drag was pressed (or re-anchored when Shift changed) and the value then.
@@ -944,7 +971,7 @@ pub fn slider_has_focus(ctx: &egui::Context) -> bool {
 
 /// Slider without label and number, e.g. for the thumbnail size; double-click resets.
 pub fn compact_slider(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, default: f32, width: f32) -> bool {
-    rail_slider(ui, name, value, range, default, 2, width, None)
+    rail_slider(ui, name, value, range, default, 2, width, None).0
 }
 
 /// What a drag on a color wheel changes, and where it was pressed (or re-anchored when Shift
@@ -1289,11 +1316,80 @@ pub fn no_image(ui: &mut Ui) {
 }
 
 /// Returns the area it was drawn in.
-pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>) -> Rect {
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 110.0), Sense::hover());
+/// The tonal ranges of the histogram and the sliders that move them (as in Lightroom).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToneZone {
+    Blacks,
+    Shadows,
+    Exposure,
+    Highlights,
+    Whites,
+}
+
+impl ToneZone {
+    pub const ALL: [ToneZone; 5] = [ToneZone::Blacks, ToneZone::Shadows, ToneZone::Exposure, ToneZone::Highlights, ToneZone::Whites];
+
+    /// The slider's name.
+    pub fn label(self) -> &'static str {
+        match self {
+            ToneZone::Blacks => "Schwarz",
+            ToneZone::Shadows => "Tiefen",
+            ToneZone::Exposure => "Belichtung",
+            ToneZone::Highlights => "Lichter",
+            ToneZone::Whites => "Weiß",
+        }
+    }
+
+    /// Where it lies in the histogram (0..1 of its width).
+    pub fn span(self) -> (f32, f32) {
+        match self {
+            ToneZone::Blacks => (0.0, 0.1),
+            ToneZone::Shadows => (0.1, 0.35),
+            ToneZone::Exposure => (0.35, 0.65),
+            ToneZone::Highlights => (0.65, 0.9),
+            ToneZone::Whites => (0.9, 1.0),
+        }
+    }
+
+    fn at(x: f32) -> ToneZone {
+        ToneZone::ALL.into_iter().find(|z| x < z.span().1).unwrap_or(ToneZone::Whites)
+    }
+}
+
+/// What the histogram shows besides the image's tones.
+#[derive(Clone, Copy, Default)]
+pub struct HistogramMarks {
+    /// The color under the mouse in the image: a mark per channel and the values in percent.
+    pub rgb: Option<[u8; 3]>,
+    /// The range of the slider under the mouse.
+    pub zone: Option<ToneZone>,
+}
+
+/// The histogram; hovering it shows the tonal ranges, dragging in one moves its slider (returned
+/// as the range and the way since the last frame, in histogram widths).
+pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>, marks: HistogramMarks) -> (Rect, Option<(ToneZone, f32)>) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 110.0), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, theme::BROWSER);
-    let Some(h) = hist else { return rect };
+    let Some(h) = hist else { return (rect, None) };
+    // The range where a drag began holds while it lasts.
+    let drag_id = resp.id.with("zone");
+    if resp.drag_started()
+        && let Some(p) = resp.interact_pointer_pos()
+    {
+        ui.data_mut(|d| d.insert_temp(drag_id, ToneZone::at((p.x - rect.left()) / rect.width())));
+    }
+    let dragging = resp.dragged().then(|| ui.data(|d| d.get_temp::<ToneZone>(drag_id))).flatten();
+    let hovered = resp.hover_pos().map(|p| ToneZone::at((p.x - rect.left()) / rect.width()));
+    let zone = dragging.or(hovered).or(marks.zone);
+    if let Some(z) = zone {
+        let (a, b) = z.span();
+        let r = Rect::from_min_max(pos2(rect.left() + rect.width() * a, rect.top()), pos2(rect.left() + rect.width() * b, rect.bottom()));
+        painter.rect_filled(r, 0.0, Color32::from_white_alpha(14));
+    }
+    if hovered.is_some() || dragging.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
     // Ignore the extreme bins for scaling so clipping spikes do not flatten everything.
     let max = [&h.r, &h.g, &h.b]
         .iter()
@@ -1345,13 +1441,33 @@ pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>) -> Rect {
     if lo > 0.001 {
         painter.circle_filled(rect.left_top() + vec2(8.0, 8.0), 4.0, Color32::from_rgb(60, 120, 255));
     }
-    rect
+    let small = egui::FontId::proportional(11.0);
+    if let Some(z) = zone {
+        painter.text(rect.center_top() + vec2(0.0, 6.0), egui::Align2::CENTER_TOP, z.label(), small.clone(), theme::TEXT);
+    }
+    // The color under the mouse: where each channel lies, and its values.
+    if let Some(rgb) = marks.rgb {
+        let colors = [Color32::from_rgb(240, 90, 90), Color32::from_rgb(90, 215, 90), Color32::from_rgb(110, 150, 255)];
+        for (v, c) in rgb.iter().zip(colors) {
+            let x = rect.left() + rect.width() * *v as f32 / 255.0;
+            painter.line_segment([pos2(x, rect.top() + 4.0), pos2(x, rect.bottom())], Stroke::new(1.0, c));
+        }
+        let pct = rgb.map(|v| (v as f32 / 2.55).round() as u32);
+        let text = format!("R {} %   G {} %   B {} %", pct[0], pct[1], pct[2]);
+        let galley = painter.layout_no_wrap(text, small, theme::TEXT);
+        let at = pos2(rect.center().x - galley.size().x / 2.0, rect.bottom() - galley.size().y - 5.0);
+        painter.rect_filled(Rect::from_min_size(at - vec2(6.0, 2.0), galley.size() + vec2(12.0, 4.0)), 4.0, Color32::from_black_alpha(150));
+        painter.galley(at, galley, theme::TEXT);
+    }
+    let moved = dragging.map(|z| (z, resp.drag_delta().x / rect.width().max(1.0))).filter(|(_, d)| *d != 0.0);
+    (rect, moved)
 }
 
 /// Levels: the histogram of what goes into them (`bins`, 256) with handles below it for the black
 /// point, the midtones and the white point, then a gray bar with handles for the output range,
 /// and the values as numbers (0–255, midtones as gamma). Double click on a handle resets it.
-pub fn levels_editor(ui: &mut Ui, set: &mut LevelSet, bins: Option<&[f32]>, color: Color32) -> bool {
+/// `peek` is set to what the black or white point of the input shows while held with Strg.
+pub fn levels_editor(ui: &mut Ui, set: &mut LevelSet, bins: Option<&[f32]>, color: Color32, peek: &std::cell::Cell<Option<sk_core::pipeline::SliderView>>) -> bool {
     const MIN_GAP: f32 = 2.0 / 255.0;
     let before = *set;
     let width = ui.available_width();
@@ -1411,6 +1527,13 @@ pub fn levels_editor(ui: &mut Ui, set: &mut LevelSet, bins: Option<&[f32]>, colo
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, name));
         let resp = resp.on_hover_text(format!("{name} – Doppelklick: zurücksetzen"));
         let hot = resp.hovered() || resp.dragged();
+        if resp.is_pointer_button_down_on() && ui.input(|i| i.modifiers.command) {
+            match name {
+                "Eingang Schwarz" => peek.set(Some(sk_core::pipeline::SliderView::ClipShadows)),
+                "Eingang Weiß" => peek.set(Some(sk_core::pipeline::SliderView::ClipHighlights)),
+                _ => {}
+            }
+        }
         let tip = pos2(x, track.top());
         let size = if hot { 7.0 } else { 6.0 };
         let tri = vec![tip, pos2(x + size, track.top() + size * 1.6), pos2(x - size, track.top() + size * 1.6)];

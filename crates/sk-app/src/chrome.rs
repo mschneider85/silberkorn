@@ -281,7 +281,7 @@ impl App {
         ui.separator();
         self.command_item(ui, "auto-adjust");
         self.command_item_labeled(ui, "wb-picker", "Weißabgleich-Pipette");
-        self.command_item(ui, "denoise");
+        self.command_item(ui, "enhance");
         ui.separator();
         self.merge_menu(ui);
         ui.separator();
@@ -313,6 +313,17 @@ impl App {
         if check(ui, self.show_navigator, "Navigator beim Zoomen", "") {
             self.show_navigator = !self.show_navigator;
         }
+        self.command_item(ui, "info-overlay");
+        ui.menu_button("Hintergrund", |ui| {
+            for b in crate::app::ViewerBackground::ALL {
+                if check(ui, self.viewer_background == b, b.label(), "") {
+                    self.viewer_background = b;
+                    self.save_settings();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Worauf das Bild gezeigt wird (auch per Rechtsklick neben das Bild)");
         ui.separator();
         for m in crate::side_column::SideColumn::ALL {
             if check(ui, self.side_column == m, m.label(), "") {

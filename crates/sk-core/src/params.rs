@@ -270,7 +270,9 @@ impl Curves {
 ///    middle one follows (instead of each channel on its own, which turned skin orange and
 ///    skies cyan). Highlights/shadows work on a median of the brightness, so fine lines and
 ///    texture keep their contrast.
-pub const PROCESS_LATEST: u32 = 3;
+/// 4. Partly clipped highlights are reconstructed from the unclipped channels and the color of
+///    their surroundings (instead of all made white).
+pub const PROCESS_LATEST: u32 = 4;
 /// Version of settings saved before process versions existed.
 pub const PROCESS_LEGACY: u32 = 1;
 
@@ -1014,10 +1016,13 @@ pub struct LensCoefficients {
 pub struct Detail {
     /// Unsharp mask amount in percent, 0..500.
     pub sharpen_amount: f32,
-    /// Radius in pixels (full resolution), 0.2..3.0.
+    /// Radius in pixels (full resolution), the sigma of the blur: 0.2..1.5 (older edits up to 3.0).
     pub sharpen_radius: f32,
     /// Threshold in 8-bit levels, 0..20.
     pub sharpen_threshold: f32,
+    /// How the sharpening is made, 0 (unsharp mask) .. 100 (deconvolution), see [`Self::sharpen_split`].
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub sharpen_detail: f32,
     /// Noise reduction, 0..100.
     pub nr_luma: f32,
     pub nr_color: f32,
@@ -1031,8 +1036,12 @@ pub struct Detail {
     pub vignette_amount: f32,
     /// Haze removal (+) or added haze (-), -100..100.
     pub dehaze: f32,
-    /// AI denoising (see `ai_denoise`): how much of the cleaned raw data replaces the plain one, 0..100.
+    /// AI denoising (see `ai_products`): how much of the cleaned raw data replaces the plain one, 0..100.
     pub ai_denoise: f32,
+    /// Raw-Details (see `ai_products`): how much of the network's demosaic replaces AHD's, 0..100.
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub raw_details: f32,
+
     /// Glow (Orton effect): a blurred copy of the bright parts screened over the image, 0..100.
     #[serde(skip_serializing_if = "is_zero_f32")]
     pub glow_amount: f32,
@@ -1052,12 +1061,34 @@ fn is_default_glow_size(v: &f32) -> bool {
     *v == GLOW_SIZE
 }
 
+/// Sharpening amount (percent) as sharp as the full deconvolution.
+pub const DECONVOLUTION_FULL: f32 = 120.0;
+
+impl Detail {
+    /// The sharpening by method: (unsharp mask amount in percent, deconvolution 0..1). Details
+    /// shares the amount between them; the deconvolution is complete at [`DECONVOLUTION_FULL`],
+    /// beyond that more comes as unsharp mask, so that a larger amount is always sharper.
+    pub fn sharpen_split(&self) -> (f32, f32) {
+        let (s, d) = (self.sharpen_amount.max(0.0), (self.sharpen_detail / 100.0).clamp(0.0, 1.0));
+        let deconvolution = d * (s / DECONVOLUTION_FULL).min(1.0);
+        let unsharp = s * (1.0 - d) + d * (s - DECONVOLUTION_FULL).max(0.0);
+        (unsharp, deconvolution)
+    }
+
+    /// Raw-Details as it acts: not at all under full KI-Entrauschen, whose network demosaics
+    /// Bayer mosaics itself and so replaces everything Raw-Details does.
+    pub fn effective_raw_details(&self) -> f32 {
+        if self.ai_denoise >= 100.0 { 0.0 } else { self.raw_details }
+    }
+}
+
 impl Default for Detail {
     fn default() -> Self {
         Self {
             sharpen_amount: 120.0,
             sharpen_radius: 0.8,
             sharpen_threshold: 1.0,
+            sharpen_detail: 0.0,
             nr_luma: 0.0,
             nr_color: 25.0,
             clarity: 0.0,
@@ -1067,6 +1098,7 @@ impl Default for Detail {
             vignette_amount: 0.0,
             dehaze: 0.0,
             ai_denoise: 0.0,
+            raw_details: 0.0,
             glow_amount: 0.0,
             glow_size: GLOW_SIZE,
         }
@@ -1378,6 +1410,11 @@ impl Adjustments {
         self.process >= 3
     }
 
+    /// Partly clipped highlights reconstructed (process version 4, see `highlights`).
+    pub fn process_4(&self) -> bool {
+        self.process >= 4
+    }
+
     /// Copies the image-specific settings (rotation, crop, layers, retouching) from `other`.
     /// Used when pasting adjustments or applying styles, which should not change framing or masks.
     pub fn keep_geometry_from(&mut self, other: &Adjustments) {
@@ -1473,6 +1510,19 @@ mod tests {
         let adj = Adjustments { layers: vec![layer(ai(vec![0; 10])), layer(ai(vec![0; 16]))], ..Default::default() }.normalized();
         assert!(adj.layers[0].mask.ai.is_none());
         assert!(adj.layers[1].mask.ai.is_some());
+    }
+
+    /// Details shares the amount between the methods; beyond the full deconvolution the unsharp
+    /// mask adds more.
+    #[test]
+    fn sharpening_is_shared_between_the_methods() {
+        let d = |amount: f32, detail: f32| Detail { sharpen_amount: amount, sharpen_detail: detail, ..Default::default() }.sharpen_split();
+        assert_eq!(d(120.0, 0.0), (120.0, 0.0));
+        assert_eq!(d(120.0, 100.0), (0.0, 1.0));
+        assert_eq!(d(60.0, 100.0), (0.0, 0.5));
+        assert_eq!(d(120.0, 50.0), (60.0, 0.5));
+        assert_eq!(d(200.0, 100.0), (80.0, 1.0));
+        assert_eq!(d(0.0, 100.0), (0.0, 0.0));
     }
 
     #[test]

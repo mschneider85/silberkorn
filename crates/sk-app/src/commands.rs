@@ -169,7 +169,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("merge-hdr", icon::SUN_HORIZON, "HDR zusammenfügen …", "Entwickeln", [], "merge belichtungsreihe", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Hdr)),
     cmd!("merge-pano", icon::PANORAMA, "Panorama zusammenfügen …", "Entwickeln", [], "merge stitch", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Panorama)),
     cmd!("merge-focus", icon::APERTURE, "Focus Stacking …", "Entwickeln", [], "merge fokus schärfentiefe stack makro focus stacking", several_files, |a, _| a.open_merge(crate::merge::MergeKind::FocusStack)),
-    cmd!("denoise", icon::SPARKLE, "KI-Entrauschen", "Entwickeln", [], "denoise rauschen ki entrauschen rauschreduzierung", image_tool, |a, ctx| a.open_denoise(ctx)),
+    cmd!("enhance", icon::SPARKLE, "Verbessern", "Entwickeln", [], "enhance verbessern raw-details raw details demosaic ki entrauschen denoise rauschen feinzeichnung farbsäume moiré", image_tool, |a, ctx| a.open_enhance(ctx)),
     cmd!("reference", icon::PUSH_PIN, "Referenzbild festlegen / entfernen", "Entwickeln", [SHIFT => Key::Enter], "vergleich compare", has_image, |a, _| a.toggle_reference()),
     cmd!("match-look", icon::SWATCHES, "Look angleichen", "Entwickeln", [], "match look referenz angleichen stil übertragen belichtung weißabgleich", |a| a.can_match_look() && !a.on_layer(), |a, _| {
         a.tab = Tab::Color;
@@ -227,6 +227,15 @@ pub const COMMANDS: &[Command] = &[
     // Ansicht
     cmd!("grid", icon::SQUARES_FOUR, "Raster / Einzelbild umschalten", "Ansicht", [NONE => Key::G], "grid browser übersicht viewer", always, |a, _| a.grid_view = !a.grid_view),
     cmd!("filmstrip", icon::FILM_STRIP, "Filmstreifen ein/aus", "Ansicht", [], "filmstrip", always, |a, _| a.show_filmstrip = !a.show_filmstrip),
+    cmd!("info-overlay", icon::INFO, "Bildinfo: kurz / ausführlich / aus", "Ansicht", [NONE => Key::I], "info exif aufnahmedaten kamera objektiv einblendung overlay", has_image, |a, _| {
+        use crate::app::InfoOverlay;
+        a.info_overlay = match a.info_overlay {
+            InfoOverlay::Off => InfoOverlay::Short,
+            InfoOverlay::Short => InfoOverlay::Full,
+            InfoOverlay::Full => InfoOverlay::Off,
+        };
+        a.save_settings();
+    }),
     cmd!("navigator", icon::MAP_TRIFOLD, "Navigator beim Zoomen", "Ansicht", [], "minimap", always, |a, _| {
         a.show_navigator = !a.show_navigator;
         a.save_settings();
@@ -423,7 +432,7 @@ fn parse_bindings(saved: &BTreeMap<String, Vec<String>>) -> Bindings {
 /// `text` with the shortcut of command `id` in brackets, e.g. "Rückgängig (Strg+Z)".
 /// Commands of AI functions (marked with the yellow sparkle in menus and the palette).
 pub fn is_ai(id: &str) -> bool {
-    matches!(id, "denoise" | "tool-object" | "tool-remove")
+    matches!(id, "enhance" | "tool-object" | "tool-remove")
 }
 
 pub fn hint(text: &str, id: &str) -> String {

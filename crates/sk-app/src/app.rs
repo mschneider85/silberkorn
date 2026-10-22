@@ -348,6 +348,56 @@ struct Settings {
     watch_no_open: bool,
     /// Choices of the catalog import.
     import: crate::import::ImportOptions,
+    viewer_background: ViewerBackground,
+    info_overlay: InfoOverlay,
+}
+
+/// Information about the picture over it (I switches): off, short, or with everything.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InfoOverlay {
+    #[default]
+    Off,
+    /// Name and exposure.
+    Short,
+    /// Also camera, lens, date and size.
+    Full,
+}
+
+/// What the image is shown on (right-click beside it): the surroundings change how bright an
+/// image looks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ViewerBackground {
+    /// The theme's dark grey (black in full screen).
+    #[default]
+    Standard,
+    Black,
+    Grey,
+    White,
+}
+
+impl ViewerBackground {
+    pub const ALL: [ViewerBackground; 4] = [ViewerBackground::Standard, ViewerBackground::Black, ViewerBackground::Grey, ViewerBackground::White];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ViewerBackground::Standard => "Dunkelgrau",
+            ViewerBackground::Black => "Schwarz",
+            ViewerBackground::Grey => "Mittelgrau",
+            ViewerBackground::White => "Weiß",
+        }
+    }
+
+    /// The color (`fullscreen`: the standard is black there).
+    pub fn color(self, fullscreen: bool) -> egui::Color32 {
+        match self {
+            ViewerBackground::Standard if fullscreen => egui::Color32::from_gray(10),
+            ViewerBackground::Standard => crate::theme::VIEWER,
+            ViewerBackground::Black => egui::Color32::from_gray(0),
+            // Middle grey of the display (sRGB 119 is 18 % reflectance).
+            ViewerBackground::Grey => egui::Color32::from_gray(119),
+            ViewerBackground::White => egui::Color32::from_gray(245),
+        }
+    }
 }
 
 /// Thumbnail textures kept at most (see `App::trim_thumbs`).
@@ -459,6 +509,12 @@ pub struct App {
     pub load_error: Option<String>,
     generation: u64,
     pub texture: Option<TextureHandle>,
+    /// The pixels of `texture` (sRGB), for the values under the mouse.
+    shown_image: Option<Arc<egui::ColorImage>>,
+    /// The displayed color under the mouse (0..255), shown in the histogram.
+    pub(crate) hover_rgb: Option<[u8; 3]>,
+    /// The tonal range of the slider under the mouse, marked in the histogram.
+    pub(crate) hover_zone: Option<crate::widgets::ToneZone>,
     /// Edit version of the rendering in `texture`.
     texture_version: u64,
     /// `texture` is a half-resolution draft (made while dragging a control).
@@ -500,6 +556,10 @@ pub struct App {
     /// What the color pipette (`picking_skin`) picks: the skin tone or a color range.
     pub color_pick: crate::develop_tools::ColorPick,
     pub picking_wb: bool,
+    /// Zielkorrektur: dragging in the image changes the curve or the color bands under the mouse.
+    pub target_tool: Option<crate::target_tool::TargetTool>,
+    /// What the running drag of the Zielkorrektur changes.
+    pub(crate) target_grip: Option<crate::target_tool::Grip>,
     /// The skin tone pipette is active (color tab).
     pub picking_skin: bool,
     /// The focus pipette of the lens blur is active (details tab).
@@ -562,7 +622,7 @@ pub struct App {
     pub show_gpu_dialog: bool,
     pub show_storage_dialog: bool,
     /// Sizes of the caches while "Speicherplatz" is open (see `storage.rs`).
-    pub(crate) storage_sizes: Option<[u64; 3]>,
+    pub(crate) storage_sizes: Option<[u64; 4]>,
     pub ai_busy: bool,
     /// The image whose subject mask was last asked for ahead, and the image shown in the Ebenen
     /// tab since when (see `prepare_subject`).
@@ -592,6 +652,8 @@ pub struct App {
     steps_ended: bool,
     pub pointer_down: bool,
     pub clip_warning: bool,
+    /// The grey view of the sharpening, while a slider of Schärfen is held with Strg.
+    pub slider_view: Option<sk_core::pipeline::SliderView>,
     pub show_before: bool,
     /// A tool left out of the view while Shift and the mouse button are held on its reset button.
     pub(crate) tool_peek: Option<sk_core::tools::Tool>,
@@ -730,6 +792,10 @@ pub struct App {
     pub palette: crate::palette::Palette,
     /// Minimap of the whole image while zoomed in.
     pub show_navigator: bool,
+    /// What the image is shown on.
+    pub viewer_background: ViewerBackground,
+    /// Information about the picture over it.
+    pub info_overlay: InfoOverlay,
     pub side_column: crate::side_column::SideColumn,
     /// The right column is shown this frame.
     pub side_column_shown: bool,
@@ -823,8 +889,8 @@ pub struct App {
     pub ai_downloads: crate::ai_models::AiDownloads,
     /// Background jobs whose end is not reported in the status bar.
     pub quiet_jobs: Vec<String>,
-    /// Images waiting for their AI denoised data.
-    pub denoise: crate::denoise::DenoiseQueue,
+    /// Images waiting for their Raw-Details and AI denoised data (by `AiProduct`).
+    pub ai_products: [crate::ai_products::ProductQueue; 2],
     /// Depth maps being computed (lens blur, depth masks).
     pub depth: crate::depth::DepthQueue,
 }
@@ -864,6 +930,7 @@ impl App {
         }
         sk_ai::runtime::set_gpu_enabled(settings.ai_gpu.unwrap_or(true));
         sk_ai::denoise::register();
+        sk_ai::demosaic::register();
         sk_ai::depth::register();
         sk_core::gpu::set_enabled(settings.develop_gpu.unwrap_or(true));
         // Sets up the graphics card and compiles the shaders while the window opens.
@@ -941,6 +1008,8 @@ impl App {
             sort: settings.sort,
             sort_desc: settings.sort_desc,
             show_navigator: !settings.hide_navigator,
+            viewer_background: settings.viewer_background,
+            info_overlay: settings.info_overlay,
             side_column: settings.side_column,
             side_column_shown: false,
             viewer_rect: None,
@@ -973,6 +1042,9 @@ impl App {
             load_error: None,
             generation: 0,
             texture: None,
+            shown_image: None,
+            hover_rgb: None,
+            hover_zone: None,
             texture_version: 0,
             texture_draft: false,
             view_size: None,
@@ -995,6 +1067,8 @@ impl App {
             color_zone: 0,
             color_pick: Default::default(),
             picking_wb: false,
+            target_tool: None,
+            target_grip: None,
             picking_skin: false,
             picking_focus: false,
             crop_tool: None,
@@ -1050,6 +1124,7 @@ impl App {
             edit_version: 0,
             pointer_down: false,
             clip_warning: false,
+            slider_view: None,
             show_before: false,
             tool_peek: None,
             render_requested: false,
@@ -1183,7 +1258,7 @@ impl App {
             pano_options: settings.pano_options,
             ai_downloads: Default::default(),
             quiet_jobs: Vec::new(),
-            denoise: Default::default(),
+            ai_products: Default::default(),
             depth: Default::default(),
         };
         app.reload_styles();
@@ -1243,6 +1318,8 @@ impl App {
             sort: self.sort,
             sort_desc: self.sort_desc,
             hide_navigator: !self.show_navigator,
+            viewer_background: self.viewer_background,
+            info_overlay: self.info_overlay,
             side_column: self.side_column,
             focus_sensitivity: Some(self.focus_sensitivity),
             guides: self.guides,
@@ -1337,6 +1414,7 @@ impl App {
         self.current = None;
         self.loading = None;
         self.texture = None;
+        self.shown_image = None;
         self.placeholder = None;
         self.histogram = None;
         // Paths may have changed (moved images, other folder).
@@ -1367,6 +1445,7 @@ impl App {
             && !self.texture_draft
             && self.style_preview.is_none()
             && !self.clip_warning
+            && self.slider_view.is_none()
             && !self.show_before
             && self.crop_tool.is_none()
             && !self.softproof.on
@@ -1504,7 +1583,7 @@ impl App {
         // With the print preview, each image starts at its printed size (zooming stays possible).
         self.print.zoom = self.print.on;
         match rendered {
-            Some((_, texture, histogram)) if !self.clip_warning && !self.show_before && !self.split_view => {
+            Some((_, texture, histogram)) if !self.clip_warning && self.slider_view.is_none() && !self.show_before && !self.split_view => {
                 self.view_size = Some(texture.size_vec2());
                 self.texture_draft = false;
                 self.texture = Some(texture);
@@ -1519,6 +1598,7 @@ impl App {
                     self.placeholder = Some(texture);
                 }
                 self.texture = None;
+                self.shown_image = None;
                 self.view_size = None;
                 self.request_render();
             }
@@ -1781,7 +1861,8 @@ impl App {
         });
     }
 
-    /// Shows the current image with these adjustments while a style is hovered.
+    /// Shows the current image with these adjustments while a style, a step of the history or a
+    /// snapshot is hovered (back to the real ones when the mouse leaves, see `finish_frame`).
     pub(crate) fn preview_style(&mut self, adjustments: Adjustments) {
         self.style_hovered = true;
         if self.style_preview.as_ref() != Some(&adjustments) {
@@ -1833,6 +1914,7 @@ impl App {
             self.picking_wb = false;
             self.picking_skin = false;
             self.picking_focus = false;
+            self.target_tool = None;
             self.library_ui.new_style_tools = None;
             self.full_due = None;
             match self.prepared.iter().position(|r| r.meta.path == *path).map(|i| self.prepared.remove(i)) {
@@ -1844,6 +1926,7 @@ impl App {
                     // Show the thumbnail right away, then the cached preview, then the real thing.
                     self.placeholder = self.thumbs.get(path).cloned();
                     self.texture = None;
+                    self.shown_image = None;
                     self.loading = Some(path.clone());
                     self.workers.quick(self.generation, path.clone(), self.session_root());
                     self.workers.load(self.generation, path.clone());
@@ -1896,6 +1979,15 @@ impl App {
         self.render_requested = true;
         self.edit_version += 1;
         self.edited_at = Instant::now();
+    }
+
+    /// Shows what a slider held with Strg does instead of the image (`None`: the image again);
+    /// each tab sets it from its sliders every frame.
+    pub(crate) fn set_slider_view(&mut self, view: Option<sk_core::pipeline::SliderView>) {
+        if view != self.slider_view {
+            self.slider_view = view;
+            self.request_render();
+        }
     }
 
     /// Pushes finished edits to the undo stack and writes the sidecar.
@@ -2166,7 +2258,7 @@ impl App {
     }
 
     /// Average camera RGB of a 7x7 spot; `image_pos` is in displayed preview pixels.
-    fn sample_camera_rgb(&self, image_pos: Vec2) -> Option<[f32; 3]> {
+    pub(crate) fn sample_camera_rgb(&self, image_pos: Vec2) -> Option<[f32; 3]> {
         let cur = self.current.as_ref()?;
         let p = &cur.preview;
         let geo = sk_core::pipeline::geomap(&cur.meta, &cur.adjustments, self.crop_tool.is_some(), p.width, p.height);
@@ -2187,20 +2279,96 @@ impl App {
         (n > 0.0).then(|| acc.map(|v| v / n))
     }
 
+    /// The displayed color at `image_pos` (displayed preview pixels; a draft is smaller).
+    pub(crate) fn shown_pixel(&self, image_pos: Vec2) -> Option<[u8; 3]> {
+        let img = self.shown_image.as_ref()?;
+        let size = self.view_size?;
+        let (x, y) = (image_pos.x * img.size[0] as f32 / size.x, image_pos.y * img.size[1] as f32 / size.y);
+        if x < 0.0 || y < 0.0 || x >= img.size[0] as f32 || y >= img.size[1] as f32 {
+            return None;
+        }
+        let c = img.pixels[y as usize * img.size[0] + x as usize];
+        Some([c.r(), c.g(), c.b()])
+    }
+
+    /// Notes the displayed color under the mouse (`None`: not over the image).
+    pub(crate) fn hover_image(&mut self, ctx: &egui::Context, image_pos: Option<Vec2>) {
+        let rgb = image_pos.and_then(|p| self.shown_pixel(p));
+        if rgb != self.hover_rgb {
+            self.hover_rgb = rgb;
+            // The histogram is drawn before the viewer: once more with the new value.
+            ctx.request_repaint();
+        }
+    }
+
+    /// The white balance that makes the spot at `image_pos` (displayed preview pixels) neutral;
+    /// `Err` with why not.
+    pub(crate) fn white_balance_at(&self, image_pos: Vec2) -> Result<WhiteBalance, &'static str> {
+        let avg = self.sample_camera_rgb(image_pos).ok_or("Außerhalb des Bildes")?;
+        let cur = self.current.as_ref().ok_or("Kein Bild")?;
+        if avg.iter().any(|v| *v <= 1e-5) || avg.iter().any(|v| *v >= 0.98) {
+            return Err("Stelle ist zu dunkel oder ausgebrannt");
+        }
+        let (kelvin, tint) = cur.meta.color.temp_tint_for_wb([avg[1] / avg[0], 1.0, avg[1] / avg[2]]);
+        Ok(WhiteBalance { mode: WbMode::Custom, kelvin, tint })
+    }
+
     /// White balance from a neutral spot; `image_pos` is in displayed preview pixels.
     pub fn pick_white_balance(&mut self, image_pos: Vec2) {
-        let Some(avg) = self.sample_camera_rgb(image_pos) else { return };
+        let wb = match self.white_balance_at(image_pos) {
+            Ok(wb) => wb,
+            Err(e) => {
+                self.status = format!("Pipette: {e}");
+                return;
+            }
+        };
         let Some(cur) = self.current.as_mut() else { return };
-        if avg.iter().any(|v| *v <= 1e-5) || avg.iter().any(|v| *v >= 0.98) {
-            self.status = "Pipette: Stelle ist zu dunkel oder ausgebrannt".into();
-            return;
-        }
-        let wb = [avg[1] / avg[0], 1.0, avg[1] / avg[2]];
-        let (kelvin, tint) = cur.meta.color.temp_tint_for_wb(wb);
-        cur.adjustments.white_balance = WhiteBalance { mode: WbMode::Custom, kelvin, tint };
-        self.status = format!("Weißabgleich: {kelvin:.0} K, Tönung {tint:.1}");
+        self.status = format!("Weißabgleich: {:.0} K, Tönung {:.1}", wb.kelvin, wb.tint);
+        cur.adjustments.white_balance = wb;
+        // The preview of hovering is the real thing now.
+        self.style_preview = None;
         self.picking_wb = false;
         self.request_render();
+    }
+
+    /// While the white balance pipette hovers the image: the image with the balance a click would
+    /// give, and a magnified view of the spot with it.
+    pub(crate) fn white_balance_hover(&mut self, ui: &egui::Ui, pos: egui::Pos2, img_rect: egui::Rect, scale: f32, texture: egui::TextureId) {
+        let image_pos = (pos - img_rect.min) / scale;
+        let result = self.white_balance_at(image_pos);
+        if let (Ok(wb), Some(cur)) = (&result, self.current.as_ref()) {
+            let adjustments = sk_core::params::Adjustments { white_balance: wb.clone(), ..cur.adjustments.clone() };
+            self.preview_style(adjustments);
+        }
+        // The spot: 11 × 11 preview pixels, magnified, beside the cursor.
+        const SIDE: f32 = 110.0;
+        const PIXELS: f32 = 11.0;
+        let painter = ui.painter();
+        let mut r = egui::Rect::from_min_size(pos + egui::vec2(24.0, 24.0), egui::vec2(SIDE, SIDE));
+        let clip = ui.clip_rect();
+        if r.right() > clip.right() {
+            r = r.translate(egui::vec2(-SIDE - 48.0, 0.0));
+        }
+        if r.bottom() + 24.0 > clip.bottom() {
+            r = r.translate(egui::vec2(0.0, -SIDE - 72.0));
+        }
+        let size = img_rect.size() / scale;
+        let half = egui::vec2(PIXELS, PIXELS) / 2.0;
+        let uv = egui::Rect::from_min_max(((image_pos - half) / size).to_pos2(), ((image_pos + half) / size).to_pos2());
+        painter.rect_filled(r.expand(3.0), 4.0, egui::Color32::from_black_alpha(220));
+        painter.image(texture, r, uv, egui::Color32::WHITE);
+        // The sampled middle (7 × 7 pixels around the cursor, see `sample_camera_rgb`).
+        let c = r.center();
+        let cell = SIDE / PIXELS;
+        painter.rect_stroke(egui::Rect::from_center_size(c, egui::vec2(cell * 7.0, cell * 7.0)), 0.0, egui::Stroke::new(1.0, egui::Color32::WHITE), egui::StrokeKind::Middle);
+        let text = match &result {
+            Ok(wb) => format!("{:.0} K   Tönung {:+.0}", wb.kelvin, wb.tint),
+            Err(e) => (*e).to_string(),
+        };
+        let galley = painter.layout_no_wrap(text, egui::FontId::proportional(12.0), egui::Color32::WHITE);
+        let at = egui::pos2(r.center().x - galley.size().x / 2.0, r.bottom() + 8.0);
+        painter.rect_filled(egui::Rect::from_min_size(at, galley.size()).expand2(egui::vec2(6.0, 3.0)), 4.0, egui::Color32::from_black_alpha(200));
+        painter.galley(at, galley, egui::Color32::WHITE);
     }
 
     /// Skin tone target from a spot of skin; `image_pos` is in displayed preview pixels.
@@ -2263,7 +2431,16 @@ impl App {
             self.status = format!("{panic} (Details in panic.log)");
         }
         self.load_full_when_due(ctx);
-        self.pump_denoise();
+        // Only the sliders of the Belichtung tab mark their range in the histogram.
+        if self.tab != Tab::Exposure {
+            self.hover_zone = None;
+        }
+        // The grey view of the sharpening lasts only while its slider is held.
+        if self.slider_view.is_some() && !ctx.input(|i| i.pointer.primary_down()) {
+            self.slider_view = None;
+            self.request_render();
+        }
+        self.pump_products();
         self.pump_hot_folder(ctx);
         self.pump_depth();
         self.poll_spot_search();
@@ -2283,6 +2460,7 @@ impl App {
                         self.loading = None;
                         self.current = None;
                         self.texture = None;
+                        self.shown_image = None;
                         self.placeholder = None;
                         self.load_error = Some(e);
                     }
@@ -2330,6 +2508,7 @@ impl App {
                     {
                         self.request_focus(&path, &image, Some(version));
                     }
+                    self.shown_image = Some(image.clone());
                     match &mut self.texture {
                         Some(t) => t.set(image, TextureOptions::LINEAR),
                         None => self.texture = Some(ctx.load_texture("viewer", image, TextureOptions::LINEAR)),
@@ -2652,6 +2831,7 @@ impl App {
                     preview: cur.preview.clone(),
                     adjustments: cur.adjustments.clone(),
                     clip_warning: false,
+            slider_view: None,
                     before: true,
                     ignore_crop: false,
                     mask_overlay: None,
@@ -2676,7 +2856,8 @@ impl App {
         };
         self.drag_rendered |= self.pointer_down && self.current.is_some();
         let peek = self.tool_peek;
-        self.whole_sent = (draft == 1 && !self.show_before && self.style_preview.is_none() && peek.is_none() && self.current.is_some()).then_some(self.edit_version);
+        self.whole_sent = (draft == 1 && !self.show_before && self.style_preview.is_none() && peek.is_none() && self.slider_view.is_none() && self.current.is_some())
+            .then_some(self.edit_version);
         if let Some(cur) = &self.current {
             // A style preview or a tool left out is shown, but never cached.
             let mut adjustments = self.style_preview.clone().unwrap_or_else(|| cur.adjustments.clone());
@@ -2688,10 +2869,11 @@ impl App {
                 version: self.edit_version,
                 adjustments,
                 draft,
-                cache_as: (!self.pointer_down && self.style_preview.is_none() && peek.is_none()).then(|| (cur.meta.path.clone(), self.session_root())),
+                cache_as: (!self.pointer_down && self.style_preview.is_none() && peek.is_none() && self.slider_view.is_none()).then(|| (cur.meta.path.clone(), self.session_root())),
                 meta: cur.meta.clone(),
                 preview: cur.preview.clone(),
                 clip_warning: self.clip_warning,
+                slider_view: self.slider_view,
                 before: self.show_before,
                 ignore_crop: self.crop_tool.is_some(),
                 mask_overlay: self.mask_overlay(),
@@ -2754,13 +2936,23 @@ impl App {
         } else if self.picking_focus {
             Some(Tab::Effects)
         } else {
-            None
+            match self.target_tool {
+                Some(crate::target_tool::TargetTool::Curve) => Some(Tab::Exposure),
+                Some(crate::target_tool::TargetTool::Colors(_)) => Some(Tab::Color),
+                None => None,
+            }
         }
     }
 
     /// A tool working in the viewer (crop, straighten, pickers, brushes …): Esc ends it first.
     pub(crate) fn viewer_tool_active(&self) -> bool {
-        self.picking_wb || self.picking_skin || self.picking_focus || self.local_tool.is_some() || self.straighten_tool.is_some() || self.crop_tool.is_some()
+        self.picking_wb
+            || self.picking_skin
+            || self.picking_focus
+            || self.target_tool.is_some()
+            || self.local_tool.is_some()
+            || self.straighten_tool.is_some()
+            || self.crop_tool.is_some()
     }
 
     pub(crate) fn shortcuts(&mut self, ctx: &egui::Context) {

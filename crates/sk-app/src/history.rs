@@ -25,6 +25,13 @@ impl App {
         Some((steps, self.undo.len()))
     }
 
+    /// Shows step `j` of the timeline in the image while it is hovered.
+    pub(crate) fn preview_history_step(&mut self, j: usize) {
+        if let Some(adj) = self.history_steps().and_then(|(steps, _)| steps.get(j).map(|a| (*a).clone())) {
+            self.preview_style(adj);
+        }
+    }
+
     /// Goes to step `target` of the timeline (undo or redo as often as needed), saving once.
     pub fn jump_history(&mut self, target: usize) {
         self.commit_and_save();
@@ -94,6 +101,8 @@ impl App {
     pub(crate) fn snapshot_section(&mut self, ui: &mut Ui, side: bool) {
         let mut action = None;
         let mut typed = None;
+        // Hovered: the image shows it until the mouse leaves (see `App::preview_style`).
+        let mut hovered = None;
         let editing = self.snapshot_rename.clone();
         let Some(cur) = &self.current else { return };
         let help = "Ein Schnappschuss sichert den jetzigen Stand; ein Klick darauf stellt ihn wieder her.";
@@ -122,6 +131,9 @@ impl App {
                         _ => {
                             let current = s.adjustments == cur.adjustments;
                             let r = ui.selectable_label(current, format!("{}  {}", icon::CAMERA, s.name)).on_hover_text("Klick: anwenden · Doppelklick: umbenennen");
+                            if r.hovered() && !current {
+                                hovered = Some(i);
+                            }
                             if r.double_clicked() {
                                 action = Some(SnapshotAction::StartRename(i));
                             } else if r.clicked() {
@@ -157,6 +169,9 @@ impl App {
         if typed.is_some() {
             self.snapshot_rename = typed;
         }
+        if let Some(adj) = hovered.filter(|_| action.is_none()).and_then(|i| self.current.as_ref()?.snapshots.get(i)).map(|s| s.adjustments.clone()) {
+            self.preview_style(adj);
+        }
         match action {
             Some(SnapshotAction::Add) => self.add_snapshot_to_name(),
             Some(SnapshotAction::Apply(i)) => {
@@ -186,21 +201,26 @@ impl App {
             return;
         }
         self.snapshot_section(ui, false);
-        let mut jump = None;
+        let (mut jump, mut hovered) = (None, None);
         if let Some((steps, now)) = self.history_steps() {
-            let help = "Klick springt zu diesem Stand; neue Änderungen verwerfen die Schritte darüber.";
+            let help = "Klick springt zu diesem Stand; neue Änderungen verwerfen die Schritte darüber. Überfahren zeigt ihn im Bild.";
             section_help(ui, "Verlauf", help, None, |ui| {
                 for j in (0..steps.len()).rev() {
                     let label = if j == 0 { "Geöffnet".to_string() } else { describe(steps[j - 1], steps[j]) };
                     let text = if j > now { RichText::new(label).color(Color32::from_gray(120)).italics() } else { RichText::new(label) };
-                    if ui.selectable_label(j == now, text).clicked() && j != now {
+                    let r = ui.selectable_label(j == now, text);
+                    if r.clicked() && j != now {
                         jump = Some(j);
+                    } else if r.hovered() && j != now {
+                        hovered = Some(j);
                     }
                 }
             });
         }
         if let Some(j) = jump {
             self.jump_history(j);
+        } else if let Some(j) = hovered {
+            self.preview_history_step(j);
         }
     }
 }

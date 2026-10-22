@@ -209,6 +209,7 @@ pub const GUIDE_EDGE: usize = 640;
 fn measuring(adj: &Adjustments) -> Adjustments {
     let mut a = adj.clone();
     a.detail.ai_denoise = 0.0;
+    a.detail.raw_details = 0.0;
     a.detail.nr_luma = 0.0;
     a.detail.nr_color = 0.0;
     a.detail.sharpen_amount = 0.0;
@@ -770,7 +771,7 @@ mod tests {
             color: CameraColor::new(xyz_to_cam),
             as_shot_wb: [1.0; 3],
             orientation: Orientation::Normal,
-            hdr: false, lens: None, lens_corrected: false,
+            hdr: false, lens: None, lens_corrected: false, bayer: false,
         }
     }
 

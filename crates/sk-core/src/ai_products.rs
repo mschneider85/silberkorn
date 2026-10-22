@@ -1,10 +1,13 @@
-//! AI denoising without new files: a neural network (in `sk-ai`) cleans the raw data once per
-//! file; the result ("product": camera RGB like [`crate::raw::load_full`] returns it, oriented) is
-//! kept in a disk cache, and the pipeline blends it into the source by `Detail::ai_denoise`.
-//! The raw file stays untouched, the amount can be changed at any time and is undoable.
+//! AI improvements of the raw data without new files: a neural network (in `sk-ai`) computes
+//! better raw data once per file; the result ("product": camera RGB like [`crate::raw::load_full`]
+//! returns it, oriented) is kept in a disk cache, and the pipeline blends it into the source by
+//! an amount. The raw file stays untouched, the amount can be changed at any time and is undoable.
+//!
+//! Two kinds: [`DETAILS`] (Raw-Details, a learned demosaic, `Detail::raw_details`) and
+//! [`DENOISE`] (KI-Entrauschen, `Detail::ai_denoise`), blended in that order.
 //!
 //! sk-core cannot run networks; the application registers the function that computes a product
-//! ([`set_provider`]). Without it, or before a product exists, images are rendered without.
+//! ([`Products::set_provider`]). Without it, or before a product exists, images are rendered without.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -17,8 +20,6 @@ use crate::image::LinearImage;
 
 /// Changes when products made earlier must not be used any more.
 pub const VERSION: u32 = 1;
-/// Products are large (about 4 bytes per pixel): the oldest are removed beyond this.
-pub const CACHE_LIMIT: u64 = 20 << 30;
 /// Larger images are refused: computing needs about 65 bytes per pixel (8 GB at this size).
 pub const MAX_PIXELS: usize = 120_000_000;
 
@@ -33,91 +34,199 @@ struct Provider {
     compute: Box<ComputeFn>,
 }
 
-static PROVIDER: RwLock<Option<Arc<Provider>>> = RwLock::new(None);
+/// Blended sources by (plain source, product, amount): renderings of the same source with the same
+/// amount reuse one, so the pipeline's stage caches (keyed by the source) stay valid.
+type BlendKey = (usize, usize, usize, u64, PathBuf, u32);
+/// Products resampled to preview sizes (dragging the amount blends again, but resamples once).
+type Resized = (PathBuf, usize, usize);
 
-/// Registers the function that computes products; `tag` names the model (e.g. its hash).
-pub fn set_provider(tag: &str, compute: Box<ComputeFn>) {
-    *PROVIDER.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Provider { tag: tag.to_string(), compute }));
+/// One kind of product: its cache folder, the registered network, and what is kept in memory.
+pub struct Products {
+    /// Name of the function, for messages.
+    pub label: &'static str,
+    /// Folder in the cache, and the environment variable that overrides it.
+    folder: &'static str,
+    env: &'static str,
+    /// Products are large (about 4 bytes per pixel): the oldest are removed beyond this.
+    pub cache_limit: u64,
+    provider: RwLock<Option<Arc<Provider>>>,
+    /// One computation at a time: each needs a lot of memory and all cores already.
+    compute: Mutex<()>,
+    loaded: Mutex<Loaded>,
+    blends: Mutex<Vec<(BlendKey, Arc<LinearImage>)>>,
+    resized: Mutex<Vec<(Resized, Arc<LinearImage>)>>,
 }
 
-fn provider() -> Option<Arc<Provider>> {
-    PROVIDER.read().unwrap_or_else(|e| e.into_inner()).clone()
-}
+/// Raw-Details: demosaiced by a network instead of AHD.
+pub static DETAILS: Products = Products::new("Raw-Details", "raw-details", "SILBERKORN_DETAILS_CACHE", 10 << 30);
+/// KI-Entrauschen: cleaned by a network.
+pub static DENOISE: Products = Products::new("KI-Entrauschen", "denoise", "SILBERKORN_DENOISE_CACHE", 20 << 30);
 
-/// Folder of the products (`SILBERKORN_DENOISE_CACHE` overrides it).
-pub fn cache_dir() -> PathBuf {
-    std::env::var_os("SILBERKORN_DENOISE_CACHE").map(PathBuf::from).unwrap_or_else(|| crate::paths::cache_dir().join("denoise"))
-}
-
-/// The product file of an image: named after the raw file's identity (path, size, modification
-/// time) and the model, so an edited file or another model never finds an old product.
-pub fn product_file(path: &Path) -> Option<PathBuf> {
-    let tag = provider()?.tag.clone();
-    let id = format!("{}|{tag}|{VERSION}", crate::cache::file_identity(path)?);
-    Some(cache_dir().join(format!("{:016x}.skdn", crate::cache::fnv1a(id.as_bytes()))))
-}
-
-/// The product exists (so rendering uses it).
-pub fn is_ready(path: &Path) -> bool {
-    product_file(path).is_some_and(|f| f.is_file())
-}
-
-/// The model is registered (the application can compute products).
-pub fn available() -> bool {
-    provider().is_some()
-}
-
-/// One computation at a time: each needs a lot of memory and all cores already.
-static COMPUTE: Mutex<()> = Mutex::new(());
-
-/// Computes and stores the product unless it exists.
-pub fn ensure(path: &Path, progress: &dyn Fn(f32)) -> Result<()> {
-    let p = provider().context("KI-Entrauschen ist nicht eingerichtet (Modell fehlt)")?;
-    let file = product_file(path).with_context(|| format!("{} nicht lesbar", path.display()))?;
-    let _one = COMPUTE.lock().unwrap_or_else(|e| e.into_inner());
-    if file.is_file() {
-        return Ok(());
-    }
-    // (A file that can't be read is reported by the computation itself.)
-    if let Ok(meta) = crate::raw::read_meta(path) {
-        check_size(meta.info.width, meta.info.height)?;
-    }
-    let img = (p.compute)(&crate::variant::file_of(path), progress)?;
-    std::fs::create_dir_all(cache_dir())?;
-    crate::safe_file::write(&file, encode(&img))?;
-    prune(&cache_dir(), CACHE_LIMIT);
-    Ok(())
-}
-
-fn check_size(width: usize, height: usize) -> Result<()> {
-    let pixels = width.saturating_mul(height);
-    anyhow::ensure!(
-        pixels <= MAX_PIXELS,
-        "Bild zu groß für KI-Entrauschen ({} MP, höchstens {} MP)",
-        pixels / 1_000_000,
-        MAX_PIXELS / 1_000_000
-    );
-    Ok(())
-}
-
-/// Disk space of the products.
-pub fn cache_size() -> u64 {
-    std::fs::read_dir(cache_dir()).into_iter().flatten().flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum()
-}
-
-/// Removes all products.
-pub fn clear_cache() -> Result<()> {
-    {
-        let mut loaded = LOADED.lock().unwrap_or_else(|e| e.into_inner());
-        loaded.products.clear();
-        loaded.generation += 1;
-    }
-    BLENDS.lock().unwrap_or_else(|e| e.into_inner()).clear();
-    for e in std::fs::read_dir(cache_dir()).into_iter().flatten().flatten() {
-        if e.path().extension().is_some_and(|x| x == "skdn") {
-            std::fs::remove_file(e.path())?;
+impl Products {
+    const fn new(label: &'static str, folder: &'static str, env: &'static str, cache_limit: u64) -> Self {
+        Self {
+            label,
+            folder,
+            env,
+            cache_limit,
+            provider: RwLock::new(None),
+            compute: Mutex::new(()),
+            loaded: Mutex::new(Loaded { generation: 0, products: Vec::new() }),
+            blends: Mutex::new(Vec::new()),
+            resized: Mutex::new(Vec::new()),
         }
     }
+
+    /// Registers the function that computes products; `tag` names the model (e.g. its hash).
+    pub fn set_provider(&self, tag: &str, compute: Box<ComputeFn>) {
+        *self.provider.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(Provider { tag: tag.to_string(), compute }));
+    }
+
+    fn provider(&self) -> Option<Arc<Provider>> {
+        self.provider.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Folder of the products.
+    pub fn cache_dir(&self) -> PathBuf {
+        std::env::var_os(self.env).map(PathBuf::from).unwrap_or_else(|| crate::paths::cache_dir().join(self.folder))
+    }
+
+    /// The product file of an image: named after the raw file's identity (path, size, modification
+    /// time) and the model, so an edited file or another model never finds an old product.
+    pub fn product_file(&self, path: &Path) -> Option<PathBuf> {
+        let tag = self.provider()?.tag.clone();
+        let id = format!("{}|{tag}|{VERSION}", crate::cache::file_identity(path)?);
+        Some(self.cache_dir().join(format!("{:016x}.skdn", crate::cache::fnv1a(id.as_bytes()))))
+    }
+
+    /// The product exists (so rendering uses it).
+    pub fn is_ready(&self, path: &Path) -> bool {
+        self.product_file(path).is_some_and(|f| f.is_file())
+    }
+
+    /// The model is registered (the application can compute products).
+    pub fn available(&self) -> bool {
+        self.provider().is_some()
+    }
+
+    /// Computes and stores the product unless it exists.
+    pub fn ensure(&self, path: &Path, progress: &dyn Fn(f32)) -> Result<()> {
+        let p = self.provider().with_context(|| format!("{} ist nicht eingerichtet (Modell fehlt)", self.label))?;
+        let file = self.product_file(path).with_context(|| format!("{} nicht lesbar", path.display()))?;
+        let _one = self.compute.lock().unwrap_or_else(|e| e.into_inner());
+        if file.is_file() {
+            return Ok(());
+        }
+        // (A file that can't be read is reported by the computation itself.)
+        if let Ok(meta) = crate::raw::read_meta(path) {
+            check_size(self.label, meta.info.width, meta.info.height)?;
+        }
+        let img = (p.compute)(&crate::variant::file_of(path), progress)?;
+        let dir = self.cache_dir();
+        std::fs::create_dir_all(&dir)?;
+        crate::safe_file::write(&file, encode(&img))?;
+        prune(&dir, self.cache_limit);
+        Ok(())
+    }
+
+    /// Disk space of the products.
+    pub fn cache_size(&self) -> u64 {
+        std::fs::read_dir(self.cache_dir()).into_iter().flatten().flatten().filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum()
+    }
+
+    /// Removes all products.
+    pub fn clear_cache(&self) -> Result<()> {
+        {
+            let mut loaded = self.loaded.lock().unwrap_or_else(|e| e.into_inner());
+            loaded.products.clear();
+            loaded.generation += 1;
+        }
+        self.blends.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        for e in std::fs::read_dir(self.cache_dir()).into_iter().flatten().flatten() {
+            if e.path().extension().is_some_and(|x| x == "skdn") {
+                std::fs::remove_file(e.path())?;
+            }
+        }
+        Ok(())
+    }
+
+    /// The source with `amount` (0..1) of the product blended in, or `None` if there is no product
+    /// (yet) or nothing to blend. `plain` is the image as `raw::load_full` or `raw::load_preview`
+    /// return it (any size: the product is resampled to it).
+    pub fn blended(&self, path: &Path, plain: &LinearImage, amount: f32) -> Option<Arc<LinearImage>> {
+        if amount <= 0.0 || plain.data.is_empty() {
+            return None;
+        }
+        let file = self.product_file(path)?;
+        let key: BlendKey = (plain.data.as_ptr() as usize, plain.width, plain.height, fingerprint(plain), file.clone(), amount.to_bits());
+        {
+            let mut blends = self.blends.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(i) = blends.iter().position(|(k, _)| *k == key) {
+                let e = blends.remove(i);
+                let img = e.1.clone();
+                blends.push(e);
+                return Some(img);
+            }
+        }
+        let product = product_in(&self.loaded, &file)?;
+        let t = amount.clamp(0.0, 1.0);
+        let img = if (product.width, product.height) == (plain.width, plain.height) {
+            let data = plain
+                .data
+                .par_iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    let d = product.at(i);
+                    [0, 1, 2].map(|c| p[c] + (d[c] - p[c]) * t)
+                })
+                .collect();
+            LinearImage::new(plain.width, plain.height, data)
+        } else {
+            let small = self.resized(&file, &product, plain.width, plain.height);
+            let data = plain.data.par_iter().zip(&small.data).map(|(p, d)| [0, 1, 2].map(|c| p[c] + (d[c] - p[c]) * t)).collect();
+            LinearImage::new(plain.width, plain.height, data)
+        };
+        let img = Arc::new(img);
+        let mut blends = self.blends.lock().unwrap_or_else(|e| e.into_inner());
+        blends.push((key, img.clone()));
+        let mut total: usize = blends.iter().map(|(_, i)| i.data.len() * 12).sum();
+        while total > BLEND_BUDGET && blends.len() > 1 {
+            total -= blends.remove(0).1.data.len() * 12;
+        }
+        Some(img)
+    }
+
+    fn resized(&self, file: &Path, product: &Product, w: usize, h: usize) -> Arc<LinearImage> {
+        let key = (file.to_path_buf(), w, h);
+        if let Some((_, img)) = self.resized.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
+            return img.clone();
+        }
+        let img = Arc::new(product.resized(w, h));
+        let mut r = self.resized.lock().unwrap_or_else(|e| e.into_inner());
+        r.push((key, img.clone()));
+        if r.len() > 6 {
+            r.remove(0);
+        }
+        img
+    }
+}
+
+/// The source with Raw-Details and then KI-Entrauschen blended in by their amounts (0..1, the
+/// images as `Products::blended` takes them); `None` if neither applies.
+pub fn prepared(path: &Path, plain: &LinearImage, details: f32, denoise: f32) -> Option<Arc<LinearImage>> {
+    chained(&DETAILS, &DENOISE, path, plain, details, denoise)
+}
+
+/// `first` blended into `plain` by `a`, then `second` into that by `b`.
+fn chained(first: &Products, second: &Products, path: &Path, plain: &LinearImage, a: f32, b: f32) -> Option<Arc<LinearImage>> {
+    let one = first.blended(path, plain, a);
+    let base = one.as_deref().unwrap_or(plain);
+    second.blended(path, base, b).or(one)
+}
+
+fn check_size(label: &str, width: usize, height: usize) -> Result<()> {
+    let pixels = width.saturating_mul(height);
+    anyhow::ensure!(pixels <= MAX_PIXELS, "Bild zu groß für {label} ({} MP, höchstens {} MP)", pixels / 1_000_000, MAX_PIXELS / 1_000_000);
     Ok(())
 }
 
@@ -251,12 +360,6 @@ struct Loaded {
     products: Vec<(PathBuf, Arc<Product>)>,
 }
 
-static LOADED: Mutex<Loaded> = Mutex::new(Loaded { generation: 0, products: Vec::new() });
-
-fn product(file: &Path) -> Option<Arc<Product>> {
-    product_in(&LOADED, file)
-}
-
 /// The product in `file`, from `cache` or read (outside the lock: other images' products stay
 /// available meanwhile).
 fn product_in(cache: &Mutex<Loaded>, file: &Path) -> Option<Arc<Product>> {
@@ -296,10 +399,6 @@ fn product_in(cache: &Mutex<Loaded>, file: &Path) -> Option<Arc<Product>> {
     Some(p)
 }
 
-/// Blended sources by (plain source, product, amount): renderings of the same source with the same
-/// amount reuse one, so the pipeline's stage caches (keyed by the source) stay valid.
-type BlendKey = (usize, usize, usize, u64, PathBuf, u32);
-static BLENDS: Mutex<Vec<(BlendKey, Arc<LinearImage>)>> = Mutex::new(Vec::new());
 /// Memory for blended sources (the newest are kept).
 const BLEND_BUDGET: usize = 600 << 20;
 
@@ -313,78 +412,14 @@ pub(crate) fn fingerprint(img: &LinearImage) -> u64 {
     crate::cache::fnv1a(&samples)
 }
 
-/// The source with `amount` (0..1) of the product blended in, or `None` if there is no product
-/// (yet) or nothing to blend. `plain` is the image as `raw::load_full` or `raw::load_preview`
-/// return it (any size: the product is resampled to it).
-pub fn blended(path: &Path, plain: &LinearImage, amount: f32) -> Option<Arc<LinearImage>> {
-    if amount <= 0.0 || plain.data.is_empty() {
-        return None;
-    }
-    let file = product_file(path)?;
-    let key: BlendKey = (plain.data.as_ptr() as usize, plain.width, plain.height, fingerprint(plain), file.clone(), amount.to_bits());
-    {
-        let mut blends = BLENDS.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(i) = blends.iter().position(|(k, _)| *k == key) {
-            let e = blends.remove(i);
-            let img = e.1.clone();
-            blends.push(e);
-            return Some(img);
-        }
-    }
-    let product = product(&file)?;
-    let t = amount.clamp(0.0, 1.0);
-    let img = if (product.width, product.height) == (plain.width, plain.height) {
-        let data = plain
-            .data
-            .par_iter()
-            .enumerate()
-            .map(|(i, p)| {
-                let d = product.at(i);
-                [0, 1, 2].map(|c| p[c] + (d[c] - p[c]) * t)
-            })
-            .collect();
-        LinearImage::new(plain.width, plain.height, data)
-    } else {
-        let small = resized(&file, &product, plain.width, plain.height);
-        let data = plain.data.par_iter().zip(&small.data).map(|(p, d)| [0, 1, 2].map(|c| p[c] + (d[c] - p[c]) * t)).collect();
-        LinearImage::new(plain.width, plain.height, data)
-    };
-    let img = Arc::new(img);
-    let mut blends = BLENDS.lock().unwrap_or_else(|e| e.into_inner());
-    blends.push((key, img.clone()));
-    let mut total: usize = blends.iter().map(|(_, i)| i.data.len() * 12).sum();
-    while total > BLEND_BUDGET && blends.len() > 1 {
-        total -= blends.remove(0).1.data.len() * 12;
-    }
-    Some(img)
-}
-
-/// Products resampled to preview sizes (dragging the amount blends again, but resamples once).
-type Resized = (PathBuf, usize, usize);
-static RESIZED: Mutex<Vec<(Resized, Arc<LinearImage>)>> = Mutex::new(Vec::new());
-
-fn resized(file: &Path, product: &Product, w: usize, h: usize) -> Arc<LinearImage> {
-    let key = (file.to_path_buf(), w, h);
-    if let Some((_, img)) = RESIZED.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
-        return img.clone();
-    }
-    let img = Arc::new(product.resized(w, h));
-    let mut r = RESIZED.lock().unwrap_or_else(|e| e.into_inner());
-    r.push((key, img.clone()));
-    if r.len() > 6 {
-        r.remove(0);
-    }
-    img
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn very_large_images_are_refused() {
-        assert!(check_size(11_648, 8_736).is_ok());
-        let e = check_size(40_000, 6_000).unwrap_err();
+        assert!(check_size("KI-Entrauschen", 11_648, 8_736).is_ok());
+        let e = check_size("KI-Entrauschen", 40_000, 6_000).unwrap_err();
         assert!(format!("{e}").contains("240 MP"), "{e}");
     }
 
@@ -422,44 +457,77 @@ mod tests {
         assert!((r.data[0][0] - 1.0).abs() < 1e-3 && (r.data[1][0] - 5.0).abs() < 1e-3, "{:?}", r.data);
     }
 
+    /// A kind of product with its cache in `dir`.
+    fn kind(dir: &Path, env: &'static str) -> Products {
+        // SAFETY: each test has a variable of its own.
+        unsafe { std::env::set_var(env, dir) };
+        Products::new("Test", "test", env, 1 << 30)
+    }
+
+    /// A stand-in network that returns `value` everywhere, counting its calls.
+    fn stand_in(p: &Products, value: [f32; 3]) -> Arc<std::sync::atomic::AtomicUsize> {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c = calls.clone();
+        p.set_provider("test", Box::new(move |_, progress| {
+            c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            progress(1.0);
+            Ok(LinearImage::new(8, 4, vec![value; 32]))
+        }));
+        calls
+    }
+
     /// With a stand-in network: the product is computed once, stored, and blended into sources
     /// of any size by the amount.
     #[test]
     fn computes_once_and_blends_by_amount() {
-        let dir = std::env::temp_dir().join(format!("sk-denoise-blend-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("sk-products-blend-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        // SAFETY: no other test reads this variable.
-        unsafe { std::env::set_var("SILBERKORN_DENOISE_CACHE", dir.join("cache")) };
+        let p = kind(&dir.join("cache"), "SK_TEST_PRODUCTS_BLEND");
         let raw = dir.join("bild.arw");
         std::fs::write(&raw, b"raw").unwrap();
-        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let c = calls.clone();
-        set_provider("test", Box::new(move |_, progress| {
-            c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            progress(1.0);
-            Ok(LinearImage::new(8, 4, vec![[0.5, 0.25, 1.0]; 32]))
-        }));
-        assert!(!is_ready(&raw));
+        let calls = stand_in(&p, [0.5, 0.25, 1.0]);
+        assert!(!p.is_ready(&raw));
         let plain = LinearImage::new(8, 4, vec![[0.1; 3]; 32]);
-        assert!(blended(&raw, &plain, 0.5).is_none(), "nothing before the product exists");
-        ensure(&raw, &|_| {}).unwrap();
-        ensure(&raw, &|_| {}).unwrap();
+        assert!(p.blended(&raw, &plain, 0.5).is_none(), "nothing before the product exists");
+        p.ensure(&raw, &|_| {}).unwrap();
+        p.ensure(&raw, &|_| {}).unwrap();
         assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
-        assert!(is_ready(&raw));
-        let half = blended(&raw, &plain, 0.5).unwrap();
+        assert!(p.is_ready(&raw));
+        let half = p.blended(&raw, &plain, 0.5).unwrap();
         assert!(half.data.iter().all(|p| (p[0] - 0.3).abs() < 1e-3 && (p[1] - 0.175).abs() < 1e-3 && (p[2] - 0.55).abs() < 1e-3));
         // The same source and amount: the same image (the pipeline's stage caches stay valid).
-        assert!(Arc::ptr_eq(&half, &blended(&raw, &plain, 0.5).unwrap()));
-        assert!(blended(&raw, &plain, 0.0).is_none());
+        assert!(Arc::ptr_eq(&half, &p.blended(&raw, &plain, 0.5).unwrap()));
+        assert!(p.blended(&raw, &plain, 0.0).is_none());
         // A preview-sized source gets the product resampled.
         let small = LinearImage::new(4, 2, vec![[0.1; 3]; 8]);
-        let full = blended(&raw, &small, 1.0).unwrap();
+        let full = p.blended(&raw, &small, 1.0).unwrap();
         assert_eq!((full.width, full.height), (4, 2));
         assert!(full.data.iter().all(|p| (p[0] - 0.5).abs() < 1e-3));
         // An edited raw file is another file: its old product is not used.
         std::thread::sleep(std::time::Duration::from_millis(1100));
         std::fs::write(&raw, b"raw2").unwrap();
-        assert!(!is_ready(&raw));
+        assert!(!p.is_ready(&raw));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Raw-Details first, KI-Entrauschen blended into its result; either alone works too.
+    #[test]
+    fn the_second_product_is_blended_into_the_first() {
+        let dir = std::env::temp_dir().join(format!("sk-products-chain-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (a, b) = (kind(&dir.join("a"), "SK_TEST_PRODUCTS_A"), kind(&dir.join("b"), "SK_TEST_PRODUCTS_B"));
+        let raw = dir.join("bild.arw");
+        std::fs::write(&raw, b"raw").unwrap();
+        stand_in(&a, [1.0; 3]);
+        stand_in(&b, [0.0; 3]);
+        a.ensure(&raw, &|_| {}).unwrap();
+        b.ensure(&raw, &|_| {}).unwrap();
+        let plain = LinearImage::new(8, 4, vec![[0.2; 3]; 32]);
+        let v = |a_amt, b_amt| chained(&a, &b, &raw, &plain, a_amt, b_amt).map(|i| i.data[0][0]);
+        assert_eq!(v(0.0, 0.0), None);
+        assert!((v(0.5, 0.0).unwrap() - 0.6).abs() < 1e-3);
+        assert!((v(0.0, 0.5).unwrap() - 0.1).abs() < 1e-3);
+        assert!((v(0.5, 0.5).unwrap() - 0.3).abs() < 1e-3);
         std::fs::remove_dir_all(dir).ok();
     }
 

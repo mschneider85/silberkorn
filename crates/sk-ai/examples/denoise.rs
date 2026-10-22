@@ -13,9 +13,9 @@ fn main() -> anyhow::Result<()> {
     }
     let denoiser = sk_ai::denoise::Denoiser::default();
     let tag = format!("{}{}", sk_ai::denoise::tag(), if linear { "-linear" } else { "" });
-    sk_core::ai_denoise::set_provider(&tag, Box::new(move |p, progress| denoiser.product_ext(p, linear, progress)));
+    sk_core::ai_products::DENOISE.set_provider(&tag, Box::new(move |p, progress| denoiser.product_ext(p, linear, progress)));
     let start = std::time::Instant::now();
-    sk_core::ai_denoise::ensure(&path, &|p| eprint!("\r{:3.0} %", p * 100.0))?;
+    sk_core::ai_products::DENOISE.ensure(&path, &|p| eprint!("\r{:3.0} %", p * 100.0))?;
     eprintln!("\nentrauscht in {:.1?}", start.elapsed());
     let (meta, full) = sk_core::raw::load_full(&path)?;
     let crop = |a: f32| {

@@ -1,6 +1,7 @@
 //! Tool tabs for geometry/lens, details and the advanced color tools.
 
 use sk_core::auto;
+use sk_core::pipeline::SliderView;
 use sk_core::params::{Adjustments, AspectRatio, ColorWheel, ColorZone, Detail, HUE_BANDS, HslBand, LensCorrection, MAX_COLOR_ZONES, SkinTone};
 use egui::{Color32, RichText, Ui};
 
@@ -57,7 +58,7 @@ pub enum ColorView {
 impl ColorView {
     const ALL: [ColorView; 5] = [ColorView::Hue, ColorView::Saturation, ColorView::Lightness, ColorView::Single, ColorView::Zones];
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             ColorView::Hue => "Farbton",
             ColorView::Saturation => "Sättigung",
@@ -248,6 +249,16 @@ fn balance_ui(ui: &mut Ui, view: &mut BalanceView, cb: &mut sk_core::params::Col
         BalanceView::Highlights => wheel_row(ui, 0.62, &mut [("Lichter", &mut cb.highlights, true)]),
     }
 }
+
+/// What "Details" of Schärfen does (behind its info icon).
+const SHARPEN_DETAIL_HELP: &str = "Bestimmt, wie geschärft wird – nicht wie stark (das macht die Stärke).\n\n\
+    0: Unscharf maskieren. Verstärkt den Kontrast an Kanten, wirkt auch bei leicht unscharfen Bildern. \
+    Kann helle und dunkle Säume erzeugen; Radius und Schwelle gelten dafür.\n\n\
+    100: Dekonvolution. Rechnet die leichte Unschärfe des Objektivs zurück (Radius aus dem Bild gemessen): \
+    feinere Details, kaum Säume. Flächen und ausgebrannte Lichter bleiben unberührt. \
+    Bei unscharfen Bildern wenig Wirkung.\n\n\
+    Dazwischen: beides gemischt. Bei 100 ist die Dekonvolution ab Stärke 120 voll, \
+    darüber kommt wieder Unscharf maskieren dazu.";
 
 impl App {
     pub fn lens_tab(&mut self, ui: &mut Ui) {
@@ -540,22 +551,40 @@ impl App {
             crate::widgets::no_image(ui);
             return;
         }
-        let mut changed = self.noise_section(ui);
+        let mut changed = self.enhance_section(ui);
+        let (noise_changed, noise_view) = self.noise_section(ui);
+        changed |= noise_changed;
         let Some(cur) = self.current.as_mut() else { return };
         let mut t = Target::new(&cur.adjustments, self.active_layer);
         let d = &mut cur.adjustments.detail;
         let defaults = Detail::default();
 
         let (mut r_sharp, mut r_clarity, mut r_haze) = (false, false, false);
+        // Held with Strg: the grey view of what the slider does.
+        let held = [(); 4].map(|_| std::cell::Cell::new(false));
         widgets::tool_section(ui, sk_core::tools::Tool::Sharpening, Some(&mut || r_sharp = true), |ui| {
-            changed |= crate::widgets::percent_row(ui, "Stärke", &mut d.sharpen_amount, 0.0..=500.0, defaults.sharpen_amount);
+            let opts = |i: usize| widgets::SliderOpts { held_with_ctrl: Some(&held[i]), ..Default::default() };
+            changed |= widgets::slider_row_with(ui, "Stärke", &mut d.sharpen_amount, 0.0..=500.0, defaults.sharpen_amount, 0, widgets::SliderOpts { suffix: " %", ..opts(0) });
             // Without an effect, what shapes it is shown but disabled (here and below).
             ui.add_enabled_ui(d.sharpen_amount > 0.0, |ui| {
-                changed |= slider_row(ui, "Radius", &mut d.sharpen_radius, 0.2..=3.0, defaults.sharpen_radius, 1);
-                changed |= slider_row(ui, "Schwelle", &mut d.sharpen_threshold, 0.0..=20.0, defaults.sharpen_threshold, 1);
+                // Radius and Schwelle shape only the unsharp mask.
+                ui.add_enabled_ui(d.sharpen_split().0 > 0.0, |ui| {
+                    // Sigma of the blur, whose halos reach about three times as far: up to 1.5 is
+                    // about as wide as the radius of other programs goes (older edits keep more).
+                    changed |= widgets::slider_row_with(ui, "Radius", &mut d.sharpen_radius, 0.2..=1.5, defaults.sharpen_radius, 1, opts(1));
+                    changed |= widgets::slider_row_with(ui, "Schwelle", &mut d.sharpen_threshold, 0.0..=20.0, defaults.sharpen_threshold, 1, opts(2));
+                });
+                changed |= widgets::slider_row_with(ui, "Details", &mut d.sharpen_detail, 0.0..=100.0, defaults.sharpen_detail, 0, widgets::SliderOpts { help: Some(SHARPEN_DETAIL_HELP), ..opts(3) });
             });
             crate::widgets::hint(ui, crate::commands::hint("Wirkung bei 100 % prüfen", "zoom-100"));
+            crate::widgets::hint(ui, "Strg beim Ziehen: Wirkung in Grau");
         });
+        let view = match held.iter().position(|h| h.get()) {
+            Some(0) => Some(SliderView::Grey),
+            Some(1 | 3) => Some(SliderView::Sharpening),
+            Some(2) => Some(SliderView::SharpenMask),
+            _ => noise_view,
+        };
         widgets::tool_section(ui, sk_core::tools::Tool::Clarity, Some(&mut || r_clarity = true), |ui| {
             changed |= slider_row(ui, "Klarheit", t.pick(&mut d.clarity, |l| &mut l.clarity), -100.0..=100.0, 0.0, 0);
             changed |= slider_row(ui, "Struktur", t.pick(&mut d.structure, |l| &mut l.structure), -100.0..=100.0, 0.0, 0);
@@ -564,7 +593,8 @@ impl App {
             changed |= crate::widgets::percent_row(ui, "Stärke", t.pick(&mut d.dehaze, |l| &mut l.dehaze), -100.0..=100.0, 0.0);
         });
         if r_sharp {
-            (d.sharpen_amount, d.sharpen_radius, d.sharpen_threshold) = (defaults.sharpen_amount, defaults.sharpen_radius, defaults.sharpen_threshold);
+            (d.sharpen_amount, d.sharpen_radius, d.sharpen_threshold, d.sharpen_detail) =
+                (defaults.sharpen_amount, defaults.sharpen_radius, defaults.sharpen_threshold, defaults.sharpen_detail);
         }
         if r_clarity {
             match t.layer_mut() {
@@ -582,6 +612,7 @@ impl App {
         if changed || r_sharp || r_clarity || r_haze {
             self.request_render();
         }
+        self.set_slider_view(view);
     }
 
     /// Creative looks: depth effects first, the finishing touches (vignette, grain) last.
@@ -641,6 +672,8 @@ impl App {
             _ => None,
         };
         let mut toggle_pick: Option<ColorPick> = None;
+        let target = self.target_tool;
+        let mut toggle_target = None;
         let Some(cur) = self.current.as_mut() else { return };
         let adj = &mut cur.adjustments;
         let mut t = Target::new(adj, self.active_layer);
@@ -668,6 +701,19 @@ impl App {
                     };
                     if r.clicked() {
                         *view = v;
+                    }
+                }
+                // For one property of all colors: drag on a color in the image.
+                if matches!(*view, ColorView::Hue | ColorView::Saturation | ColorView::Lightness) {
+                    let t = crate::target_tool::TargetTool::Colors(*view);
+                    let what = match *view {
+                        ColorView::Hue => "ihren Farbton",
+                        ColorView::Saturation => "ihre Sättigung",
+                        _ => "ihre Helligkeit",
+                    };
+                    let hint = format!("Zielkorrektur: auf einer Farbe im Bild nach oben oder unten ziehen ändert {what}");
+                    if crate::tools::target_button(ui, target == Some(t), &hint) {
+                        toggle_target = Some(t);
                     }
                 }
             });
@@ -837,6 +883,9 @@ impl App {
         }
         if let Some(target) = toggle_pick {
             self.toggle_color_picker(target);
+        }
+        if let Some(t) = toggle_target {
+            self.toggle_target_tool(t);
         }
     }
 

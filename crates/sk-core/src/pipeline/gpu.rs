@@ -314,6 +314,8 @@ struct ResampleArgs {
     cam: [f32; 9],
     hdr: u32,
     to_working: u32,
+    /// See `Processor::rebuilt`.
+    rebuilt: u32,
 }
 
 /// Layout of `Params` in develop.wgsl.
@@ -602,11 +604,12 @@ impl Processor {
             cam: flat(&self.cam_to_working),
             hdr: self.hdr as u32,
             to_working: 1,
+            rebuilt: self.rebuilt as u32,
         };
         let input = if self.adj.retouch.is_empty() && self.adj.removals.is_empty() {
             let win = plan.geo.source_window(ext);
             args.win = [win.0 as u32, win.1 as u32, win.2 as u32, win.3 as u32];
-            let k = key(&format!("{:p}|{}x{}|{}|{win:?}", src.data.as_ptr(), src.width, src.height, crate::ai_denoise::fingerprint(src)));
+            let k = key(&format!("{:p}|{}x{}|{}|{win:?}", src.data.as_ptr(), src.width, src.height, crate::ai_products::fingerprint(src)));
             let mut c = cache.map(|c| c.gpu.lock().unwrap_or_else(|e| e.into_inner()));
             match c.as_mut().and_then(|c| c.source.as_ref().filter(|(ck, _)| *ck == k).map(|(_, b)| b.clone())) {
                 Some(b) => b,
@@ -631,7 +634,7 @@ impl Processor {
                 src.data.as_ptr(),
                 src.width,
                 src.height,
-                crate::ai_denoise::fingerprint(src),
+                crate::ai_products::fingerprint(src),
                 self.retouch_relevant()
             ));
             let mut c = cache.map(|c| c.gpu.lock().unwrap_or_else(|e| e.into_inner()));
@@ -1015,7 +1018,8 @@ impl Processor {
         ops.enc.run_2d(DEVELOP, &[&p, &working, local_buf, &luts, &layer_buf, &mask_buf, &out], ext.w, ext.h);
 
         let d = &adj.detail;
-        if d.sharpen_amount > 0.0 {
+        let unsharp = d.sharpen_split().0;
+        if unsharp > 0.0 {
             let sigma = d.sharpen_radius * plan.scale;
             if sigma >= 0.25 {
                 let y = ops.img_planes(IMG_LUMA, &out, n).0;
@@ -1027,7 +1031,7 @@ impl Processor {
                     amount: f32,
                     thr: f32,
                 }
-                let a = ops.args(&Args { n: n as u32, amount: d.sharpen_amount / 100.0, thr: d.sharpen_threshold / 255.0 });
+                let a = ops.args(&Args { n: n as u32, amount: unsharp / 100.0, thr: d.sharpen_threshold / 255.0 });
                 ops.enc.run_1d(SHARPEN, &[&a, &out, &y, &blur], n);
             }
         }
@@ -1553,11 +1557,12 @@ mod tests {
             color,
             as_shot_wb: [1.6, 1.0, 1.3],
             orientation: Orientation::Normal,
-            hdr: false, lens: None, lens_corrected: false,
+            hdr: false, lens: None, lens_corrected: false, bayer: false,
         }
     }
 
-    /// Colorful content with edges, smooth gradients, noise and clipped highlights.
+    /// Colorful content with edges, smooth gradients, noise and clipped highlights (all channels
+    /// in one corner, only blue in another).
     fn image(w: usize, h: usize) -> LinearImage {
         LinearImage::new(
             w,
@@ -1569,7 +1574,11 @@ mod tests {
                     let block = (((i % w) / 23 + (i / w) / 17) % 3) as f32 * 0.15;
                     let base = [x * 0.6 + block, (1.0 - y) * 0.4 + 0.02, (x * 7.0 + y * 3.0).sin().abs() * 0.5];
                     let hi = if x > 0.85 && y < 0.2 { 1.0 } else { 0.0 };
-                    base.map(|v| (v + n).max(0.0).max(hi))
+                    let mut p = base.map(|v| (v + n).max(0.0).max(hi));
+                    if x < 0.15 && y > 0.8 {
+                        p[2] = 1.0;
+                    }
+                    p
                 })
                 .collect(),
         )

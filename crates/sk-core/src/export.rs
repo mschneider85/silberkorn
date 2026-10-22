@@ -238,9 +238,12 @@ pub fn export_many_with(
     written: &mut HashSet<PathBuf>,
 ) -> Vec<Result<PathBuf>> {
     let loaded = raw::load_full(image).and_then(|(meta, linear)| {
-        // Never silently without the denoising the image shows.
+        // Never silently without the Raw-Details and denoising the image shows.
+        if adj.detail.effective_raw_details() > 0.0 && !meta.hdr && meta.bayer {
+            crate::ai_products::DETAILS.ensure(image, &|_| {}).context("Raw-Details")?;
+        }
         if adj.detail.ai_denoise > 0.0 && !meta.hdr {
-            crate::ai_denoise::ensure(image, &|_| {}).context("KI-Entrauschen")?;
+            crate::ai_products::DENOISE.ensure(image, &|_| {}).context("KI-Entrauschen")?;
         }
         // Nor without the lens blur, relight or atmosphere.
         if adj.needs_depth() {

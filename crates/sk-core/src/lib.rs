@@ -1,7 +1,7 @@
 //! Silberkorn core: raw decoding, development pipeline, sidecars and export.
 
 pub mod ahd;
-pub mod ai_denoise;
+pub mod ai_products;
 pub mod auto;
 pub mod brush;
 pub mod cache;
@@ -9,6 +9,7 @@ pub mod camera_lens;
 pub mod camera_look;
 pub mod catalog;
 pub mod color;
+pub mod deconvolution;
 pub mod depth;
 pub mod detail;
 pub mod dng;
@@ -19,6 +20,7 @@ pub mod focus_stack;
 pub mod geometry;
 pub mod gpu;
 pub mod hdr;
+pub mod highlights;
 pub mod panorama;
 pub mod history;
 pub mod icc;

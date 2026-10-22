@@ -3,12 +3,18 @@
 use sk_core::export::{ExportFormat, OutputSharpening, Resize};
 use sk_core::watermark::{Anchor, WatermarkKind};
 use sk_core::params::{BaseCurve, Curve, Levels, WbMode, WhiteBalance};
+use sk_core::pipeline::SliderView;
 use sk_core::sidecar::ColorLabel;
 use egui::{Color32, RichText, Ui};
 
 use crate::app::{App, CurveChannel, Tab};
 use crate::layer_target::Target;
 use crate::widgets::{self, section, slider_row};
+
+/// The crosshair of the Zielkorrektur (selected while on); returns whether it was clicked.
+pub(crate) fn target_button(ui: &mut Ui, on: bool, hint: &str) -> bool {
+    ui.add(egui::Button::new(crate::theme::icon::CROSSHAIR_SIMPLE).selected(on)).on_hover_text(hint).clicked()
+}
 
 impl App {
     pub fn tools_ui(&mut self, ui: &mut Ui) {
@@ -75,7 +81,7 @@ impl App {
         }
         // With the right column open, the histogram is shown there.
         if !self.side_column_shown {
-            let r = widgets::histogram(ui, self.histogram.as_ref());
+            let r = self.histogram_widget(ui);
             if widgets::clip_triangles(ui, r, self.histogram.as_ref(), self.clip_warning) {
                 self.toggle_clip_warning();
             }
@@ -91,10 +97,15 @@ impl App {
         let mut t = Target::new(adj, self.active_layer);
         let mut changed = false;
 
+        // Held with Strg: where highlights or shadows clip (see `SliderView`).
+        let (high, low) = (std::cell::Cell::new(false), std::cell::Cell::new(false));
+        // Under the mouse: its range is marked in the histogram.
+        let zones = widgets::ToneZone::ALL.map(|_| std::cell::Cell::new(false));
+        let over = |z: widgets::ToneZone| Some(&zones[widgets::ToneZone::ALL.iter().position(|x| *x == z).unwrap_or(0)]);
         let mut reset_exposure = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Exposure, Some(&mut || reset_exposure = true), |ui| {
             let tone = widgets::SliderOpts { rail: Some(widgets::RAIL_TONE), ..Default::default() };
-            let ev = widgets::SliderOpts { suffix: " EV", ..tone };
+            let ev = widgets::SliderOpts { suffix: " EV", held_with_ctrl: Some(&high), hovered: over(widgets::ToneZone::Exposure), ..tone };
             changed |= widgets::slider_row_with(ui, "Belichtung", t.pick(&mut adj.exposure, |l| &mut l.exposure), -4.0..=4.0, 0.0, 2, ev);
             changed |= slider_row(ui, "Kontrast", t.pick(&mut adj.contrast, |l| &mut l.contrast), -100.0..=100.0, 0.0, 0);
             changed |= widgets::slider_row_with(ui, "Helligkeit", t.pick(&mut adj.brightness, |l| &mut l.brightness), -100.0..=100.0, 0.0, 0, tone);
@@ -110,10 +121,15 @@ impl App {
         let mut reset_hdr = false;
         widgets::tool_section(ui, sk_core::tools::Tool::HighlightsShadows, Some(&mut || reset_hdr = true), |ui| {
             let tone = widgets::SliderOpts { rail: Some(widgets::RAIL_TONE), ..Default::default() };
-            changed |= widgets::slider_row_with(ui, "Lichter", t.pick(&mut adj.highlights, |l| &mut l.highlights), -100.0..=100.0, 0.0, 0, tone);
-            changed |= widgets::slider_row_with(ui, "Tiefen", t.pick(&mut adj.shadows, |l| &mut l.shadows), -100.0..=100.0, 0.0, 0, tone);
-            changed |= widgets::slider_row_with(ui, "Weiß", t.pick(&mut adj.whites, |l| &mut l.whites), -100.0..=100.0, 0.0, 0, tone);
-            changed |= widgets::slider_row_with(ui, "Schwarz", t.pick(&mut adj.blacks, |l| &mut l.blacks), -100.0..=100.0, 0.0, 0, tone);
+            let (hi, lo) = (widgets::SliderOpts { held_with_ctrl: Some(&high), ..tone }, widgets::SliderOpts { held_with_ctrl: Some(&low), ..tone });
+            use widgets::ToneZone as Z;
+            let (o_hi, o_sh) = (widgets::SliderOpts { hovered: over(Z::Highlights), ..hi }, widgets::SliderOpts { hovered: over(Z::Shadows), ..lo });
+            let (o_wh, o_bl) = (widgets::SliderOpts { hovered: over(Z::Whites), ..hi }, widgets::SliderOpts { hovered: over(Z::Blacks), ..lo });
+            changed |= widgets::slider_row_with(ui, "Lichter", t.pick(&mut adj.highlights, |l| &mut l.highlights), -100.0..=100.0, 0.0, 0, o_hi);
+            changed |= widgets::slider_row_with(ui, "Tiefen", t.pick(&mut adj.shadows, |l| &mut l.shadows), -100.0..=100.0, 0.0, 0, o_sh);
+            changed |= widgets::slider_row_with(ui, "Weiß", t.pick(&mut adj.whites, |l| &mut l.whites), -100.0..=100.0, 0.0, 0, o_wh);
+            changed |= widgets::slider_row_with(ui, "Schwarz", t.pick(&mut adj.blacks, |l| &mut l.blacks), -100.0..=100.0, 0.0, 0, o_bl);
+            widgets::hint(ui, "Strg beim Ziehen: ausgefressene und abgesoffene Stellen");
         });
         if reset_hdr {
             match t.layer_mut() {
@@ -134,6 +150,7 @@ impl App {
         let mut changed = false;
 
         let mut reset_levels = false;
+        let levels_peek = std::cell::Cell::new(None);
         let levels_channel = &mut self.levels_channel;
         let (meta, preview, levels_hist) = (cur.meta.clone(), cur.preview.clone(), &mut self.levels_hist);
         widgets::tool_section(ui, sk_core::tools::Tool::Levels, Some(&mut || reset_levels = true), |ui| {
@@ -155,7 +172,7 @@ impl App {
                 CurveChannel::Blue => (&mut lv.blue, Color32::from_rgb(90, 130, 250), h.map(|h| through_rgb(&h.b))),
                 CurveChannel::Rgb | CurveChannel::Luma => (&mut lv.rgb, Color32::from_gray(220), h.map(|h| h.luma.iter().map(|&n| n as f32).collect())),
             };
-            changed |= widgets::levels_editor(ui, set, bins.as_deref(), color);
+            changed |= widgets::levels_editor(ui, set, bins.as_deref(), color, &levels_peek);
         });
         if reset_levels {
             adj.levels = Levels::default();
@@ -165,6 +182,8 @@ impl App {
         // The curves of the background or of the chosen layer (on the layer's result).
         let mut t = Target::new(adj, self.active_layer);
         let mut reset_curve = false;
+        let target_on = self.target_tool == Some(crate::target_tool::TargetTool::Curve);
+        let mut toggle_target = false;
         let channel = &mut self.curve_channel;
         let curves = match t.layer_mut() {
             Some(l) => &mut l.curves,
@@ -178,6 +197,9 @@ impl App {
                         r.on_hover_text("Nur die Helligkeit: Kontrast ohne Farbverschiebung, Farbton und Sättigung bleiben");
                     }
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    toggle_target = target_button(ui, target_on, "Zielkorrektur: im Bild nach oben oder unten ziehen ändert die Kurve beim Ton unter der Maus");
+                });
             });
             let h = self.histogram.as_ref();
             let (color, bins): (Color32, Option<&[u32]>) = match channel {
@@ -198,6 +220,22 @@ impl App {
         if changed {
             self.request_render();
         }
+        if toggle_target {
+            self.toggle_target_tool(crate::target_tool::TargetTool::Curve);
+        }
+        let zone = widgets::ToneZone::ALL.into_iter().zip(&zones).find(|(_, c)| c.get()).map(|(z, _)| z);
+        if zone != self.hover_zone {
+            self.hover_zone = zone;
+            ui.ctx().request_repaint();
+        }
+        let view = if high.get() {
+            Some(SliderView::ClipHighlights)
+        } else if low.get() {
+            Some(SliderView::ClipShadows)
+        } else {
+            levels_peek.get()
+        };
+        self.set_slider_view(view);
     }
 
     fn color_tab(&mut self, ui: &mut Ui) {

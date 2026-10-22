@@ -62,6 +62,8 @@ pub struct RawMeta {
     pub lens: Option<crate::camera_lens::CameraLens>,
     /// The lens is already corrected (a stitched panorama): no lens profile applies.
     pub lens_corrected: bool,
+    /// A Bayer sensor of the usual 2×2 layout (see [`load_bayer`]).
+    pub bayer: bool,
 }
 
 #[derive(Clone)]
@@ -256,7 +258,7 @@ fn build_meta(path: &Path, raw: &RawImage, md: Option<&RawMetadata>) -> Result<R
     // The size of the developed image: default crop (or active area), oriented.
     let (w, h) = image_size(raw);
     (info.width, info.height) = if orientation.swaps_dimensions() { (h, w) } else { (w, h) };
-    Ok(RawMeta { path: path.to_path_buf(), info, color, as_shot_wb, orientation, hdr: false, lens: None, lens_corrected: false })
+    Ok(RawMeta { path: path.to_path_buf(), info, color, as_shot_wb, orientation, hdr: false, lens: None, lens_corrected: false, bayer: is_bayer(raw) })
 }
 
 /// Size of the image [`load_full`] returns, before orientation: the default crop, else the
@@ -272,8 +274,58 @@ fn scale(raw: &mut RawImage) -> Result<()> {
     if !scaled {
         raw.apply_scaling().map_err(|e| anyhow!("Skalierung fehlgeschlagen: {e}"))?;
     }
+    if is_bayer(raw)
+        && let RawImageData::Float(data) = &mut raw.data
+    {
+        remove_hot_pixels(data, raw.width, raw.height);
+    }
     Ok(())
 }
+
+/// Replaces hot and stuck photosites of a Bayer mosaic (`width` x `height`, scaled 0..1): one
+/// far brighter than all eight nearest of its color (two apart) and all eight around it gets the
+/// median of the former. Real detail always reaches several photosites through the lens; a lone
+/// bright one is a defect (long exposures, warm sensors). Returns how many were replaced.
+pub(crate) fn remove_hot_pixels(data: &mut [f32], width: usize, height: usize) -> usize {
+    if width < 5 || height < 5 || data.len() < width * height {
+        return 0;
+    }
+    const OFFSETS: [(isize, isize); 8] = [(-2, -2), (0, -2), (2, -2), (-2, 0), (2, 0), (-2, 2), (0, 2), (2, 2)];
+    let fixes: Vec<(usize, f32)> = (2..height - 2)
+        .into_par_iter()
+        .flat_map_iter(|y| {
+            let data = &*data;
+            (2..width - 2).filter_map(move |x| {
+                let i = y * width + x;
+                let v = data[i];
+                let at = |(dx, dy): (isize, isize)| data[(y as isize + dy) as usize * width + (x as isize + dx) as usize];
+                // Cheap test first: most photosites are no brighter than a neighbor.
+                if v < 0.02 || v <= at((2, 0)) * HOT_RATIO {
+                    return None;
+                }
+                let mut n = OFFSETS.map(at);
+                let max = n.iter().copied().fold(0.0f32, f32::max);
+                if v - max < 0.02 || v <= max * HOT_RATIO {
+                    return None;
+                }
+                // Light reaching the photosites around it (of other colors) is detail, a spot.
+                let around = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)].map(at);
+                if around.iter().any(|&a| v <= a * HOT_RATIO) {
+                    return None;
+                }
+                n.sort_by(f32::total_cmp);
+                Some((i, (n[3] + n[4]) / 2.0))
+            })
+        })
+        .collect();
+    for &(i, v) in &fixes {
+        data[i] = v;
+    }
+    fixes.len()
+}
+
+/// How much brighter than its brightest neighbor of the same color a hot photosite is.
+const HOT_RATIO: f32 = 3.0;
 
 /// Reads only the metadata, without decoding pixel data.
 pub fn read_meta(path: &Path) -> Result<RawMeta> {
@@ -373,19 +425,24 @@ fn develop_full(raw: RawImage, xtrans: XTransQuality) -> Result<LinearImage> {
     }
 }
 
+/// A Bayer sensor with an RGB 2×2 pattern (what AHD and the networks on the mosaic handle).
+fn is_bayer(raw: &RawImage) -> bool {
+    let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else { return false };
+    raw.cpp == 1
+        && config.sensor == rawler::imgop::sensor::SensorType::Bayer
+        && config.cfa.is_rgb()
+        && config.cfa.width == 2
+        && config.cfa.height == 2
+        && raw.fuji_rotation_width.is_none()
+}
+
 /// Bayer sensors with AHD (see `ahd`) instead of rawler's PPG, which leaves zipper edges and
 /// maze patterns along fine lines. Every other sensor is handed back.
 fn develop_bayer(mut raw: RawImage) -> Result<Result<LinearImage, RawImage>> {
-    let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else { return Ok(Err(raw)) };
-    if raw.cpp != 1
-        || config.sensor != rawler::imgop::sensor::SensorType::Bayer
-        || !config.cfa.is_rgb()
-        || config.cfa.width != 2
-        || config.cfa.height != 2
-        || raw.fuji_rotation_width.is_some()
-    {
+    if !is_bayer(&raw) {
         return Ok(Err(raw));
     }
+    let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else { return Ok(Err(raw)) };
     let config = config.clone();
     scale(&mut raw)?;
     let RawImageData::Float(data) = std::mem::replace(&mut raw.data, RawImageData::Float(Vec::new())) else { bail!("Unerwartetes Datenformat") };
@@ -442,18 +499,12 @@ impl BayerMosaic {
 /// The Bayer mosaic of a raw file (`None` for other sensors and for demosaiced data).
 pub fn load_bayer(path: &Path) -> Result<Option<(RawMeta, BayerMosaic)>> {
     let Decoded { mut raw, meta } = decode(path)?;
-    let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else { return Ok(None) };
-    if raw.cpp != 1
-        || config.sensor != rawler::imgop::sensor::SensorType::Bayer
-        || !config.cfa.is_rgb()
-        || config.cfa.width != 2
-        || config.cfa.height != 2
-        || raw.fuji_rotation_width.is_some()
-    {
+    if !is_bayer(&raw) {
         return Ok(None);
     }
+    let RawPhotometricInterpretation::Cfa(config) = &raw.photometric else { return Ok(None) };
     let cfa = config.cfa.clone();
-    raw.apply_scaling().map_err(|e| anyhow!("Skalierung fehlgeschlagen: {e}"))?;
+    scale(&mut raw)?;
     let RawImageData::Float(data) = &raw.data else { bail!("Unerwartetes Datenformat") };
     // The same area as the demosaic in `develop_bayer`: the default crop (absolute coordinates).
     let crop = raw.crop_area.or(raw.active_area).unwrap_or(rawler::imgop::Rect::new(
@@ -627,6 +678,46 @@ fn embedded_preview_rawler(path: &Path) -> Result<::image::DynamicImage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A lone bright photosite goes, lines and spots that reach several photosites stay.
+    #[test]
+    fn hot_pixels_are_replaced_but_detail_stays() {
+        let (w, h) = (40, 30);
+        let noise = |x: usize, y: usize| 0.05 + crate::detail::hash_noise(x as i64, y as i64, 1) * 0.01;
+        let mut data: Vec<f32> = (0..w * h).map(|i| noise(i % w, i / w)).collect();
+        data[10 * w + 10] = 0.8;
+        // A line one photosite wide (every color along it) and a 3×3 spot.
+        for x in 2..w - 2 {
+            data[20 * w + x] = 0.6;
+        }
+        for y in 4..7 {
+            for x in 30..33 {
+                data[y * w + x] = 0.9;
+            }
+        }
+        let before = data.clone();
+        assert_eq!(remove_hot_pixels(&mut data, w, h), 1);
+        assert!((data[10 * w + 10] - 0.05).abs() < 0.01, "{}", data[10 * w + 10]);
+        assert!(data.iter().zip(&before).enumerate().all(|(i, (a, b))| i == 10 * w + 10 || a == b));
+    }
+
+    /// The real photos: hardly a photosite is taken for a hot one.
+    #[test]
+    fn hot_pixel_search_leaves_real_photos_alone() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../samples");
+        for name in ["_DSC0009.ARW", "DSC09192.ARW"] {
+            let path = root.join(name);
+            if !path.exists() {
+                continue;
+            }
+            let Decoded { mut raw, .. } = decode(&path).unwrap();
+            raw.apply_scaling().unwrap();
+            let RawImageData::Float(data) = &mut raw.data else { panic!() };
+            let n = remove_hot_pixels(data, raw.width, raw.height);
+            eprintln!("{name}: {n} Hotpixel");
+            assert!(n < 50, "{name}: {n}");
+        }
+    }
 
     #[test]
     fn areas_outside_the_sensor_are_dropped() {

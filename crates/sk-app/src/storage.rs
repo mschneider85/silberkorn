@@ -1,8 +1,9 @@
-//! "Speicherplatz …": what Silberkorn keeps on disk to be faster (previews, depth maps, denoised
-//! data), how full each cache is, and emptying it.
+//! "Speicherplatz …": what Silberkorn keeps on disk to be faster (previews, depth maps, Raw-Details
+//! and denoised data), how full each cache is, and emptying it.
 
 use egui::RichText;
 
+use crate::ai_products::AiProduct;
 use crate::app::App;
 use crate::dialog::{self, Dialog};
 use crate::theme::{self, icon};
@@ -14,17 +15,17 @@ pub const DIALOG_TITLE: &str = "Speicherplatz …";
 enum Cache {
     Previews,
     Depth,
-    Denoise,
+    Product(AiProduct),
 }
 
 impl Cache {
-    const ALL: [Cache; 3] = [Cache::Previews, Cache::Depth, Cache::Denoise];
+    const ALL: [Cache; 4] = [Cache::Previews, Cache::Depth, Cache::Product(AiProduct::Details), Cache::Product(AiProduct::Denoise)];
 
     fn title(self) -> &'static str {
         match self {
             Cache::Previews => "Vorschauen und Miniaturen",
             Cache::Depth => "Tiefenkarten",
-            Cache::Denoise => "KI-Entrauschen",
+            Cache::Product(k) => k.label(),
         }
     }
 
@@ -33,7 +34,8 @@ impl Cache {
         match self {
             Cache::Previews => "Für die Bibliothek; Sessions haben ihre eigenen im Session-Ordner",
             Cache::Depth => "Für Tiefen-Auswahl, Atmosphäre und Objektivunschärfe",
-            Cache::Denoise => "Die entrauschten Bilddaten",
+            Cache::Product(AiProduct::Details) => "Die Bilddaten von Raw-Details",
+            Cache::Product(AiProduct::Denoise) => "Die entrauschten Bilddaten",
         }
     }
 
@@ -41,7 +43,7 @@ impl Cache {
         match self {
             Cache::Previews => sk_core::cache::user_cache_limit(),
             Cache::Depth => sk_core::depth::CACHE_LIMIT,
-            Cache::Denoise => sk_core::ai_denoise::CACHE_LIMIT,
+            Cache::Product(k) => k.products().cache_limit,
         }
     }
 
@@ -49,7 +51,7 @@ impl Cache {
         match self {
             Cache::Previews => sk_core::cache::user_cache_size(),
             Cache::Depth => sk_core::depth::cache_size(),
-            Cache::Denoise => sk_core::ai_denoise::cache_size(),
+            Cache::Product(k) => k.products().cache_size(),
         }
     }
 }
@@ -70,7 +72,7 @@ impl App {
         let total: u64 = sizes.iter().sum();
         let mut clear: Option<Cache> = None;
         let mut close = false;
-        let denoising = self.denoise_running();
+        let running = AiProduct::ALL.map(|k| self.product_running(k));
         let title = DIALOG_TITLE.trim_end_matches(" …");
         let subtitle = format!("Zwischenspeicher, um schneller zu sein · zusammen {}", amount(total));
         let modal = Dialog::new("storage", icon::HARD_DRIVES, title).subtitle(&subtitle).width(460.0).show(ctx, |ui| {
@@ -90,9 +92,9 @@ impl App {
                             ui.add(egui::ProgressBar::new((used as f64 / limit.max(1) as f64).min(1.0) as f32).desired_width(width).desired_height(4.0));
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let busy = matches!(cache, Cache::Denoise) && denoising;
+                            let busy = matches!(cache, Cache::Product(k) if running[k as usize]);
                             let button = ui.add_enabled(used > 0 && !busy, dialog::secondary("Leeren"));
-                            if button.on_disabled_hover_text(if busy { "Während des Entrauschens nicht möglich" } else { "Leer" }).clicked() {
+                            if button.on_disabled_hover_text(if busy { "Während der Berechnung nicht möglich" } else { "Leer" }).clicked() {
                                 clear = Some(cache);
                             }
                         });
@@ -121,7 +123,7 @@ impl App {
                 Ok(())
             }
             Cache::Depth => sk_core::depth::clear_cache(),
-            Cache::Denoise => self.clear_denoise_cache(),
+            Cache::Product(k) => self.clear_product_cache(k),
         };
         self.status = match result {
             Ok(()) => format!("{}: Zwischenspeicher geleert", cache.title()),

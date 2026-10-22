@@ -220,7 +220,7 @@ impl App {
                 // Not tried again by itself: only when the user asks for the feature again.
                 self.status = format!("{}: Laden des KI-Modells abgebrochen", f.label());
                 match f {
-                    AiFeature::Denoise => self.denoise_download_cancelled(),
+                    AiFeature::Denoise => self.product_download_cancelled(crate::ai_products::AiProduct::Denoise),
                     AiFeature::Depth => self.depth_download_cancelled(),
                     _ => {}
                 }

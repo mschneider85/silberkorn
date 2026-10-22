@@ -1,6 +1,6 @@
 //! AI denoising with RawNIND (UtNet2 by Benoit Brummer, UCLouvain, as published for darktable;
 //! weights GPL-3.0, downloaded only at the user's request). Computes the product that
-//! `sk_core::ai_denoise` keeps and blends into the image:
+//! `sk_core::ai_products::DENOISE` keeps and blends into the image:
 //!
 //! - Bayer sensors: the network takes the mosaic itself (four planes R, G, G, B of 2×2 cells,
 //!   black level subtracted, not white balanced) and returns clean camera RGB at full resolution,
@@ -174,11 +174,11 @@ impl Denoiser {
     }
 }
 
-/// Registers RawNIND as the provider of `sk_core::ai_denoise` (whether or not it is downloaded:
+/// Registers RawNIND as the provider of `sk_core::ai_products::DENOISE` (whether or not it is downloaded:
 /// computing fails with a message until it is).
 pub fn register() {
     let denoiser = Denoiser::default();
-    sk_core::ai_denoise::set_provider(&tag(), Box::new(move |path, progress| denoiser.product(path, progress)));
+    sk_core::ai_products::DENOISE.set_provider(&tag(), Box::new(move |path, progress| denoiser.product(path, progress)));
 }
 
 #[cfg(test)]

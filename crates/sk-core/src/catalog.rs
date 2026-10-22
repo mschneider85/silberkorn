@@ -1433,7 +1433,7 @@ mod tests {
             color: CameraColor::new(id),
             as_shot_wb: [1.0; 3],
             orientation: Orientation::Normal,
-            hdr: false, lens: None, lens_corrected: false,
+            hdr: false, lens: None, lens_corrected: false, bayer: false,
         }
     }
 
@@ -2022,7 +2022,7 @@ mod bench_store {
             orientation: crate::image::Orientation::Normal,
             hdr: false,
             lens: None,
-            lens_corrected: false,
+            lens_corrected: false, bayer: false,
         }
     }
 }

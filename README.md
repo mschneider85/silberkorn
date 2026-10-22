@@ -247,9 +247,9 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
   verschieben; die Werte stehen darunter (0–255).
 - **Stilpinsel** (+ unter der Ebenenliste → „Neue Ebene mit Stilpinsel“): Stilpinsel (Aufhellen, Abdunkeln, Wärmer, Haut glätten, Dunst entfernen, …).
 
-### KI-Werkzeuge: Entrauschen und Entfernen
+### KI-Werkzeuge: Raw-Details, Entrauschen und Entfernen
 
-Die neuronalen Netze werden nicht mitgeliefert, sondern nach `~/.local/share/silberkorn/models/`
+Die neuronalen Netze (außer dem von Raw-Details) werden nicht mitgeliefert, sondern nach `~/.local/share/silberkorn/models/`
 geladen (`SILBERKORN_MODELS=<ordner>` überschreibt den Ort), und zwar still beim Programmstart, ohne
 Nachfrage (zusammen etwa 530 MB, unter Windows samt KI-Beschleunigung). Die Modelldateien von
 „Verwacklung entfernen“ (nur in 0.2.6) und deren Zwischenspeicher löscht der Start wieder. Der Startbildschirm zeigt den
@@ -261,7 +261,7 @@ festgelegt); ein abgebrochener Download wird beim nächsten Versuch fortgesetzt.
 
 **Kennzeichnung:** KI-Funktionen tragen ein gelbes Funken-Symbol hinter ihrem Namen, in den
 Werkzeugbereichen (Objektivunschärfe, Neu ausleuchten, Atmosphäre, Entfernen, Gesichter & Sichtung),
-an Werkzeugen und Knöpfen (Objekt, Motiv, Himmel, Tiefe, KI-Entrauschen), in den Menüs
+an Werkzeugen und Knöpfen (Raw-Details, Objekt, Motiv, Himmel, Tiefe, KI-Entrauschen), in den Menüs
 und in der Befehlspalette.
 
 **KI-Beschleunigung** (Bearbeiten → „Grafikkarte …“, Abschnitt „KI-Berechnung“, Windows): Die Netze rechnen dann über
@@ -285,7 +285,25 @@ Statusleiste mit Fortschritt an; Export, Zusammenfügen und Entrauschen lassen s
 abbrechen, und beim Beenden fragt Silberkorn nach, solange sie laufen; worauf man im Bild wartet (Maske, Entfernen, Angleichen),
 erscheint zusätzlich oben im Bild.
 
-- **KI-Entrauschen** (Tab „Details“, Abschnitt „Rauschreduzierung“; das Übertragen-Symbol im Kopf des Abschnitts gilt für die Auswahl): RawNIND (UtNet2, Benoit
+- **Abschnitt „Verbessern“** (Tab „Details“, ganz oben; Entwickeln → „Verbessern“): Raw-Details und
+  KI-Entrauschen, wie Lightroom „Verbessern“. Das Übertragen-Symbol im Kopf gilt für beide, die
+  klassische Rauschreduzierung (Luminanz, Farbe) ist ein eigener Abschnitt darunter. Bei 100 %
+  KI-Entrauschen ist Raw-Details gesperrt und wirkungslos: RawNIND setzt die Farben selbst neu zusammen.
+  Raw-Details lässt Rauschen und Textur stehen (für rauscharme Bilder), KI-Entrauschen glättet.
+- **Raw-Details**: Demosaicing durch
+  DemosaicNet (Michaël Gharbi et al., „Deep Joint Demosaicking and Denoising“, 2016) statt AHD –
+  feine Details mit weniger Farbsäumen, Treppen und Moiré, ähnlich Lightrooms „Raw-Details“. Die
+  Gewichte stehen unter **MIT** und sind mitgeliefert (`crates/sk-ai/models/`, 2.3 MB, aus
+  `bayer.pth` unverändert nach ONNX exportiert; Lizenztext unter Hilfe → „Lizenzen …“). Nur für
+  Bayer-Sensoren; bei X-Trans, linearen DNGs und HDR ist der Regler gesperrt. Das Netz lernte auf
+  weißabgeglichenen, gammakodierten Bildern: Das Mosaik wird vorher abgeglichen und kodiert (Gamma
+  2.2), danach zurückgerechnet. Es hat keinen Rand: Kacheln zu 768 liefern 706 Pixel, sie schließen
+  nahtlos aneinander an (mit der Phase des Bayer-Musters). Übersteuerte Lichter bleiben wie bei AHD.
+  Berechnet, gehalten und gemischt wird wie beim KI-Entrauschen (24 MP etwa 50 s auf 12 Kernen ohne
+  Grafikkarte; `~/.cache/silberkorn/raw-details/`, höchstens 10 GB, `SILBERKORN_DETAILS_CACHE`);
+  **Stärke** mischt es in die AHD-Daten, das KI-Entrauschen kommt danach. Kommandozeile:
+  `cargo run --release -p sk-ai --example raw_details -- <raw> <ordner> [x y]` (Ausschnitt mit AHD und Raw-Details).
+- **KI-Entrauschen**: RawNIND (UtNet2, Benoit
   Brummer, UCLouvain) in der Fassung von darktable (darktable-ai 5.6.0). Die Gewichte stehen unter
   **GPL-3.0**; sie werden nicht mitgeliefert, sondern wie die anderen Modelle beim Start geladen (etwa 57 MB,
   per Teil-Download nur die beiden ONNX-Dateien aus dem Archiv).
@@ -449,6 +467,30 @@ bleiben unberührt. Die Bereiche rechnen auf Grafikkarte und Prozessor gleich.
   Farbton, Sättigung und Helligkeit der ähnlichen Farben zu diesem Ton hin (Flecken, Rötungen),
   „Hautton verändern“ verschiebt den ganzen Bereich.
 
+**Schärfen** (Tab „Details“): **Stärke**, **Radius** und **Schwelle** wie gewohnt (Unscharf maskieren;
+der Radius ist das Sigma der Weichzeichnung, 0.2–1.5 – seine Säume reichen etwa dreimal so weit, 1.5
+entspricht damit ungefähr dem Höchstwert anderer Programme; ältere Bearbeitungen mit mehr bleiben),
+dazu **Details** wie in Lightroom (i-Symbol am Regler): Er bestimmt, *wie* geschärft wird, nicht wie
+stark. 0 ist Unscharf maskieren, 100 ist Dekonvolution (`sk-core/src/deconvolution.rs`):
+Richardson-Lucy auf der Helligkeit der linearen Daten, 8 Durchgänge, mit einem Gauß-Radius, der aus
+den schärfsten waagerechten und senkrechten Kanten des Bildes gemessen wird (10–90-%-Anstieg,
+schärfstes Viertel, 80 % davon, 0.5–1.6 px). Flächen ohne Detail und ausgebrannte Lichter bleiben
+ausgespart, kein Pixel ändert sich um mehr als den Faktor 1.35 (gegen Säume). Dazwischen wird die
+Stärke geteilt; bei Details 100 ist die Dekonvolution ab Stärke 120 voll, darüber kommt wieder
+Unscharf maskieren dazu (`Detail::sharpen_split`). Radius und Schwelle sind gesperrt, solange kein
+Unscharf maskieren wirkt. Die Dekonvolution wird je Bild einmal gerechnet (24 MP etwa 1 s), der Regler
+mischt danach nur.
+
+**Strg beim Ziehen eines Reglers** zeigt statt des Bildes, was er bewirkt, solange er gehalten wird
+(`SliderView`), wie Alt in Lightroom (Alt allein öffnet unter Windows das Fenstermenü):
+- Belichtung, Lichter, Weiß und Weißpunkt der Tonwerte: Schwarz, ausgefressene Stellen weiß bzw. in der
+  Farbe der vollen Kanäle; Tiefen, Schwarz und Schwarzpunkt der Tonwerte: Weiß, abgesoffene Stellen
+  schwarz bzw. farbig. Dieselben Grenzen wie die Belichtungswarnung (255 und 0).
+- Schärfen: Stärke das Bild in Graustufen, Radius und Details nur den Schärfungsanteil als Relief auf
+  Mittelgrau, Schwelle die Maske (weiß wird geschärft); am besten bei 100 %.
+- Rauschreduzierung (Luminanz, Farbe): was entfernt wird, als Relief auf Mittelgrau. Körnchen und
+  Farbflecken heißen, sie arbeitet richtig; erkennbare Umrisse, sie nimmt schon Detail mit.
+
 **Leuchten** (Tab „Effekte“, Orton-Effekt): eine weichgezeichnete Kopie des Bildes wird, vor allem aus
 ihren hellen Teilen, per „Negativ multiplizieren“ darübergelegt; Lichter strahlen in die Umgebung.
 **Größe** bestimmt die Weichzeichnung (0,3 bis 3,3 % der langen Kante); gerechnet wird nach dem
@@ -609,12 +651,44 @@ Maustaste auf dem eingepassten Bild gedrückt halten: Ein Ausschnitt unter dem C
 100 % (ein Bildpixel pro Bildschirmpixel). Gezeigt werden die
 Kacheln in voller Auflösung, solange sie noch berechnet werden die vergrößerte Vorschau.
 
+### Histogramm
+
+Über dem Bild zeigt das Histogramm die Farbe unter der Maus: je Kanal eine Linie und die Werte in
+Prozent (die angezeigten sRGB-Werte). Über dem Histogramm erscheinen die Tonbereiche Schwarz, Tiefen,
+Belichtung, Lichter und Weiß (0–10, 10–35, 35–65, 65–90, 90–100 %); **Ziehen** darin verstellt den
+Regler des Bereichs (die ganze Breite: sein halber Bereich), auf der aktiven Ebene oder dem ganzen
+Bild, ein Rückgängig-Schritt je Zug. Umgekehrt markiert ein Regler im Tab „Belichtung“ seinen Bereich,
+solange die Maus darauf steht.
+
+### Ansicht: Bildinfo, Hintergrund, Weißabgleich-Pipette
+
+- **Bildinfo** (I, Ansicht → „Bildinfo …“): oben links über dem Bild Dateiname und Belichtung (Zeit,
+  Blende, ISO, Brennweite); ein zweites I zeigt dazu Kamera, Objektiv, Aufnahmedatum und Größe, ein
+  drittes blendet aus. Bleibt über Programmstarts.
+- **Hintergrund** (Rechtsklick neben das Bild oder Ansicht → „Hintergrund“): Dunkelgrau (Standard, im
+  Vollbild schwarz), Schwarz, Mittelgrau (sRGB 119, 18 %) oder Weiß. Die Umgebung bestimmt mit, wie
+  hell ein Bild wirkt; vor dem Drucken sind Mittelgrau oder Weiß ehrlicher. Die Druckvorschau zeigt
+  weiter das Papier.
+- **Weißabgleich-Pipette** (W): Beim Überfahren zeigt das Bild schon den Weißabgleich, den ein Klick an
+  dieser Stelle ergäbe, und neben dem Cursor eine Lupe der Stelle (der Rahmen ist der gemittelte
+  Bereich) mit Kelvin und Tönung – oder warum es dort nicht geht (zu dunkel, ausgebrannt).
+
+### Zielkorrektur
+
+Das Fadenkreuz neben den Kanälen der **Gradationskurve** bzw. neben „Farbton / Sättigung /
+Helligkeit“ im **Farbeditor** schaltet sie ein (Esc beendet): Ziehen im Bild nach oben oder unten
+ändert, was dort liegt, wo der Zug begann – die Kurve beim Ton der Stelle (ein Punkt in der Nähe wird
+genommen, sonst einer gesetzt) bzw. Farbton, Sättigung oder Helligkeit der Farbbereiche nach dem Anteil,
+den sie am Farbton der Stelle haben (`sk-app/src/target_tool.rs`). Auf der aktiven Ebene oder dem
+ganzen Bild.
+
 ### Verlauf und Schnappschüsse
 
 Der Tab **„Verlauf“** listet alle Bearbeitungsschritte des Bildes, benannt nach dem, was sich
 geändert hat („Belichtung 0,8“, „Perspektive, Geraderichten“). Ein Klick springt zu diesem Stand,
 spätere Schritte bleiben erreichbar, bis eine neue Änderung sie verwirft. Der Verlauf gilt, solange
-das Bild geöffnet ist.
+das Bild geöffnet ist. Überfahren eines Schritts oder Schnappschusses zeigt ihn im Bild, ohne ihn
+anzuwenden.
 
 **Schnappschüsse** sichern einen Stand unter einem Namen, dauerhaft im Sidecar (je Bild bzw.
 Variante). Klick wendet ihn an (ein Rückgängig-Schritt), Doppelklick benennt um.
@@ -741,6 +815,19 @@ stellt die Auswahl um; Stile und eingefügte Anpassungen übernehmen die Version
   Median der Helligkeit (0,15 % der langen Kante), sodass Äste, Linien und feine Texturen ihren
   Kontrast behalten. Die Farbmatrix folgt dem Licht: Hat die Kamera auch eine Matrix für
   Glühlampenlicht, wird zwischen Tageslicht und Glühlampe nach der Farbtemperatur interpoliert.
+- **4:** Teilweise ausgebrannte Lichter werden rekonstruiert (`sk-core/src/highlights.rs`): Ist nur
+  ein Kanal oder sind zwei übersteuert, schätzt Silberkorn sie aus den heilen Kanälen und dem
+  Farbanteil der hellen, nicht übersteuerten Umgebung (auf einem groben Raster gesammelt und per
+  Push-Pull in die ausgebrannten Stellen verteilt). Ein heller Himmel, dessen Grün übersteuert
+  ist, bleibt so blau statt cyan; die Helligkeit steigt weiter an (Werte über 1, die der
+  Lichter-Regler zurückholen kann). Nur wo alle Kanäle voll sind, wird wie bisher Weiß daraus.
+  Etwa 0.1 s für 24 MP; immer aktiv, ohne Regler.
+
+Unabhängig von der Prozessversion werden **Hotpixel** entfernt: Ein Fotosit des Bayer-Mosaiks,
+das mehr als dreimal so hell ist wie alle acht gleichfarbigen Nachbarn und alle acht direkt
+darum, bekommt den Median der gleichfarbigen Nachbarn (gleich nach dem Skalieren der RAW-Daten,
+also auch für Vorschau, Raw-Details und KI-Entrauschen). Echte Lichtpunkte treffen durch das
+Objektiv immer mehrere Fotosites und bleiben; in den Beispielfotos wird kein einziges ersetzt.
 
 ### Varianten
 
@@ -841,7 +928,7 @@ beziehen sich aber nur auf die Bilder der Session.
   genutzten entfernt. Session-Caches sind davon ausgenommen. Sichtbare Vorschaubilder werden vor
   denen berechnet, an denen man schon vorbeigescrollt ist.
 - **Speicherplatz** (Bearbeiten → „Speicherplatz …“): zeigt die Zwischenspeicher auf der Festplatte
-  mit Füllstand – Vorschauen und Miniaturen (4 GB), Tiefenkarten (2 GB), KI-Entrauschen (20 GB) –
+  mit Füllstand – Vorschauen und Miniaturen (4 GB), Tiefenkarten (2 GB), Raw-Details (10 GB), KI-Entrauschen (20 GB) –
   und leert sie einzeln. Alles darin wird bei Bedarf neu berechnet.
 
 Sidecars bleiben die maßgebliche Quelle; der Katalog ist ein Index und kann jederzeit neu aufgebaut werden.
@@ -908,6 +995,7 @@ die Leertaste und die Tasten der Schnellbearbeitung.
 | Strg+[ / Strg+] | drehen |
 | Y | Vorher/Nachher |
 | E | Belichtungswarnung |
+| I | Bildinfo über dem Bild: kurz / ausführlich / aus |
 | Umschalt+P | Softproof |
 | W | Weißabgleich-Pipette |
 | Z / Doppelklick | Einpassen ↔ 100 % · Mausrad: zoomen · Ziehen: verschieben |
