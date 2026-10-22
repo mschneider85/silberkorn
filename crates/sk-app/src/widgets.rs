@@ -2292,3 +2292,23 @@ pub(crate) fn subheading(ui: &mut Ui, text: &str) {
     ui.add_space(8.0);
     ui.label(egui::RichText::new(text).size(11.5).strong().color(crate::theme::TEXT_DIM));
 }
+
+/// A menu that opens with a click on `resp`, in [`theme::menu_style`] (its submenus too).
+pub fn menu_popup(resp: &Response) -> egui::Popup<'_> {
+    egui::Popup::menu(resp).style(theme::menu_style)
+}
+
+/// The context menu of `resp` (right click), in [`theme::menu_style`].
+pub fn context_menu(resp: &Response, add_contents: impl FnOnce(&mut Ui)) -> Option<egui::InnerResponse<()>> {
+    egui::Popup::context_menu(resp).style(theme::menu_style).show(add_contents)
+}
+
+/// [`Ui::menu_button`] in [`theme::menu_style`]; within a menu a submenu (it takes the menu's style).
+pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, add_contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
+    if egui::containers::menu::is_in_menu(ui) {
+        return ui.menu_button(atoms, add_contents);
+    }
+    let config = egui::containers::menu::MenuConfig::new().style(theme::menu_style);
+    let (response, inner) = egui::containers::menu::MenuButton::new(atoms).config(config).ui(ui, add_contents);
+    egui::InnerResponse::new(inner.map(|i| i.inner), response)
+}

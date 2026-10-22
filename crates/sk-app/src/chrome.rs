@@ -1,6 +1,6 @@
 //! Window chrome: title bar with menus, toolbar, tool tab rail, status bar and the help dialogs.
 
-use egui::containers::menu::{self, MenuConfig, MenuState, SubMenu};
+use egui::containers::menu::{MenuConfig, MenuState, SubMenu};
 use egui::{
     Align, Button, Color32, FontId, Id, Key, Layout, Margin, Modifiers, Order, PointerButton, Popup, PopupCloseBehavior,
     Rect, Response, RichText, Sense, Stroke, StrokeKind, Ui, UiBuilder, UiKind, UiStackInfo, ViewportCommand, pos2, vec2,
@@ -154,10 +154,10 @@ impl App {
                     .id(menu_popup_id(ui, i))
                     .open_memory(None)
                     .close_behavior(PopupCloseBehavior::CloseOnClickOutside)
-                    .style(menu::menu_style)
+                    .style(crate::theme::menu_style)
                     .info(UiStackInfo::new(UiKind::Menu).with_tag_value(
                         MenuConfig::MENU_CONFIG_TAG,
-                        MenuConfig::new().close_behavior(PopupCloseBehavior::CloseOnClickOutside),
+                        MenuConfig::new().close_behavior(PopupCloseBehavior::CloseOnClickOutside).style(crate::theme::menu_style),
                     ));
                 popup.show(|ui| {
                     match i {
@@ -216,7 +216,7 @@ impl App {
     /// Organizing: rating, labels, metadata, names, variants, stacks, where the files are.
     /// "Bewertung" and "Farb-Label" submenus for the selection (photo menu and thumbnails).
     pub(crate) fn rating_label_menus(&mut self, ui: &mut Ui) {
-        ui.menu_button(format!("{}  Bewertung", icon::STAR), |ui| {
+        crate::widgets::menu_button(ui, format!("{}  Bewertung", icon::STAR), |ui| {
             for r in 0..=5u8 {
                 let text = if r == 0 { "Keine".to_string() } else { "★".repeat(r as usize) };
                 if ui.add(Button::new(text).shortcut_text(shortcut(&format!("rating-{r}")))).clicked() {
@@ -224,7 +224,7 @@ impl App {
                 }
             }
         });
-        ui.menu_button(format!("{}  Farb-Label", icon::TAG), |ui| {
+        crate::widgets::menu_button(ui, format!("{}  Farb-Label", icon::TAG), |ui| {
             for (l, id) in [
                 (ColorLabel::None, "label-none"),
                 (ColorLabel::Red, "label-red"),
@@ -243,7 +243,7 @@ impl App {
         let n_sel = self.selected_count();
         ui.add_enabled_ui(n_sel > 0, |ui| {
             self.rating_label_menus(ui);
-            ui.menu_button(format!("{}  XMP", icon::FILE_CODE), |ui| {
+            crate::widgets::menu_button(ui, format!("{}  XMP", icon::FILE_CODE), |ui| {
                 if item(ui, icon::UPLOAD_SIMPLE, "Metadaten in XMP schreiben", "", true) {
                     self.write_xmp_selection();
                 }
@@ -314,7 +314,7 @@ impl App {
             self.show_navigator = !self.show_navigator;
         }
         self.command_item(ui, "info-overlay");
-        ui.menu_button("Hintergrund", |ui| {
+        crate::widgets::menu_button(ui, "Hintergrund", |ui| {
             for b in crate::app::ViewerBackground::ALL {
                 if check(ui, self.viewer_background == b, b.label(), "") {
                     self.viewer_background = b;
@@ -375,7 +375,7 @@ impl App {
             self.toggle_print_zoom();
         }
         ui.separator();
-        ui.menu_button("Hilfslinien", |ui| {
+        crate::widgets::menu_button(ui, "Hilfslinien", |ui| {
             for g in crate::guides::Guides::ALL {
                 if check(ui, self.guides == g, g.label(), &if g == crate::guides::Guides::Off { shortcut("guides-next") } else { String::new() }) {
                     self.guides = g;
@@ -511,7 +511,7 @@ impl App {
                 group_gap(ui);
                 let guides_on = self.guides != crate::guides::Guides::Off;
                 let resp = tool(ui, icon::GRID_NINE, &crate::commands::hint("Hilfslinien", "guides-next"), guides_on, true);
-                Popup::menu(&resp).show(|ui| {
+                crate::widgets::menu_popup(&resp).show(|ui| {
                     for g in crate::guides::Guides::ALL {
                         if check(ui, self.guides == g, g.label(), "") {
                             self.guides = g;

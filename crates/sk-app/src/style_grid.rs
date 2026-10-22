@@ -159,7 +159,7 @@ impl App {
                         clicked = Some((style.clone(), *look));
                     }
                     if !look {
-                        resp.context_menu(|ui| {
+                        crate::widgets::context_menu(&resp, |ui| {
                             if ui.button("Stil löschen …").clicked() {
                                 delete = Some(style.name.clone());
                                 ui.close();

@@ -232,7 +232,7 @@ impl App {
         // Right-click (no tool takes it): what the image is shown on.
         if !self.viewer_tool_active() {
             let mut chosen = None;
-            response.context_menu(|ui| {
+            crate::widgets::context_menu(&response, |ui| {
                 ui.label(egui::RichText::new("Hintergrund").color(theme::TEXT_DIM));
                 for b in crate::app::ViewerBackground::ALL {
                     if ui.radio(self.viewer_background == b, b.label()).clicked() {
@@ -1152,7 +1152,7 @@ impl App {
             }
         }
         // The photo commands that matter most for a picked image, like in the photo menu.
-        resp.context_menu(|ui| {
+        crate::widgets::context_menu(&resp, |ui| {
             self.rating_label_menus(ui);
             ui.separator();
             self.command_item(ui, "copy-adjustments");

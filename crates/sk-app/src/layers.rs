@@ -1259,7 +1259,7 @@ impl App {
                     if resp.clicked() {
                         act = Some(Act::Select(*area));
                     }
-                    resp.context_menu(|ui| {
+                    crate::widgets::context_menu(&resp, |ui| {
                         if let Area::Spot(i) = area
                             && ui.button(format!("{}  Neue Quelle", icon::MAGIC_WAND)).clicked()
                         {
@@ -1562,7 +1562,7 @@ impl App {
                     } else if resp.clicked() {
                         action = Some(LayerAction::Select(Some(li)));
                     }
-                    resp.context_menu(|ui| {
+                    crate::widgets::context_menu(&resp, |ui| {
                         if ui.button("Umbenennen").clicked() {
                             *renaming = Some(Rename { index: li, original: l.name.clone(), focus: true });
                             action = Some(LayerAction::Select(Some(li)));
@@ -1581,11 +1581,11 @@ impl App {
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.menu_button(egui::RichText::new(icon::PLUS).size(15.0), |ui| {
+                crate::widgets::menu_button(ui, egui::RichText::new(icon::PLUS).size(15.0), |ui| {
                     if ui.button("Neue Ebene").on_hover_text("Leere Maske, dann malen oder auswählen").clicked() {
                         action = Some(LayerAction::Add);
                     }
-                    ui.menu_button("Neue Ebene mit Stilpinsel", |ui| {
+                    crate::widgets::menu_button(ui, "Neue Ebene mit Stilpinsel", |ui| {
                         for (k, (name, _)) in style_brushes().iter().enumerate() {
                             if ui.button(*name).clicked() {
                                 action = Some(LayerAction::AddStyle(k));

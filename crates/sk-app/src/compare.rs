@@ -378,7 +378,7 @@ impl App {
             if resp.clicked() {
                 clicked = Some(path.clone());
             }
-            resp.context_menu(|ui| {
+            crate::widgets::context_menu(&resp, |ui| {
                 let text = if is_ref { "Referenzbild entfernen" } else { "Referenzbild festlegen" };
                 if ui.button(format!("{}  {text}", icon::PUSH_PIN)).clicked() {
                     toggle_ref = Some(path.clone());

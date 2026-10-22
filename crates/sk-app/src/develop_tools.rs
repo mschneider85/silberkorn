@@ -454,7 +454,7 @@ impl App {
                     if ui.add(egui::Button::new(label).selected(guide_mode.is_some())).on_hover_text(tip).clicked() {
                         guides = Some(guide_mode.is_none().then_some(guide_pref));
                     }
-                    ui.menu_button(icon::CARET_DOWN, |ui| {
+                    crate::widgets::menu_button(ui, icon::CARET_DOWN, |ui| {
                         ui.label(RichText::new("Linien für:").weak());
                         for (mode, label, tip) in [
                             (GuideMode::Vertical, "Vertikale Kanten", "Zwei Linien an Kanten legen, die vertikal sein sollen"),
@@ -902,7 +902,7 @@ impl App {
                 self.auto_adjust_selection();
             }
             let mut opts = self.auto_options;
-            ui.menu_button(icon::CARET_DOWN, |ui| {
+            crate::widgets::menu_button(ui, icon::CARET_DOWN, |ui| {
                 ui.label(RichText::new("Automatisch anpassen setzt:").weak());
                 crate::widgets::checkbox(ui, &mut opts.white_balance, "Weißabgleich");
                 crate::widgets::checkbox(ui, &mut opts.exposure, "Belichtung");

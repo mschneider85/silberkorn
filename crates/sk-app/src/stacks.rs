@@ -275,7 +275,7 @@ impl App {
                 self.pending = Some(PendingAction::Stack(a));
             }
         };
-        ui.menu_button(format!("{}  Stapel", icon::STACK_SIMPLE), |ui| {
+        crate::widgets::menu_button(ui, format!("{}  Stapel", icon::STACK_SIMPLE), |ui| {
             act(ui, icon::STACK_PLUS, "Stapel bilden", shortcut_of("stack-create"), n_files >= 2, StackAction::Create);
             act(ui, icon::STACK_MINUS, "Stapel auflösen", shortcut_of("stack-dissolve"), in_stack, StackAction::Dissolve);
             act(ui, icon::ARROW_SQUARE_OUT, "Aus Stapel entfernen", String::new(), in_stack, StackAction::RemoveFromStack);

@@ -150,7 +150,7 @@ impl App {
                             } else if r.clicked() {
                                 action = Some(SnapshotAction::Apply(*i));
                             }
-                            r.context_menu(|ui| {
+                            crate::widgets::context_menu(&r, |ui| {
                                 if ui.button("Anwenden").clicked() {
                                     action = Some(SnapshotAction::Apply(*i));
                                 }
@@ -193,7 +193,7 @@ impl App {
                             } else if r.clicked() {
                                 action = Some(SnapshotAction::Apply(i));
                             }
-                            r.context_menu(|ui| {
+                            crate::widgets::context_menu(&r, |ui| {
                                 if ui.button("Anwenden").clicked() {
                                     action = Some(SnapshotAction::Apply(i));
                                 }

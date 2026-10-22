@@ -633,7 +633,7 @@ impl App {
                 } else if resp.clicked() {
                     open = Some(scope);
                 }
-                resp.context_menu(|ui| {
+                crate::widgets::context_menu(&resp, |ui| {
                     if album.smart.is_none() && ui.button("Auswahl hinzufügen").clicked() {
                         action = Some(AlbumAction::AddSelection(album.id));
                         ui.close();

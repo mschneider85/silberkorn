@@ -364,7 +364,7 @@ impl App {
                 self.pending = Some(PendingAction::ToSelects);
             }
             if let Some(s) = &self.session {
-                ui.menu_button(format!("{}  Verschieben nach", icon::ARROW_BEND_UP_RIGHT), |ui| {
+                crate::widgets::menu_button(ui, format!("{}  Verschieben nach", icon::ARROW_BEND_UP_RIGHT), |ui| {
                     for f in [SessionFolder::Capture, SessionFolder::Selects] {
                         if ui.add_enabled(self.folder != s.folder(f), Button::new(format!("{}  {}", folder_icon(f), f.label()))).clicked() {
                             self.pending = Some(PendingAction::MoveTo(s.folder(f)));
@@ -402,7 +402,7 @@ impl App {
         }
         let recent: Vec<PathBuf> = self.recent_sessions.iter().filter(|p| Some(*p) != self.session.as_ref().map(|s| &s.file)).cloned().collect();
         ui.add_enabled_ui(!recent.is_empty(), |ui| {
-            ui.menu_button(format!("{}  Zuletzt verwendet", icon::CLOCK_COUNTER_CLOCKWISE), |ui| {
+            crate::widgets::menu_button(ui, format!("{}  Zuletzt verwendet", icon::CLOCK_COUNTER_CLOCKWISE), |ui| {
                 for file in &recent {
                     let name = file.file_stem().unwrap_or_default().to_string_lossy().to_string();
                     if ui.button(name).on_hover_text(file.display().to_string()).clicked() {
@@ -449,7 +449,7 @@ impl App {
                         open = Some(dir.clone());
                     }
                 }
-                resp.context_menu(|ui| {
+                crate::widgets::context_menu(&resp, |ui| {
                     if f == SessionFolder::Trash && ui.add_enabled(count > 0, Button::new("Papierkorb leeren …")).clicked() {
                         empty_trash = true;
                         ui.close();
@@ -496,7 +496,7 @@ impl App {
                 if resp.clicked() && fav.is_dir() {
                     open = Some(fav.clone());
                 }
-                resp.context_menu(|ui| {
+                crate::widgets::context_menu(&resp, |ui| {
                     if ui.button("Aus Favoriten entfernen").clicked() {
                         toggle_fav = Some(fav.clone());
                         ui.close();

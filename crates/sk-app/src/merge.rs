@@ -39,7 +39,7 @@ impl App {
     pub fn merge_menu(&mut self, ui: &mut Ui) {
         let n = sk_core::variant::files_of(&self.selected_paths()).len();
         ui.add_enabled_ui(n >= 2, |ui| {
-            ui.menu_button(format!("{}  Zusammenfügen", icon::STACK), |ui| {
+            crate::widgets::menu_button(ui, format!("{}  Zusammenfügen", icon::STACK), |ui| {
                 if ui.button(format!("{}  HDR …", icon::SUN_HORIZON)).clicked() {
                     self.open_merge(MergeKind::Hdr);
                 }

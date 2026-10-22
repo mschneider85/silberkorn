@@ -6,7 +6,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use egui::{Color32, Popup, Rect, RichText, Sense, Ui, Vec2};
+use egui::{Color32, Rect, RichText, Sense, Ui, Vec2};
 use serde::{Deserialize, Serialize};
 use sk_core::look_match::LookOptions;
 use sk_core::params::Adjustments;
@@ -401,7 +401,7 @@ impl App {
     fn look_add_menu(&self, resp: &egui::Response) -> Option<AddChoice> {
         let resp = resp.clone().on_hover_text("Bilddatei, dieses Bild oder das Referenzbild als Vorlage");
         let mut choice = None;
-        Popup::menu(&resp).show(|ui| {
+        crate::widgets::menu_popup(&resp).show(|ui| {
             ui.set_min_width(220.0);
             if ui
                 .button(format!("{}  Bilddatei …", icon::FOLDER_OPEN))
@@ -667,7 +667,7 @@ impl App {
         if is_image && resp.clicked() {
             action = Some(CardAction::Open);
         }
-        resp.context_menu(|ui| {
+        crate::widgets::context_menu(&resp, |ui| {
             if is_image && ui.button(format!("{}  Öffnen", icon::IMAGE)).clicked() {
                 action = Some(CardAction::Open);
             }

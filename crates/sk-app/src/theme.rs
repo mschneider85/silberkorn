@@ -119,6 +119,13 @@ pub fn install(ctx: &egui::Context) {
     });
 }
 
+/// Style of menus and context menus: egui's, with roomier entries.
+pub fn menu_style(s: &mut egui::Style) {
+    egui::containers::menu::menu_style(s);
+    s.spacing.button_padding = vec2(8.0, 5.0);
+    s.spacing.interact_size.y = 28.0;
+}
+
 /// Frame for the dark chrome bars (menu, toolbar, rail, status bar).
 pub fn chrome_frame(margin: Margin) -> egui::Frame {
     egui::Frame::new().fill(CHROME).inner_margin(margin)
