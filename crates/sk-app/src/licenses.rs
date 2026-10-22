@@ -24,7 +24,7 @@ fn sections() -> [(&'static str, Vec<Entry>); 3] {
                 ("BiRefNet (Peng Zheng et al.)", "Motiv auswählen", models::SUBJECT_EDGES.license),
                 ("U²-Net (Xuebin Qin et al.)", "Automatisch anpassen, Look angleichen", models::SUBJECT.license),
                 ("MobileSAM (Chaoning Zhang et al.), Segment Anything (Meta)", "Objekt auswählen", models::OBJECT_ENCODER.license),
-                ("MI-GAN (Picsart)", "Entfernen", models::INPAINT.license),
+                ("LaMa (Roman Suvorov et al., Samsung AI Center), ONNX: Carve", "Entfernen", models::INPAINT.license),
                 ("Depth Anything V2 Small (Lihe Yang et al.)", "Tiefenkarte", models::DEPTH.license),
                 ("YuNet (OpenCV Zoo)", "Gesichtserkennung", models::FACE_DETECT.license),
                 ("SFace (OpenCV Zoo)", "Gesichtsvergleich", models::FACE_EMBED.license),

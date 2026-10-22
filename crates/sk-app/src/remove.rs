@@ -251,12 +251,18 @@ impl App {
     }
 }
 
-/// Removal computed in the background (see `Workers::inpaint`).
-pub fn compute(job: &InpaintJob, model: &mut Option<(sk_ai::inpaint::Inpainter, u64)>, progress: &dyn Fn(f32)) -> Result<sk_core::params::Removal, String> {
+/// The network, loaded unless it is (again, when the runtime settings changed).
+pub fn load_model(model: &mut Option<(sk_ai::inpaint::Inpainter, u64)>) -> Result<(), String> {
     let generation = sk_ai::runtime::config_generation();
     if model.as_ref().is_none_or(|(_, g)| *g != generation) {
         *model = Some((sk_ai::inpaint::Inpainter::load(&models::path(&models::INPAINT)).map_err(|e| format!("{e:#}"))?, generation));
     }
+    Ok(())
+}
+
+/// Removal computed in the background (see `Workers::inpaint`).
+pub fn compute(job: &InpaintJob, model: &mut Option<(sk_ai::inpaint::Inpainter, u64)>, progress: &dyn Fn(f32)) -> Result<sk_core::params::Removal, String> {
+    load_model(model)?;
     let full = match &job.full {
         Some(f) => f.clone(),
         None => Arc::new(sk_core::raw::load_full(&job.path).map_err(|e| format!("{e:#}"))?.1),

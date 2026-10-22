@@ -288,6 +288,13 @@ pub struct InpaintJob {
     pub replaces: Option<u64>,
 }
 
+impl InpaintJob {
+    /// Only loads the network (when the tool is chosen, so that the first stroke doesn't wait).
+    pub fn warm_up() -> Self {
+        Self { generation: 0, path: PathBuf::new(), full: None, wb: [1.0; 3], strokes: Vec::new(), replaces: None }
+    }
+}
+
 /// The current image with each style applied, small (see `style_grid`); replaces earlier jobs.
 pub struct StyleThumbJob {
     pub key: u64,
@@ -1116,6 +1123,12 @@ impl Workers {
                 let mut model: Option<(sk_ai::inpaint::Inpainter, u64)> = None;
                 while let Ok(job) = inpaint_rx.recv() {
                     activity.touch();
+                    if job.strokes.is_empty() {
+                        if let Err(e) = crate::guard::catch(|| crate::remove::load_model(&mut model)).and_then(|r| r) {
+                            log::warn!("Entfernen: Modell nicht geladen: {e}");
+                        }
+                        continue;
+                    }
                     let progress = |p: f32| {
                         let _ = ev_tx.send(Event::RemovalProgress { generation: job.generation, progress: p });
                         ctx.request_repaint();

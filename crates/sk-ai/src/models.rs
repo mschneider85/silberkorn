@@ -56,14 +56,16 @@ pub const DENOISE_LINEAR: ModelInfo = ModelInfo {
 /// darktable-ai's release archive with both RawNIND models (pinned release).
 const RAWNIND_ARCHIVE: &str = "https://github.com/darktable-org/darktable-ai/releases/download/release-5.6.0/rawdenoise-nind.dtmodel";
 
-/// Object removal: MI-GAN (Picsart), inpainting at 512 px.
+/// Object removal: LaMa (Roman Suvorov et al., Samsung AI Center; Apache-2.0), inpainting at
+/// 512 px, as exported to ONNX by Carve (Fourier convolutions from standard operations, so
+/// that tract runs it as well).
 pub const INPAINT: ModelInfo = ModelInfo {
-    label: "Entfernen (MI-GAN)",
-    file: "migan.onnx",
-    url: "https://huggingface.co/andraniksargsyan/migan/resolve/406830d0fa60666da0071c342ad2fbc8f30c5c64/migan.onnx",
-    bytes: 29_546_882,
-    sha256: "593eba0b7e04730f1b61c0a3cbca68d97d8d6a7ff5c6a44a7b9d7fcd880fc5ae",
-    license: "MIT",
+    label: "Entfernen (LaMa)",
+    file: "lama_fp32.onnx",
+    url: "https://huggingface.co/Carve/LaMa-ONNX/resolve/c3c0c9e468934d62e79c329e35d82dd09ff8c444/lama_fp32.onnx",
+    bytes: 208_044_816,
+    sha256: "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",
+    license: "Apache-2.0",
     entry: None,
 };
 
@@ -159,8 +161,9 @@ pub const SUBJECT_EDGES: ModelInfo = ModelInfo {
 };
 
 /// Files of models that Silberkorn no longer uses (removed at startup): NAFNet of
-/// "Verwacklung entfernen", which came with 0.2.6 only.
-const OBSOLETE: [&str; 2] = ["nafnet_deblur.onnx", "nafnet_deblur.data"];
+/// "Verwacklung entfernen", which came with 0.2.6 only, and MI-GAN, which "Entfernen" used
+/// before LaMa (up to 0.2.14).
+const OBSOLETE: [&str; 3] = ["nafnet_deblur.onnx", "nafnet_deblur.data", "migan.onnx"];
 
 /// Deletes the files of models that are no longer used.
 pub fn remove_obsolete() {

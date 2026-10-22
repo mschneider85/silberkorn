@@ -444,6 +444,9 @@ impl App {
                     app.prepare_object();
                 }
             }),
+            // Its network takes seconds to load: from now on, not with the first stroke (only for
+            // those who use the tool; it takes about 1 GB).
+            Some(LocalTool::Remove) if self.subject_ahead => self.with_ai(AiFeature::Inpaint, |app| app.workers.inpaint(crate::workers::InpaintJob::warm_up())),
             Some(LocalTool::Remove) => {
                 self.ensure_ai(AiFeature::Inpaint);
             }

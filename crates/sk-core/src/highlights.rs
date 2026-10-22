@@ -127,7 +127,7 @@ pub fn reconstruct(src: &LinearImage, wb: [f32; 3]) -> Option<LinearImage> {
 /// Fills a grid of weighted sums (`num` / `den`) everywhere from where it has data: halved
 /// until every cell has some, then interpolated back up into the cells without. `None` if
 /// there is no data at all.
-fn push_pull(num: Vec<[f32; 3]>, den: Vec<f32>, w: usize, h: usize) -> Option<Vec<[f32; 3]>> {
+pub fn push_pull(num: Vec<[f32; 3]>, den: Vec<f32>, w: usize, h: usize) -> Option<Vec<[f32; 3]>> {
     let total: f32 = den.iter().sum();
     if total <= 0.0 {
         return None;

@@ -630,7 +630,8 @@ pub struct App {
     /// tab since when (see `prepare_subject`).
     pub(crate) subject_prepared: Option<u64>,
     pub(crate) subject_shown: Option<(u64, Instant)>,
-    /// Masks are computed ahead (not in tests: each would load BiRefNet).
+    /// Masks are computed and networks loaded ahead (not in tests: each would load BiRefNet and
+    /// LaMa).
     pub(crate) subject_ahead: bool,
     /// Clicks of the object tool on the active layer (see `layers::ObjectSession`).
     pub object_session: Option<crate::layers::ObjectSession>,

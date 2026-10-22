@@ -266,7 +266,7 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
 
 Die neuronalen Netze (außer dem von Raw-Details) werden nicht mitgeliefert, sondern nach `~/.local/share/silberkorn/models/`
 geladen (`SILBERKORN_MODELS=<ordner>` überschreibt den Ort), und zwar still beim Programmstart, ohne
-Nachfrage (zusammen etwa 530 MB, unter Windows samt KI-Beschleunigung). Die Modelldateien von
+Nachfrage (zusammen etwa 710 MB, unter Windows samt KI-Beschleunigung). Die Modelldateien von
 „Verwacklung entfernen“ (nur in 0.2.6) und deren Zwischenspeicher löscht der Start wieder. Der Startbildschirm zeigt den
 Fortschritt, danach läuft der Download in der Statusleiste weiter; man kann sofort arbeiten. Wird eine
 Funktion benutzt, bevor ihr Modell da ist (oder fehlte beim Start das Internet), sieht man den Fortschritt
@@ -334,16 +334,26 @@ erscheint zusätzlich oben im Bild.
   in die RAW-Daten: nicht-destruktiv, rückgängig zu machen, gilt für Vorschau, Export und
   Thumbnails. Fehlt es beim Export, wird es dort berechnet – nie wird stillschweigend ohne
   exportiert. Kommandozeile: `cargo run --release -p sk-ai --example denoise -- <raw> <ordner> [stärke] [--linear]`
-- **Entfernen** (X, Tab „Retusche“): Über Störendes malen; beim Loslassen füllt MI-GAN
-  (Picsart, MIT, 30 MB) die Stelle passend zur Umgebung. Gefüllt wird in voller Auflösung, bei
-  größeren Markierungen in mehreren 512er-Fenstern nacheinander; erst sehr große Flächen werden
-  verkleinert berechnet. Das Ergebnis ist ein kleiner Flicken mit weicher Kante im Sidecar (Feld
+- **Entfernen** (X, Tab „Retusche“): Über Störendes malen; beim Loslassen füllt LaMa (Roman Suvorov
+  et al., Samsung AI Center, Apache-2.0; ONNX von Carve, 208 MB, auch mit tract lauffähig) die Stelle
+  passend zur Umgebung; bis 0.2.14 war es MI-GAN, dessen Datei der Start nun löscht. Es rechnet immer
+  auf dem Prozessor: DirectML scheitert an den Matrixprodukten seiner Fourier-Faltungen („Falscher
+  Parameter“, GTX 1650 Ti). Pro 512er-Fenster etwa 2.6 s mit ONNX Runtime unter Windows (eine ganze
+  Entfernung knapp 3 s), 10 s mit tract; in den Speicher geladen wird das Netz (gut 10 s, etwa 1 GB) im Hintergrund,
+  sobald das Werkzeug gewählt wird, nicht erst mit dem ersten Strich. Das Netz rechnet so verkleinert, dass die
+  Markierung höchstens gut ein Drittel seines 512er-Fensters einnimmt (es sieht dann genug Umgebung,
+  im Maßstab der Bilder, an denen es lernte); größere Flächen in mehreren Fenstern. Danach in voller
+  Auflösung (sehr große Flächen etwas verkleinert): Helligkeit und Farbe werden am Rand gemessen und
+  ins Innere verteilt (Push-Pull). Musste das Netz stark verkleinert rechnen (ab etwa einem Drittel
+  voll), kommt die feine Struktur – samt Korn – blockweise aus Stellen der Umgebung mit ähnlicher
+  Farbe (Wald aus Wald, nicht aus Fels oder Wolke); wo keine passt, und bei kleineren Flächen, bleibt
+  die Struktur des Netzes. Das Ergebnis ist ein kleiner Flicken mit weicher Kante im Sidecar (Feld
   `removals`): Er wird vor Reparieren/Klonen eingesetzt, bleibt am Bildinhalt wie die Masken und
-  ist ein Rückgängig-Schritt. Die entfernten Bereiche stehen in der Liste „Stellen“ und sind im Bild umrandet;
+  ist ein Rückgängig-Schritt. Die entfernten Bereiche stehen in der Liste „Retuschen“ und sind im Bild umrandet;
   ein Klick auf den Pin wählt einen. Er hat eine eigene Deckkraft, lässt sich einzeln löschen (Entf)
   und wie bei Reparieren/Klonen mit Umschalt erweitern oder mit Alt verkleinern: Dann wird nur dieser
-  Bereich mit allen seinen Strichen neu gefüllt und behält Platz und Deckkraft. „Alle löschen“ stellt
-  das Original wieder her.
+  Bereich mit allen seinen Strichen neu gefüllt und behält Platz und Deckkraft. ↺ im Kopf der Retuschen
+  stellt das Original wieder her.
 - **Objektivunschärfe** (Tab „Effekte“): zeichnet Vorder- und
   Hintergrund weich wie eine offene Blende. Wie nah jede Stelle ist, schätzt Depth Anything V2
   Small (Lihe Yang et al.; das kleine Modell steht unter Apache-2.0, die größeren nicht; 99 MB,
