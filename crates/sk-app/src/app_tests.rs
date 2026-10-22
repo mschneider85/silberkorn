@@ -4576,3 +4576,51 @@ fn split_view_renders_the_before_image_sharp_when_zoomed_in() {
     assert_eq!(d.version, f.app.before_key);
     assert!(d.width > f.app.before_texture.as_ref().unwrap().size_vec2().x, "schärfer als die Vorschau");
 }
+
+/// Zoomed in, the sharp tiles stay on screen while the view without the tool (Shift held on its
+/// reset button) is rendered, and again when it is let go: never the magnified preview.
+#[test]
+fn leaving_a_tool_out_keeps_the_view_sharp_meanwhile() {
+    let Some(mut f) = Fixture::new("tool-peek-sharp") else { return };
+    f.pump("Vollauflösung", |a| a.texture.is_some() && a.current.as_ref().is_some_and(|c| c.full.is_some()));
+    f.app.edit(|a| a.detail.sharpen_amount = 150.0);
+    f.app.commit_and_save();
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut t = 10.0;
+    f.app.splash = None;
+    f.app.set_zoom_pct(100.0);
+    let mut frames = |f: &mut Fixture, t: &mut f64, peek: Option<sk_core::tools::Tool>, n: usize| {
+        for _ in 0..n {
+            *t += 0.05;
+            if let Some(tool) = peek {
+                f.ctx.data_mut(|d| d.insert_temp(egui::Id::new("tool_peek"), tool));
+            }
+            window_frame(f, &mut frame, *t, vec![]);
+            f.app.handle_events(&f.ctx);
+            std::thread::sleep(Duration::from_millis(30));
+        }
+    };
+    let sharp_now = |a: &App| a.tiles.view.as_ref().is_some_and(|v| v.level == 1 && v.version == a.edit_version);
+    let sharp_shown = |a: &App| {
+        let stale = a.tiles_stale_ok && a.tiles.version != a.edit_version;
+        a.tiles.view.as_ref().is_some_and(|v| v.level == 1 && (v.version == a.edit_version || stale))
+    };
+    let start = Instant::now();
+    while !sharp_now(&f.app) {
+        assert!(start.elapsed() < LIMIT, "scharfer Ausschnitt");
+        frames(&mut f, &mut t, None, 1);
+    }
+    for peek in [Some(sk_core::tools::Tool::Sharpening), None] {
+        let version = f.app.edit_version;
+        let start = Instant::now();
+        loop {
+            frames(&mut f, &mut t, peek, 1);
+            assert!(f.app.edit_version > version, "neue Darstellung");
+            assert!(sharp_shown(&f.app), "{peek:?}: zwischendurch die vergrößerte Vorschau");
+            if sharp_now(&f.app) {
+                break;
+            }
+            assert!(start.elapsed() < LIMIT, "{peek:?}: neuer scharfer Ausschnitt");
+        }
+    }
+}

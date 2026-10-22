@@ -36,8 +36,13 @@ impl App {
         }
         let peek = widgets::take_tool_peek(ui.ctx());
         if peek != self.tool_peek {
+            // Tools that move the image would leave the tiles of before in the wrong place.
+            use sk_core::tools::Tool;
+            let moves = |t: Option<Tool>| matches!(t, Some(Tool::LensCorrection | Tool::Crop | Tool::Rotation | Tool::Perspective));
+            let stale_ok = !moves(peek) && !moves(self.tool_peek);
             self.tool_peek = peek;
             self.request_render();
+            self.tiles_stale_ok = stale_ok;
         }
     }
 

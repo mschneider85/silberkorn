@@ -662,6 +662,9 @@ pub struct App {
     pub show_before: bool,
     /// A tool left out of the view while Shift and the mouse button are held on its reset button.
     pub(crate) tool_peek: Option<sk_core::tools::Tool>,
+    /// The last new rendering only left a tool out or took it back (see `tool_peek`): the tiles
+    /// of before may be shown until the new ones are there (same framing).
+    pub(crate) tiles_stale_ok: bool,
     render_requested: bool,
     pub(crate) undo: Vec<Adjustments>,
     pub(crate) redo: Vec<Adjustments>,
@@ -1136,6 +1139,7 @@ impl App {
             slider_view: None,
             show_before: false,
             tool_peek: None,
+            tiles_stale_ok: false,
             render_requested: false,
             undo: Vec::new(),
             undo_seq: Vec::new(),
@@ -1997,6 +2001,7 @@ impl App {
     }
 
     pub fn request_render(&mut self) {
+        self.tiles_stale_ok = false;
         self.render_requested = true;
         self.edit_version += 1;
         self.edited_at = Instant::now();

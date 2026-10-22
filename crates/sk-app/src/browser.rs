@@ -283,12 +283,15 @@ impl App {
             let k = self.tiles.full_size.0 as f32 / size.x;
             let (fw, fh) = (self.tiles.full_size.0 as f32, self.tiles.full_size.1 as f32);
             // `None`: the view region.
-            let grid = self.tiles.textures.iter().filter(|_| self.tiles.version == self.edit_version).map(|(&(tx, ty), t)| {
+            // Shift held on a tool's reset button (or let go): the sharp tiles of before stay until
+            // the new ones are there, instead of the magnified preview.
+            let stale_ok = self.tiles_stale_ok && self.tiles.version != self.edit_version;
+            let grid = self.tiles.textures.iter().filter(|_| self.tiles.version == self.edit_version || stale_ok).map(|(&(tx, ty), t)| {
                 let [w, h] = t.size();
                 (sk_core::geometry::Region { x: tx * TILE, y: ty * TILE, w, h }, t.id(), Some((tx, ty)))
             });
             // While dragging, the latest (draft) view rendering stands in for the current one.
-            let view = self.tiles.view.iter().filter(|v| v.version == self.edit_version || self.texture_draft).map(|v| (v.region, v.texture.id(), None));
+            let view = self.tiles.view.iter().filter(|v| v.version == self.edit_version || self.texture_draft || stale_ok).map(|v| (v.region, v.texture.id(), None));
             let shown: Vec<_> = grid.chain(view).collect();
             let (sensitivity, ctx) = (self.focus_sensitivity, ui.ctx().clone());
             for (r, texture, index) in shown {
