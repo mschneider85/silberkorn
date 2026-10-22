@@ -4457,6 +4457,26 @@ fn shift_on_reset_leaves_the_tool_out_while_held() {
     assert_eq!(adj(&f).exposure, 0.0, "ohne Shift: zurückgesetzt");
 }
 
+/// Zoomed in, holding Shift on a tool's reset button renders the view sharp, without the tool,
+/// not coarse as while dragging a slider (the mouse button is down all the while).
+#[test]
+fn leaving_a_tool_out_stays_sharp_when_zoomed_in() {
+    let Some(mut f) = Fixture::new("tool-peek-zoomed") else { return };
+    f.pump("Vollauflösung", |a| a.texture.is_some() && a.current.as_ref().is_some_and(|c| c.full.is_some()));
+    f.app.edit(|a| a.exposure = 1.0);
+    f.app.commit_and_save();
+    f.app.tool_peek = Some(sk_core::tools::Tool::Exposure);
+    f.app.request_render();
+    f.app.pointer_down = true;
+    assert!(f.app.shown_adjustments().hidden.contains(&sk_core::tools::Tool::Exposure));
+    let tex = f.app.texture.as_ref().unwrap().size_vec2();
+    let viewport = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0));
+    let img_rect = egui::Rect::from_center_size(viewport.center(), tex * 3.0);
+    f.app.update_tiles(viewport, img_rect, 3.0, true);
+    assert_eq!(f.app.drag_view_level, None, "kein Entwurf wie beim Ziehen");
+    f.pump("scharfer Ausschnitt", |a| a.tiles.view.as_ref().is_some_and(|v| v.version == a.edit_version && v.level == 1));
+}
+
 /// The lens correction comes from one source, chosen in a drop-down: none, the camera's data or
 /// a local profile.
 #[test]

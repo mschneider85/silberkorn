@@ -1985,6 +1985,17 @@ impl App {
 
     // ---------------------------------------------------------------- editing
 
+    /// The adjustments of the current image as the viewer shows them: without the tool left out
+    /// while Shift is held on its reset button.
+    pub(crate) fn shown_adjustments(&self) -> Adjustments {
+        let Some(cur) = &self.current else { return Adjustments::default() };
+        let mut adjustments = cur.adjustments.clone();
+        if let Some(tool) = self.tool_peek.filter(|t| !adjustments.hidden.contains(t)) {
+            adjustments.hidden.push(tool);
+        }
+        adjustments
+    }
+
     pub fn request_render(&mut self) {
         self.render_requested = true;
         self.edit_version += 1;
@@ -2887,10 +2898,7 @@ impl App {
             .then_some(self.edit_version);
         if let Some(cur) = &self.current {
             // A style preview or a tool left out is shown, but never cached.
-            let mut adjustments = self.style_preview.clone().unwrap_or_else(|| cur.adjustments.clone());
-            if let Some(tool) = peek.filter(|t| !adjustments.hidden.contains(t)) {
-                adjustments.hidden.push(tool);
-            }
+            let adjustments = self.style_preview.clone().unwrap_or_else(|| self.shown_adjustments());
             self.workers.render(RenderJob {
                 generation: self.generation,
                 version: self.edit_version,

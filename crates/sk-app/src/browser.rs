@@ -942,7 +942,9 @@ impl App {
         let Some(full) = &cur.full else { return };
         let Some(size) = self.image_size() else { return };
         // A style preview has no full-resolution rendering (only while hovering).
-        if self.crop_tool.is_some() || self.straighten_tool.is_some() || (self.pointer_down && !zoomed) || self.style_preview.is_some() {
+        // Held on a tool's reset button (Shift) only shows the image without the tool: no drag.
+        let dragging = self.pointer_down && self.tool_peek.is_none();
+        if self.crop_tool.is_some() || self.straighten_tool.is_some() || (dragging && !zoomed) || self.style_preview.is_some() {
             return;
         }
         // Not zoomed: the order doesn't depend on the view, one request per edit is enough.
@@ -982,7 +984,7 @@ impl App {
         let min_level = region.w.max(region.h).div_ceil(self.max_texture_side.max(512));
         // Something was edited while the mouse is down (not just panning): no sharp rendering yet.
         let sharp = self.tiles.version == self.edit_version || self.tiles.view.as_ref().is_some_and(|v| v.version == self.edit_version && v.level == 1);
-        if self.pointer_down && !sharp {
+        if dragging && !sharp {
             // Dragging a control: only the view, reduced as far as the measured speed requires
             // (and never finer than the screen), so it keeps up but stays as sharp as possible.
             let level = match self.drag_view_level {
@@ -1055,7 +1057,7 @@ impl App {
             version: self.edit_version,
             meta: cur.meta.clone(),
             full: full.clone(),
-            adjustments: cur.adjustments.clone(),
+            adjustments: self.shown_adjustments(),
             clip_warning: self.clip_warning,
             slider_view: self.slider_view,
             mask_overlay: self.mask_overlay(),
