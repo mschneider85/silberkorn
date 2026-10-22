@@ -104,8 +104,10 @@ static ALLOC: GuardedAlloc = GuardedAlloc;
 
 fn main() -> eframe::Result {
     guard::install_hook();
-    // Warnings and errors also into silberkorn.log: the Windows release has no console.
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,silberkorn=info,sk_core=info,sk_ai=info,wgpu_core=error,wgpu_hal=error,naga=error"))
+    // Warnings and errors also into silberkorn.log: the Windows release has no console. rawler
+    // only with errors: it warns about its own lens database (Silberkorn uses Lensfun, see `sk_core::lensfun`) at
+    // every decoding of a file whose lens it doesn't know.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn,silberkorn=info,sk_core=info,sk_ai=info,wgpu_core=error,wgpu_hal=error,naga=error,rawler=error"))
         .target(env_logger::Target::Pipe(guard::log_target()))
         .init();
     // Started as the process the networks run in (see `sk_ai::worker`).
