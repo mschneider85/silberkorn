@@ -345,24 +345,24 @@ fn histogram_shows_the_color_under_the_mouse_and_moves_tone_sliders() {
     assert_eq!(f.app.current.as_ref().unwrap().adjustments.whites, -10.0);
 }
 
-/// Holding a slider with Strg shows what it does instead of the image, as long as it is held.
+/// Holding a slider with Alt shows what it does instead of the image, as long as it is held.
 #[test]
-fn sliders_show_their_effect_with_ctrl() {
+fn sliders_show_their_effect_with_alt() {
     use sk_core::pipeline::SliderView;
     let Some(mut f) = Fixture::new("sharpen-view") else { return };
     f.pump("Bild geladen", |a| a.current.is_some());
     f.app.tab = crate::app::Tab::Details;
-    let ctrl = egui::Modifiers::COMMAND;
-    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: ctrl };
+    let alt = egui::Modifiers::ALT;
+    let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: alt };
     for (label, view) in [("Stärke", SliderView::Grey), ("Radius", SliderView::Sharpening), ("Schwelle", SliderView::SharpenMask), ("Details", SliderView::Sharpening)] {
         let nodes = tool_panel_frame(&mut f, vec![]);
         let rail = slider(&nodes, label);
         let at = egui::pos2(rail.left() + 7.0 + (rail.width() - 14.0) * 0.3, rail.center().y);
-        tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at)], ctrl);
-        tool_panel_frame_with(&mut f, vec![button(at, true)], ctrl);
-        tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at + egui::vec2(3.0, 0.0))], ctrl);
+        tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at)], alt);
+        tool_panel_frame_with(&mut f, vec![button(at, true)], alt);
+        tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at + egui::vec2(3.0, 0.0))], alt);
         assert_eq!(f.app.slider_view, Some(view), "{label}");
-        tool_panel_frame_with(&mut f, vec![button(at, false)], ctrl);
+        tool_panel_frame_with(&mut f, vec![button(at, false)], alt);
         tool_panel_frame(&mut f, vec![]);
         f.app.handle_events(&f.ctx);
         assert_eq!(f.app.slider_view, None, "{label} losgelassen");
@@ -373,11 +373,11 @@ fn sliders_show_their_effect_with_ctrl() {
         let nodes = tool_panel_frame(&mut f, vec![]);
         let rail = slider(&nodes, label);
         let at = egui::pos2(rail.left() + 7.0 + (rail.width() - 14.0) * 0.5, rail.center().y);
-        tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at)], ctrl);
-        tool_panel_frame_with(&mut f, vec![button(at, true)], ctrl);
-        tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at + egui::vec2(2.0, 0.0))], ctrl);
+        tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at)], alt);
+        tool_panel_frame_with(&mut f, vec![button(at, true)], alt);
+        tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at + egui::vec2(2.0, 0.0))], alt);
         assert_eq!(f.app.slider_view, Some(view), "{label}");
-        tool_panel_frame_with(&mut f, vec![button(at, false)], ctrl);
+        tool_panel_frame_with(&mut f, vec![button(at, false)], alt);
         tool_panel_frame(&mut f, vec![]);
         f.app.handle_events(&f.ctx);
         assert_eq!(f.app.slider_view, None, "{label} losgelassen");
@@ -386,14 +386,25 @@ fn sliders_show_their_effect_with_ctrl() {
     let nodes = tool_panel_frame(&mut f, vec![]);
     let rail = slider(&nodes, "Luminanz");
     let at = egui::pos2(rail.left() + 20.0, rail.center().y);
-    tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at)], ctrl);
-    tool_panel_frame_with(&mut f, vec![button(at, true)], ctrl);
+    tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at)], alt);
+    tool_panel_frame_with(&mut f, vec![button(at, true)], alt);
     assert_eq!(f.app.slider_view, Some(SliderView::NoiseRemoved));
-    tool_panel_frame_with(&mut f, vec![button(at, false)], ctrl);
+    tool_panel_frame_with(&mut f, vec![button(at, false)], alt);
     tool_panel_frame(&mut f, vec![]);
     f.app.handle_events(&f.ctx);
 
-    // Without Strg: no grey view.
+    // Strg does not do it (one key per function).
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let rail = slider(&nodes, "Stärke");
+    let at = egui::pos2(rail.left() + 20.0, rail.center().y);
+    let strg = egui::Modifiers::COMMAND;
+    tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(at)], strg);
+    tool_panel_frame_with(&mut f, vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: strg }], strg);
+    assert_eq!(f.app.slider_view, None, "nicht mit Strg");
+    tool_panel_frame_with(&mut f, vec![egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: strg }], strg);
+    tool_panel_frame(&mut f, vec![]);
+    f.app.handle_events(&f.ctx);
+    // Without Alt: no grey view.
     let nodes = tool_panel_frame(&mut f, vec![]);
     let rail = slider(&nodes, "Stärke");
     let at = egui::pos2(rail.left() + 20.0, rail.center().y);
@@ -3891,6 +3902,81 @@ fn a_crop_is_one_undo_step() {
     assert_eq!(f.app.undo.len(), steps + 1);
     f.app.undo();
     assert_eq!(f.app.current.as_ref().unwrap().adjustments.geometry.crop, sk_core::params::CropRect::default());
+}
+
+/// Cropping: Alt at a corner keeps the middle, Shift keeps free proportions.
+#[test]
+fn crop_corner_with_alt_keeps_the_middle_and_shift_the_proportions() {
+    use sk_core::params::CropRect;
+    let Some(mut f) = Fixture::new("crop-keys") else { return };
+    f.pump("Bild gerendert", |a| a.current.is_some() && a.texture.is_some());
+    f.app.start_crop_tool();
+    let start = CropRect { x: 0.25, y: 0.25, w: 0.5, h: 0.4 };
+    let drag_corner = |f: &mut Fixture, m: egui::Modifiers, by: egui::Vec2| {
+        f.app.current.as_mut().unwrap().adjustments.geometry.crop = start;
+        viewer_frame(f, vec![]);
+        let (_, img) = f.app.view_geometry.unwrap();
+        let corner = img.min + egui::vec2(img.width() * (start.x + start.w), img.height() * (start.y + start.h));
+        let button = |p, pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: m };
+        viewer_frame_with(f, vec![egui::Event::PointerMoved(corner)], m);
+        viewer_frame_with(f, vec![button(corner, true)], m);
+        for i in 1..=5 {
+            viewer_frame_with(f, vec![egui::Event::PointerMoved(corner + by * (i as f32 / 5.0))], m);
+        }
+        viewer_frame_with(f, vec![button(corner + by, false)], m);
+        f.app.current.as_ref().unwrap().adjustments.geometry.crop
+    };
+    let c = drag_corner(&mut f, egui::Modifiers::ALT, egui::vec2(40.0, 25.0));
+    assert!((c.x + c.w / 2.0 - 0.5).abs() < 0.005 && (c.y + c.h / 2.0 - 0.45).abs() < 0.005, "Mitte bleibt: {c:?}");
+    assert!(c.w > start.w && c.x < start.x, "{c:?}");
+    let c = drag_corner(&mut f, egui::Modifiers::SHIFT, egui::vec2(60.0, 0.0));
+    assert!((c.w / c.h - start.w / start.h).abs() < 0.01, "Verhältnis bleibt: {c:?}");
+    assert!((c.x - start.x).abs() < 1e-4 && (c.y - start.y).abs() < 1e-4, "obere linke Ecke bleibt: {c:?}");
+    let c = drag_corner(&mut f, egui::Modifiers::NONE, egui::vec2(60.0, 0.0));
+    assert!((c.h - start.h).abs() < 1e-4 && c.w > start.w, "ohne Taste frei: {c:?}");
+}
+
+/// Klonen: an Alt-click puts the source of the next area there, and of a chosen one.
+#[test]
+fn alt_click_sets_the_clone_source() {
+    let Some(mut f) = Fixture::new("clone-source") else { return };
+    f.pump("Bild gerendert", |a| a.current.is_some() && a.texture.is_some());
+    f.app.set_local_tool(crate::layers::LocalTool::Clone);
+    let click = |f: &mut Fixture, p: egui::Pos2, m: egui::Modifiers| {
+        let button = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: m };
+        viewer_frame_with(f, vec![egui::Event::PointerMoved(p)], m);
+        viewer_frame_with(f, vec![button(true)], m);
+        viewer_frame_with(f, vec![button(false)], m);
+        viewer_frame_with(f, vec![], egui::Modifiers::NONE);
+    };
+    let (src, dst, other) = (egui::pos2(450.0, 350.0), egui::pos2(700.0, 450.0), egui::pos2(400.0, 500.0));
+    click(&mut f, src, egui::Modifiers::ALT);
+    let picked = f.app.next_source.expect("Quelle vorgemerkt");
+    assert!(f.app.current.as_ref().unwrap().adjustments.retouch.is_empty(), "kein Bereich");
+    click(&mut f, dst, egui::Modifiers::NONE);
+    let spots = f.app.current.as_ref().unwrap().adjustments.retouch.clone();
+    assert_eq!(spots.len(), 1);
+    assert_eq!(spots[0].source, picked);
+    assert_eq!(f.app.next_source, None, "nur für den nächsten Bereich");
+    // The area is chosen now: an Alt-click moves its source.
+    click(&mut f, other, egui::Modifiers::ALT);
+    let spots = f.app.current.as_ref().unwrap().adjustments.retouch.clone();
+    assert_eq!(spots.len(), 1, "kein neuer Bereich");
+    assert_ne!(spots[0].source, picked, "Quelle versetzt");
+}
+
+/// Alt-click on a layer's eye: only that layer shows; once more, all again.
+#[test]
+fn alt_click_on_an_eye_shows_only_that_layer() {
+    use crate::layers::LayerAction;
+    let Some(mut f) = Fixture::new("layer-solo") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.edit(|a| a.layers = (0..3).map(|i| sk_core::params::Layer { name: format!("{i}"), enabled: i != 2, ..Default::default() }).collect());
+    let shown = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.layers.iter().map(|l| l.enabled).collect::<Vec<_>>();
+    f.app.apply_layer_action(Some(LayerAction::Solo(2)));
+    assert_eq!(shown(&f), [false, false, true]);
+    f.app.apply_layer_action(Some(LayerAction::Solo(2)));
+    assert_eq!(shown(&f), [true, true, true]);
 }
 
 /// Every tool opens the tab with its settings, however it is started.

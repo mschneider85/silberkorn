@@ -735,7 +735,9 @@ impl App {
 
     /// Heal and clone, painted like a brush: the stroke becomes a retouch area whose source is
     /// chosen automatically. The pins move an area (white) or its source (yellow). With an area
-    /// chosen, Shift paints onto it and Alt takes part of it away (see [`AreaPaint`]).
+    /// chosen, Shift paints onto it and Alt takes part of it away (see [`AreaPaint`]). An
+    /// Alt-click (as with Photoshop's clone stamp) puts the source there: of the chosen area, or
+    /// of the next one painted.
     fn spot_interaction(&mut self, ui: &mut Ui, response: &Response, img_rect: Rect, scale: f32, tool: LocalTool) {
         let Some(cur) = &self.current else { return };
         let spots = cur.adjustments.retouch.clone();
@@ -790,6 +792,14 @@ impl App {
             }
             pin(&painter, lines[0][0], if sel { Color32::WHITE } else { Color32::from_white_alpha(170) }, hovered_pin == Some((i, false)));
         }
+        // The source chosen for the next area.
+        if let Some(src) = self.next_source.filter(|_| selected.is_none()) {
+            let c = map.map(src);
+            let s = Stroke::new(1.5, crate::theme::GUIDE);
+            painter.circle_stroke(c, 9.0, s);
+            painter.line_segment([c - vec2(14.0, 0.0), c + vec2(14.0, 0.0)], s);
+            painter.line_segment([c - vec2(0.0, 14.0), c + vec2(0.0, 14.0)], s);
+        }
         // Painting onto the chosen area goes with its size.
         let mode = if matches!(self.local_drag, LocalDrag::Paint(..)) { self.stroke_paint } else { self.stroke_mode(ui, selected.is_some()) };
         let mut b = self.brushes.spot.clone();
@@ -841,7 +851,20 @@ impl App {
             paint_area(&painter, &preview, b.size, if self.stroke_paint == AreaPaint::Shrink { ERASED } else { Color32::WHITE });
         }
         if let Some(pts) = self.finished_paint(ui) {
+            // An Alt-click (not a stroke): the source goes there.
+            let alt_click = ui.input(|i| i.modifiers.alt) && pts.iter().all(|p| (map.map(*p) - map.map(pts[0])).length() < 4.0);
             match (self.stroke_paint, selected) {
+                _ if alt_click => match selected {
+                    Some(i) => {
+                        let at = *pts.last().unwrap_or(&pts[0]);
+                        self.edit(|a| {
+                            if let Some(s) = a.retouch.get_mut(i) {
+                                s.source = at;
+                            }
+                        });
+                    }
+                    None => self.next_source = Some(pts[0]),
+                },
                 (AreaPaint::Extend | AreaPaint::Shrink, Some(i)) => {
                     let erase = self.stroke_paint == AreaPaint::Shrink;
                     self.edit(|a| {
@@ -852,7 +875,10 @@ impl App {
                 }
                 _ => {
                     let radius = self.radius_norm(b.size, scale);
-                    let source = self.current.as_ref().map_or(pts[0], |c| mask::auto_source_area(&c.preview, &pts, radius));
+                    let source = match self.next_source.take() {
+                        Some(s) => s,
+                        None => self.current.as_ref().map_or(pts[0], |c| mask::auto_source_area(&c.preview, &pts, radius)),
+                    };
                     let mode = if tool == LocalTool::Heal { SpotMode::Heal } else { SpotMode::Clone };
                     let (feather, opacity) = (1.0 - b.hardness.clamp(0.0, 1.0), b.opacity);
                     let spot = Spot { mode, target: pts[0], source, path: pts[1..].to_vec(), strokes: Vec::new(), radius, feather, opacity };
@@ -1526,8 +1552,9 @@ impl App {
                     let g = p.layout_job(job);
                     p.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, text_color);
                     let on_name = resp.interact_pointer_pos().is_some_and(|pos| name_rect.contains(pos));
-                    if eye.as_ref().is_some_and(|r| r.clone().on_hover_text(if on { "Ausblenden" } else { "Einblenden" }).clicked()) {
-                        action = Some(LayerAction::Toggle(li));
+                    let eye_hint = if on { "Ausblenden · Alt-Klick: nur diese Ebene" } else { "Einblenden · Alt-Klick: nur diese Ebene" };
+                    if eye.as_ref().is_some_and(|r| r.clone().on_hover_text(eye_hint).clicked()) {
+                        action = Some(if ui.input(|i| i.modifiers.alt) { LayerAction::Solo(li) } else { LayerAction::Toggle(li) });
                     } else if resp.double_clicked() || (resp.clicked() && selected && on_name) {
                         *renaming = Some(Rename { index: li, original: l.name.clone(), focus: true });
                         action = Some(LayerAction::Select(Some(li)));
@@ -1894,6 +1921,14 @@ impl App {
                     }
                 });
             }
+            Some(LayerAction::Solo(i)) => {
+                self.edit(|a| {
+                    let alone = a.layers.iter().enumerate().all(|(j, l)| l.enabled == (j == i));
+                    for (j, l) in a.layers.iter_mut().enumerate() {
+                        l.enabled = alone || j == i;
+                    }
+                });
+            }
             Some(LayerAction::Delete(i)) => self.delete_layer(i),
             None => {}
         }
@@ -1914,6 +1949,8 @@ pub(crate) enum LayerAction {
     /// New layer with the adjustments of a style brush (index into [`style_brushes`]).
     AddStyle(usize),
     Toggle(usize),
+    /// Only this layer shown (Alt-click on its eye, as in Photoshop); all again if it already is.
+    Solo(usize),
     Delete(usize),
 }
 

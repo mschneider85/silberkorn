@@ -560,10 +560,10 @@ impl App {
         let defaults = Detail::default();
 
         let (mut r_sharp, mut r_clarity, mut r_haze) = (false, false, false);
-        // Held with Strg: the grey view of what the slider does.
+        // Held with Alt: the grey view of what the slider does.
         let held = [(); 4].map(|_| std::cell::Cell::new(false));
         widgets::tool_section(ui, sk_core::tools::Tool::Sharpening, Some(&mut || r_sharp = true), |ui| {
-            let opts = |i: usize| widgets::SliderOpts { held_with_ctrl: Some(&held[i]), ..Default::default() };
+            let opts = |i: usize| widgets::SliderOpts { held_with_alt: Some(&held[i]), ..Default::default() };
             changed |= widgets::slider_row_with(ui, "Stärke", &mut d.sharpen_amount, 0.0..=500.0, defaults.sharpen_amount, 0, widgets::SliderOpts { suffix: " %", ..opts(0) });
             // Without an effect, what shapes it is shown but disabled (here and below).
             ui.add_enabled_ui(d.sharpen_amount > 0.0, |ui| {
@@ -577,7 +577,7 @@ impl App {
                 changed |= widgets::slider_row_with(ui, "Details", &mut d.sharpen_detail, 0.0..=100.0, defaults.sharpen_detail, 0, widgets::SliderOpts { help: Some(SHARPEN_DETAIL_HELP), ..opts(3) });
             });
             crate::widgets::hint(ui, crate::commands::hint("Wirkung bei 100 % prüfen", "zoom-100"));
-            crate::widgets::hint(ui, "Strg beim Ziehen: Wirkung in Grau");
+            crate::widgets::hint(ui, "Alt beim Ziehen: Wirkung in Grau");
         });
         let view = match held.iter().position(|h| h.get()) {
             Some(0) => Some(SliderView::Grey),

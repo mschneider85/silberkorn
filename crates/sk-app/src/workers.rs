@@ -128,7 +128,7 @@ pub struct RenderJob {
     pub preview: Arc<LinearImage>,
     pub adjustments: Adjustments,
     pub clip_warning: bool,
-    /// The grey view of the sharpening (while a slider of Schärfen is held with Strg).
+    /// The grey view of the sharpening (while a slider of Schärfen is held with Alt).
     pub slider_view: Option<sk_core::pipeline::SliderView>,
     pub before: bool,
     /// Render the whole frame (crop tool active).

@@ -181,6 +181,7 @@ Woran man gerade arbeitet, zeigt:
 - ein blauer Strich an den Werkzeugen und ein Schild „Ebene „…““ oben im Bild.
 
 Den Ebenenmodus verlässt man mit ✕ in der Leiste, „Hintergrund“ in der Ebenenliste oder Alt+↓.
+Alt-Klick auf das Auge einer Ebene zeigt nur sie (wie in Photoshop), ein zweiter wieder alle.
 Im Tab „Ebenen“ fasst „Anpassungen“ zusammen, was die Ebene ändert; ein Klick springt zum Werkzeug.
 Alt+↑ / Alt+↓ wählen die Ebene darüber bzw. darunter (unter der untersten liegt der Hintergrund).
 
@@ -212,7 +213,9 @@ die Umgebung an; „Klonen“ kopiert 1:1. Mit aktivem Werkzeug zeigt das Bild a
 weiße verschiebt den Bereich, der gelbe (beim ausgewählten) die Quelle. Im Abschnitt „Stellen“
 stehen alle Bereiche in einer Liste, zusammen mit den entfernten; dort lassen sich Art, Deckkraft und
 Weichheit ändern, eine neue Quelle suchen oder Bereiche löschen (was eine Art nicht hat, ist ausgegraut). Einen gewählten Bereich erweitert man, indem man mit Umschalt dazumalt; mit Alt
-nimmt man einen Teil weg (oder „Malen: Erweitern / Verkleinern“ im Abschnitt). Die Striche gehören zum Bereich:
+nimmt man einen Teil weg (oder „Malen: Erweitern / Verkleinern“ im Abschnitt). Ein **Alt-Klick** (ohne zu
+ziehen) legt die Quelle fest wie beim Kopierstempel in Photoshop: beim gewählten Bereich dort hin, ohne
+gewählten Bereich für den nächsten (ein Fadenkreuz zeigt sie bis dahin). Die Striche gehören zum Bereich:
 gleiche Größe, Weichheit und Quelle, und sie wandern mit, wenn man ihn verschiebt.
 
 **Staub und Flecken finden** (Tab „Retusche“, oder über die Befehlssuche) macht Sensorstaub und Hautunreinheiten zu
@@ -485,8 +488,8 @@ Unscharf maskieren dazu (`Detail::sharpen_split`). Radius und Schwelle sind gesp
 Unscharf maskieren wirkt. Die Dekonvolution wird je Bild einmal gerechnet (24 MP etwa 1 s), der Regler
 mischt danach nur.
 
-**Strg beim Ziehen eines Reglers** zeigt statt des Bildes, was er bewirkt, solange er gehalten wird
-(`SliderView`), wie Alt in Lightroom (Alt allein öffnet unter Windows das Fenstermenü):
+**Alt beim Ziehen eines Reglers** zeigt statt des Bildes, was er bewirkt, solange er gehalten wird
+(`SliderView`), wie in Lightroom:
 - Belichtung, Lichter, Weiß und Weißpunkt der Tonwerte: Schwarz, ausgefressene Stellen weiß bzw. in der
   Farbe der vollen Kanäle; Tiefen, Schwarz und Schwarzpunkt der Tonwerte: Weiß, abgesoffene Stellen
   schwarz bzw. farbig. Dieselben Grenzen wie die Belichtungswarnung (255 und 0).
@@ -1003,7 +1006,7 @@ die Leertaste und die Tasten der Schnellbearbeitung.
 | Umschalt+P | Softproof |
 | W | Weißabgleich-Pipette |
 | Z / Doppelklick | Einpassen ↔ 100 % · Mausrad: zoomen · Ziehen: verschieben |
-| C / Enter / Esc | Zuschnitt-Werkzeug / übernehmen / abbrechen |
+| C / Enter / Esc | Zuschnitt-Werkzeug / übernehmen / abbrechen · beim Ziehen Alt: von der Mitte aus, Umschalt: Seitenverhältnis beibehalten (wenn frei) |
 | Esc | beendet der Reihe nach Werkzeug, Ansicht (Vorher/Nachher, Vergleich, Ausgabevorschau, 100 %) und Vollbild |
 | B / N / L / R | Pinsel / Radierer / linearer / radialer Verlauf |
 | H / S | Reparieren / Klonen · Entf: Punkt löschen · Umschalt/Alt beim Malen: gewählten Bereich erweitern/verkleinern |

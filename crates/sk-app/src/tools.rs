@@ -97,7 +97,7 @@ impl App {
         let mut t = Target::new(adj, self.active_layer);
         let mut changed = false;
 
-        // Held with Strg: where highlights or shadows clip (see `SliderView`).
+        // Held with Alt: where highlights or shadows clip (see `SliderView`).
         let (high, low) = (std::cell::Cell::new(false), std::cell::Cell::new(false));
         // Under the mouse: its range is marked in the histogram.
         let zones = widgets::ToneZone::ALL.map(|_| std::cell::Cell::new(false));
@@ -105,7 +105,7 @@ impl App {
         let mut reset_exposure = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Exposure, Some(&mut || reset_exposure = true), |ui| {
             let tone = widgets::SliderOpts { rail: Some(widgets::RAIL_TONE), ..Default::default() };
-            let ev = widgets::SliderOpts { suffix: " EV", held_with_ctrl: Some(&high), hovered: over(widgets::ToneZone::Exposure), ..tone };
+            let ev = widgets::SliderOpts { suffix: " EV", held_with_alt: Some(&high), hovered: over(widgets::ToneZone::Exposure), ..tone };
             changed |= widgets::slider_row_with(ui, "Belichtung", t.pick(&mut adj.exposure, |l| &mut l.exposure), -4.0..=4.0, 0.0, 2, ev);
             changed |= slider_row(ui, "Kontrast", t.pick(&mut adj.contrast, |l| &mut l.contrast), -100.0..=100.0, 0.0, 0);
             changed |= widgets::slider_row_with(ui, "Helligkeit", t.pick(&mut adj.brightness, |l| &mut l.brightness), -100.0..=100.0, 0.0, 0, tone);
@@ -121,7 +121,7 @@ impl App {
         let mut reset_hdr = false;
         widgets::tool_section(ui, sk_core::tools::Tool::HighlightsShadows, Some(&mut || reset_hdr = true), |ui| {
             let tone = widgets::SliderOpts { rail: Some(widgets::RAIL_TONE), ..Default::default() };
-            let (hi, lo) = (widgets::SliderOpts { held_with_ctrl: Some(&high), ..tone }, widgets::SliderOpts { held_with_ctrl: Some(&low), ..tone });
+            let (hi, lo) = (widgets::SliderOpts { held_with_alt: Some(&high), ..tone }, widgets::SliderOpts { held_with_alt: Some(&low), ..tone });
             use widgets::ToneZone as Z;
             let (o_hi, o_sh) = (widgets::SliderOpts { hovered: over(Z::Highlights), ..hi }, widgets::SliderOpts { hovered: over(Z::Shadows), ..lo });
             let (o_wh, o_bl) = (widgets::SliderOpts { hovered: over(Z::Whites), ..hi }, widgets::SliderOpts { hovered: over(Z::Blacks), ..lo });
@@ -129,7 +129,7 @@ impl App {
             changed |= widgets::slider_row_with(ui, "Tiefen", t.pick(&mut adj.shadows, |l| &mut l.shadows), -100.0..=100.0, 0.0, 0, o_sh);
             changed |= widgets::slider_row_with(ui, "Weiß", t.pick(&mut adj.whites, |l| &mut l.whites), -100.0..=100.0, 0.0, 0, o_wh);
             changed |= widgets::slider_row_with(ui, "Schwarz", t.pick(&mut adj.blacks, |l| &mut l.blacks), -100.0..=100.0, 0.0, 0, o_bl);
-            widgets::hint(ui, "Strg beim Ziehen: ausgefressene und abgesoffene Stellen");
+            widgets::hint(ui, "Alt beim Ziehen: ausgefressene und abgesoffene Stellen");
         });
         if reset_hdr {
             match t.layer_mut() {

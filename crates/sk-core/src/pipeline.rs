@@ -49,7 +49,7 @@ pub struct RenderOptions {
     pub slider_view: Option<SliderView>,
 }
 
-/// What a slider held with Strg shows instead of the image.
+/// What a slider held with Alt shows instead of the image.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SliderView {
     /// The image in grey, without the distraction of color (Schärfen: Stärke).

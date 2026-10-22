@@ -454,8 +454,8 @@ pub struct SliderOpts<'a> {
     pub ai: bool,
     /// How it works, behind an info icon after the label.
     pub help: Option<&'a str>,
-    /// Set while the slider is held with Strg (for a view of what it does, as in Schärfen).
-    pub held_with_ctrl: Option<&'a std::cell::Cell<bool>>,
+    /// Set while the slider is held with Alt (for a view of what it does, as in Schärfen).
+    pub held_with_alt: Option<&'a std::cell::Cell<bool>>,
     /// Set while the mouse is over the row (or it is dragged).
     pub hovered: Option<&'a std::cell::Cell<bool>>,
 }
@@ -614,9 +614,9 @@ pub fn slider_row_with(
         let slider_w = (ui.available_width() - value_w - 8.0).max(60.0);
         let (moved, held) = rail_slider(ui, label, value, range.clone(), default, decimals, slider_w, opts.rail);
         changed |= moved;
-        if let Some(cell) = opts.held_with_ctrl
+        if let Some(cell) = opts.held_with_alt
             && held
-            && ui.input(|i| i.modifiers.command)
+            && ui.input(|i| i.modifiers.alt)
         {
             cell.set(true);
         }
@@ -1466,7 +1466,7 @@ pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>, marks: HistogramMarks) -
 /// Levels: the histogram of what goes into them (`bins`, 256) with handles below it for the black
 /// point, the midtones and the white point, then a gray bar with handles for the output range,
 /// and the values as numbers (0–255, midtones as gamma). Double click on a handle resets it.
-/// `peek` is set to what the black or white point of the input shows while held with Strg.
+/// `peek` is set to what the black or white point of the input shows while held with Alt.
 pub fn levels_editor(ui: &mut Ui, set: &mut LevelSet, bins: Option<&[f32]>, color: Color32, peek: &std::cell::Cell<Option<sk_core::pipeline::SliderView>>) -> bool {
     const MIN_GAP: f32 = 2.0 / 255.0;
     let before = *set;
@@ -1527,7 +1527,7 @@ pub fn levels_editor(ui: &mut Ui, set: &mut LevelSet, bins: Option<&[f32]>, colo
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Slider, true, name));
         let resp = resp.on_hover_text(format!("{name} – Doppelklick: zurücksetzen"));
         let hot = resp.hovered() || resp.dragged();
-        if resp.is_pointer_button_down_on() && ui.input(|i| i.modifiers.command) {
+        if resp.is_pointer_button_down_on() && ui.input(|i| i.modifiers.alt) {
             match name {
                 "Eingang Schwarz" => peek.set(Some(sk_core::pipeline::SliderView::ClipShadows)),
                 "Eingang Weiß" => peek.set(Some(sk_core::pipeline::SliderView::ClipHighlights)),

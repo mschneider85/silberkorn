@@ -525,6 +525,7 @@ impl App {
             let keys = match t {
                 crate::layers::LocalTool::Brush => "  ·  Alt radiert  ·  Umschalt-Klick: gerade Linie",
                 crate::layers::LocalTool::Eraser => "  ·  Umschalt-Klick: gerade Linie",
+                crate::layers::LocalTool::Heal | crate::layers::LocalTool::Clone => "  ·  Alt-Klick: Quelle festlegen",
                 _ => "",
             };
             Some(match self.edit_layer_name() {

@@ -243,6 +243,14 @@ pub fn straighten_delta(d: Vec2) -> f32 {
 }
 
 /// Enforces the aspect ratio (pixel w/h) on a normalized rect, anchored at `anchor` (0..1 in rect).
+/// The frame around `middle` reaching `half` to each side, as far as the image allows on both
+/// (so that the middle stays), at least a little.
+fn centered(middle: Vec2, half: Vec2) -> CropRect {
+    let hx = half.x.min(middle.x).min(1.0 - middle.x).max(0.01);
+    let hy = half.y.min(middle.y).min(1.0 - middle.y).max(0.01);
+    CropRect { x: middle.x - hx, y: middle.y - hy, w: 2.0 * hx, h: 2.0 * hy }
+}
+
 pub fn constrain(rect: CropRect, ratio: Option<f32>, frame: Vec2, anchor: Vec2, by_width: bool) -> CropRect {
     let Some(r) = ratio else { return rect.clamped() };
     let mut c = rect;
@@ -288,6 +296,7 @@ impl App {
         self.picking_skin = false;
         self.picking_focus = false;
         self.target_tool = None;
+        self.next_source = None;
         self.local_drag = Default::default();
         self.finish_crop_tool();
     }
@@ -456,7 +465,26 @@ impl App {
             let d = to_norm(pos) - to_norm(origin);
             let s = start;
             let (right, bottom) = (s.x + s.w, s.y + s.h);
+            // As in Lightroom and Photoshop: Alt keeps the middle, Shift the proportions the
+            // frame had (when they are free).
+            let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
+            let ratio = ratio.or_else(|| (shift && s.h > 0.0).then(|| s.w * frame.x / (s.h * frame.y)));
+            let middle = vec2(s.x + s.w / 2.0, s.y + s.h / 2.0);
             let c = match handle {
+                Handle::Corner(..) if alt => {
+                    let half = vec2((n.x - middle.x).abs(), (n.y - middle.y).abs());
+                    constrain(centered(middle, half), ratio, frame, vec2(0.5, 0.5), true)
+                }
+                Handle::Edge(side) if alt => {
+                    let horizontal = matches!(side, Side::Left | Side::Right);
+                    let half = if horizontal { vec2((n.x - middle.x).abs(), s.h / 2.0) } else { vec2(s.w / 2.0, (n.y - middle.y).abs()) };
+                    constrain(centered(middle, half), ratio, frame, vec2(0.5, 0.5), horizontal)
+                }
+                Handle::New if alt => {
+                    let o = to_norm(origin);
+                    let half = vec2((n.x - o.x).abs(), (n.y - o.y).abs());
+                    constrain(centered(o, half), ratio, frame, vec2(0.5, 0.5), true)
+                }
                 Handle::Move => {
                     let mut c = s;
                     c.x = (s.x + d.x).clamp(0.0, 1.0 - s.w);
@@ -600,6 +628,15 @@ mod tests {
         assert!((straighten_delta(vec2(100.0, 5.0)) - 2.862).abs() < 0.01);
         assert!((straighten_delta(vec2(-100.0, 5.0)) + 2.862).abs() < 0.01);
         assert!((straighten_delta(vec2(4.0, 100.0)) + 2.29).abs() < 0.01);
+    }
+
+    #[test]
+    fn centered_frames_keep_their_middle() {
+        let c = centered(vec2(0.5, 0.4), vec2(0.2, 0.1));
+        assert!((c.x - 0.3).abs() < 1e-6 && (c.y - 0.3).abs() < 1e-6 && (c.w - 0.4).abs() < 1e-6 && (c.h - 0.2).abs() < 1e-6);
+        // Near the edge: no wider than the image allows on the near side.
+        let c = centered(vec2(0.9, 0.5), vec2(0.3, 0.3));
+        assert!((c.x + c.w / 2.0 - 0.9).abs() < 1e-6 && c.x + c.w <= 1.0 + 1e-6);
     }
 
     #[test]

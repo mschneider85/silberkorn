@@ -591,6 +591,8 @@ pub struct App {
     pub area_paint: crate::layers::AreaPaint,
     /// How the stroke being painted acts, fixed when it starts (with Shift or Alt).
     pub(crate) stroke_paint: crate::layers::AreaPaint,
+    /// Alt-clicked with Reparieren or Klonen and no area chosen: the source of the next one.
+    pub(crate) next_source: Option<[f32; 2]>,
     pub show_mask: bool,
     /// The mask is shown while the pointer is over the layer bar above the tools.
     pub peek_mask: bool,
@@ -652,7 +654,7 @@ pub struct App {
     steps_ended: bool,
     pub pointer_down: bool,
     pub clip_warning: bool,
-    /// The grey view of the sharpening, while a slider of Schärfen is held with Strg.
+    /// The grey view of the sharpening, while a slider of Schärfen is held with Alt.
     pub slider_view: Option<sk_core::pipeline::SliderView>,
     pub show_before: bool,
     /// A tool left out of the view while Shift and the mouse button are held on its reset button.
@@ -1087,6 +1089,7 @@ impl App {
             selected_removal: None,
             area_paint: Default::default(),
             stroke_paint: Default::default(),
+            next_source: None,
             show_mask: false,
             peek_mask: false,
             rendered_mask_overlay: None,
@@ -1915,6 +1918,7 @@ impl App {
             self.picking_skin = false;
             self.picking_focus = false;
             self.target_tool = None;
+            self.next_source = None;
             self.library_ui.new_style_tools = None;
             self.full_due = None;
             match self.prepared.iter().position(|r| r.meta.path == *path).map(|i| self.prepared.remove(i)) {
@@ -1981,7 +1985,7 @@ impl App {
         self.edited_at = Instant::now();
     }
 
-    /// Shows what a slider held with Strg does instead of the image (`None`: the image again);
+    /// Shows what a slider held with Alt does instead of the image (`None`: the image again);
     /// each tab sets it from its sliders every frame.
     pub(crate) fn set_slider_view(&mut self, view: Option<sk_core::pipeline::SliderView>) {
         if view != self.slider_view {
