@@ -4457,6 +4457,38 @@ fn shift_on_reset_leaves_the_tool_out_while_held() {
     assert_eq!(adj(&f).exposure, 0.0, "ohne Shift: zurückgesetzt");
 }
 
+/// Leaving a tool out with Shift held on its reset button lasts while the button is held, also
+/// beyond the 0.8 s after which egui no longer takes the press for a click (frames here are a
+/// quarter second apart).
+#[test]
+fn leaving_enhance_out_lasts_while_held() {
+    let Some(mut f) = Fixture::new("tool-peek-enhance") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.tab = crate::app::Tab::Details;
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let rail = slider(&nodes, "Raw-Details");
+    let reset = nodes
+        .iter()
+        .filter(|(l, r)| l == crate::theme::icon::ARROWS_COUNTER_CLOCKWISE && r.bottom() <= rail.top())
+        .map(|(_, r)| *r)
+        .max_by(|a, b| a.top().total_cmp(&b.top()))
+        .expect("Zurücksetzen von Verbessern")
+        .center();
+    let button = |pressed| egui::Event::PointerButton { pos: reset, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::SHIFT };
+    tool_panel_frame_with(&mut f, vec![egui::Event::PointerMoved(reset)], egui::Modifiers::SHIFT);
+    tool_panel_frame_with(&mut f, vec![button(true)], egui::Modifiers::SHIFT);
+    for i in 0..12 {
+        f.app.handle_events(&f.ctx);
+        f.app.send_render();
+        tool_panel_frame_with(&mut f, vec![], egui::Modifiers::SHIFT);
+        assert_eq!(f.app.tool_peek, Some(sk_core::tools::Tool::Enhance), "Bild {i}");
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    tool_panel_frame_with(&mut f, vec![button(false)], egui::Modifiers::SHIFT);
+    tool_panel_frame(&mut f, vec![]);
+    assert_eq!(f.app.tool_peek, None);
+}
+
 /// Zoomed in, holding Shift on a tool's reset button renders the view sharp, without the tool,
 /// not coarse as while dragging a slider (the mouse button is down all the while).
 #[test]

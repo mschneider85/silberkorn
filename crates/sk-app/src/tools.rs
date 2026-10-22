@@ -34,7 +34,9 @@ impl App {
         if let Some(tool) = widgets::take_eye_clicked(ui.ctx()) {
             self.edit(|a| a.toggle_hidden(tool));
         }
-        let peek = widgets::take_tool_peek(ui.ctx());
+        // Once begun, leaving a tool out lasts until the mouse button is let go.
+        let held = self.tool_peek.filter(|_| ui.input(|i| i.pointer.primary_down()));
+        let peek = widgets::take_tool_peek(ui.ctx()).or(held);
         if peek != self.tool_peek {
             // Tools that move the image would leave the tiles of before in the wrong place.
             use sk_core::tools::Tool;
