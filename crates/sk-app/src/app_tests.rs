@@ -298,6 +298,28 @@ fn target_tool_changes_what_is_under_the_mouse() {
     assert!(adj(&f).color_editor.bands.iter().all(|b| b.saturation >= 0.0 && b.hue == 0.0 && b.lightness == 0.0));
 }
 
+/// Snapshots are shown like the styles: a preview of the image as each was saved; a click
+/// applies one.
+#[test]
+fn snapshots_show_as_previews() {
+    let Some(mut f) = Fixture::new("snapshot-grid") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.add_snapshot(Some("Hell".into()));
+    f.app.edit(|a| a.exposure = 1.5);
+    f.app.commit_and_save();
+    f.app.add_snapshot(Some("Heller".into()));
+    f.app.edit(|a| a.exposure = 0.0);
+    f.app.commit_and_save();
+    f.app.tab = crate::app::Tab::History;
+    tool_panel_frame(&mut f, vec![]);
+    let shots = f.app.current.as_ref().unwrap().snapshots.clone();
+    f.pump("Vorschauen", |a| shots.iter().enumerate().all(|(i, s)| a.snapshot_texture(i, &s.adjustments).is_some()));
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let tile = widget(&nodes, "Heller").expect("Kachel „Heller“");
+    click_at(&mut f, tile.center());
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.exposure, 1.5);
+}
+
 /// Hovering a step of the history shows it in the image without going there.
 #[test]
 fn hovering_a_history_step_previews_it() {

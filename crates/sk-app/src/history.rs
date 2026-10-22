@@ -104,7 +104,13 @@ impl App {
         // Hovered: the image shows it until the mouse leaves (see `App::preview_style`).
         let mut hovered = None;
         let editing = self.snapshot_rename.clone();
+        // As the styles: small previews of the image, or (with „Liste“ there) a list.
+        let grid = !self.style_list;
+        if grid {
+            self.pump_snapshot_thumbs();
+        }
         let Some(cur) = &self.current else { return };
+        let app = &*self;
         let help = "Ein Schnappschuss sichert den jetzigen Stand; ein Klick darauf stellt ihn wieder her.";
         let body = |ui: &mut Ui| {
             if ui.button(format!("{}  Schnappschuss", icon::PLUS)).on_hover_text("Den jetzigen Stand unter einem Namen sichern").clicked() {
@@ -112,6 +118,54 @@ impl App {
             }
             if cur.snapshots.is_empty() {
                 crate::widgets::hint(ui, "Noch keine Schnappschüsse.");
+            }
+            if grid {
+                ui.add_space(4.0);
+                // The name being edited above the previews.
+                if let Some((i, text)) = &editing {
+                    let mut text = text.clone();
+                    let r = ui.text_edit_singleline(&mut text);
+                    r.request_focus();
+                    if r.lost_focus() {
+                        let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                        action = Some(SnapshotAction::Rename(*i, if esc { String::new() } else { text }));
+                    } else if r.changed() {
+                        typed = Some((*i, text));
+                    }
+                }
+                let (cols, tile, image_h) = crate::style_grid::tile_size(ui.available_width());
+                let shots: Vec<(usize, &sk_core::sidecar::Snapshot)> = cur.snapshots.iter().enumerate().collect();
+                for row in shots.chunks(cols) {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        for (i, s) in row {
+                            let current = s.adjustments == cur.adjustments;
+                            let r = crate::style_grid::thumb_tile(ui, app.snapshot_texture(*i, &s.adjustments), &s.name, tile, image_h, current)
+                                .on_hover_text("Klick: anwenden · Doppelklick: umbenennen");
+                            if r.hovered() && !current {
+                                hovered = Some(*i);
+                            }
+                            if r.double_clicked() {
+                                action = Some(SnapshotAction::StartRename(*i));
+                            } else if r.clicked() {
+                                action = Some(SnapshotAction::Apply(*i));
+                            }
+                            r.context_menu(|ui| {
+                                if ui.button("Anwenden").clicked() {
+                                    action = Some(SnapshotAction::Apply(*i));
+                                }
+                                if ui.button("Umbenennen").clicked() {
+                                    action = Some(SnapshotAction::StartRename(*i));
+                                }
+                                if ui.button(format!("{}  Löschen …", icon::TRASH)).clicked() {
+                                    action = Some(SnapshotAction::Delete(*i));
+                                }
+                            });
+                        }
+                    });
+                    ui.add_space(6.0);
+                }
+                return;
             }
             for (i, s) in cur.snapshots.iter().enumerate() {
                 ui.horizontal(|ui| {

@@ -467,6 +467,8 @@ pub struct App {
     /// A style row is hovered this frame (otherwise the preview ends).
     pub(crate) style_hovered: bool,
     pub(crate) style_grid: crate::style_grid::StyleGrid,
+    /// The snapshots as previews (see `style_grid`).
+    pub(crate) snapshot_grid: crate::style_grid::SnapshotGrid,
     /// Styles as a list instead of the grid of previews.
     pub(crate) style_list: bool,
     /// Lensfun profiles, read in the background at startup.
@@ -1004,6 +1006,7 @@ impl App {
             style_preview: None,
             style_hovered: false,
             style_grid: Default::default(),
+            snapshot_grid: Default::default(),
             style_list: settings.style_list,
             lens_db: None,
             lens_db_downloading: false,
@@ -2712,7 +2715,8 @@ impl App {
                     }
                 }
                 Event::LensDbDownloading(on) => self.lens_db_downloading = on,
-                Event::StyleThumb { key, id, image } => self.style_thumb_arrived(ctx, key, id, image),
+                Event::StyleThumb { key, id, image, snapshots: false } => self.style_thumb_arrived(ctx, key, id, image),
+                Event::StyleThumb { key, id, image, snapshots: true } => self.snapshot_thumb_arrived(ctx, key, id, image),
                 Event::CompareImage { path, image } => {
                     // The current image is shown from its live rendering.
                     if self.compare_requested.remove(&path) && self.current_path().as_ref() != Some(&path) {

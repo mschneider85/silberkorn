@@ -716,7 +716,10 @@ das Bild geöffnet ist. Überfahren eines Schritts oder Schnappschusses zeigt ih
 anzuwenden.
 
 **Schnappschüsse** sichern einen Stand unter einem Namen, dauerhaft im Sidecar (je Bild bzw.
-Variante). Klick wendet ihn an (ein Rückgängig-Schritt), Doppelklick benennt um.
+Variante). Sie erscheinen wie die Stile als kleine Vorschauen des Bildes, jede so, wie der Stand
+gespeichert wurde (ein eigener Hintergrund-Thread rechnet sie); mit „Ansicht: Liste“ bei den Stilen
+als Liste. Klick wendet ihn an (ein Rückgängig-Schritt), Doppelklick benennt um, Überfahren zeigt ihn
+im Bild.
 
 ### Umbenennen
 

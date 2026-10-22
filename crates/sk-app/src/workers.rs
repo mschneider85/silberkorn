@@ -80,7 +80,8 @@ pub enum Event {
     /// `before`: of the image without adjustments (see `DetailJob::before`).
     CompareDetail { path: PathBuf, version: Option<u64>, uv: [f32; 4], width: f32, full_res: bool, image: ColorImage, focus: Option<Arc<Vec<u8>>>, before: bool },
     /// A style applied to the current image, for the style grid (see `style_grid`).
-    StyleThumb { key: u64, id: String, image: ColorImage },
+    /// A small preview of a style or (`snapshots`) of a snapshot.
+    StyleThumb { key: u64, id: String, image: ColorImage, snapshots: bool },
     /// Sharpness map of a displayed image for the focus mask.
     /// `version`: edit version of the rendering of the image being edited (`None` for others).
     Focus { path: PathBuf, version: Option<u64>, size: [usize; 2], sharpness: Arc<Vec<u8>> },
@@ -302,10 +303,45 @@ pub struct StyleThumbJob {
     pub source: Arc<LinearImage>,
     /// Style id and the adjustments it gives the image.
     pub variants: Vec<(String, Adjustments)>,
+    /// Previews of the snapshots (a worker of their own, so that the two don't cancel each
+    /// other's previews).
+    pub snapshots: bool,
 }
 
 /// Long edge of the source the style previews are rendered from.
 const STYLE_THUMB_SOURCE: usize = 360;
+
+/// A worker for small previews of variants of the current image (styles, snapshots); a newer
+/// job replaces the one it is working on.
+fn spawn_thumbs(name: &'static str, rx: Receiver<StyleThumbJob>, ev_tx: Sender<Event>, ctx: egui::Context, activity: Activity) {
+    crate::guard::spawn(name, move || {
+        let mut next = recv_latest(&rx);
+        while let Some(job) = next.take() {
+            let src = &job.source;
+            let k = STYLE_THUMB_SOURCE as f32 / src.width.max(src.height).max(1) as f32;
+            let small = if k < 1.0 {
+                src.resize_area(((src.width as f32 * k).round() as usize).max(1), ((src.height as f32 * k).round() as usize).max(1))
+            } else {
+                (**src).clone()
+            };
+            for (id, adj) in job.variants {
+                // A newer image or edit: these previews are no longer wanted.
+                if let Some(newer) = rx.try_iter().last() {
+                    next = Some(newer);
+                    break;
+                }
+                activity.touch();
+                let r = Processor::new(&job.meta, &adj).render(&small, None, None);
+                let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
+                let _ = ev_tx.send(Event::StyleThumb { key: job.key, id, image, snapshots: job.snapshots });
+                ctx.request_repaint();
+            }
+            if next.is_none() {
+                next = recv_latest(&rx);
+            }
+        }
+    });
+}
 
 pub struct Workers {
     pub events: Receiver<Event>,
@@ -335,6 +371,7 @@ pub struct Workers {
     auto_tx: Sender<Option<AutoJob>>,
     inpaint_tx: Sender<InpaintJob>,
     style_tx: Sender<StyleThumbJob>,
+    snapshot_tx: Sender<StyleThumbJob>,
     /// Run, folder, with subfolders.
     folder_tx: Sender<(u64, PathBuf, bool)>,
     activity: Activity,
@@ -970,36 +1007,9 @@ impl Workers {
         }
 
         let (style_tx, style_rx) = channel::<StyleThumbJob>();
-        {
-            let (ev_tx, ctx, activity) = (ev_tx.clone(), ctx.clone(), activity.clone());
-            crate::guard::spawn("Stilvorschau", move || {
-                let mut next = recv_latest(&style_rx);
-                while let Some(job) = next.take() {
-                    let src = &job.source;
-                    let k = STYLE_THUMB_SOURCE as f32 / src.width.max(src.height).max(1) as f32;
-                    let small = if k < 1.0 {
-                        src.resize_area(((src.width as f32 * k).round() as usize).max(1), ((src.height as f32 * k).round() as usize).max(1))
-                    } else {
-                        (**src).clone()
-                    };
-                    for (id, adj) in job.variants {
-                        // A newer image or edit: these previews are no longer wanted.
-                        if let Some(newer) = style_rx.try_iter().last() {
-                            next = Some(newer);
-                            break;
-                        }
-                        activity.touch();
-                        let r = Processor::new(&job.meta, &adj).render(&small, None, None);
-                        let image = ColorImage::from_rgba_unmultiplied([r.width, r.height], &r.rgba);
-                        let _ = ev_tx.send(Event::StyleThumb { key: job.key, id, image });
-                        ctx.request_repaint();
-                    }
-                    if next.is_none() {
-                        next = recv_latest(&style_rx);
-                    }
-                }
-            });
-        }
+        spawn_thumbs("Stilvorschau", style_rx, ev_tx.clone(), ctx.clone(), activity.clone());
+        let (snapshot_tx, snapshot_rx) = channel::<StyleThumbJob>();
+        spawn_thumbs("Schnappschussvorschau", snapshot_rx, ev_tx.clone(), ctx.clone(), activity.clone());
 
         let (folder_tx, folder_rx) = channel::<(u64, PathBuf, bool)>();
         {
@@ -1202,6 +1212,7 @@ impl Workers {
             proof_tx,
             compare_tx,
             style_tx,
+            snapshot_tx,
             folder_tx,
             detail_tx,
             focus_tx,
@@ -1269,6 +1280,10 @@ impl Workers {
 
     pub fn inpaint(&self, job: InpaintJob) {
         let _ = self.inpaint_tx.send(job);
+    }
+
+    pub fn snapshot_thumbs(&self, job: StyleThumbJob) {
+        let _ = self.snapshot_tx.send(job);
     }
 
     pub fn style_thumbs(&self, job: StyleThumbJob) {

@@ -1,6 +1,7 @@
 //! The styles as a grid of small previews of the current image:
 //! every film look and saved style applied to the image, rendered in the background
-//! (`workers::StyleThumbJob`) whenever the image or its committed adjustments change.
+//! (`workers::StyleThumbJob`) whenever the image or its committed adjustments change. The
+//! snapshots are shown the same way (`SnapshotGrid`, a worker of their own).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -21,6 +22,64 @@ pub struct StyleGrid {
     /// Identifies the current request; older results are dropped.
     key: u64,
     textures: HashMap<String, TextureHandle>,
+}
+
+/// The previews of the snapshots of the current image.
+#[derive(Default)]
+pub struct SnapshotGrid {
+    /// What the previews show: image and the snapshots' adjustments.
+    shown: Option<(PathBuf, Vec<Adjustments>)>,
+    key: u64,
+    textures: HashMap<String, TextureHandle>,
+}
+
+/// Id of a snapshot's preview (its place and its adjustments: a renamed one keeps it).
+fn snapshot_id(i: usize, adj: &Adjustments) -> String {
+    format!("{i}:{:016x}", sk_core::cache::fnv1a(serde_json::to_string(adj).unwrap_or_default().as_bytes()))
+}
+
+/// Size of the tiles of a grid as wide as `width`: columns, tile width, image height.
+pub(crate) fn tile_size(width: f32) -> (usize, f32, f32) {
+    let spacing = TILE_SPACING;
+    let cols = ((width + spacing) / (MIN_TILE + spacing)).floor().max(2.0) as usize;
+    let tile = (width - spacing * (cols - 1) as f32) / cols as f32;
+    (cols, tile, tile * 0.72)
+}
+
+const TILE_SPACING: f32 = 6.0;
+
+/// One tile: the preview (or "…" while it is rendered) and the name below; framed while the
+/// pointer is on it or it is `selected`.
+pub(crate) fn thumb_tile(ui: &mut Ui, texture: Option<&TextureHandle>, name: &str, tile: f32, image_h: f32, selected: bool) -> egui::Response {
+    let label_h = 18.0;
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(tile, image_h + label_h), Sense::click());
+    let img_rect = Rect::from_min_size(rect.min, Vec2::new(tile, image_h));
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(img_rect, 3.0, Color32::from_gray(24));
+    match texture {
+        Some(t) => {
+            let [w, h] = t.size().map(|v| v as f32);
+            let k = (img_rect.width() / w).min(img_rect.height() / h);
+            let r = Rect::from_center_size(img_rect.center(), Vec2::new(w * k, h * k));
+            painter.image(t.id(), r, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        None => {
+            painter.text(img_rect.center(), egui::Align2::CENTER_CENTER, "…", egui::FontId::proportional(14.0), crate::theme::TEXT_FAINT);
+        }
+    }
+    let hot = resp.hovered();
+    if hot || selected {
+        let c = if hot { crate::theme::ACCENT } else { Color32::from_gray(200) };
+        painter.rect_stroke(img_rect, 3.0, egui::Stroke::new(2.0, c), egui::StrokeKind::Inside);
+    }
+    let name_color = if hot || selected { Color32::WHITE } else { Color32::from_gray(190) };
+    let mut job = egui::text::LayoutJob::simple_singleline(name.to_string(), egui::FontId::proportional(11.5), name_color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(tile);
+    let galley = painter.layout_job(job);
+    let name_pos = egui::pos2(rect.center().x - galley.size().x / 2.0, img_rect.max.y + 3.0);
+    painter.galley(name_pos, galley, name_color);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, name));
+    resp
 }
 
 /// What a click or the pointer on a tile does: the style and whether it is a film look (see
@@ -52,7 +111,7 @@ impl App {
         let own = self.styles.iter().map(|s| (s, false));
         let variants = looks.chain(own).map(|(s, look)| (id(s, look), applied(s, look, &cur.committed))).collect();
         let key = self.style_grid.key + 1;
-        self.workers.style_thumbs(crate::workers::StyleThumbJob { key, meta: cur.meta.clone(), source: cur.preview.clone(), variants });
+        self.workers.style_thumbs(crate::workers::StyleThumbJob { key, meta: cur.meta.clone(), source: cur.preview.clone(), variants, snapshots: false });
         // The old previews stay until the new ones replace them (no flicker while editing).
         self.style_grid.key = key;
         self.style_grid.shown = Some((path, cur.committed.clone(), self.styles.clone()));
@@ -85,41 +144,13 @@ impl App {
     /// styles, from the context menu).
     pub(crate) fn style_tiles(&self, ui: &mut Ui, list: &[(Style, bool, String)]) -> Picks {
         let (mut clicked, mut hovered, mut delete) = (None, None, None);
-        let spacing = 6.0;
-        let width = ui.available_width();
-        let cols = ((width + spacing) / (MIN_TILE + spacing)).floor().max(2.0) as usize;
-        let tile = (width - spacing * (cols - 1) as f32) / cols as f32;
-        let image_h = tile * 0.72;
-        let label_h = 18.0;
+        let (cols, tile, image_h) = tile_size(ui.available_width());
         for row in list.chunks(cols) {
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = spacing;
+                ui.spacing_mut().item_spacing.x = TILE_SPACING;
                 for (style, look, help) in row {
-                    let (rect, resp) = ui.allocate_exact_size(Vec2::new(tile, image_h + label_h), Sense::click());
-                    let img_rect = Rect::from_min_size(rect.min, Vec2::new(tile, image_h));
-                    let painter = ui.painter_at(rect);
-                    painter.rect_filled(img_rect, 3.0, Color32::from_gray(24));
-                    match self.style_grid.textures.get(&id(style, *look)) {
-                        Some(t) => {
-                            let [w, h] = t.size().map(|v| v as f32);
-                            let k = (img_rect.width() / w).min(img_rect.height() / h);
-                            let r = Rect::from_center_size(img_rect.center(), Vec2::new(w * k, h * k));
-                            painter.image(t.id(), r, Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
-                        }
-                        None => {
-                            painter.text(img_rect.center(), egui::Align2::CENTER_CENTER, "…", egui::FontId::proportional(14.0), crate::theme::TEXT_FAINT);
-                        }
-                    }
+                    let resp = thumb_tile(ui, self.style_grid.textures.get(&id(style, *look)), &style.name, tile, image_h, false);
                     let hot = resp.hovered();
-                    if hot {
-                        painter.rect_stroke(img_rect, 3.0, egui::Stroke::new(2.0, crate::theme::ACCENT), egui::StrokeKind::Inside);
-                    }
-                    let name_color = if hot { Color32::WHITE } else { Color32::from_gray(190) };
-                    let mut job = egui::text::LayoutJob::simple_singleline(style.name.clone(), egui::FontId::proportional(11.5), name_color);
-                    job.wrap = egui::text::TextWrapping::truncate_at_width(tile);
-                    let galley = painter.layout_job(job);
-                    let name_pos = egui::pos2(rect.center().x - galley.size().x / 2.0, img_rect.max.y + 3.0);
-                    painter.galley(name_pos, galley, name_color);
                     let resp = resp.on_hover_text(help.as_str());
                     if hot {
                         hovered = Some((style.clone(), *look));
@@ -137,9 +168,43 @@ impl App {
                     }
                 }
             });
-            ui.add_space(spacing);
+            ui.add_space(TILE_SPACING);
         }
         (clicked, hovered, delete)
+    }
+
+    /// Requests new previews of the snapshots when the image or its snapshots changed (each
+    /// rendered as it was saved, on the current preview).
+    pub(crate) fn pump_snapshot_thumbs(&mut self) {
+        let Some(cur) = &self.current else { return };
+        let path = cur.meta.path.clone();
+        let adjs: Vec<Adjustments> = cur.snapshots.iter().map(|s| s.adjustments.clone()).collect();
+        if self.snapshot_grid.shown.as_ref().is_some_and(|(p, a)| *p == path && *a == adjs) {
+            return;
+        }
+        let variants = adjs.iter().enumerate().map(|(i, a)| (snapshot_id(i, a), a.clone())).collect();
+        let key = self.snapshot_grid.key + 1;
+        self.workers.snapshot_thumbs(crate::workers::StyleThumbJob { key, meta: cur.meta.clone(), source: cur.preview.clone(), variants, snapshots: true });
+        self.snapshot_grid.key = key;
+        self.snapshot_grid.shown = Some((path, adjs));
+    }
+
+    pub(crate) fn snapshot_thumb_arrived(&mut self, ctx: &egui::Context, key: u64, id: String, image: ColorImage) {
+        if key != self.snapshot_grid.key {
+            return;
+        }
+        match self.snapshot_grid.textures.get_mut(&id) {
+            Some(t) => t.set(image, TextureOptions::LINEAR),
+            None => {
+                let t = ctx.load_texture(format!("snapshot:{id}"), image, TextureOptions::LINEAR);
+                self.snapshot_grid.textures.insert(id, t);
+            }
+        }
+    }
+
+    /// The preview of snapshot `i` with these adjustments, once rendered.
+    pub(crate) fn snapshot_texture(&self, i: usize, adj: &Adjustments) -> Option<&TextureHandle> {
+        self.snapshot_grid.textures.get(&snapshot_id(i, adj))
     }
 }
 
