@@ -408,13 +408,13 @@ im Katalog bzw. in der Session:
   ähnliche Gesichter werden derselben Person zugeordnet. Die Liste zeigt benannte Personen und
   solche auf mindestens zwei Bildern, jede als Kachel mit ihrem Gesicht (dem größten, das von ihr
   gefunden wurde), Name und Bildanzahl. Ein Klick zeigt ihre Bilder, ein zweiter wieder alle, ein
-  Doppelklick benennt sie. Wird dieselbe Person doppelt erkannt, eine Kachel auf die andere ziehen
-  (oder Rechtsklick → „Zusammenführen mit“). Nach einer Rückfrage gehören alle Gesichter zur
+  Doppelklick benennt sie. Wird dieselbe Person doppelt erkannt, eine Kachel auf die andere ziehen.
+  Nach einer Rückfrage gehören alle Gesichter zur
   Zielperson; sie behält ihren Namen oder übernimmt den der anderen, und das Keyword folgt.
   Umgekehrt zeigt eine gewählte Person darunter alle ihre Gesichter einzeln. Gehören welche zu
-  jemand anderem: anklicken (Strg+Klick für mehrere) und auf die richtige Person ziehen, oder
-  „Als neue Person“ abtrennen (die dann gleich benannt wird und auch mit einem Bild in der Liste
-  bleibt). Bilder, die die Person nicht mehr zeigen, verlieren ihren Namen als Keyword. Wird ein
+  jemand anderem: auf die richtige Person ziehen (Strg+Klick wählt mehrere, die dann zusammen
+  gezogen werden), oder auf die Kachel „Neue Person“, die beim Ziehen am Ende der Liste erscheint
+  (die neue Person wird gleich benannt und bleibt auch mit einem Bild in der Liste). Bilder, die die Person nicht mehr zeigen, verlieren ihren Namen als Keyword. Wird ein
   Bild neu analysiert, ordnet die Erkennung seine Gesichter wieder selbst zu.
   Der Name wird als Keyword der Bilder gesetzt (auch im XMP, wenn aktiviert); eine Person, die
   bereits so heißt, wird zusammengeführt.

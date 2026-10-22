@@ -259,16 +259,14 @@ impl App {
         }
     }
 
-    /// The faces of the chosen person, to choose and split off those that belong to someone
-    /// else; returns what to move where.
-    fn person_faces_ui(&mut self, ui: &mut Ui, person: &Person, faces: &[PersonFace]) -> Option<(Vec<i64>, Option<i64>)> {
-        let mut action = None;
+    /// The faces of the chosen person, to drag those that belong to someone else away.
+    fn person_faces_ui(&mut self, ui: &mut Ui, person: &Person, faces: &[PersonFace]) {
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("Gesichter von „{}“ ({})", person_name(person), faces.len())).strong());
         })
         .response
-        .on_hover_text("Falsch zugeordnete Gesichter auf die richtige Person ziehen oder abtrennen (Strg+Klick für mehrere) · Doppelklick öffnet das Bild");
+        .on_hover_text("Falsch zugeordnete Gesichter auf die richtige Person ziehen, oder auf „Neue Person“ (erscheint beim Ziehen) · Strg+Klick wählt mehrere · Doppelklick öffnet das Bild");
         let mut open_image = None;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
@@ -299,25 +297,12 @@ impl App {
                 }
             }
         });
-        let n = self.library_ui.person_faces.selected.len();
-        ui.horizontal(|ui| {
-            let text = if n > 1 { format!("{}  Als neue Person ({n})", icon::USER_PLUS) } else { format!("{}  Als neue Person", icon::USER_PLUS) };
-            if ui
-                .add_enabled(n > 0 && n < faces.len(), egui::Button::new(text))
-                .on_hover_text("Die gewählten Gesichter gehören zu jemand anderem: sie werden eine eigene Person")
-                .on_disabled_hover_text(if n == 0 { "Erst Gesichter anklicken, die zu jemand anderem gehören" } else { "Alle Gesichter gewählt: dann einfach die Person umbenennen" })
-                .clicked()
-            {
-                action = Some((self.library_ui.person_faces.selected.iter().copied().collect(), None));
-            }
-            if n > 0 && ui.button("Auswahl aufheben").clicked() {
-                self.library_ui.person_faces.selected.clear();
-            }
-        });
+        if !self.library_ui.person_faces.selected.is_empty() && ui.button("Auswahl aufheben").clicked() {
+            self.library_ui.person_faces.selected.clear();
+        }
         if let Some(p) = open_image {
             self.select_path(&p, egui::Modifiers::NONE);
         }
-        action
     }
 
     /// Merges the person `from` into `into` (one person recognized as two): the faces, the
@@ -514,26 +499,6 @@ impl App {
                             person_name(p),
                             crate::widgets::image_count(p.count)
                         ));
-                        resp.context_menu(|ui| {
-                            if ui.button(format!("{}  Benennen …", icon::PENCIL_SIMPLE)).clicked() {
-                                self.library_ui.naming = Some((p.id, p.name.clone().unwrap_or_default()));
-                                ui.close();
-                            }
-                            ui.menu_button(format!("{}  Zusammenführen mit", icon::USERS), |ui| {
-                                ui.label(RichText::new("Dieselbe Person, doppelt erkannt:").small().weak());
-                                for other in persons.iter().filter(|o| o.id != p.id) {
-                                    let text = format!("{} ({})", person_name(other), crate::widgets::image_count(other.count));
-                                    let clicked = match self.library_ui.faces.get(other) {
-                                        Some(t) => ui.add(egui::Button::image_and_text(egui::Image::new((t.id(), Vec2::splat(28.0))).corner_radius(4.0), text)).clicked(),
-                                        None => ui.button(format!("{}  {text}", icon::USER_CIRCLE)).clicked(),
-                                    };
-                                    if clicked {
-                                        self.library_ui.merging = Some((other.id, p.id));
-                                        ui.close();
-                                    }
-                                }
-                            });
-                        });
                         if resp.double_clicked() {
                             // The first click has opened the person already; the second only names it.
                             self.library_ui.naming = Some((p.id, p.name.clone().unwrap_or_default()));
@@ -542,12 +507,21 @@ impl App {
                             open = Some(if on { Scope::Folder { path: self.folder.clone(), recursive: false } } else { scope });
                         }
                     }
+                    // Faces being dragged: a tile to drop them on as a new person (not all of
+                    // them: then the person would only be renamed).
+                    if let Some(drag) = egui::DragAndDrop::payload::<FacesDrag>(ui.ctx())
+                        && drag.0.len() < faces.len()
+                    {
+                        let resp = new_person_tile(ui);
+                        if let Some(drag) = resp.dnd_release_payload::<FacesDrag>() {
+                            move_faces = Some((drag.0.clone(), None));
+                        }
+                    }
                 });
                 if let Some(person) = chosen.and_then(|id| self.lists.persons.iter().find(|p| p.id == id)).cloned()
                     && faces.len() > 1
-                    && let Some(action) = self.person_faces_ui(ui, &person, &faces)
                 {
-                    move_faces = Some(action);
+                    self.person_faces_ui(ui, &person, &faces);
                 }
             }
         });
@@ -620,6 +594,20 @@ fn drag_ghost(ui: &Ui, face: Option<&TextureHandle>) {
             painter.text(r.center(), egui::Align2::CENTER_CENTER, icon::USER_CIRCLE, egui::FontId::proportional(26.0), Color32::WHITE);
         }
     }
+}
+
+/// Where dragged faces become a new person: a tile like a person's, framed while they are over it.
+fn new_person_tile(ui: &mut Ui) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(FACE_TILE, FACE_TILE + 16.0), Sense::hover());
+    let painter = ui.painter_at(rect);
+    let img = Rect::from_min_size(rect.min, Vec2::splat(FACE_TILE));
+    let over = resp.dnd_hover_payload::<FacesDrag>().is_some();
+    painter.rect_filled(img, 6.0, if over { crate::theme::ACCENT.gamma_multiply(0.25) } else { Color32::from_gray(30) });
+    let stroke = if over { egui::Stroke::new(2.5, crate::theme::ACCENT) } else { egui::Stroke::new(1.0, crate::theme::TEXT_DIM) };
+    painter.rect_stroke(img, 6.0, stroke, egui::StrokeKind::Inside);
+    painter.text(img.center(), egui::Align2::CENTER_CENTER, icon::USER_PLUS, egui::FontId::proportional(26.0), if over { Color32::WHITE } else { crate::theme::TEXT_DIM });
+    painter.text(egui::pos2(img.center().x, img.bottom() + 2.0), egui::Align2::CENTER_TOP, "Neue Person", egui::FontId::proportional(11.0), crate::theme::TEXT);
+    resp
 }
 
 /// A person as a tile: the face (or a placeholder), the name below, the number of images in
