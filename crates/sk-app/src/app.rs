@@ -277,6 +277,19 @@ pub struct Tiles {
     /// The visible region, rendered first when zooming in and while dragging a control
     /// (drawn over the grid).
     pub view: Option<ViewTile>,
+    /// The view tile's texture is also in [`KeptTiles`]: the next view rendering gets a texture
+    /// of its own instead of replacing it.
+    pub view_kept: bool,
+}
+
+/// The tiles of before Shift was held on a tool's reset button, shown again at once when it is
+/// let go (nothing else can change meanwhile).
+pub struct KeptTiles {
+    generation: u64,
+    adjustments: Adjustments,
+    full_size: (usize, usize),
+    textures: HashMap<(usize, usize), TextureHandle>,
+    view: Option<(sk_core::geometry::Region, TextureHandle)>,
 }
 
 pub struct ViewTile {
@@ -665,6 +678,8 @@ pub struct App {
     /// The last new rendering only left a tool out or took it back (see `tool_peek`): the tiles
     /// of before may be shown until the new ones are there (same framing).
     pub(crate) tiles_stale_ok: bool,
+    /// See [`KeptTiles`].
+    pub(crate) kept_tiles: Option<KeptTiles>,
     render_requested: bool,
     pub(crate) undo: Vec<Adjustments>,
     pub(crate) redo: Vec<Adjustments>,
@@ -1140,6 +1155,7 @@ impl App {
             show_before: false,
             tool_peek: None,
             tiles_stale_ok: false,
+            kept_tiles: None,
             render_requested: false,
             undo: Vec::new(),
             undo_seq: Vec::new(),
@@ -1409,6 +1425,38 @@ impl App {
 
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// Keeps the full-resolution tiles of the current rendering (see [`KeptTiles`]).
+    pub(crate) fn keep_tiles(&mut self) {
+        let Some(cur) = &self.current else { return };
+        let current = self.tiles.version == self.edit_version && !self.tiles.textures.is_empty();
+        let view = self.tiles.view.as_ref().filter(|v| v.version == self.edit_version && v.level == 1).map(|v| (v.region, v.texture.clone()));
+        self.tiles.view_kept = view.is_some();
+        self.kept_tiles = (current || view.is_some()).then(|| KeptTiles {
+            generation: self.generation,
+            adjustments: cur.adjustments.clone(),
+            full_size: self.tiles.full_size,
+            textures: if current { self.tiles.textures.clone() } else { HashMap::new() },
+            view,
+        });
+    }
+
+    /// Shows the kept tiles again as those of the current rendering, if nothing changed since
+    /// (missing ones, and focus masks, are rendered as usual).
+    pub(crate) fn restore_kept_tiles(&mut self) {
+        let Some(k) = self.kept_tiles.take() else { return };
+        if k.generation != self.generation || self.current.as_ref().is_none_or(|c| c.adjustments != k.adjustments) {
+            return;
+        }
+        let version = self.edit_version;
+        self.tiles.version = version;
+        self.tiles.full_size = k.full_size;
+        self.tiles.textures = k.textures;
+        self.tiles.focus.clear();
+        self.tiles.view = k.view.map(|(region, texture)| ViewTile { region, level: 1, version, texture, focus: None });
+        self.tiles.view_kept = false;
+        self.tiles_requested = None;
     }
 
     pub fn current_path(&self) -> Option<PathBuf> {
@@ -2656,15 +2704,16 @@ impl App {
                         // way: while dragging, versions change faster than they can be rendered.
                         None => match &mut self.tiles.view {
                             Some(v) if v.version > version => {}
-                            Some(v) => {
+                            Some(v) if !self.tiles.view_kept => {
                                 v.focus = focus.map(|f| crate::focus::FocusMap::new(image.size, f));
                                 v.texture.set(image, TextureOptions::LINEAR);
                                 (v.region, v.level, v.version) = (region, level, version);
                             }
-                            None => {
+                            _ => {
                                 let focus = focus.map(|f| crate::focus::FocusMap::new(image.size, f));
                                 let texture = ctx.load_texture("view tile", image, TextureOptions::LINEAR);
                                 self.tiles.view = Some(ViewTile { region, level, version, texture, focus });
+                                self.tiles.view_kept = false;
                             }
                         },
                     }

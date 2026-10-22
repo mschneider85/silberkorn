@@ -42,9 +42,17 @@ impl App {
             use sk_core::tools::Tool;
             let moves = |t: Option<Tool>| matches!(t, Some(Tool::LensCorrection | Tool::Crop | Tool::Rotation | Tool::Perspective));
             let stale_ok = !moves(peek) && !moves(self.tool_peek);
+            let (starting, ending) = (self.tool_peek.is_none(), peek.is_none());
+            if starting && stale_ok {
+                self.keep_tiles();
+            }
             self.tool_peek = peek;
             self.request_render();
             self.tiles_stale_ok = stale_ok;
+            // Let go: the image as before, at once (only the preview is rendered again).
+            if ending {
+                self.restore_kept_tiles();
+            }
         }
     }
 

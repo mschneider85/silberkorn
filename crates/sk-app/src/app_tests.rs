@@ -4610,7 +4610,8 @@ fn split_view_renders_the_before_image_sharp_when_zoomed_in() {
 }
 
 /// Zoomed in, the sharp tiles stay on screen while the view without the tool (Shift held on its
-/// reset button) is rendered, and again when it is let go: never the magnified preview.
+/// reset button) is rendered, never the magnified preview; let go, those of before are back at
+/// once.
 #[test]
 fn leaving_a_tool_out_keeps_the_view_sharp_meanwhile() {
     let Some(mut f) = Fixture::new("tool-peek-sharp") else { return };
@@ -4642,17 +4643,28 @@ fn leaving_a_tool_out_keeps_the_view_sharp_meanwhile() {
         assert!(start.elapsed() < LIMIT, "scharfer Ausschnitt");
         frames(&mut f, &mut t, None, 1);
     }
-    for peek in [Some(sk_core::tools::Tool::Sharpening), None] {
-        let version = f.app.edit_version;
-        let start = Instant::now();
-        loop {
-            frames(&mut f, &mut t, peek, 1);
-            assert!(f.app.edit_version > version, "neue Darstellung");
-            assert!(sharp_shown(&f.app), "{peek:?}: zwischendurch die vergrößerte Vorschau");
-            if sharp_now(&f.app) {
-                break;
-            }
-            assert!(start.elapsed() < LIMIT, "{peek:?}: neuer scharfer Ausschnitt");
-        }
+    // Grid tiles too, so that they are kept.
+    let start = Instant::now();
+    while f.app.tiles.textures.is_empty() || f.app.tiles.version != f.app.edit_version {
+        assert!(start.elapsed() < LIMIT, "alle Kacheln");
+        frames(&mut f, &mut t, None, 1);
     }
+    let before: Vec<egui::TextureId> = f.app.tiles.view.iter().map(|v| v.texture.id()).collect();
+    let version = f.app.edit_version;
+    let start = Instant::now();
+    loop {
+        frames(&mut f, &mut t, Some(sk_core::tools::Tool::Sharpening), 1);
+        assert!(f.app.edit_version > version, "neue Darstellung");
+        assert!(sharp_shown(&f.app), "zwischendurch die vergrößerte Vorschau");
+        if sharp_now(&f.app) {
+            break;
+        }
+        assert!(start.elapsed() < LIMIT, "neuer scharfer Ausschnitt");
+    }
+    assert_ne!(f.app.tiles.view.iter().map(|v| v.texture.id()).collect::<Vec<_>>(), before, "eigene Textur ohne das Werkzeug");
+    // Let go: the tiles of before are back at once, nothing is rendered again for them.
+    frames(&mut f, &mut t, None, 1);
+    assert!(sharp_now(&f.app), "sofort wieder scharf");
+    assert_eq!(f.app.tiles.view.iter().map(|v| v.texture.id()).collect::<Vec<_>>(), before);
+    assert_eq!(f.app.tiles.version, f.app.edit_version);
 }
