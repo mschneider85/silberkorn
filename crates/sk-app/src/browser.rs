@@ -40,6 +40,13 @@ pub(crate) fn slider_pct(log: f32) -> f32 {
     [100.0, ZOOM_SLIDER_MAX].into_iter().find(|t| (pct / t - 1.0).abs() < 0.005).unwrap_or(pct.round().min(ZOOM_SLIDER_MAX))
 }
 
+/// How far the view can be moved: an image larger than the view up to its edges (and `margin`
+/// beyond), a smaller one only while it stays wholly in view, as in Lightroom.
+pub(crate) fn clamp_pan(pan: Vec2, image: Vec2, view: Vec2, margin: f32) -> Vec2 {
+    let limit = |i: f32, v: f32| if i > v { (i - v) / 2.0 + margin } else { (v - i) / 2.0 };
+    vec2(pan.x.clamp(-limit(image.x, view.x), limit(image.x, view.x)), pan.y.clamp(-limit(image.y, view.y), limit(image.y, view.y)))
+}
+
 /// "2024:05:17 14:03:22" (EXIF) as "17.05.2024 14:03"; anything else as it is.
 pub(crate) fn exif_date(d: &str) -> String {
     let p: Vec<&str> = d.split([':', ' ', '-', 'T']).collect();
@@ -213,6 +220,8 @@ impl App {
         if self.zoom.is_none() {
             self.pan = Vec2::ZERO;
         }
+        // The image (with its paper) can't be pushed out of sight.
+        self.pan = clamp_pan(self.pan, extent * scale, rect.size(), margin);
         // On whole physical pixels, so that 100 % maps each image pixel to exactly one screen pixel.
         let ppp = self.pixels_per_point;
         let img_rect = Rect::from_center_size(rect.center() + self.pan, size * scale);

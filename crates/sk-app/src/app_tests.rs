@@ -3979,6 +3979,26 @@ fn alt_click_on_an_eye_shows_only_that_layer() {
     assert_eq!(shown(&f), [true, true, true]);
 }
 
+/// Zoomed in, the image can be moved up to its edges, not out of sight; zoomed far out, it stays
+/// wholly in view.
+#[test]
+fn the_image_cannot_be_pushed_out_of_view() {
+    use crate::browser::clamp_pan;
+    let (image, view) = (egui::vec2(3000.0, 2000.0), egui::vec2(1000.0, 800.0));
+    assert_eq!(clamp_pan(egui::vec2(5000.0, -5000.0), image, view, 20.0), egui::vec2(1020.0, -620.0));
+    assert_eq!(clamp_pan(egui::vec2(-300.0, 0.0), image, view, 20.0), egui::vec2(-300.0, 0.0), "innerhalb frei");
+    assert_eq!(clamp_pan(egui::vec2(900.0, 900.0), egui::vec2(200.0, 100.0), view, 20.0), egui::vec2(400.0, 350.0));
+
+    let Some(mut f) = Fixture::new("pan-limit") else { return };
+    f.pump("Bild gerendert", |a| a.current.is_some() && a.texture.is_some());
+    f.app.set_zoom_pct(100.0);
+    viewer_frame(&mut f, vec![]);
+    drag(&mut f, egui::pos2(600.0, 400.0), egui::pos2(3600.0, 2900.0), 10);
+    let (view, img) = f.app.view_geometry.unwrap();
+    assert!(img.left() <= view.left() + 20.5 && img.top() <= view.top() + 20.5, "Bild bleibt im Blick: {view:?} {img:?}");
+    assert!(img.right() > view.right() && img.bottom() > view.bottom());
+}
+
 /// Every tool opens the tab with its settings, however it is started.
 #[test]
 fn tools_open_their_tab() {
