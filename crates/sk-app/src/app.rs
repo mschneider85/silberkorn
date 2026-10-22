@@ -921,6 +921,8 @@ impl Default for AppOptions {
 impl App {
     pub fn new(ctx: &egui::Context, opts: AppOptions) -> Self {
         crate::theme::install(ctx);
+        // Later starts wake this window (see `single_instance`).
+        crate::single_instance::set_context(ctx);
         let (settings, settings_error) = settings_path().filter(|_| opts.persist_settings).map_or((Settings::default(), None), |p| load_settings(&p));
         // Without an explicit folder, reopen the session that was open last time.
         sk_core::xmp::set_write_enabled(settings.write_xmp && opts.persist_settings);
@@ -1985,6 +1987,21 @@ impl App {
         self.edited_at = Instant::now();
     }
 
+    /// What later starts of Silberkorn handed over (see `single_instance`): their folder or
+    /// session is opened here, and the window comes to the front.
+    fn take_later_starts(&mut self, ctx: &egui::Context) {
+        for request in crate::single_instance::take_requests() {
+            match request {
+                Some(p) if sk_core::session::is_session_file(&p) || (p.is_dir() && sk_core::session::find_session_file(&p).is_some()) => self.open_session(&p),
+                Some(p) if p.is_dir() => self.open_folder(p),
+                Some(p) => self.status = format!("Nicht geöffnet: {} (weder Ordner noch Session)", p.display()),
+                None => {}
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+        }
+    }
+
     /// Shows what a slider held with Alt does instead of the image (`None`: the image again);
     /// each tab sets it from its sliders every frame.
     pub(crate) fn set_slider_view(&mut self, view: Option<sk_core::pipeline::SliderView>) {
@@ -2435,6 +2452,7 @@ impl App {
             self.status = format!("{panic} (Details in panic.log)");
         }
         self.load_full_when_due(ctx);
+        self.take_later_starts(ctx);
         // Only the sliders of the Belichtung tab mark their range in the histogram.
         if self.tab != Tab::Exposure {
             self.hover_zone = None;

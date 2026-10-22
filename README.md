@@ -157,6 +157,15 @@ Frame (Bearbeitungen werden sofort gespeichert). RAW-Dateien werden vor rawler g
 (`raw_check`): Verweise im Kreis, riesige Einträge und unplausible Bildgrößen, an denen rawler
 unabfangbar abbräche, gelten als beschädigt.
 
+**Nur eine Instanz** (`sk-app/src/single_instance.rs`): Zwei Silberkorn würden sich Sidecars, Katalog
+und Einstellungen überschreiben. Die erste sperrt `silberkorn.lock` im Datenordner (das System gibt
+die Sperre frei, wenn der Prozess endet, auch nach einem Absturz) und wartet auf einem lokalen Port;
+Port und ein Zufallsschlüssel stehen in `silberkorn.port`. Ein weiterer Start – etwa ein Doppelklick
+auf eine `.sksession` – reicht seinen Ordner oder seine Session an die laufende weiter, die sie öffnet
+und nach vorn kommt, und beendet sich. Antwortet die laufende nicht binnen 5 s, startet er doch. Der
+KI-Prozess und `SILBERKORN_SCREENSHOT` sind ausgenommen; beim Neustart nach Verlust der Grafikkarte
+gibt der alte Prozess die Sperre vorher ab.
+
 `cargo run --release -p sk-core --example bench -- <raw>` misst die Pipeline auf Prozessor und Grafikkarte.
 
 ### Ebenen & Masken

@@ -45,6 +45,7 @@ mod rename;
 mod session;
 mod shortcut_editor;
 mod side_column;
+mod single_instance;
 mod softproof;
 mod splash;
 mod stacks;
@@ -115,11 +116,16 @@ fn main() -> eframe::Result {
     if let Ok(exe) = std::env::current_exe() {
         sk_ai::worker::set_command(exe, vec![sk_ai::worker::ARG.into()]);
     }
+    // The argument is a folder to browse, or a session (its `.sksession` file or folder).
+    let arg = std::env::args().nth(1).map(PathBuf::from);
+    // One at a time: a second start hands its folder or session to the running one (not for
+    // the screenshots of development, which run beside it).
+    if std::env::var_os("SILBERKORN_SCREENSHOT").is_none() && !single_instance::claim(arg.as_deref()) {
+        return Ok(());
+    }
     if guard::mark_running() {
         log::warn!("Die letzte Sitzung wurde nicht normal beendet");
     }
-    // The argument is a folder to browse, or a session (its `.sksession` file or folder).
-    let arg = std::env::args().nth(1).map(PathBuf::from);
     let is_session = arg.as_ref().is_some_and(|p| sk_core::session::is_session_file(p) || (p.is_dir() && sk_core::session::find_session_file(p).is_some()));
     let (folder, session) = if is_session { (None, arg) } else { (arg, None) };
 
@@ -187,6 +193,8 @@ fn main() -> eframe::Result {
         Err(_) if guard::display_lost() && started.elapsed() > std::time::Duration::from_secs(30) => {
             log::warn!("Silberkorn startet neu");
             guard::mark_clean_exit();
+            // The new process becomes the instance.
+            single_instance::release();
             if let Err(e) = std::process::Command::new(std::env::current_exe().unwrap_or_default()).args(std::env::args_os().skip(1)).spawn() {
                 log::error!("Neustart fehlgeschlagen: {e}");
             }
@@ -259,6 +267,7 @@ mod tests {
             include_str!("session.rs"),
             include_str!("shortcut_editor.rs"),
             include_str!("side_column.rs"),
+            include_str!("single_instance.rs"),
             include_str!("softproof.rs"),
             include_str!("splash.rs"),
             include_str!("stacks.rs"),
