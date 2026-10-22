@@ -88,7 +88,9 @@ const FULL_RES_LIMIT: f32 = 1800.0;
 /// The network fills at a size where the marked area is at most this much of its window:
 /// with the surroundings in view (and at the scale of the pictures it learned on), not a
 /// window that is mostly hole. The fine structure comes back afterwards (see `add_texture`).
-const NET_EXTENT: f32 = NET as f32 * 0.35;
+/// Half the window: with a third, larger areas were scaled down so far that grass and similar
+/// fine structure came back only as blotches.
+const NET_EXTENT: f32 = NET as f32 * 0.5;
 /// Most pixels stored in a patch (larger patches are reduced).
 const PATCH_PIXELS: usize = 1_000_000;
 
@@ -192,10 +194,10 @@ fn remove_with(full: &LinearImage, wb: [f32; 3], strokes: &[BrushStroke], fill: 
     let hole = work.hole();
     match_edges(&mut work, &hole);
     progress(0.9);
-    // Scaled up from much smaller, the fill is soft: the fine structure comes from the
-    // surroundings, fully from a third of the size on. Filled about at its size, the network's
-    // own structure is better (it would only be blurred by that).
-    let strength = if scaled { ((coarse / fine - 1.8) / 1.2).clamp(0.0, 1.0) } else { 0.0 };
+    // Scaled up, the fill is soft: the fine structure comes from the surroundings, fully from
+    // 1.6 times on. Filled at its size, the network's own structure is better (it would only be
+    // blurred by that).
+    let strength = if scaled { ((coarse / fine - 1.0) / 0.6).clamp(0.0, 1.0) } else { 0.0 };
     if strength > 0.0 {
         let before = work.rgb.clone();
         // The network's fill is kept only as far as this blur: the fine structure (and with it

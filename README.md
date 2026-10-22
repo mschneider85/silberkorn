@@ -344,11 +344,11 @@ erscheint zusätzlich oben im Bild.
   einer GTX 1650 Ti (auf dem Prozessor 3.8 s, mit tract 10 s), gut 800 MB Grafikspeicher. Geladen wird
   das Netz (gut 10 s, auf der Grafikkarte samt erstem Lauf, der die Shader übersetzt) im Hintergrund,
   sobald das Werkzeug gewählt wird, nicht erst mit dem ersten Strich. Das Netz rechnet so verkleinert, dass die
-  Markierung höchstens gut ein Drittel seines 512er-Fensters einnimmt (es sieht dann genug Umgebung,
+  Markierung höchstens die Hälfte seines 512er-Fensters einnimmt (es sieht dann genug Umgebung,
   im Maßstab der Bilder, an denen es lernte); größere Flächen in mehreren Fenstern. Danach in voller
   Auflösung (sehr große Flächen etwas verkleinert): Helligkeit und Farbe werden am Rand gemessen und
-  ins Innere verteilt (Push-Pull). Musste das Netz stark verkleinert rechnen (ab etwa einem Drittel
-  voll), kommt die feine Struktur – samt Korn – blockweise aus Stellen der Umgebung mit ähnlicher
+  ins Innere verteilt (Push-Pull). Musste das Netz verkleinert rechnen (voll ab
+  1.6-fach), kommt die feine Struktur – samt Korn – blockweise aus Stellen der Umgebung mit ähnlicher
   Farbe (Wald aus Wald, nicht aus Fels oder Wolke); wo keine passt, und bei kleineren Flächen, bleibt
   die Struktur des Netzes. Das Ergebnis ist ein kleiner Flicken mit weicher Kante im Sidecar (Feld
   `removals`): Er wird vor Reparieren/Klonen eingesetzt, bleibt am Bildinhalt wie die Masken und
