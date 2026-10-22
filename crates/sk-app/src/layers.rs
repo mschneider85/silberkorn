@@ -1178,8 +1178,8 @@ impl App {
         }
     }
 
-    /// "Stellen": everything retouched, removals first (they are applied first), then the heal
-    /// and clone areas. Select one to edit it (also in the viewer), change its settings, find a
+    /// "Retuschen": everything retouched, removals first (they are applied first), then the heal
+    /// and clone areas, as a list like the layers'. Select one to edit it (also in the viewer), change its settings, find a
     /// new source or delete it; settings a kind does not have are shown, but disabled.
     fn areas_section(&mut self, ui: &mut Ui) {
         #[derive(Clone, Copy)]
@@ -1204,67 +1204,95 @@ impl App {
         let (spots, removals) = (&mut adj.retouch, &mut adj.removals);
         use crate::commands::hint;
         let help = format!(
-            "Alle retuschierten Stellen. Eine wählen, um sie zu ändern; im Bild ist sie dann markiert.\n\nPins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · {}\n\nGewählten Bereich ändern: mit Umschalt dazumalen, mit Alt wegnehmen; entfernte Bereiche werden dann neu gefüllt.",
+            "Alle Retuschen dieses Bildes. Eine wählen, um sie zu ändern; im Bild ist sie dann markiert. ↺ im Kopf löscht alle.\n\nPins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · {}\n\nGewählten Bereich ändern: mit Umschalt dazumalen, mit Alt wegnehmen; entfernte Bereiche werden dann neu gefüllt.",
             hint("Löschen", "delete-spot")
         );
         let area_paint = &mut self.area_paint;
         let mut reset = false;
-        crate::widgets::section_help(ui, "Stellen", &help, Some(&mut || reset = true), |ui| {
-            if spots.is_empty() && removals.is_empty() {
-                crate::widgets::hint(ui, "Noch keine.");
-            }
-            let entries = (0..removals.len()).map(Area::Removal).chain((0..spots.len()).map(Area::Spot));
-            for (n, area) in entries.enumerate() {
-                let (ic, kind, chosen) = match area {
-                    Area::Removal(i) => (icon::SPARKLE, "Entfernen", selected_removal == Some(i)),
-                    Area::Spot(i) => match spots[i].mode {
-                        SpotMode::Heal => (icon::BANDAIDS, "Reparieren", selected_spot == Some(i)),
-                        SpotMode::Clone => (icon::STAMP, "Klonen", selected_spot == Some(i)),
-                    },
-                };
-                let w = ui.available_width();
-                let r = ui.add_sized([w, 24.0], egui::Button::selectable(chosen, format!("{ic}  {kind} {}", n + 1)));
-                if r.clicked() {
-                    act = Some(Act::Select(area));
-                }
-                r.context_menu(|ui| {
-                    if let Area::Spot(i) = area
-                        && ui.button(format!("{}  Neue Quelle", icon::MAGIC_WAND)).clicked()
-                    {
-                        act = Some(Act::SourceOf(i));
-                    }
-                    if ui.button(format!("{}  Löschen", icon::TRASH)).clicked() {
-                        act = Some(Act::DeleteAt(area));
-                    }
-                });
-            }
+        let count = spots.len() + removals.len();
+        crate::widgets::list_section(ui, RETOUCH_SECTION, &help, count, Some(&mut || reset = true), |ui| {
             // The settings of the chosen area; without one they are shown, but disabled.
             let mut spot_placeholder = Spot { mode: SpotMode::Heal, target: [0.0; 2], source: [0.0; 2], path: Vec::new(), strokes: Vec::new(), radius: 0.0, feather: 0.4, opacity: 1.0 };
             let mut removal_placeholder = sk_core::params::Removal::default();
+            let names: Vec<(Area, &str, &str, f32)> = (0..removals.len())
+                .map(|i| (Area::Removal(i), icon::SPARKLE, "Entfernen", removals[i].opacity))
+                .chain((0..spots.len()).map(|i| match spots[i].mode {
+                    SpotMode::Heal => (Area::Spot(i), icon::BANDAIDS, "Reparieren", spots[i].opacity),
+                    SpotMode::Clone => (Area::Spot(i), icon::STAMP, "Klonen", spots[i].opacity),
+                }))
+                .collect();
             let spot = selected_spot.and_then(|i| spots.get_mut(i));
             let removal = selected_removal.and_then(|i| removals.get_mut(i)).filter(|_| spot.is_none());
             let (is_spot, is_removal) = (spot.is_some(), removal.is_some());
             let has = is_spot || is_removal;
             let s = spot.unwrap_or(&mut spot_placeholder);
             let r = removal.unwrap_or(&mut removal_placeholder);
-            ui.scope(|ui| {
-                if !has {
-                    ui.disable();
-                }
-                ui.add_space(6.0);
-                ui.add_enabled_ui(!is_removal, |ui| {
-                    crate::widgets::field(ui, "Art", |ui| {
-                        changed |= ui.selectable_value(&mut s.mode, SpotMode::Heal, "Reparieren").changed();
-                        changed |= ui.selectable_value(&mut s.mode, SpotMode::Clone, "Klonen").changed();
-                    });
-                });
+            // As with the layers: the opacity of the chosen one above the list.
+            ui.add_enabled_ui(has, |ui| {
                 let opacity = if is_removal { &mut r.opacity } else { &mut s.opacity };
                 let mut percent = *opacity * 100.0;
                 if slider_row(ui, "Deckkraft", &mut percent, 0.0..=100.0, 100.0, 0) {
                     *opacity = percent / 100.0;
                     changed = true;
                 }
+            });
+            ui.add_space(4.0);
+            ui.scope(|ui| {
+                ui.spacing_mut().item_spacing.y = 1.0;
+                for (n, (area, ic, kind, opacity)) in names.iter().enumerate() {
+                    let chosen = match area {
+                        Area::Removal(i) => selected_removal == Some(*i),
+                        Area::Spot(i) => selected_spot == Some(*i),
+                    };
+                    let name = format!("{kind} {}", n + 1);
+                    let (rect, resp) = crate::widgets::list_row(ui, LIST_ROW, chosen, &name);
+                    let p = ui.painter();
+                    // The kind where the layers have their eye.
+                    let icon_rect = Rect::from_min_size(rect.min + vec2(4.0, (LIST_ROW - 22.0) / 2.0), vec2(22.0, 22.0));
+                    p.text(icon_rect.center(), egui::Align2::CENTER_CENTER, *ic, egui::FontId::proportional(15.0), theme::TEXT_DIM);
+                    p.text(pos2(icon_rect.right() + 6.0, rect.center().y), egui::Align2::LEFT_CENTER, &name, egui::FontId::proportional(13.0), theme::TEXT);
+                    let percent = format!("{:.0} %", opacity * 100.0);
+                    p.text(pos2(rect.right() - 8.0, rect.center().y), egui::Align2::RIGHT_CENTER, percent, egui::FontId::proportional(11.5), theme::TEXT_DIM);
+                    if resp.clicked() {
+                        act = Some(Act::Select(*area));
+                    }
+                    resp.context_menu(|ui| {
+                        if let Area::Spot(i) = area
+                            && ui.button(format!("{}  Neue Quelle", icon::MAGIC_WAND)).clicked()
+                        {
+                            act = Some(Act::SourceOf(*i));
+                        }
+                        if ui.button(format!("{}  Löschen", icon::TRASH)).clicked() {
+                            act = Some(Act::DeleteAt(*area));
+                        }
+                    });
+                }
+            });
+            if names.is_empty() {
+                crate::widgets::hint(ui, "Noch keine: mit Reparieren, Klonen oder Entfernen über eine Stelle malen.");
+            }
+            ui.add_space(4.0);
+            // Below the list, as with the layers: what acts on the chosen one.
+            ui.horizontal(|ui| {
+                let source = ui.add_enabled(is_spot, egui::Button::new(RichText::new(icon::MAGIC_WAND).size(15.0)));
+                if source.on_hover_text("Neue Quelle: erneut automatisch wählen").clicked() {
+                    act = Some(Act::NewSource);
+                }
+                let delete = ui.add_enabled(has, egui::Button::new(RichText::new(icon::TRASH).size(15.0)));
+                if delete.on_hover_text(crate::commands::hint("Gewählte Retusche löschen", "delete-spot")).clicked() {
+                    act = Some(Act::Delete);
+                }
+            });
+            ui.add_space(6.0);
+            ui.scope(|ui| {
+                if !has {
+                    ui.disable();
+                }
                 ui.add_enabled_ui(!is_removal, |ui| {
+                    crate::widgets::field(ui, "Art", |ui| {
+                        changed |= ui.selectable_value(&mut s.mode, SpotMode::Heal, "Reparieren").changed();
+                        changed |= ui.selectable_value(&mut s.mode, SpotMode::Clone, "Klonen").changed();
+                    });
                     let mut feather = s.feather * 100.0;
                     if slider_row(ui, "Weichheit", &mut feather, 0.0..=100.0, 40.0, 0) {
                         s.feather = feather / 100.0;
@@ -1272,21 +1300,7 @@ impl App {
                     }
                 });
                 area_paint_row(ui, area_paint, has);
-                ui.horizontal(|ui| {
-                    let source = ui.add_enabled(!is_removal, egui::Button::new(format!("{}  Neue Quelle", icon::MAGIC_WAND)));
-                    if source.on_hover_text("Quelle erneut automatisch wählen").clicked() {
-                        act = Some(Act::NewSource);
-                    }
-                    if ui.button(format!("{}  Löschen", icon::TRASH)).on_hover_text(crate::commands::shortcut_of("delete-spot")).clicked() {
-                        act = Some(Act::Delete);
-                    }
-                });
             });
-            ui.add_space(4.0);
-            let any = !spots.is_empty() || !removals.is_empty();
-            if ui.add_enabled(any, egui::Button::new(format!("{}  Alle löschen", icon::TRASH))).clicked() {
-                act = Some(Act::Clear);
-            }
         });
         if reset {
             act = Some(Act::Clear);
@@ -1467,9 +1481,9 @@ impl App {
         }
         let mut action = None;
         let mut changed = false;
-        let title = if layers.is_empty() { "Ebenen".to_string() } else { format!("Ebenen ({})", layers.len()) };
+        let count = layers.len();
         let help = "Oberste Ebene zuerst. Klick wählt, Doppelklick benennt um, das Auge blendet aus.\n\nPinsel, Verlauf und Zauberpinsel legen selbst eine Ebene an, wenn keine gewählt ist.";
-        crate::widgets::section_help(ui, &title, help, None, |ui| {
+        crate::widgets::list_section(ui, "Ebenen", help, count, None, |ui| {
             // Opacity of the chosen layer; greyed out for the background.
             match active {
                 Some(li) => changed |= slider_row(ui, "Deckkraft", &mut layers[li].opacity, 0.0..=100.0, 100.0, 0),
@@ -1479,24 +1493,16 @@ impl App {
             }
             ui.add_space(4.0);
             ui.spacing_mut().item_spacing.y = 1.0;
-            let w = ui.available_width();
-            let h = 26.0;
+            let h = LIST_ROW;
             // The topmost layer first, the background at the bottom.
             let rows = layers.len();
             for i in (0..=rows).rev() {
                 let layer = (i < rows).then_some(i);
                 let selected = if layer.is_some() { active == Some(i) } else { active.is_none() };
-                let (rect, resp) = ui.allocate_exact_size(vec2(w, h), egui::Sense::click());
+                let name = layer.map_or("Hintergrund".to_string(), |li| layers[li].name.clone());
+                let (rect, resp) = crate::widgets::list_row(ui, h, selected, &name);
                 let eye_rect = Rect::from_min_size(rect.min + vec2(4.0, (h - 22.0) / 2.0), vec2(22.0, 22.0));
                 let eye = layer.map(|_| ui.interact(eye_rect, ui.id().with(("eye", i)), egui::Sense::click()));
-                let fill = if selected {
-                    theme::ACCENT_SOFT
-                } else if resp.hovered() {
-                    Color32::from_rgb(54, 54, 60)
-                } else {
-                    Color32::TRANSPARENT
-                };
-                ui.painter().rect_filled(rect, 4.0, fill);
                 let x = eye_rect.right() + 6.0;
                 let Some(li) = layer else {
                     let p = ui.painter();
@@ -2102,6 +2108,10 @@ const BRUSH_ADJUST_HARDNESS_SPAN: f32 = 200.0;
 
 /// Pointer distance (screen points) within which a pin of a retouch area is grabbed.
 pub(crate) const PIN_HIT: f32 = 9.0;
+/// Height of a row of the layer and retouch lists.
+const LIST_ROW: f32 = 26.0;
+/// Title of the list of retouches in the Retusche tab.
+pub(crate) const RETOUCH_SECTION: &str = "Retuschen";
 
 /// Pointer positions of this frame while dragging, in order: every movement the system
 /// reported, not only where the pointer ended up (at one point per frame a fast circle comes

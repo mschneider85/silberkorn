@@ -62,6 +62,12 @@ pub fn section_counted(ui: &mut Ui, title: &str, help: Option<&str>, count: usiz
     section_inner(ui, title, false, help, None, false, Some(count), None, body);
 }
 
+/// An open [`section_help`] of a list, with how many entries it has after the title (the
+/// section keeps whether it is open however many there are).
+pub fn list_section(ui: &mut Ui, title: &str, help: &str, count: usize, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
+    section_inner(ui, title, true, Some(help), None, false, Some(count), reset, body);
+}
+
 fn copy_targets_id() -> egui::Id {
     egui::Id::new("tool_copy_targets")
 }
@@ -440,6 +446,22 @@ pub fn combo_field(ui: &mut Ui, label: &str, selected: impl Into<egui::WidgetTex
         // Named after the row (screen readers, tests), not after the chosen entry.
         r.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), label));
     });
+}
+
+/// A row of a list like the layers': `h` high and as wide as the panel, filled when chosen or
+/// under the mouse, named for screen readers (and tests). The caller draws its content.
+pub fn list_row(ui: &mut Ui, h: f32, selected: bool, name: &str) -> (Rect, Response) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
+    let fill = if selected {
+        theme::ACCENT_SOFT
+    } else if resp.hovered() {
+        Color32::from_rgb(54, 54, 60)
+    } else {
+        Color32::TRANSPARENT
+    };
+    ui.painter().rect_filled(rect, 4.0, fill);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, name));
+    (rect, resp)
 }
 
 /// Options of a [`slider_row_with`].

@@ -103,7 +103,7 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Layers, "Anpassungen", "ebenen-anpassungen lokal belichtung"),
     (Tab::Layers, "Ebenen", "layer maske lokal"),
     (Tab::Retouch, "Werkzeuge", "reparieren klonen entfernen heal clone stempel remove objekt ki flecken staub"),
-    (Tab::Retouch, "Stellen", "retusche reparieren klonen entfernen bereiche liste"),
+    (Tab::Retouch, "Retuschen", "retusche retuschen reparieren klonen entfernen bereiche stellen liste"),
     (Tab::Metadata, "Keywords", "schlagworte stichworte tags"),
     (Tab::Metadata, "Aufnahme", "exif kamera objektiv iso"),
     (Tab::Styles, "Filmsimulationen", "film look preset vorschau raster"),

@@ -218,9 +218,9 @@ Drehen oder Objektivkorrektur am Bildinhalt.
 „Reparieren“ und „Klonen“ (Tab „Retusche“) werden wie ein Pinsel über die Stelle gemalt (ein Klick ergibt einen runden
 Punkt). „Reparieren“ übernimmt Struktur von einer automatisch gewählten Quelle und gleicht Farbe/Helligkeit an
 die Umgebung an; „Klonen“ kopiert 1:1. Mit aktivem Werkzeug zeigt das Bild alle Bereiche mit Pins: der
-weiße verschiebt den Bereich, der gelbe (beim ausgewählten) die Quelle. Im Abschnitt „Stellen“
-stehen alle Bereiche in einer Liste, zusammen mit den entfernten; dort lassen sich Art, Deckkraft und
-Weichheit ändern, eine neue Quelle suchen oder Bereiche löschen (was eine Art nicht hat, ist ausgegraut). Einen gewählten Bereich erweitert man, indem man mit Umschalt dazumalt; mit Alt
+weiße verschiebt den Bereich, der gelbe (beim ausgewählten) die Quelle. Im Abschnitt „Retuschen“
+stehen alle Bereiche in einer Liste wie die Ebenen (Art, Name, Deckkraft), zusammen mit den entfernten; dort lassen sich Art, Deckkraft und
+Weichheit ändern, eine neue Quelle suchen oder Bereiche löschen (↺ im Kopf löscht alle) (was eine Art nicht hat, ist ausgegraut). Einen gewählten Bereich erweitert man, indem man mit Umschalt dazumalt; mit Alt
 nimmt man einen Teil weg (oder „Malen: Erweitern / Verkleinern“ im Abschnitt). Ein **Alt-Klick** (ohne zu
 ziehen) legt die Quelle fest wie beim Kopierstempel in Photoshop: beim gewählten Bereich dort hin, ohne
 gewählten Bereich für den nächsten (ein Fadenkreuz zeigt sie bis dahin). Die Striche gehören zum Bereich:

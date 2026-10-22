@@ -325,7 +325,7 @@ fn tool_of(name: &'static str) -> Option<(Tab, Option<&'static str>)> {
         "Vignette" => (Tab::Effects, Some("Vignette")),
         "Objektivunschärfe" => (Tab::Effects, Some("Objektivunschärfe")),
         "Ebenen" => (Tab::Layers, None),
-        "Retusche" | "Entfernen" => (Tab::Retouch, Some("Stellen")),
+        "Retusche" | "Entfernen" => (Tab::Retouch, Some(crate::layers::RETOUCH_SECTION)),
         _ => return None,
     };
     Some(t)

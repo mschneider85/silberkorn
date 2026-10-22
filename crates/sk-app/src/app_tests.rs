@@ -4276,7 +4276,7 @@ fn delete_in_layer_tab_ignores_hidden_spot() {
 }
 
 /// The retouch tab lists removals and heal/clone areas together: a click chooses one (and the
-/// tool that shows it), "Alle löschen" clears both kinds.
+/// tool that shows it), ↺ in the header clears both kinds.
 #[test]
 fn retouch_tab_lists_all_areas_together() {
     use crate::app::Tab;
@@ -4305,7 +4305,15 @@ fn retouch_tab_lists_all_areas_together() {
     assert_eq!((f.app.selected_removal, f.app.selected_spot), (None, Some(0)));
     assert_eq!(f.app.local_tool, Some(LocalTool::Heal));
 
-    click_at(&mut f, widget(&nodes, "Alle löschen").expect("Alle löschen").center());
+    // The rows show the opacity, like the layers; ↺ in the header deletes all.
+    let first = widget(&nodes, "Entfernen 1").unwrap();
+    let reset = nodes
+        .iter()
+        .filter(|(l, r)| l == crate::theme::icon::ARROWS_COUNTER_CLOCKWISE && r.bottom() <= first.top())
+        .max_by(|a, b| a.1.top().total_cmp(&b.1.top()))
+        .map(|(_, r)| *r)
+        .expect("↺ im Kopf der Retuschen");
+    click_at(&mut f, reset.center());
     let adj = &f.app.current.as_ref().unwrap().adjustments;
     assert!(adj.retouch.is_empty() && adj.removals.is_empty());
 }
