@@ -261,6 +261,9 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
   Griffen wirkt die Ebene voll, zu den unteren läuft sie aus. Das Trapez lässt sich als Ganzes
   verschieben; die Werte stehen darunter (0–255).
 - **Stilpinsel** (+ unter der Ebenenliste → „Neue Ebene mit Stilpinsel“): Stilpinsel (Aufhellen, Abdunkeln, Wärmer, Haut glätten, Dunst entfernen, …).
+- **Neue Ebene mit Look** (+ unter der Ebenenliste): eine Ebene über das ganze Bild mit einem
+  Filmlook oder eigenen Stil; ihre Deckkraft ist die Stärke, ihre Maske kann ihn eingrenzen (siehe
+  „Stile“).
 
 ### KI-Werkzeuge: Raw-Details, Entrauschen und Entfernen
 
@@ -969,6 +972,15 @@ beziehen sich aber nur auf die Bilder der Session.
   setzt nur seine Werkzeuge, alle anderen bleiben, wie sie sind, so lassen sich Stile übereinander
   anwenden (etwa ein Farblook und danach ein Körnungs-Stil). Stile von vor dieser Funktion setzen
   weiterhin alles außer Zuschnitt, Drehen, Perspektive, Ebenen und Retusche.
+  Ist eine **Ebene gewählt**, geht ein Stil oder Look auf diese Ebene (nur im aktuellen Bild, auch
+  die Vorschau beim Überfahren): als Änderung des Hintergrunds, deren Stärke die Deckkraft der Ebene
+  ist und die ihre Maske eingrenzt. Schwarzweiß wird dort zu Sättigung −100 mit der
+  Farbempfindlichkeit als Helligkeit je Farbband und der Tonung als Farbbalance; eine andere
+  Basiskurve als „Film Standard“ wird zu einer Gradationskurve, die denselben Unterschied macht.
+  So sieht jeder der elf Filmlooks auf einer Ebene über das ganze Bild aus wie auf dem Bild selbst,
+  bis auf die Körnung (neun gleich, Velvia und Tri-X im Mittel unter drei von 255 Stufen anders). Was
+  eine Ebene nicht kann (Körnung, Tonwerte, Weißabgleich, eigene Farbbereiche …), nennt die
+  Statusleiste; das bleibt dem Hintergrund vorbehalten, wie in Capture One.
 - **Eingebettete Vorschauen** werden direkt gelesen: nur die TIFF-Struktur und das JPEG, nicht die
   ganze RAW-Datei (ARW, NEF, CR2, DNG, ORF, RW2, PEF, RAF). Über Netzlaufwerke oder USB ein
   Vielfaches schneller; andere Formate (z. B. CR3) wie bisher über die volle Datei.

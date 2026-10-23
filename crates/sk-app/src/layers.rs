@@ -1485,6 +1485,8 @@ impl App {
         let mut action = None;
         let mut changed = false;
         let count = layers.len();
+        let look_names: Vec<String> = self.film_looks.iter().map(|(s, _)| s.name.clone()).collect();
+        let style_names: Vec<String> = self.styles.iter().map(|s| s.name.clone()).collect();
         let help = "Oberste Ebene zuerst. Klick wählt, Doppelklick benennt um, das Auge blendet aus.\n\nPinsel, Verlauf und Zauberpinsel legen selbst eine Ebene an, wenn keine gewählt ist.";
         crate::widgets::list_section(ui, "Ebenen", help, count, None, |ui| {
             // Opacity of the chosen layer; greyed out for the background.
@@ -1594,6 +1596,23 @@ impl App {
                     })
                     .response
                     .on_hover_text("Ebene mit fertigen Anpassungen, der Pinsel ist gleich gewählt");
+                    crate::widgets::menu_button(ui, "Neue Ebene mit Look", |ui| {
+                        for (index, name) in look_names.iter().enumerate() {
+                            if ui.button(name).clicked() {
+                                action = Some(LayerAction::AddLook { look: true, index });
+                            }
+                        }
+                        if !style_names.is_empty() {
+                            ui.separator();
+                            for (index, name) in style_names.iter().enumerate() {
+                                if ui.button(name).clicked() {
+                                    action = Some(LayerAction::AddLook { look: false, index });
+                                }
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("Ebene über das ganze Bild mit einem Look oder Stil: ihre Deckkraft ist die Stärke, ihre Maske schränkt ihn ein");
                 })
                 .response
                 .on_hover_text("Neue Ebene");
@@ -1915,6 +1934,12 @@ impl App {
                     self.add_style_brush(name, adj);
                 }
             }
+            Some(LayerAction::AddLook { look, index }) => {
+                let style = if look { self.film_looks.get(index).map(|(s, _)| s.clone()) } else { self.styles.get(index).cloned() };
+                if let Some(s) = style {
+                    self.add_look_layer(&s, look);
+                }
+            }
             Some(LayerAction::Toggle(i)) => {
                 self.edit(|a| {
                     if let Some(l) = a.layers.get_mut(i) {
@@ -1949,6 +1974,9 @@ pub(crate) enum LayerAction {
     Add,
     /// New layer with the adjustments of a style brush (index into [`style_brushes`]).
     AddStyle(usize),
+    /// New layer over the whole image with a film look (`look`, index into `film_looks`) or a
+    /// style of one's own (index into `styles`).
+    AddLook { look: bool, index: usize },
     Toggle(usize),
     /// Only this layer shown (Alt-click on its eye, as in Photoshop); all again if it already is.
     Solo(usize),

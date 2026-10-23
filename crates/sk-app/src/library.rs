@@ -844,7 +844,7 @@ impl App {
         if let (Some((style, look)), Some(current)) = (hovered, current)
             && apply.is_none()
         {
-            self.preview_style(crate::style_grid::applied(&style, look, &current));
+            self.preview_style(crate::style_grid::applied_to(&style, look, &current, self.active_layer));
         }
         let mut save = None;
         section(ui, "Neuer Stil", None, |ui| {
@@ -885,7 +885,12 @@ impl App {
             self.library_ui.new_style_tools = None;
             self.reload_styles();
         }
-        if let Some((style, look)) = apply {
+        // A layer chosen: onto it, on the current image (layers belong to one image).
+        if let Some((style, look)) = &apply
+            && let Some(li) = self.active_layer.filter(|i| self.current.as_ref().is_some_and(|c| *i < c.adjustments.layers.len()))
+        {
+            self.apply_style_to_layer(style, *look, li);
+        } else if let Some((style, look)) = apply {
             let paths = self.selected_paths();
             self.set_adjustments_on(&paths, |a| if look { styles::apply_look(&style, a) } else { styles::apply(&style, a) });
             self.status = format!("Stil „{}“ auf {} angewendet", style.name, crate::widgets::image_count(paths.len()));

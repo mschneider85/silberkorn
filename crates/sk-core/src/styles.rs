@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::params::{Adjustments, BaseCurve, ColorWheel, Curve, HslBand};
+use crate::params::{Adjustments, BaseCurve, ColorWheel, Curve, HslBand, LayerAdjustments};
 use crate::tools::Tool;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -98,6 +98,87 @@ pub fn apply_look(style: &Style, target: &Adjustments) -> Adjustments {
     out.detail.grain_amount = l.detail.grain_amount;
     out.detail.grain_size = l.detail.grain_size;
     out
+}
+
+/// The tools a look sets (see [`apply_look`]).
+const LOOK_TOOLS: [Tool; 8] = [Tool::BaseCurve, Tool::Exposure, Tool::Color, Tool::Levels, Tool::Curves, Tool::ColorEditor, Tool::ColorBalance, Tool::BlackWhite];
+
+/// A style (or a look, `look`) on a layer: `target` with what a layer can take of it. Its
+/// values are changes of the background's (the layer's opacity then sets how much). Black and
+/// white becomes no saturation with the channel mix as lightness per hue band and the toning as
+/// color balance, a base curve other than Film Standard a curve with the same change. Returns
+/// the labels of the tools the style sets that a layer can't (grain, levels, white balance,
+/// color ranges of one's own …).
+pub fn apply_on_layer(style: &Style, look: bool, target: &LayerAdjustments) -> (LayerAdjustments, Vec<&'static str>) {
+    let a = &style.adjustments;
+    let tools: Vec<Tool> = if look {
+        LOOK_TOOLS.into_iter().chain([Tool::Grain]).collect()
+    } else {
+        style.tools.clone().unwrap_or_else(|| Tool::ALL.into_iter().filter(|t| !t.image_specific()).collect())
+    };
+    let mut out = target.clone();
+    let mut left_out = Vec::new();
+    let mut base = None;
+    for tool in tools.into_iter().filter(|t| !t.is_default(a)) {
+        match tool {
+            // As the difference to the standard curve, in the curve of the layer (below).
+            Tool::BaseCurve if a.base_curve != BaseCurve::Camera => base = Some(a.base_curve),
+            Tool::Exposure => {
+                if !look {
+                    out.exposure = a.exposure;
+                }
+                (out.contrast, out.brightness) = (a.contrast, a.brightness);
+            }
+            Tool::HighlightsShadows => (out.highlights, out.shadows, out.whites, out.blacks) = (a.highlights, a.shadows, a.whites, a.blacks),
+            Tool::Color => (out.saturation, out.vibrance) = (a.saturation, a.vibrance),
+            Tool::Curves => out.curves = a.curves.clone(),
+            Tool::ColorEditor => {
+                out.color_bands = a.color_editor.bands;
+                if !a.color_editor.zones.is_empty() {
+                    left_out.push("Eigene Farbbereiche");
+                }
+            }
+            Tool::ColorBalance => out.color_balance = a.color_balance,
+            Tool::Clarity => (out.clarity, out.structure) = (a.detail.clarity, a.detail.structure),
+            Tool::Dehaze => out.dehaze = a.detail.dehaze,
+            Tool::BlackWhite if a.black_white.enabled => {
+                let bw = &a.black_white;
+                out.saturation = -100.0;
+                out.vibrance = 0.0;
+                for (band, mix) in out.color_bands.iter_mut().zip(bw.mix) {
+                    *band = HslBand { lightness: mix, ..Default::default() };
+                }
+                (out.color_balance.shadows, out.color_balance.highlights) = (bw.shadow_tint, bw.highlight_tint);
+            }
+            Tool::BlackWhite => {}
+            other => left_out.push(other.label()),
+        }
+    }
+    if let Some(kind) = base {
+        out.curves.rgb = after_base_curve(kind, &out.curves.rgb);
+    }
+    (out, left_out)
+}
+
+/// `curve` after the change the base curve `kind` makes to Film Standard (the default), both in
+/// the encoded values a layer's curve works on: through Film Standard, a scene value gives `e`,
+/// through `kind` it gives what this curve gives for `e`.
+fn after_base_curve(kind: BaseCurve, curve: &Curve) -> Curve {
+    use crate::color::srgb_encode;
+    use crate::pipeline::base_curve;
+    let lut = curve.build_lut(256);
+    let then = |v: f32| lut[(v.clamp(0.0, 1.0) * 255.0).round() as usize];
+    let mut points = vec![[0.0, then(0.0)]];
+    // Scene values spread over the output, from the shadows to just below white.
+    for i in 1..16 {
+        let x = 0.002 * 1.5f32.powi(i);
+        let (from, to) = (srgb_encode(base_curve(BaseCurve::FilmStandard, x)), srgb_encode(base_curve(kind, x)));
+        if from > points.last().unwrap()[0] + 0.02 && from < 0.98 {
+            points.push([from, then(to)]);
+        }
+    }
+    points.push([1.0, then(1.0)]);
+    Curve { points }
 }
 
 // Hue bands of the color editor (see `params::HUE_BANDS`).
@@ -392,5 +473,25 @@ mod tests {
         // Saved and read back with its tools.
         let back: Style = serde_json::from_str(&serde_json::to_string(&warm).unwrap()).unwrap();
         assert_eq!(back, warm);
+    }
+
+    /// A film look on a layer takes its tone and colors; black and white becomes saturation and
+    /// band lightness, the base curve a curve; grain stays on the background.
+    #[test]
+    fn looks_go_onto_layers() {
+        let looks = film_simulations();
+        let find = |n: &str| looks.iter().find(|(s, _)| s.name == n).unwrap().0.clone();
+        let portra = find("Kodak Portra 400");
+        let (l, left) = apply_on_layer(&portra, true, &LayerAdjustments::default());
+        let a = &portra.adjustments;
+        assert_eq!((l.contrast, l.saturation, l.vibrance), (a.contrast, a.saturation, a.vibrance));
+        assert_eq!((l.curves.clone(), l.color_bands, l.color_balance), (a.curves.clone(), a.color_editor.bands, a.color_balance));
+        assert_eq!(left, ["Körnung"]);
+        let trix = find("Kodak Tri-X 400");
+        let (l, left) = apply_on_layer(&trix, true, &LayerAdjustments { exposure: 0.5, ..Default::default() });
+        assert_eq!((l.saturation, l.exposure), (-100.0, 0.5), "Schwarzweiß, die Belichtung der Ebene bleibt");
+        assert_eq!(l.color_bands.map(|b| b.lightness), trix.adjustments.black_white.mix);
+        assert_eq!(left, ["Körnung"]);
+        assert!(!l.curves.rgb.is_identity(), "Basiskurve als Kurve");
     }
 }

@@ -2723,6 +2723,26 @@ mod tests {
         }
     }
 
+    /// Every film look on a layer over the whole image looks about as on the background (its
+    /// grain aside, which stays on the background): the base curve as a curve, black and white
+    /// rebuilt.
+    #[test]
+    fn film_looks_on_layers_look_as_on_the_image() {
+        let src = colorful();
+        for (look, _) in crate::styles::film_simulations() {
+            let mut grainless = crate::styles::apply_look(&look, &plain());
+            grainless.detail.grain_amount = 0.0;
+            let whole = Processor::new(&meta(), &grainless).render(&src, None, None);
+            let (on_layer, left) = crate::styles::apply_on_layer(&look, true, &LayerAdjustments::default());
+            assert!(left.iter().all(|t| *t == "Körnung"), "{}: {left:?}", look.name);
+            let mut adj = plain();
+            adj.layers.push(layer(Mask { fill: true, ..Default::default() }, on_layer));
+            let layered = Processor::new(&meta(), &adj).render(&src, None, None);
+            let mean = whole.rgba.iter().zip(&layered.rgba).map(|(x, y)| (*x as f64 - *y as f64).abs()).sum::<f64>() / whole.rgba.len() as f64;
+            assert!(mean < 6.0, "{}: im Mittel {mean:.2} Stufen anders", look.name);
+        }
+    }
+
     #[test]
     fn color_wheels_of_layers_add_up() {
         use crate::params::ColorWheel;

@@ -3619,6 +3619,29 @@ fn detail_tools_set_themselves() {
     assert!(f.app.command_available("auto-sharpen") && f.app.command_available("auto-enhance"));
 }
 
+/// A look on a new layer over the whole image (its opacity is the strength), and onto the chosen
+/// layer instead of the image.
+#[test]
+fn looks_go_onto_layers() {
+    let Some(mut f) = Fixture::new("look-layers") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let adj = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.clone();
+    let portra = f.app.film_looks.iter().position(|(s, _)| s.name == "Kodak Portra 400").unwrap();
+    f.app.apply_layer_action(Some(crate::layers::LayerAction::AddLook { look: true, index: portra }));
+    let a = adj(&f);
+    assert_eq!(a.layers.len(), 1);
+    let l = &a.layers[0];
+    assert!(l.mask.fill && l.name == "Kodak Portra 400" && l.opacity == 100.0);
+    assert_eq!(l.adjustments.saturation, f.app.film_looks[portra].0.adjustments.saturation);
+    assert_eq!((a.saturation, a.curves.clone()), (0.0, Default::default()), "das Bild selbst bleibt");
+    assert!(f.app.status.contains("nur auf dem Hintergrund möglich: Körnung"), "{}", f.app.status);
+    // A black and white look onto the chosen layer.
+    let trix = f.app.film_looks.iter().find(|(s, _)| s.name == "Kodak Tri-X 400").unwrap().0.clone();
+    f.app.apply_style_to_layer(&trix, true, 0);
+    assert_eq!(adj(&f).layers[0].adjustments.saturation, -100.0);
+    assert!(!adj(&f).black_white.enabled);
+}
+
 /// Draws the tool panel (with AccessKit) and reports the labels of its widgets.
 fn tool_panel_frame(f: &mut Fixture, events: Vec<egui::Event>) -> Vec<(String, egui::Rect)> {
     tool_panel_frame_with(f, events, Default::default())

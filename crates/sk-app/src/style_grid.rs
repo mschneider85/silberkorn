@@ -98,7 +98,57 @@ pub(crate) fn applied(style: &Style, look: bool, current: &Adjustments) -> Adjus
     if look { styles::apply_look(style, current) } else { styles::apply(style, current) }
 }
 
+/// [`applied`], or on the layer `layer` if one is chosen (see `styles::apply_on_layer`).
+pub(crate) fn applied_to(style: &Style, look: bool, current: &Adjustments, layer: Option<usize>) -> Adjustments {
+    match layer.filter(|i| *i < current.layers.len()) {
+        Some(i) => {
+            let mut a = current.clone();
+            a.layers[i].adjustments = styles::apply_on_layer(style, look, &a.layers[i].adjustments).0;
+            a
+        }
+        None => applied(style, look, current),
+    }
+}
+
+/// What of a style a layer can't take, for messages.
+fn left_out_note(left: &[&str]) -> String {
+    if left.is_empty() { String::new() } else { format!(" (nur auf dem Hintergrund möglich: {})", left.join(", ")) }
+}
+
 impl App {
+    /// Puts a style or look (`look`) on the layer `li` of the current image.
+    pub(crate) fn apply_style_to_layer(&mut self, style: &Style, look: bool, li: usize) {
+        let mut left = Vec::new();
+        let mut name = String::new();
+        self.edit(|a| {
+            if let Some(l) = a.layers.get_mut(li) {
+                (l.adjustments, left) = styles::apply_on_layer(style, look, &l.adjustments);
+                name = l.name.clone();
+            }
+        });
+        self.commit_and_save();
+        self.status = format!("„{}“ auf Ebene „{name}“ angewendet{}", style.name, left_out_note(&left));
+    }
+
+    /// A new layer over the whole image with a style or look (`look`): its opacity is then the
+    /// strength.
+    pub(crate) fn add_look_layer(&mut self, style: &Style, look: bool) {
+        if self.current.is_none() {
+            return;
+        }
+        self.end_viewer_tools();
+        let (adjustments, left) = styles::apply_on_layer(style, look, &sk_core::params::LayerAdjustments::default());
+        let mut index = None;
+        self.edit(|a| {
+            let mask = sk_core::params::Mask { fill: true, ..Default::default() };
+            a.layers.push(sk_core::params::Layer { name: style.name.clone(), adjustments, mask, ..Default::default() });
+            index = Some(a.layers.len() - 1);
+        });
+        self.active_layer = index;
+        self.commit_and_save();
+        self.status = format!("Ebene „{}“ angelegt: ihre Deckkraft ist die Stärke{}", style.name, left_out_note(&left));
+    }
+
     /// Requests new previews when the image, its committed adjustments or the styles changed.
     pub(crate) fn pump_style_thumbs(&mut self) {
         let Some(cur) = &self.current else { return };
