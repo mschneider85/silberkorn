@@ -275,6 +275,27 @@ impl CameraColor {
 
     /// Estimates temperature/tint that reproduce the given camera multipliers.
     pub fn temp_tint_for_wb(&self, wb: [f32; 3]) -> (f32, f32) {
+        // The search takes about a millisecond, and every renderer asks (process 3 on, for its
+        // color matrix): Auto renders a hundred times in a row.
+        type Memo = std::sync::Mutex<Vec<([u32; 12], (f32, f32))>>;
+        static MEMO: Memo = std::sync::Mutex::new(Vec::new());
+        let mut key = [0u32; 12];
+        for (k, v) in key.iter_mut().zip(self.xyz_to_cam.iter().flatten().chain(&wb)) {
+            *k = v.to_bits();
+        }
+        if let Some((_, found)) = MEMO.lock().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _)| *k == key) {
+            return *found;
+        }
+        let found = self.search_temp_tint(wb);
+        let mut memo = MEMO.lock().unwrap_or_else(|e| e.into_inner());
+        memo.push((key, found));
+        if memo.len() > 32 {
+            memo.remove(0);
+        }
+        found
+    }
+
+    fn search_temp_tint(&self, wb: [f32; 3]) -> (f32, f32) {
         let target = [(wb[0] / wb[1]).ln(), (wb[2] / wb[1]).ln()];
         let err = |k: f32, t: f32| {
             let m = self.wb_for_temp_tint(k, t);
