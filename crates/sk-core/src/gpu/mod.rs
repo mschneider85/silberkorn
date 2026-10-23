@@ -45,6 +45,8 @@ pub struct Gpu {
     /// Why the device must not be used any more (see [`Gpu::fail`]).
     broken: Arc<Mutex<Option<String>>>,
     /// Buffers of finished renderings, reused instead of allocated anew (see [`Pool`]).
+    /// PCI vendor and device id (to find the adapter for [`vram`]).
+    ids: (u32, u32),
     pool: Mutex<Pool>,
     /// Display tables of the pipeline (uploaded once).
     pub(crate) display_tables: OnceLock<(wgpu::Buffer, wgpu::Buffer)>,
@@ -56,13 +58,20 @@ pub struct Gpu {
 /// Released buffers for reuse: allocating (and zeroing) large buffers anew for every rendering
 /// costs about as much as some of the kernels. Storage buffers are cleared on reuse, so they
 /// behave like new ones; readback buffers are overwritten completely anyway.
-#[derive(Default)]
 struct Pool {
     free: Vec<(wgpu::Buffer, bool, Instant)>,
     bytes: u64,
+    /// Most memory it keeps (a quarter of the video memory budget where that is known).
+    limit: u64,
 }
 
-/// Most memory the pool keeps, and how long an unused buffer is kept.
+impl Default for Pool {
+    fn default() -> Self {
+        Self { free: Vec::new(), bytes: 0, limit: POOL_LIMIT }
+    }
+}
+
+/// Most memory the pool keeps without a known budget, and how long an unused buffer is kept.
 const POOL_LIMIT: u64 = 768 << 20;
 const POOL_IDLE: Duration = Duration::from_secs(3);
 
@@ -85,7 +94,7 @@ impl Pool {
 
     fn give(&mut self, b: wgpu::Buffer, readback: bool) {
         // Small buffers are cheap to allocate; huge ones would crowd out the rest.
-        if b.size() < 1 << 20 || b.size() > POOL_LIMIT / 2 {
+        if b.size() < 1 << 20 || b.size() > self.limit / 2 {
             return;
         }
         self.bytes += b.size();
@@ -96,9 +105,10 @@ impl Pool {
     /// Drops buffers unused for a while, and the oldest beyond the limit.
     fn trim(&mut self) {
         self.free.sort_by_key(|e| std::cmp::Reverse(e.2));
+        let limit = self.limit;
         let mut kept = 0u64;
         self.free.retain(|(b, _, t)| {
-            let keep = t.elapsed() < POOL_IDLE && kept + b.size() <= POOL_LIMIT;
+            let keep = t.elapsed() < POOL_IDLE && kept + b.size() <= limit;
             if keep {
                 kept += b.size();
             }
@@ -112,7 +122,14 @@ thread_local! {
     /// A buffer couldn't be created for lack of video memory in this thread's current
     /// [`Gpu::checked`] (error scopes are per thread too).
     static OUT_OF_MEMORY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Bytes of buffers newly created in this thread's current [`Gpu::checked`] (for the log
+    /// when video memory runs out).
+    static CREATED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
+
+mod vram;
+
+const MB: u64 = 1 << 20;
 
 /// Longest wait for results; a healthy card needs a fraction of it even for large exports.
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
@@ -129,7 +146,7 @@ fn device() -> Option<&'static Gpu> {
         }
         match Gpu::new(env_setting().as_deref() == Some("software"), None) {
             Ok(g) => {
-                log::info!("Grafikkarte für die Entwicklung: {}", g.name);
+                log::info!("Grafikkarte für die Entwicklung: {} ({})", g.name, g.memory_note());
                 Some(g)
             }
             Err(e) => {
@@ -245,11 +262,15 @@ impl Gpu {
             device,
             queue,
             name: format!("{} ({:?})", info.name, info.backend),
+            ids: (info.vendor, info.device),
             kernels: Mutex::new(HashMap::new()),
             max_binding: (limits.max_storage_buffer_binding_size as u64).min(limits.max_buffer_size),
             serial: (info.backend == wgpu::Backend::Gl).then(|| Mutex::new(())),
             broken,
-            pool: Mutex::default(),
+            pool: Mutex::new(Pool {
+                limit: vram::video_memory(info.vendor, info.device).map_or(POOL_LIMIT, |(budget, _)| (budget / 4).clamp(128 * MB, POOL_LIMIT)),
+                ..Pool::default()
+            }),
             display_tables: OnceLock::new(),
             #[cfg(test)]
             inject_incomplete: AtomicBool::new(false),
@@ -323,6 +344,22 @@ impl Gpu {
             .clone()
     }
 
+    /// Video memory free for this process (the pool's buffers count as free: they are reused
+    /// first), where the system says (Windows).
+    pub(crate) fn available_bytes(&self) -> Option<u64> {
+        let (budget, used) = vram::video_memory(self.ids.0, self.ids.1)?;
+        Some(budget.saturating_sub(used) + self.pool().bytes)
+    }
+
+    /// Video memory as the system sees it for this process (Windows), and what the pool holds.
+    pub(crate) fn memory_note(&self) -> String {
+        let pool = self.pool().bytes / MB;
+        match vram::video_memory(self.ids.0, self.ids.1) {
+            Some((budget, used)) => format!("Budget {} MB, belegt {} MB, davon Vorrat {pool} MB", budget / MB, used / MB),
+            None => format!("Budget unbekannt, Vorrat {pool} MB"),
+        }
+    }
+
     fn pool(&self) -> std::sync::MutexGuard<'_, Pool> {
         self.pool.lock().unwrap_or_else(|e| e.into_inner())
     }
@@ -364,6 +401,7 @@ impl Gpu {
     fn create_buffer(&self, desc: &wgpu::BufferDescriptor) -> wgpu::Buffer {
         let scope = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let b = self.device.create_buffer(desc);
+        CREATED.set(CREATED.get() + desc.size);
         if pollster::block_on(scope.pop()).is_some() {
             OUT_OF_MEMORY.set(true);
         }
@@ -450,15 +488,19 @@ impl Gpu {
     pub(crate) fn checked<R>(&self, f: impl FnOnce() -> Result<R>) -> Result<R> {
         let _serial = self.serial.as_ref().map(|m| m.lock().unwrap_or_else(|e| e.into_inner()));
         OUT_OF_MEMORY.set(false);
+        CREATED.set(0);
         let oom = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
         let r = f();
         let v = pollster::block_on(validation.pop());
         let o = pollster::block_on(oom.pop());
         if OUT_OF_MEMORY.replace(false) {
+            let note = self.memory_note();
             // Free what the pool holds for the next attempt; this rendering runs on the CPU.
-            *self.pool() = Pool::default();
-            log::warn!("Grafikspeicher voll, dieses Bild wird auf dem Prozessor berechnet");
+            let mut pool = self.pool();
+            *pool = Pool { limit: pool.limit, ..Pool::default() };
+            drop(pool);
+            log::warn!("Grafikspeicher voll ({} MB neu angefordert; {note}), dieses Bild wird auf dem Prozessor berechnet", CREATED.get() / MB);
             return Err(anyhow!("Grafikkarte: Grafikspeicher voll"));
         }
         if let Some(e) = v.or(o) {

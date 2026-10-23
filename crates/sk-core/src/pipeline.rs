@@ -1377,9 +1377,9 @@ impl Processor {
         let prepared = self.prepared(src);
         let src = prepared.as_deref().unwrap_or(src);
         if let Some(g) = crate::gpu::active() {
-            match self.process_gpu(g, src, region, space) {
+            match self.process_gpu_fitting(g, src, region, space) {
                 Ok(img) => return img,
-                Err(e) => log::warn!("Export auf dem Prozessor: {e:#}"),
+                Err(e) => log::warn!("Export auf dem Prozessor ({}×{}, Ausschnitt {region:?}): {e:#}", src.width, src.height),
             }
         }
         self.process_source_cpu(src, region, space)
@@ -1419,9 +1419,9 @@ impl Processor {
         let prepared = self.prepared(src);
         let src = prepared.as_deref().unwrap_or(src);
         if let Some(g) = crate::gpu::active() {
-            match self.render_gpu(g, src, region, cache) {
+            match self.render_gpu_fitting(g, src, region, cache) {
                 Ok(r) => return r,
-                Err(e) => log::warn!("Darstellung auf dem Prozessor: {e:#}"),
+                Err(e) => log::warn!("Darstellung auf dem Prozessor ({}×{}, Ausschnitt {region:?}): {e:#}", src.width, src.height),
             }
         }
         let (enc, full, mask) = self.process_encoded(src, region, cache);

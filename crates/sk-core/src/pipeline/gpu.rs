@@ -1150,6 +1150,53 @@ impl Processor {
         Ok(data)
     }
 
+    /// [`Self::render_gpu`], in horizontal strips (each with its margin, so the neighborhood
+    /// operations match) where the region doesn't fit the free video memory, and in finer ones
+    /// after running out of it once.
+    pub(super) fn render_gpu_fitting(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Result<Rendered> {
+        let plan = self.plan(src, region);
+        let r = plan.region;
+        let most = (r.h / MIN_STRIP).max(1);
+        let mut strips = match pixel_budget(g, src) {
+            Some(budget) if plan.ext.w * plan.ext.h > budget => {
+                let rows = budget / plan.ext.w.max(1);
+                let n = if rows > 2 * plan.margin + MIN_STRIP { r.h.div_ceil(rows - 2 * plan.margin).min(most) } else { most };
+                log::info!("Darstellung auf der Grafikkarte in {n} Streifen ({}×{}; {})", r.w, r.h, g.memory_note());
+                n
+            }
+            _ => 1,
+        };
+        loop {
+            let result = if strips == 1 { self.render_gpu(g, src, region, cache) } else { self.render_strips(g, src, r, strips) };
+            match result {
+                Err(e) if out_of_memory(&e) && strips < most => {
+                    strips = (strips * 2).min(most);
+                    log::info!("Darstellung auf der Grafikkarte in {strips} Streifen");
+                }
+                other => return other,
+            }
+        }
+    }
+
+    /// The region `r` rendered in `n` horizontal strips, put together.
+    fn render_strips(&self, g: &Gpu, src: &LinearImage, r: Region, n: usize) -> Result<Rendered> {
+        let h = r.h.div_ceil(n);
+        let mut rgba = Vec::with_capacity(r.w * r.h * 4);
+        let mut histogram = Histogram { r: vec![0; 256], g: vec![0; 256], b: vec![0; 256], luma: vec![0; 256] };
+        let mut full_size = (0, 0);
+        for y in (r.y..r.y + r.h).step_by(h) {
+            let part = self.render_gpu(g, src, Some(Region { x: r.x, y, w: r.w, h: h.min(r.y + r.h - y) }), None)?;
+            rgba.extend_from_slice(&part.rgba);
+            for (sum, add) in [(&mut histogram.r, &part.histogram.r), (&mut histogram.g, &part.histogram.g), (&mut histogram.b, &part.histogram.b), (&mut histogram.luma, &part.histogram.luma)] {
+                for (s, a) in sum.iter_mut().zip(add) {
+                    *s += a;
+                }
+            }
+            full_size = part.full_size;
+        }
+        Ok(Rendered { width: r.w, height: r.h, rgba, histogram, full_size })
+    }
+
     pub(super) fn render_gpu(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, cache: Option<&StageCache>) -> Result<Rendered> {
         let r = self.render_gpu_inner(g, src, region, cache);
         // Buffers are cached while the work is recorded: after a failure some may never have
@@ -1221,15 +1268,44 @@ impl Processor {
         })
     }
 
+    #[cfg(test)]
     pub(super) fn process_gpu(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, space: OutputSpace) -> Result<LinearImage> {
+        self.process_gpu_within(g, src, region, space, MAX_PIXELS)
+    }
+
+    /// [`Self::process_gpu_within`] in pieces that fit the free video memory, and in smaller
+    /// ones after running out of it once.
+    pub(super) fn process_gpu_fitting(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, space: OutputSpace) -> Result<LinearImage> {
+        let budget = pixel_budget(g, src);
+        let mut max_px = budget.map_or(MAX_PIXELS, |b| b.min(MAX_PIXELS));
+        if budget.is_some_and(|b| b < MAX_PIXELS) {
+            log::info!("Export auf der Grafikkarte in Stücken von höchstens {:.1} MP ({})", max_px as f32 / 1e6, g.memory_note());
+        }
+        loop {
+            match self.process_gpu_within(g, src, region, space, max_px) {
+                Err(e) if out_of_memory(&e) && max_px / 2 >= SMALLEST_PIECE => {
+                    max_px /= 2;
+                    log::info!("Export auf der Grafikkarte in kleineren Stücken (höchstens {:.1} MP)", max_px as f32 / 1e6);
+                }
+                other => return other,
+            }
+        }
+    }
+
+    /// The image in the output space, in tiles of at most `max_px` pixels (with their margins)
+    /// where it is larger.
+    fn process_gpu_within(&self, g: &Gpu, src: &LinearImage, region: Option<Region>, space: OutputSpace, max_px: usize) -> Result<LinearImage> {
         g.checked(|| {
             let whole = self.plan(src, region);
             let r = whole.region;
             let ext_px = whole.ext.w * whole.ext.h;
-            let tiles: Vec<Region> = if ext_px <= MAX_PIXELS && ext_px as u64 * 16 <= g.max_binding {
+            // However little seems free: the smallest tiles are tried (running out of memory
+            // then hands the export to the CPU).
+            let max_px = max_px.max((MIN_TILE + 2 * whole.margin).pow(2));
+            let tiles: Vec<Region> = if ext_px <= max_px && ext_px as u64 * 16 <= g.max_binding {
                 vec![r]
             } else {
-                let tile = tile_size(whole.margin, g.max_binding)
+                let tile = tile_size(whole.margin, g.max_binding, max_px)
                     .with_context(|| format!("Rand von {} Pixeln zu groß für die Grafikkarte", whole.margin))?;
                 (0..r.h.div_ceil(tile))
                     .flat_map(|ty| (0..r.w.div_ceil(tile)).map(move |tx| (tx, ty)))
@@ -1314,10 +1390,34 @@ fn check_output(g: &Gpu, data: &[[f32; 4]]) -> Result<()> {
 /// Output pixels per side of an export tile: at most [`TILE`], and small enough that the tile
 /// with `margin` on every side fits into one buffer binding (16 bytes per pixel). `None` if not
 /// even a small tile fits.
-fn tile_size(margin: usize, max_binding: u64) -> Option<usize> {
-    const MIN: usize = 256;
-    let fits = |t: usize| ((t + 2 * margin) as u64).pow(2) * 16 <= max_binding;
-    (MIN..=TILE).rev().step_by(64).find(|&t| fits(t))
+/// Smallest export tile (without margin).
+const MIN_TILE: usize = 256;
+
+fn tile_size(margin: usize, max_binding: u64, max_px: usize) -> Option<usize> {
+    let fits = |t: usize| ((t + 2 * margin) as u64).pow(2) * 16 <= max_binding && (t + 2 * margin).pow(2) <= max_px;
+    (MIN_TILE..=TILE).rev().step_by(64).find(|&t| fits(t))
+}
+
+/// Video memory a rendering takes per pixel of its region with margin: measured about 375 bytes
+/// (the source, the working image and the planes of the local operators, all at once).
+const BYTES_PER_PIXEL: u64 = 400;
+/// The smallest piece worth rendering on the card (pixels with margin).
+const SMALLEST_PIECE: usize = 512 * 512;
+/// Fewest rows of a strip.
+const MIN_STRIP: usize = 64;
+
+/// How many pixels (with margin) a rendering of `src` may cover in the free video memory, where
+/// the system says how much is free.
+fn pixel_budget(g: &Gpu, src: &LinearImage) -> Option<usize> {
+    let free = g.available_bytes()?;
+    // The source is on the card as a whole (for any piece).
+    let usable = free.saturating_sub((src.width * src.height * 16) as u64) / 10 * 8;
+    Some((usable / BYTES_PER_PIXEL) as usize)
+}
+
+/// The rendering failed for lack of video memory (see `Gpu::checked`).
+fn out_of_memory(e: &anyhow::Error) -> bool {
+    format!("{e:#}").contains("Grafikspeicher voll")
 }
 
 #[cfg(test)]
@@ -1344,12 +1444,15 @@ mod tests {
 
     #[test]
     fn export_tiles_leave_room_for_the_margin() {
-        assert_eq!(tile_size(0, 1 << 31), Some(TILE));
+        let any = usize::MAX;
+        assert_eq!(tile_size(0, 1 << 31, any), Some(TILE));
         // 6 % clarity margin of a 40000 px panorama on a card with 2 GB bindings.
-        assert_eq!(tile_size(2400, 1 << 31), Some(TILE));
-        let t = tile_size(500, 128 << 20).unwrap();
+        assert_eq!(tile_size(2400, 1 << 31, any), Some(TILE));
+        let t = tile_size(500, 128 << 20, any).unwrap();
         assert!(((t + 1000) as u64).pow(2) * 16 <= 128 << 20 && ((t + 64 + 1000) as u64).pow(2) * 16 > 128 << 20, "{t}");
-        assert_eq!(tile_size(2400, 256 << 20), None);
+        assert_eq!(tile_size(2400, 256 << 20, any), None);
+        // Little free video memory: tiles of at most a million pixels with their margin.
+        assert_eq!(tile_size(100, 1 << 31, 1_000_000), Some(768));
     }
 
     #[test]
@@ -1363,6 +1466,28 @@ mod tests {
         let p = Processor::new(&meta(w, h), &Adjustments::default());
         let out = p.process_gpu(&g, &src, None, OutputSpace::Srgb).expect("auf der Grafikkarte");
         assert!(out.data[w - 1][0] > 0.1);
+    }
+
+    /// Rendered in strips (where video memory is short), the image is the same as in one piece,
+    /// neighborhood operations and histogram included.
+    #[test]
+    fn strips_match_the_whole() {
+        let Some(g) = gpu() else { return };
+        let (w, h) = (300, 200);
+        let src = image(w, h);
+        let adj = Adjustments {
+            shadows: 40.0,
+            detail: Detail { clarity: 50.0, structure: 30.0, sharpen_amount: 150.0, nr_luma: 30.0, nr_color: 30.0, ..Default::default() },
+            ..Default::default()
+        };
+        let p = Processor::new(&meta(w, h), &adj);
+        let whole = p.render_gpu(g, &src, None, None).unwrap();
+        let region = Region { x: 0, y: 0, w: whole.width, h: whole.height };
+        let strips = p.render_strips(g, &src, region, 3).unwrap();
+        assert_eq!((strips.width, strips.height, strips.full_size), (whole.width, whole.height, whole.full_size));
+        let max = whole.rgba.iter().zip(&strips.rgba).map(|(a, b)| (*a as i32 - *b as i32).abs()).max().unwrap();
+        assert!(max <= 2, "Streifen weichen um {max} ab");
+        assert_eq!(strips.histogram.luma.iter().sum::<u32>(), (w * h) as u32);
     }
 
     #[test]

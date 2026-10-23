@@ -40,6 +40,9 @@ pub(crate) fn slider_pct(log: f32) -> f32 {
     [100.0, ZOOM_SLIDER_MAX].into_iter().find(|t| (pct / t - 1.0).abs() < 0.005).unwrap_or(pct.round().min(ZOOM_SLIDER_MAX))
 }
 
+/// Largest view region rendered in one piece at full resolution (larger ones come as tiles).
+const VIEW_MAX_PIXELS: usize = 4_000_000;
+
 /// How far the view can be moved: an image larger than the view up to its edges (and `margin`
 /// beyond), a smaller one only while it stays wholly in view, as in Lightroom.
 pub(crate) fn clamp_pan(pan: Vec2, image: Vec2, view: Vec2, margin: f32) -> Vec2 {
@@ -1038,7 +1041,10 @@ impl App {
                 && r.x + r.w >= (b.x as usize).min(fw)
                 && r.y + r.h >= (b.y as usize).min(fh)
         });
-        let view_region = (zoomed && min_level == 1 && !covered_by_view && todo.iter().any(|&t| visible(t))).then_some((region, 1));
+        // A large view (zoomed in a little on a big screen: the whole width at full resolution)
+        // is built from the grid's tiles instead, which take far less video memory each.
+        let small_enough = region.w * region.h <= VIEW_MAX_PIXELS;
+        let view_region = (zoomed && min_level == 1 && small_enough && !covered_by_view && todo.iter().any(|&t| visible(t))).then_some((region, 1));
         let key = (self.edit_version, view_region, todo);
         // Panning within the requested view region needs no new request.
         let contains = |r: &sk_core::geometry::Region, n: &sk_core::geometry::Region| r.x <= n.x && r.y <= n.y && r.x + r.w >= n.x + n.w && r.y + r.h >= n.y + n.h;

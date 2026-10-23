@@ -4492,6 +4492,7 @@ dependencies = [
  "sha2",
  "ureq",
  "wgpu",
+ "windows",
 ]
 
 [[package]]

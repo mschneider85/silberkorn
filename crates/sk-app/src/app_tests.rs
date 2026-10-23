@@ -2895,9 +2895,12 @@ fn running_jobs_can_be_cancelled() {
 #[test]
 fn released_drag_shows_screen_resolution_before_full_resolution() {
     // Needs the full 24 megapixels: fitted on a high-density screen, the 2048 px preview is
-    // magnified and the full resolution has more than twice the screen's pixels. The GPU takes
-    // the whole view as one texture.
+    // magnified and the full resolution has more than twice the screen's pixels. That large a
+    // view comes as tiles at full resolution (one piece would take gigabytes of video memory).
     let Some(mut f) = Fixture::full_size("released") else { return };
+    let sharp = |a: &App| {
+        a.tiles.view.as_ref().is_some_and(|v| v.level == 1 && v.version == a.edit_version) || (a.tiles.version == a.edit_version && !a.tiles.textures.is_empty())
+    };
     let step = |f: &mut Fixture, events: Vec<egui::Event>| {
         f.app.pixels_per_point = 2.0;
         let screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0)));
@@ -2907,7 +2910,7 @@ fn released_drag_shows_screen_resolution_before_full_resolution() {
         std::thread::sleep(Duration::from_millis(20));
     };
     let start = Instant::now();
-    while !f.app.tiles.view.as_ref().is_some_and(|v| v.level == 1 && v.version == f.app.edit_version) {
+    while !sharp(&f.app) {
         assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: scharfe Ansicht");
         step(&mut f, vec![]);
     }
@@ -2927,12 +2930,12 @@ fn released_drag_shows_screen_resolution_before_full_resolution() {
     // Released: the coarse draft doesn't stay until the full resolution is done.
     step(&mut f, vec![press(p, false)]);
     let mut levels = vec![];
-    while levels.last() != Some(&1) {
+    while !sharp(&f.app) {
         assert!(start.elapsed() < LIMIT, "Zeitüberschreitung: nach dem Loslassen");
         step(&mut f, vec![]);
-        let level = f.app.tiles.view.as_ref().unwrap().level;
-        if levels.last() != Some(&level) {
-            levels.push(level);
+        let v = f.app.tiles.view.as_ref().unwrap();
+        if v.version == f.app.edit_version && levels.last() != Some(&v.level) {
+            levels.push(v.level);
         }
     }
     assert!(levels.contains(&2), "Stufen: {levels:?}");
