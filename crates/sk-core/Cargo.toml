@@ -13,6 +13,7 @@ half = "2"
 lcms2 = { version = "6.2", features = ["static"] }
 log = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "tiff", "webp"] }
+jpeg-encoder = { version = "0.6", features = ["simd"] }
 rawler = "0.8"
 rayon = "1.12.0"
 roxmltree = "0.21.1"

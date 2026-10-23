@@ -1,5 +1,6 @@
 //! Export ("process recipes"): full-resolution development to JPEG / TIFF / PNG / WebP / AVIF.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -302,20 +303,25 @@ fn unused_in_batch(path: PathBuf, written: &HashSet<PathBuf>) -> PathBuf {
 }
 
 /// The processed image (output space, encoded 0..1) at the recipe's size, with its watermark.
-fn resized(out: &crate::image::LinearImage, recipe: &ExportRecipe) -> Result<ImageBuffer<Rgb<f32>, Vec<f32>>> {
-    let mut buf: ImageBuffer<Rgb<f32>, Vec<f32>> =
-        ImageBuffer::from_raw(out.width as u32, out.height as u32, out.data.iter().flatten().copied().collect())
-            .context("Puffergröße ungültig")?;
-    let (w, h) = buf.dimensions();
+/// `out` as the recipe writes it: scaled, sharpened and with its watermark; as it is (without a
+/// copy) where the recipe changes nothing.
+fn resized<'a>(out: &'a crate::image::LinearImage, recipe: &ExportRecipe) -> Result<ImageBuffer<Rgb<f32>, Cow<'a, [f32]>>> {
+    let (w, h) = (out.width as u32, out.height as u32);
     let (nw, nh) = recipe.output_size(w, h);
+    let sharpening = recipe.output_sharpening.strength();
+    if (nw, nh) == (w, h) && sharpening.is_none() && recipe.watermark.is_empty() {
+        return ImageBuffer::from_raw(w, h, Cow::Borrowed(out.data.as_flattened())).context("Puffergröße ungültig");
+    }
+    let mut buf: ImageBuffer<Rgb<f32>, Vec<f32>> = ImageBuffer::from_raw(w, h, out.data.as_flattened().to_vec()).context("Puffergröße ungültig")?;
     if (nw, nh) != (w, h) {
         buf = resize_lanczos3(&buf, nw, nh);
     }
-    if let Some((amount, radius)) = recipe.output_sharpening.strength() {
+    if let Some((amount, radius)) = sharpening {
         sharpen(&mut buf, amount, radius);
     }
     recipe.watermark.apply(&mut buf, recipe.output_space)?;
-    Ok(buf)
+    let (w, h) = buf.dimensions();
+    ImageBuffer::from_raw(w, h, Cow::Owned(buf.into_raw())).context("Puffergröße ungültig")
 }
 
 /// Lanczos3 resampling like `image::imageops::resize`, but on all cores (that one runs on one
@@ -394,8 +400,120 @@ fn to_u8(v: &f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
+/// A JPEG of 8-bit RGB `data` (`w` x `h`) at `quality` (1..100), with an ICC profile and EXIF
+/// data (TIFF-structured, see `exif::build`; none if empty). `jpeg-encoder` instead of the
+/// `image` crate's encoder: SIMD, about twice as fast (1.35 s for 24 MP before); from quality 90
+/// on with full color resolution (4:4:4), below 4:2:0. Large images in strips on all cores.
+pub fn encode_jpeg(data: &[u8], w: u32, h: u32, quality: u8, icc: Option<&[u8]>, exif: &[u8]) -> Result<Vec<u8>> {
+    let strips = if (w as usize) * (h as usize) < 1_000_000 { 1 } else { rayon::current_num_threads() };
+    encode_jpeg_strips(data, w, h, quality, icc, exif, strips)
+}
+
+/// Rows of pixels in a JPEG's block row (MCU) at `quality`.
+fn jpeg_mcu(quality: u8) -> usize {
+    if quality < 90 { 16 } else { 8 }
+}
+
+fn jpeg_encoder(out: &mut Vec<u8>, quality: u8) -> jpeg_encoder::Encoder<&mut Vec<u8>> {
+    let mut enc = jpeg_encoder::Encoder::new(out, quality);
+    enc.set_sampling_factor(if jpeg_mcu(quality) == 16 { jpeg_encoder::SamplingFactor::F_2_2 } else { jpeg_encoder::SamplingFactor::F_1_1 });
+    enc
+}
+
+/// [`encode_jpeg`] in up to `strips` horizontal strips of whole block rows, each encoded on its
+/// own and joined: every block row starts with a restart marker (as the standard allows), so a
+/// strip's data doesn't depend on the ones before. The file is the same as from one encoder with
+/// that restart interval.
+fn encode_jpeg_strips(data: &[u8], w: u32, h: u32, quality: u8, icc: Option<&[u8]>, exif: &[u8], strips: usize) -> Result<Vec<u8>> {
+    let (Ok(w16), Ok(h16)) = (u16::try_from(w), u16::try_from(h)) else {
+        anyhow::bail!("JPEG erlaubt höchstens 65535 Pixel je Seite ({w}×{h})");
+    };
+    let quality = quality.clamp(1, 100);
+    let (w, h, mcu) = (w as usize, h as usize, jpeg_mcu(quality));
+    if data.len() != w * h * 3 {
+        anyhow::bail!("Puffergröße ungültig");
+    }
+    let block_rows = h.div_ceil(mcu);
+    let rows = block_rows.div_ceil(strips.clamp(1, block_rows.max(1))) * mcu;
+    let restart = (rows < h).then_some(w.div_ceil(mcu) as u16);
+    let parts: Vec<Vec<u8>> = (0..h)
+        .step_by(rows.max(1))
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|y0| {
+            let sh = rows.min(h - y0);
+            let mut out = Vec::new();
+            let mut enc = jpeg_encoder(&mut out, quality);
+            if let Some(r) = restart {
+                enc.set_restart_interval(r);
+            }
+            if y0 == 0 {
+                // EXIF first, as cameras and other programs write it.
+                if !exif.is_empty() {
+                    let mut app1 = b"Exif\0\0".to_vec();
+                    app1.extend_from_slice(exif);
+                    enc.add_app_segment(1, &app1)?;
+                }
+                if let Some(icc) = icc {
+                    enc.add_icc_profile(icc)?;
+                }
+            }
+            enc.encode(&data[y0 * w * 3..(y0 + sh) * w * 3], w16, sh as u16, jpeg_encoder::ColorType::Rgb)?;
+            Ok(out)
+        })
+        .collect::<Result<_>>()?;
+    let mut parts = parts.into_iter();
+    let Some(mut out) = parts.next() else {
+        anyhow::bail!("JPEG: leeres Bild");
+    };
+    if restart.is_none() {
+        return Ok(out);
+    }
+    // The first strip's header with the whole height, then each strip's entropy-coded data after
+    // the restart marker of its first block row, its own markers numbered on (modulo 8).
+    let (sof, _) = jpeg_scan(&out)?;
+    out[sof + 5..sof + 7].copy_from_slice(&h16.to_be_bytes());
+    out.truncate(out.len() - 2);
+    for (k, part) in parts.enumerate() {
+        let first = (k + 1) * rows / mcu;
+        out.extend_from_slice(&[0xFF, 0xD0 + ((first - 1) % 8) as u8]);
+        let (_, scan) = jpeg_scan(&part)?;
+        let coded = &part[scan..part.len() - 2];
+        out.reserve(coded.len());
+        let mut marker = false;
+        for &b in coded {
+            // 0xFF in the coded data is followed by a stuffed 0, or it starts a restart marker.
+            out.push(if marker && (0xD0..=0xD7).contains(&b) { 0xD0 + (((b - 0xD0) as usize + first) % 8) as u8 } else { b });
+            marker = b == 0xFF;
+        }
+    }
+    out.extend_from_slice(&[0xFF, 0xD9]);
+    Ok(out)
+}
+
+/// Where the frame header (SOF0 marker) and the entropy-coded data (after the scan header) of
+/// one baseline JPEG from `jpeg-encoder` start, which ends with the end marker.
+fn jpeg_scan(jpeg: &[u8]) -> Result<(usize, usize)> {
+    let mut sof = None;
+    let mut i = 2;
+    while i + 4 <= jpeg.len() && jpeg[i] == 0xFF {
+        let len = u16::from_be_bytes([jpeg[i + 2], jpeg[i + 3]]) as usize;
+        match jpeg[i + 1] {
+            0xC0 => sof = Some(i),
+            0xDA => {
+                let sof = sof.context("JPEG: kein Bildkopf")?;
+                anyhow::ensure!(jpeg.ends_with(&[0xFF, 0xD9]) && i + 2 + len <= jpeg.len() - 2, "JPEG: unerwartetes Ende");
+                return Ok((sof, i + 2 + len));
+            }
+            _ => {}
+        }
+        i += 2 + len;
+    }
+    anyhow::bail!("JPEG: Bilddaten nicht gefunden")
+}
+
 /// The file contents for the recipe's format, with its color profile and metadata.
-fn encode(buf: &ImageBuffer<Rgb<f32>, Vec<f32>>, recipe: &ExportRecipe, info: &CaptureInfo) -> Result<Vec<u8>> {
+fn encode(buf: &ImageBuffer<Rgb<f32>, Cow<'_, [f32]>>, recipe: &ExportRecipe, info: &CaptureInfo) -> Result<Vec<u8>> {
     let (w, h) = buf.dimensions();
     let profile = icc::profile_for(recipe.output_space);
     let exif = crate::exif::build(&crate::exif::ExifFields {
@@ -406,34 +524,30 @@ fn encode(buf: &ImageBuffer<Rgb<f32>, Vec<f32>>, recipe: &ExportRecipe, info: &C
     let mut file = std::io::Cursor::new(Vec::new());
     match recipe.format {
         ExportFormat::Jpeg => {
-            let data: Vec<u8> = buf.as_raw().iter().map(to_u8).collect();
-            let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut file, recipe.quality.clamp(1, 100));
-            enc.set_icc_profile(profile).ok();
-            enc.set_exif_metadata(exif).ok();
-            enc.write_image(&data, w, h, image::ExtendedColorType::Rgb8)?;
+            let data: Vec<u8> = buf.as_raw().par_iter().map(to_u8).collect();
+            return encode_jpeg(&data, w, h, recipe.quality, Some(&profile), &exif);
         }
         ExportFormat::Png => {
-            let data: Vec<u8> = buf.as_raw().iter().map(to_u8).collect();
+            let data: Vec<u8> = buf.as_raw().par_iter().map(to_u8).collect();
             let mut enc = image::codecs::png::PngEncoder::new(&mut file);
             enc.set_icc_profile(profile).ok();
             enc.set_exif_metadata(exif).ok();
             enc.write_image(&data, w, h, image::ExtendedColorType::Rgb8)?;
         }
         ExportFormat::Tiff8 => {
-            let data: Vec<u8> = buf.as_raw().iter().map(to_u8).collect();
+            let data: Vec<u8> = buf.as_raw().par_iter().map(to_u8).collect();
             let mut enc = image::codecs::tiff::TiffEncoder::new(&mut file);
             enc.set_icc_profile(profile).ok();
             enc.write_image(&data, w, h, image::ExtendedColorType::Rgb8)?;
         }
         ExportFormat::Tiff16 => {
-            let data: Vec<u16> = buf.as_raw().iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).collect();
-            let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_ne_bytes()).collect();
+            let data: Vec<u16> = buf.as_raw().par_iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16).collect();
             let mut enc = image::codecs::tiff::TiffEncoder::new(&mut file);
             enc.set_icc_profile(profile).ok();
-            enc.write_image(&bytes, w, h, image::ExtendedColorType::Rgb16)?;
+            enc.write_image(bytemuck::cast_slice(&data), w, h, image::ExtendedColorType::Rgb16)?;
         }
         ExportFormat::WebP => {
-            let data: Vec<u8> = buf.as_raw().iter().map(to_u8).collect();
+            let data: Vec<u8> = buf.as_raw().par_iter().map(to_u8).collect();
             return crate::web_formats::encode_webp(&data, w, h, recipe.quality, &profile, &exif);
         }
         ExportFormat::Avif => {
@@ -478,8 +592,8 @@ pub fn proof(processed: &crate::image::LinearImage, recipe: &ExportRecipe, info:
     let stored: Vec<f32> = match recipe.format {
         // AVIF can't be decoded here: the proof shows the pixels before compression.
         ExportFormat::Jpeg | ExportFormat::WebP => image::load_from_memory(&bytes)?.to_rgb8().into_raw().into_iter().map(|v| v as f32 / 255.0).collect(),
-        ExportFormat::Tiff16 => buf.as_raw().iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0).round() / 65535.0).collect(),
-        _ => buf.as_raw().iter().map(|v| to_u8(v) as f32 / 255.0).collect(),
+        ExportFormat::Tiff16 => buf.as_raw().par_iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0).round() / 65535.0).collect(),
+        _ => buf.as_raw().par_iter().map(|v| to_u8(v) as f32 / 255.0).collect(),
     };
     // Output space -> sRGB (both relative to D50 in our matrices), clipping what sRGB can't show.
     let srgb_from_xyz = mat_inv(&OutputSpace::Srgb.to_xyz_d50()).context("sRGB-Matrix")?;
@@ -512,6 +626,59 @@ pub fn proof(processed: &crate::image::LinearImage, recipe: &ExportRecipe, info:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A JPEG encoded in strips is the file one encoder writes with a restart marker per block
+    /// row (for both color resolutions, odd sizes and more strips than markers go round), and
+    /// decodes to the same picture as one without restart markers.
+    #[test]
+    fn jpeg_in_strips_is_one_jpeg() {
+        let (w, h) = (1003u32, 1517u32);
+        let data: Vec<u8> = (0..w * h)
+            .flat_map(|i| {
+                let (x, y) = (i % w, i / w);
+                [(x * 255 / w) as u8, (y * 255 / h) as u8, ((x * 7 + y * 3 + x * y / 97) % 256) as u8]
+            })
+            .collect();
+        for quality in [85, 95] {
+            let mut whole = Vec::new();
+            let mut enc = jpeg_encoder(&mut whole, quality);
+            enc.set_restart_interval(w.div_ceil(jpeg_mcu(quality) as u32) as u16);
+            enc.add_icc_profile(b"profil").unwrap();
+            enc.encode(&data, w as u16, h as u16, jpeg_encoder::ColorType::Rgb).unwrap();
+            for strips in [2, 7, 12] {
+                let striped = encode_jpeg_strips(&data, w, h, quality, Some(b"profil"), &[], strips).unwrap();
+                assert!(striped == whole, "Qualität {quality}, {strips} Streifen");
+            }
+            let plain = encode_jpeg_strips(&data, w, h, quality, None, &[], 1).unwrap();
+            let decoded = |j: &[u8]| image::load_from_memory(j).unwrap().to_rgb8().into_raw();
+            assert!(decoded(&whole) == decoded(&plain));
+        }
+    }
+
+    /// The JPEG keeps profile and EXIF where other programs find them, and the picture differs
+    /// only as much as JPEG at that quality does.
+    #[test]
+    fn jpeg_has_profile_exif_and_the_picture() {
+        use image::ImageDecoder;
+        let (w, h) = (320u32, 200u32);
+        let data: Vec<u8> = (0..w * h).flat_map(|i| {
+            let (x, y) = (i % w, i / w);
+            [(x * 255 / w) as u8, (y * 255 / h) as u8, ((x + y) % 256) as u8]
+        }).collect();
+        let icc = icc::profile_for(OutputSpace::AdobeRgb);
+        let info = CaptureInfo { make: "Testkamera".into(), model: "X1".into(), ..Default::default() };
+        let exif = crate::exif::build(&crate::exif::ExifFields { capture: Some(&info), artist: "Ich", copyright: "" });
+        let jpeg = encode_jpeg(&data, w, h, 92, Some(&icc), &exif).unwrap();
+        let mut dec = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(&jpeg)).unwrap();
+        assert_eq!(dec.icc_profile().unwrap().as_deref(), Some(icc.as_slice()));
+        let read = dec.exif_metadata().unwrap().expect("EXIF");
+        assert_eq!(&read[..4], b"II*\0");
+        assert!(read.windows(10).any(|s| s == b"Testkamera"));
+        let img = image::load_from_memory(&jpeg).unwrap().to_rgb8();
+        assert_eq!(img.dimensions(), (w, h));
+        let err = img.as_raw().iter().zip(&data).map(|(a, b)| (*a as f64 - *b as f64).abs()).sum::<f64>() / data.len() as f64;
+        assert!(err < 2.0, "mittlere Abweichung {err}");
+    }
 
     /// The parallel resampling gives what `image` gives (smaller and larger).
     #[test]

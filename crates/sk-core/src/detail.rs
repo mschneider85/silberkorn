@@ -62,10 +62,16 @@ fn median_line(src: &[f32], out: &mut [f32], r: usize) {
     for (i, o) in out.iter_mut().enumerate() {
         *o = win[r];
         let (leave, enter) = (at(i as isize - r as isize), at(i as isize + r as isize + 1));
-        let k = pos(&win, leave);
-        win.remove(k);
-        let k = pos(&win, enter);
-        win.insert(k, enter);
+        // One shift instead of a removal and an insertion: the values between the leaving
+        // one (at k) and where the entering one belongs (j) move by one.
+        let (k, j) = (pos(&win, leave), pos(&win, enter));
+        if j <= k {
+            win.copy_within(j..k, j + 1);
+            win[j] = enter;
+        } else {
+            win.copy_within(k + 1..j, k);
+            win[j - 1] = enter;
+        }
     }
 }
 

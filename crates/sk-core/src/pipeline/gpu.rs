@@ -39,10 +39,15 @@ const FINISH: Kernel = kernel!("finish");
 const GLOW: Kernel = kernel!("glow");
 const DISPLAY: Kernel = kernel!("display");
 const OUTPUT: Kernel = kernel!("output");
+const OUTPUT_SPACE: Kernel = kernel!("output_space");
 const MEDIAN: Kernel = kernel!("median");
 
-const ALL: [Kernel; 18] =
-    [RESAMPLE, BOX_H, BOX_V, GAUSS, PLANE_OP, IMG_PLANES, DOWNSAMPLE, UPSAMPLE_APPLY, NR_COMBINE, DEFRINGE, DARK_POOL, DEVELOP, SHARPEN, GLOW, FINISH, DISPLAY, OUTPUT, MEDIAN];
+pub(crate) mod ahd;
+
+const ALL: [Kernel; 19] = [
+    RESAMPLE, BOX_H, BOX_V, GAUSS, PLANE_OP, IMG_PLANES, DOWNSAMPLE, UPSAMPLE_APPLY, NR_COMBINE, DEFRINGE, DARK_POOL, DEVELOP, SHARPEN, GLOW, FINISH, DISPLAY, OUTPUT,
+    OUTPUT_SPACE, MEDIAN,
+];
 
 /// Sets up the graphics card and compiles all kernels (takes a moment; call it early in
 /// the background so that the first rendering does not wait for it).
@@ -50,6 +55,7 @@ pub fn prepare() {
     if let Some(g) = crate::gpu::active() {
         let t = std::time::Instant::now();
         g.prepare(&ALL);
+        g.prepare(&ahd::KERNELS);
         log::info!("Shader übersetzt in {:?}", t.elapsed());
     }
 }
@@ -137,6 +143,9 @@ struct Ops<'a> {
     dummy: Buffer,
     /// Buffers of this rendering, returned to the pool when it is done (unless kept).
     temps: Vec<Buffer>,
+    /// Of those, the ones no longer needed: taken again by this rendering's next buffers (the
+    /// card runs the commands in order, so a later one may overwrite what an earlier one read).
+    free: Vec<Buffer>,
 }
 
 impl Drop for Ops<'_> {
@@ -147,11 +156,17 @@ impl Drop for Ops<'_> {
 
 impl<'a> Ops<'a> {
     fn new(g: &'a Gpu) -> Self {
-        Self { g, enc: g.encoder(), dummy: g.buffer(16), temps: Vec::new() }
+        Self { g, enc: g.encoder(), dummy: g.buffer(16), temps: Vec::new(), free: Vec::new() }
     }
 
-    /// A zeroed storage buffer, from the pool if possible.
+    /// A zeroed storage buffer: one this rendering no longer needs, else from the pool.
     fn alloc(&mut self, bytes: u64) -> Buffer {
+        let size = bytes.max(16).next_multiple_of(4);
+        if let Some(i) = self.free.iter().position(|b| b.size() >= size && b.size() <= size + size / 4) {
+            let b = self.free.swap_remove(i);
+            self.enc.clear(&b);
+            return b;
+        }
         let (b, reused) = self.g.pooled_buffer(bytes);
         if reused {
             self.enc.clear(&b);
@@ -166,6 +181,15 @@ impl<'a> Ops<'a> {
         for y in 0..ext.h {
             let at = (from + (ext.y + y) * full_w + ext.x) * size;
             self.enc.copy_at(src, at as u64, dst, ((to + y * ext.w) * size) as u64, (ext.w * size) as u64);
+        }
+    }
+
+    /// `b`, a buffer of this rendering, is no longer needed by it (every command reading it is
+    /// recorded): its next buffers may take it.
+    fn recycle(&mut self, b: Buffer) {
+        // Only once (the same buffer may be held twice, e.g. a plane used as its own base).
+        if self.temps.contains(&b) && !self.free.contains(&b) {
+            self.free.push(b);
         }
     }
 
@@ -231,6 +255,7 @@ impl<'a> Ops<'a> {
         let tmp = self.plane(w * h);
         self.enc.run_1d(BOX_H, &[&a, from, &tmp], h);
         self.enc.run_1d(BOX_V, &[&a, &tmp, to], w);
+        self.recycle(tmp);
     }
 
     /// detail::median_hv
@@ -241,6 +266,7 @@ impl<'a> Ops<'a> {
         self.enc.run_1d(MEDIAN, &[&a, p, &tmp], w * h);
         let a = self.args(&[w as u32, h as u32, r as u32, 1]);
         self.enc.run_1d(MEDIAN, &[&a, &tmp, &out], w * h);
+        self.recycle(tmp);
         out
     }
 
@@ -265,6 +291,7 @@ impl<'a> Ops<'a> {
         self.box_pass(p, &a, w, h, r);
         self.box_pass(&a, &b, w, h, r);
         self.box_pass(&b, &a, w, h, r);
+        self.recycle(b);
         a
     }
 
@@ -289,6 +316,7 @@ impl<'a> Ops<'a> {
         self.enc.run_1d(GAUSS, &[&a, p, &tmp], w * h);
         let a = self.args(&Args { w: w as u32, h: h as u32, r, vertical: 1, sigma });
         self.enc.run_1d(GAUSS, &[&a, &tmp, &out], w * h);
+        self.recycle(tmp);
         out
     }
 
@@ -297,10 +325,16 @@ impl<'a> Ops<'a> {
         let n = w * h;
         let mean = self.box_blur(p, w, h, r);
         let sq = self.op(OP_SQUARE, 0.0, p, p, p, n);
-        let sq = self.box_blur(&sq, w, h, r);
-        let a = self.op(OP_GUIDED_A, eps, &mean, &sq, &sq, n);
+        let sq_mean = self.box_blur(&sq, w, h, r);
+        self.recycle(sq);
+        let a = self.op(OP_GUIDED_A, eps, &mean, &sq_mean, &sq_mean, n);
         let b = self.op(OP_GUIDED_B, 0.0, &mean, &a, &a, n);
-        (self.box_blur(&a, w, h, r), self.box_blur(&b, w, h, r))
+        self.recycle(mean);
+        self.recycle(sq_mean);
+        let (ma, mb) = (self.box_blur(&a, w, h, r), self.box_blur(&b, w, h, r));
+        self.recycle(a);
+        self.recycle(b);
+        (ma, mb)
     }
 
     /// detail::guided_filter
@@ -309,7 +343,10 @@ impl<'a> Ops<'a> {
             return self.copy_plane(p, w * h);
         }
         let (ma, mb) = self.guided_coefficients(p, w, h, r, eps);
-        self.op(OP_GUIDED_OUT, 0.0, &ma, &mb, p, w * h)
+        let out = self.op(OP_GUIDED_OUT, 0.0, &ma, &mb, p, w * h);
+        self.recycle(ma);
+        self.recycle(mb);
+        out
     }
 
     /// detail::fast_guided_filter
@@ -325,6 +362,9 @@ impl<'a> Ops<'a> {
         let out = self.plane(w * h);
         let a = self.args(&[w as u32, h as u32, lw as u32, lh as u32, s as u32]);
         self.enc.run_2d(UPSAMPLE_APPLY, &[&a, &ma, &mb, p, &out], w, h);
+        for b in [low, ma, mb] {
+            self.recycle(b);
+        }
         out
     }
 }
@@ -701,6 +741,9 @@ impl Processor {
         let mean_sq = ops.gaussian(&sq, w, h, sigma);
         let a = ops.args(&Args { n: n as u32, purple, green });
         ops.enc.run_1d(DEFRINGE, &[&a, img, &mean, &mean_sq], n);
+        for b in [s, sq, mean, mean_sq] {
+            ops.recycle(b);
+        }
     }
 
     fn noise_reduction_gpu(&self, ops: &mut Ops, img: &Buffer, w: usize, h: usize, scale: f32) {
@@ -715,18 +758,27 @@ impl Processor {
             let eps = (d.nr_luma / 100.0).powi(2) * 0.0025;
             let f = ops.guided(&y, w, h, r, eps);
             let keep = 1.0 - d.nr_luma / 100.0 * 0.85;
-            ops.op(OP_KEEP, keep, &y, &f, &f, n)
+            let out = ops.op(OP_KEEP, keep, &y, &f, &f, n);
+            ops.recycle(y);
+            ops.recycle(f);
+            out
         });
         let chroma = (d.nr_color > 0.0).then(|| {
             let sigma = (d.nr_color / 100.0 * 6.0 * scale).max(0.5);
             let (cr, cb) = ops.img_planes(IMG_CHROMA, img, n);
-            (ops.gaussian(&cr, w, h, sigma), ops.gaussian(&cb, w, h, sigma))
+            let blurred = (ops.gaussian(&cr, w, h, sigma), ops.gaussian(&cb, w, h, sigma));
+            ops.recycle(cr);
+            ops.recycle(cb);
+            blurred
         });
         let a = ops.args(&[n as u32, y_new.is_some() as u32, chroma.is_some() as u32]);
         let dummy = &ops.dummy;
         let y = y_new.as_ref().unwrap_or(dummy);
         let (cr, cb) = chroma.as_ref().map_or((dummy, dummy), |(r, b)| (r, b));
         ops.enc.run_1d(NR_COMBINE, &[&a, img, y, cr, cb], n);
+        for b in y_new.into_iter().chain(chroma.into_iter().flat_map(|(r, b)| [r, b])) {
+            ops.recycle(b);
+        }
     }
 
     /// Local operator planes (smoothed log luminance, clarity, structure, dark channel).
@@ -740,16 +792,25 @@ impl Processor {
                 r if r > 0 && self.adj.process_3() => ops.median(&log_l, w, h, r),
                 _ => log_l.clone(),
             };
-            ops.fast_guided(&base, w, h, plan.r_hdr as usize, 0.5, sub)
+            let ev = ops.fast_guided(&base, w, h, plan.r_hdr as usize, 0.5, sub);
+            if base != log_l {
+                ops.recycle(base);
+            }
+            ev
         });
         let clarity = plan.clarity_active.then(|| {
             let base = ops.fast_guided(&log_l, w, h, plan.r_clarity as usize, 0.3, sub);
-            ops.op(OP_DETAIL, 3.0, &log_l, &base, &base, n)
+            let detail = ops.op(OP_DETAIL, 3.0, &log_l, &base, &base, n);
+            ops.recycle(base);
+            detail
         });
         let structure = plan.structure_active.then(|| {
             let base = ops.gaussian(&log_l, w, h, plan.r_structure);
-            ops.op(OP_DETAIL, 2.0, &log_l, &base, &base, n)
+            let detail = ops.op(OP_DETAIL, 2.0, &log_l, &base, &base, n);
+            ops.recycle(base);
+            detail
         });
+        ops.recycle(log_l);
         let dark = if !plan.dehaze_active {
             None
         } else if let Some(dc) = global_dark {
@@ -774,6 +835,10 @@ impl Processor {
                 at += n;
             }
         }
+        let has = [ev.is_some(), clarity.is_some(), structure.is_some()];
+        for p in [ev, clarity, structure].into_iter().flatten() {
+            ops.recycle(p);
+        }
         // The guided filter's coefficients a and b, then the guide's limit.
         let dark = dark.map(|(planes, step, airlight, origin)| {
             off[3] = at as u32;
@@ -782,7 +847,7 @@ impl Processor {
             let (w, h) = (planes[0].w as u32, planes[0].h as u32);
             DarkInfo { w, h, step: step as u32, airlight, origin }
         });
-        Ok(Local { buf, off, has: [ev.is_some(), clarity.is_some(), structure.is_some(), dark.is_some()], dark })
+        Ok(Local { buf, off, has: [has[0], has[1], has[2], dark.is_some()], dark })
     }
 
     /// Everything up to the encoded result (with mask overlay weight in w) of `plan.ext`.
@@ -1105,8 +1170,8 @@ impl Processor {
         Ok(out)
     }
 
-    /// Crops `plan.region` out of a developed buffer, optionally converted into `space`.
-    fn output_gpu(&self, ops: &mut Ops, developed: &Buffer, plan: &Plan, space: Option<OutputSpace>) -> Result<Vec<[f32; 4]>> {
+    /// Crops `plan.region` out of a developed buffer.
+    fn output_gpu(&self, ops: &mut Ops, developed: &Buffer, plan: &Plan) -> Result<Vec<[f32; 4]>> {
         #[repr(C)]
         #[derive(Clone, Copy, Pod, Zeroable)]
         struct Args {
@@ -1115,7 +1180,26 @@ impl Processor {
             ext_w: u32,
             off_x: u32,
             off_y: u32,
-            convert: u32,
+        }
+        let (r, ext) = (plan.region, plan.ext);
+        let a = ops.args(&Args { w: r.w as u32, h: r.h as u32, ext_w: ext.w as u32, off_x: (r.x - ext.x) as u32, off_y: (r.y - ext.y) as u32 });
+        let out = ops.image(r.w * r.h);
+        ops.enc.run_2d(OUTPUT, &[&a, developed, &out], r.w, r.h);
+        ops.flush();
+        ops.g.read::<[f32; 4]>(&out, r.w * r.h)
+    }
+
+    /// Crops `plan.region` out of a developed buffer, converted into `space`: 16 bits per
+    /// channel (see `output_space.wgsl`), checked.
+    fn output_space_gpu(&self, ops: &mut Ops, developed: &Buffer, plan: &Plan, space: OutputSpace) -> Result<Vec<[u32; 2]>> {
+        #[repr(C)]
+        #[derive(Clone, Copy, Pod, Zeroable)]
+        struct Args {
+            w: u32,
+            h: u32,
+            ext_w: u32,
+            off_x: u32,
+            off_y: u32,
             gamma: f32,
             gamut: u32,
             m: [f32; 9],
@@ -1127,26 +1211,23 @@ impl Processor {
             ext_w: ext.w as u32,
             off_x: (r.x - ext.x) as u32,
             off_y: (r.y - ext.y) as u32,
-            convert: space.is_some() as u32,
-            gamma: match space.map(|s| s.trc()) {
-                Some(crate::color::Trc::Gamma(g)) => g,
+            gamma: match space.trc() {
+                crate::color::Trc::Gamma(g) => g,
                 _ => 0.0,
             },
             gamut: self.adj.gamut_mapping() as u32,
-            m: flat(&space.unwrap_or_default().from_working()),
+            m: flat(&space.from_working()),
         });
-        let out = ops.image(r.w * r.h);
-        ops.enc.run_2d(OUTPUT, &[&a, developed, &out], r.w, r.h);
+        let out = ops.alloc(r.w as u64 * r.h as u64 * 8);
+        ops.enc.run_2d(OUTPUT_SPACE, &[&a, developed, &out], r.w, r.h);
         ops.flush();
         #[allow(unused_mut)]
-        let mut data = ops.g.read::<[f32; 4]>(&out, r.w * r.h)?;
-        if space.is_some() {
-            #[cfg(test)]
-            if ops.g.inject_incomplete.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                data[0][3] = 0.0;
-            }
-            check_output(ops.g, &data)?;
+        let mut data = ops.g.read::<[u32; 2]>(&out, r.w * r.h)?;
+        #[cfg(test)]
+        if ops.g.inject_incomplete.swap(false, std::sync::atomic::Ordering::Relaxed) {
+            data[0][1] &= 0xFFFF;
         }
+        check_output(ops.g, &data)?;
         Ok(data)
     }
 
@@ -1219,7 +1300,7 @@ impl Processor {
             let (r, ext) = (plan.region, plan.ext);
             let has_mask = self.opts.mask_overlay.is_some_and(|i| self.layers.iter().any(|l| l.index == i));
             if self.opts.softproof.is_some() {
-                let data = self.output_gpu(&mut ops, &developed, &plan, None)?;
+                let data = self.output_gpu(&mut ops, &developed, &plan)?;
                 let enc = LinearImage::new(r.w, r.h, data.iter().map(|p| [p[0], p[1], p[2]]).collect());
                 let mask = has_mask.then(|| data.iter().map(|p| p[3]).collect());
                 return Ok(self.display(enc, plan.full, mask));
@@ -1341,16 +1422,16 @@ impl Processor {
                 let plan = self.plan(src, Some(*t));
                 let mut ops = Ops::new(g);
                 let developed = self.develop_gpu(&mut ops, src, &plan, None, dark.as_ref(), last_early.take())?;
-                let data = self.output_gpu(&mut ops, &developed, &plan, Some(space))?;
-                for (y, row) in data.chunks(t.w).enumerate() {
-                    let start = (t.y - r.y + y) * r.w + t.x - r.x;
-                    for (o, p) in out[start..start + t.w].iter_mut().zip(row) {
-                        *o = [p[0], p[1], p[2]];
+                let data = self.output_space_gpu(&mut ops, &developed, &plan, space)?;
+                let unorm = |v: u32| (v & 0xFFFF) as f32 / 65535.0;
+                out.par_chunks_mut(r.w).skip(t.y - r.y).zip(data.par_chunks(t.w)).for_each(|(row, data)| {
+                    for (o, p) in row[t.x - r.x..t.x - r.x + t.w].iter_mut().zip(data) {
+                        *o = [unorm(p[0]), unorm(p[0] >> 16), unorm(p[1])];
                     }
-                }
+                });
             }
             // Over the whole image: a single tile may well be black (e.g. a panorama's corner).
-            if out.iter().all(|p| *p == [0.0; 3]) {
+            if out.par_iter().all(|p| *p == [0.0; 3]) {
                 bail!("Grafikkarte: schwarzes Ergebnis, wird auf dem Prozessor geprüft");
             }
             Ok(LinearImage::new(r.w, r.h, out))
@@ -1373,15 +1454,17 @@ fn check_display(g: &Gpu, rgba: &[u8], partial: bool) -> Result<()> {
     Ok(())
 }
 
-/// Like [`check_display`] for converted output: the kernel marks each written pixel with w = 1.
-/// (An all-black result is checked over the whole image, see `process_gpu`.) A value that is not
-/// finite is redone on the CPU without blaming the card: it may come from the image data.
-fn check_output(g: &Gpu, data: &[[f32; 4]]) -> Result<()> {
-    if data.iter().any(|p| p[3] != 1.0) {
+/// Like [`check_display`] for converted output: the kernel marks each written pixel (see
+/// `output_space.wgsl`). (An all-black result is checked over the whole image, see
+/// `process_gpu`.) A value that is not finite is redone on the CPU without blaming the card: it
+/// may come from the image data.
+fn check_output(g: &Gpu, data: &[[u32; 2]]) -> Result<()> {
+    let marker = |p: &[u32; 2]| p[1] >> 16;
+    if data.par_iter().any(|p| !matches!(marker(p), 0xFFFF | 0x8000)) {
         g.fail("Grafikkarte lieferte ein unvollständiges Ergebnis");
         bail!("Grafikkarte: unvollständiges Ergebnis");
     }
-    if data.iter().any(|p| !p[..3].iter().all(|v| v.is_finite())) {
+    if data.par_iter().any(|p| marker(p) != 0xFFFF) {
         return Err(Fallback("Grafikkarte: ungültige Werte im Ergebnis, wird auf dem Prozessor gerechnet".into()).into());
     }
     Ok(())
@@ -1398,9 +1481,10 @@ fn tile_size(margin: usize, max_binding: u64, max_px: usize) -> Option<usize> {
     (MIN_TILE..=TILE).rev().step_by(64).find(|&t| fits(t))
 }
 
-/// Video memory a rendering takes per pixel of its region with margin: measured about 375 bytes
-/// (the source, the working image and the planes of the local operators, all at once).
-const BYTES_PER_PIXEL: u64 = 400;
+/// Video memory a rendering takes per pixel of its region with margin: measured about 70 bytes
+/// with strong local settings since buffers are recycled; twice that for safety (running out
+/// still retries in smaller pieces).
+const BYTES_PER_PIXEL: u64 = 150;
 /// The smallest piece worth rendering on the card (pixels with margin).
 const SMALLEST_PIECE: usize = 512 * 512;
 /// Fewest rows of a strip.
@@ -1466,6 +1550,39 @@ mod tests {
         let p = Processor::new(&meta(w, h), &Adjustments::default());
         let out = p.process_gpu(&g, &src, None, OutputSpace::Srgb).expect("auf der Grafikkarte");
         assert!(out.data[w - 1][0] > 0.1);
+    }
+
+    /// The demosaic on the card gives what the CPU gives (fine lines, edges and noise, every
+    /// Bayer layout, odd sizes, white balance), up to rounding at a few pixels where the two
+    /// directions are equally homogeneous.
+    #[test]
+    fn demosaic_on_the_card_matches_the_cpu() {
+        let Some(g) = gpu() else { return };
+        let (w, h) = (403, 297);
+        let mut seed = 7u32;
+        let mut noise = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32
+        };
+        let img: Vec<[f32; 3]> = (0..w * h)
+            .map(|i| {
+                let (x, y) = (i % w, i / w);
+                let base = if x % 6 == 0 || y % 9 == 0 { [0.8, 0.7, 0.6] } else if x + y > 400 { [0.5, 0.2, 0.1] } else { [0.1, 0.3, 0.5] };
+                base.map(|v| v * (0.9 + 0.2 * noise()))
+            })
+            .collect();
+        for pattern in [[[0, 1], [1, 2]], [[1, 0], [2, 1]], [[2, 1], [1, 0]], [[1, 2], [0, 1]]] {
+            let data: Vec<f32> = (0..w * h).map(|i| img[i][pattern[(i / w) % 2][(i % w) % 2]]).collect();
+            let m = crate::ahd::Mosaic { data: &data, width: w, height: h, pattern };
+            let wb = [2.1, 1.0, 1.6];
+            let cpu = crate::ahd::demosaic_cpu(&m, wb);
+            let gpu = super::ahd::demosaic(g, &m, wb).unwrap();
+            assert_eq!(gpu.len(), cpu.len());
+            let off: Vec<f32> = cpu.iter().zip(&gpu).map(|(a, b)| (0..3).map(|c| (a[c] - b[c]).abs()).fold(0.0, f32::max)).collect();
+            let differing = off.iter().filter(|d| **d > 1e-4).count() as f32 / off.len() as f32;
+            let mean = off.iter().sum::<f32>() / off.len() as f32;
+            assert!(differing < 0.002 && mean < 1e-4, "{pattern:?}: {:.3} % der Pixel anders, im Mittel {mean}", differing * 100.0);
+        }
     }
 
     /// Rendered in strips (where video memory is short), the image is the same as in one piece,

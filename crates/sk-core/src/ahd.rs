@@ -4,7 +4,8 @@
 //! the one whose neighborhood is more homogeneous (in a perceptual space) is taken. This avoids
 //! the zipper edges and maze patterns that simpler methods leave along fine lines.
 //!
-//! Works in tiles, so the memory stays small and the tiles run in parallel.
+//! Works in tiles, so the memory stays small and the tiles run in parallel. On the graphics card
+//! where there is one (see `pipeline::gpu::ahd`), about ten times faster.
 
 use rayon::prelude::*;
 
@@ -42,16 +43,33 @@ fn mirror(i: isize, n: usize) -> usize {
     i.clamp(0, n - 1) as usize
 }
 
+/// Smallest mosaic worth sending to the graphics card (the upload and its setup cost more below).
+const GPU_FROM: usize = 1_000_000;
+
 /// Demosaics `m` into RGB (`width * height` pixels, row by row). `wb` scales the channels while
 /// interpolating (color differences are only meaningful on balanced data); the result is in the
 /// mosaic's own (unbalanced) scale again.
 pub fn demosaic(m: &Mosaic, wb: [f32; 3]) -> Vec<[f32; 3]> {
     let (w, h) = (m.width, m.height);
-    let mut out = vec![[0.0f32; 3]; w * h];
     if w == 0 || h == 0 || m.data.len() < w * h {
-        return out;
+        return vec![[0.0f32; 3]; w * h];
     }
     let wb = wb.map(|v| if v.is_finite() && v > 0.0 { v } else { 1.0 });
+    if w * h >= GPU_FROM
+        && let Some(g) = crate::gpu::active()
+    {
+        match crate::pipeline::demosaic_gpu(g, m, wb) {
+            Ok(rgb) => return rgb,
+            Err(e) => log::info!("Demosaicing auf dem Prozessor: {e:#}"),
+        }
+    }
+    demosaic_cpu(m, wb)
+}
+
+/// [`demosaic`] on the processor (`wb` already checked).
+pub(crate) fn demosaic_cpu(m: &Mosaic, wb: [f32; 3]) -> Vec<[f32; 3]> {
+    let (w, h) = (m.width, m.height);
+    let mut out = vec![[0.0f32; 3]; w * h];
     let tiles: Vec<(usize, usize)> = (0..h.div_ceil(TILE)).flat_map(|ty| (0..w.div_ceil(TILE)).map(move |tx| (tx * TILE, ty * TILE))).collect();
     let results: Vec<((usize, usize), Tile)> = tiles.into_par_iter().map(|(x0, y0)| ((x0, y0), tile(m, wb, x0, y0))).collect();
     for ((x0, y0), t) in results {

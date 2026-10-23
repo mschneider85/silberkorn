@@ -207,11 +207,8 @@ fn store_kind(path: &Path, adj: &Adjustments, session: Option<&Path>, img: &::im
     if std::fs::create_dir_all(dir).is_err() {
         return;
     }
-    let mut bytes = Vec::new();
-    let mut enc = ::image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, kind.quality());
-    if enc.encode_image(&img.to_rgb8()).is_err() {
-        return;
-    }
+    let rgb = img.to_rgb8();
+    let Ok(bytes) = crate::export::encode_jpeg(rgb.as_raw(), rgb.width(), rgb.height(), kind.quality(), None, &[]) else { return };
     // Image and key are written as a pair: two renderings of the same image (different
     // settings, from different threads) must not leave one's image with the other's key. The
     // old key goes first, so that a failed write leaves no key (a cache miss) rather than a

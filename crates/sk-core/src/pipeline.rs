@@ -26,6 +26,7 @@ use crate::params::{Adjustments, BaseCurve, ColorBalance, HUE_BANDS, HslBand, La
 use crate::raw::RawMeta;
 
 mod gpu;
+pub(crate) use gpu::ahd::demosaic as demosaic_gpu;
 
 pub use gpu::prepare as prepare_gpu;
 

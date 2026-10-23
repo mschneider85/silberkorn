@@ -29,11 +29,7 @@ fn develop(meta: &RawMeta, linear: &LinearImage) -> LinearImage {
 
 fn encode(img: &LinearImage) -> usize {
     let rgb: Vec<u8> = img.data.iter().flat_map(|p| p.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)).collect();
-    let mut jpeg = Vec::new();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 90)
-        .encode(&rgb, img.width as u32, img.height as u32, image::ExtendedColorType::Rgb8)
-        .expect("in memory");
-    jpeg.len()
+    export::encode_jpeg(&rgb, img.width as u32, img.height as u32, 90, None, &[]).expect("in memory").len()
 }
 
 fn timed<R>(f: impl FnOnce() -> R) -> (R, Duration) {
