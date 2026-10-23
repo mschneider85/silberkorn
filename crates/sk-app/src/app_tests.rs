@@ -3579,6 +3579,46 @@ fn tool_auto_sets_only_its_tool_on_the_selection() {
     assert!(!f.app.command_available("auto-exposure"));
 }
 
+/// Schärfen, Rauschreduzierung and Verbessern have an "A" too: each sets only its own sliders,
+/// after the noise and lens blur measured at full resolution (Raw-Details not for the samples,
+/// linear DNGs without a Bayer mosaic).
+#[test]
+fn detail_tools_set_themselves() {
+    use sk_core::tools::Tool;
+    let Some(mut f) = Fixture::new("detail-auto") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some() && a.texture.is_some());
+    f.app.tab = crate::app::Tab::Details;
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(nodes.iter().filter(|(l, _)| l == "A").count() >= 3, "A bei Verbessern, Rauschreduzierung und Schärfen");
+    let detail = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.detail.clone();
+    let start = sk_core::params::Detail { sharpen_amount: 10.0, sharpen_radius: 1.5, nr_luma: 77.0, nr_color: 77.0, ..detail(&f) };
+    f.app.edit(|a| a.detail = start.clone());
+    f.app.commit_and_save();
+    for tool in [Tool::Sharpening, Tool::NoiseReduction, Tool::Enhance] {
+        f.app.auto_tool(tool);
+        assert!(f.app.auto_progress.is_some(), "{tool:?}: {}", f.app.status);
+        f.pump("automatisch", |a| a.auto_progress.is_none());
+    }
+    let d = detail(&f);
+    assert!(d.sharpen_amount >= 60.0 && (0.5..=1.2).contains(&d.sharpen_radius), "{d:?}");
+    assert!(d.nr_luma < 77.0 && (20.0..=60.0).contains(&d.nr_color), "{d:?}");
+    assert_eq!(d.raw_details, 0.0, "kein Bayer-Mosaik");
+    // Nothing else of the section changed.
+    let untouched = sk_core::params::Detail {
+        sharpen_amount: start.sharpen_amount,
+        sharpen_radius: start.sharpen_radius,
+        sharpen_threshold: start.sharpen_threshold,
+        sharpen_detail: start.sharpen_detail,
+        nr_luma: start.nr_luma,
+        nr_color: start.nr_color,
+        raw_details: start.raw_details,
+        ai_denoise: start.ai_denoise,
+        ..d.clone()
+    };
+    assert_eq!(untouched, start);
+    assert!(f.app.command_available("auto-sharpen") && f.app.command_available("auto-enhance"));
+}
+
 /// Draws the tool panel (with AccessKit) and reports the labels of its widgets.
 fn tool_panel_frame(f: &mut Fixture, events: Vec<egui::Event>) -> Vec<(String, egui::Rect)> {
     tool_panel_frame_with(f, events, Default::default())

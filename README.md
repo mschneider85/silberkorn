@@ -605,8 +605,21 @@ eigenes Tastenkürzel). Auf einer Ebene ist es deaktiviert.
 | Tonwerte | Schwarz- und Weißpunkt für alle Kanäle (je höchstens 0.05 % abgeschnitten, Farben bleiben) | Tonwerte automatisch |
 | Drehen & Spiegeln | Horizont und Kanten waagerecht | Geraderichten automatisch |
 | Trapezkorrektur | Drehung und stürzende Linien (Umschalt+A) | Perspektive automatisch |
-| Objektivkorrektur | Lensfun-Profil des Objektivs | Objektivprofil automatisch |
+| Objektivkorrektur | Lensfun-Profil des Objektivs | Objektivkorrektur automatisch |
+| Schärfen | Radius nach der Unschärfe des Objektivs, Stärke, Schwelle und Details nach dem Rauschen | Schärfen automatisch |
+| Rauschreduzierung | Luminanz und Farbe nach dem Rauschen (weniger, wo KI-Entrauschen schon wirkt) | Rauschreduzierung automatisch |
+| Verbessern | Raw-Details für rauscharme Bilder, KI-Entrauschen für verrauschte | Verbessern automatisch |
 
+- **Schärfen, Rauschreduzierung, Verbessern:** Diese drei messen an der vollen Auflösung (das Laden
+  dauert gut eine Sekunde je Bild; verkleinert würde das Rauschen weggemittelt). Das Rauschen wird in der
+  Wurzel der Helligkeit gemessen, wo das Schrotrauschen des Sensors in hellen und dunklen Teilen etwa
+  gleich ist: je Block von 32×32 Pixeln der Median eines Laplace-Operators, der glatte Verläufe
+  aufhebt (nach Immerkær), und davon die ruhigsten Blöcke, damit Textur nicht als Rauschen zählt
+  (`sk-core/src/auto_detail.rs`). An Bildern einer Sony-Vollformatkamera: etwa 0.7 bei ISO 100, 2 bei
+  ISO 1000, 3 bei ISO 2500 (Tausendstel). Der Radius des Schärfens folgt der gemessenen Unschärfe des
+  Objektivs (wie bei „Details“), Stärke und Details sinken, die Schwelle steigt mit dem Rauschen.
+  KI-Entrauschen setzt erst ab etwa ISO 1000 ein (darunter lohnte die lange Berechnung nicht), voll
+  bei doppelt so viel Rauschen; Raw-Details bleibt an, solange KI-Entrauschen unter 50 % liegt.
 - **Helligkeit:** Wie hell das Bild werden soll, gibt das Kamera-JPEG vor (siehe oben). Auf dem
   Kamera-Look ändert Auto die Belichtung daher meist nur wenig und kümmert sich vor allem um Lichter,
   Schatten und Weißabgleich.

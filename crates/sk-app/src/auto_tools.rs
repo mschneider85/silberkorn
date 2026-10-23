@@ -23,6 +23,17 @@ pub enum AutoKind {
     Upright(UprightMode),
     /// The lensfun profile of the lens, then the lateral chromatic aberration left.
     Lens,
+    /// Schärfen, Rauschreduzierung or Verbessern after the noise and the lens blur of the
+    /// full-resolution image (see `sk_core::auto_detail`).
+    Detail(DetailTool),
+}
+
+/// The tools [`AutoKind::Detail`] sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DetailTool {
+    Sharpen,
+    Noise,
+    Enhance,
 }
 
 /// The tools with an "A" in their header: what it sets, its command and what it does.
@@ -35,6 +46,9 @@ const TOOLS: &[(Tool, &str, &str)] = &[
     (Tool::Rotation, "auto-straighten", "Horizont und Kanten automatisch waagerecht, ohne Perspektivkorrektur"),
     (Tool::Perspective, "auto-upright", "Stürzende Linien automatisch korrigieren, die Drehung wird mit ausgerichtet"),
     (Tool::LensCorrection, "auto-lens", "Das passende Objektivprofil aus der Lensfun-Datenbank anwenden und die chromatische Aberration an den Kanten des Bildes messen"),
+    (Tool::Sharpening, "auto-sharpen", "Radius nach der gemessenen Unschärfe des Objektivs, Stärke, Schwelle und Details nach dem Rauschen des Bildes"),
+    (Tool::NoiseReduction, "auto-noise", "Rauschreduzierung nach dem gemessenen Rauschen des Bildes (weniger, wo KI-Entrauschen schon wirkt)"),
+    (Tool::Enhance, "auto-enhance", "Raw-Details für rauscharme Bilder, KI-Entrauschen für verrauschte, nach dem gemessenen Rauschen"),
 ];
 
 impl AutoKind {
@@ -54,6 +68,9 @@ impl AutoKind {
             Tool::Rotation => Some(AutoKind::Upright(UprightMode::Level)),
             Tool::Perspective => Some(AutoKind::Upright(UprightMode::Vertical)),
             Tool::LensCorrection => Some(AutoKind::Lens),
+            Tool::Sharpening => Some(AutoKind::Detail(DetailTool::Sharpen)),
+            Tool::NoiseReduction => Some(AutoKind::Detail(DetailTool::Noise)),
+            Tool::Enhance => Some(AutoKind::Detail(DetailTool::Enhance)),
             _ => None,
         }
     }
@@ -78,6 +95,18 @@ impl AutoKind {
                     out.lens.camera = false;
                 }
                 (out.lens.ca_red, out.lens.ca_blue) = (auto.lens.ca_red, auto.lens.ca_blue);
+                out
+            }
+            AutoKind::Detail(tool) => {
+                let mut out = onto.clone();
+                let (d, a) = (&mut out.detail, &auto.detail);
+                match tool {
+                    DetailTool::Sharpen => {
+                        (d.sharpen_amount, d.sharpen_radius, d.sharpen_threshold, d.sharpen_detail) = (a.sharpen_amount, a.sharpen_radius, a.sharpen_threshold, a.sharpen_detail);
+                    }
+                    DetailTool::Noise => (d.nr_luma, d.nr_color) = (a.nr_luma, a.nr_color),
+                    DetailTool::Enhance => (d.raw_details, d.ai_denoise) = (a.raw_details, a.ai_denoise),
+                }
                 out
             }
         }
@@ -123,6 +152,18 @@ impl AutoKind {
                 }
                 (profile.is_some() || ca.is_some()).then_some(out)
             }
+            AutoKind::Detail(tool) => {
+                // Noise and lens blur only show at full resolution.
+                let full = sk_core::raw::load_full(&meta.path).map_err(|e| log::warn!("{}: {e:#}", meta.path.display())).ok()?.1;
+                let m = sk_core::auto_detail::measure(meta, &adj, &full);
+                let mut out = adj;
+                match tool {
+                    DetailTool::Sharpen => sk_core::auto_detail::sharpen(&m, &mut out.detail),
+                    DetailTool::Noise => sk_core::auto_detail::noise_reduction(&m, &mut out.detail),
+                    DetailTool::Enhance => sk_core::auto_detail::enhance(&m, meta.bayer, meta.hdr, &mut out.detail),
+                }
+                Some(out)
+            }
         }
     }
 
@@ -133,6 +174,9 @@ impl AutoKind {
             AutoKind::Upright(UprightMode::Level) => "Geraderichten automatisch",
             AutoKind::Upright(_) => "Perspektive automatisch",
             AutoKind::Lens => "Objektivkorrektur automatisch",
+            AutoKind::Detail(DetailTool::Sharpen) => "Schärfen automatisch",
+            AutoKind::Detail(DetailTool::Noise) => "Rauschreduzierung automatisch",
+            AutoKind::Detail(DetailTool::Enhance) => "Verbessern automatisch",
         }
     }
 
@@ -140,6 +184,7 @@ impl AutoKind {
     fn nothing_found(&self) -> &'static str {
         match self {
             AutoKind::Lens => "kein Profil für dieses Objektiv und zu wenige Kanten",
+            AutoKind::Detail(_) => "Bild nicht lesbar",
             _ => "keine geraden Kanten gefunden",
         }
     }

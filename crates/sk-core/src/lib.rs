@@ -3,6 +3,7 @@
 pub mod ahd;
 pub mod ai_products;
 pub mod auto;
+pub mod auto_detail;
 pub mod brush;
 pub mod cache;
 pub mod camera_lens;
