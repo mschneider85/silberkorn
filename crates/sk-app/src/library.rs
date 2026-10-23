@@ -453,20 +453,53 @@ impl App {
     /// Writes new adjustments to images that are not open (e.g. paste, styles).
     /// Changes the adjustments of `paths`, the open image's included, as one undo step (also
     /// for the images that are not open: Ctrl+Z takes the whole change back).
-    pub fn set_adjustments_on(&mut self, paths: &[PathBuf], f: impl Fn(&Adjustments) -> Adjustments) {
+    pub fn set_adjustments_on(&mut self, paths: &[PathBuf], f: impl Fn(&Adjustments) -> Adjustments + Sync) {
+        use rayon::prelude::*;
         let current = self.current_path();
+        // The images that are not open in parallel (each sidecar write waits for the disk),
+        // the bookkeeping afterwards in one catalog transaction.
+        let others: Vec<(&PathBuf, Option<&Sidecar>)> =
+            paths.iter().filter(|p| Some(*p) != current.as_ref()).map(|p| (p, self.unsaved.get(p))).collect();
+        let written: Vec<_> = others
+            .into_par_iter()
+            .map(|(path, unsaved)| {
+                if !still_there(path) {
+                    return None;
+                }
+                let mut sc = match sidecar::try_load(path) {
+                    Ok(sc) => crate::app::with_unsaved(unsaved, sc),
+                    Err(e) => return Some(Err(e)),
+                };
+                let new = f(&sc.adjustments);
+                let prev = std::mem::replace(&mut sc.adjustments, new);
+                let saved = sidecar::save(path, &sc);
+                Some(Ok((prev, sc, saved)))
+            })
+            .collect();
         let mut before = Vec::new();
-        for path in paths {
-            let old = if Some(path) == current.as_ref() {
-                self.commit_and_save();
-                self.current.as_ref().map(|c| c.committed.clone())
-            } else {
-                self.sidecar_for_update(path).ok().map(|sc| sc.adjustments)
-            };
-            let Some(old) = old else { continue };
-            if let Some(prev) = self.write_adjustments(path, f(&old)) {
+        // The open image first, outside the batch (saving it has transactions of its own).
+        if let Some(path) = current.as_ref().filter(|c| paths.contains(c)) {
+            self.commit_and_save();
+            if let Some(old) = self.current.as_ref().map(|c| c.committed.clone())
+                && let Some(prev) = self.write_adjustments(path, f(&old))
+            {
                 before.push((path.clone(), prev));
             }
+        }
+        let batch = self.catalog.as_ref().is_some_and(|c| c.begin_batch().is_ok());
+        for (path, result) in paths.iter().filter(|p| Some(*p) != current.as_ref()).zip(written) {
+            match result {
+                Some(Ok((prev, sc, saved))) => {
+                    self.saved_sidecar(path, &sc, saved);
+                    self.forget_rendered(path);
+                    before.push((path.clone(), prev));
+                }
+                Some(Err(e)) => self.report_error(format!("Nicht gespeichert: {e:#}")),
+                None => {}
+            }
+        }
+        if batch && let Some(c) = &self.catalog {
+            let _ = c.end_batch();
         }
         self.record_step(crate::undo::Step::Adjustments(before));
     }
@@ -484,10 +517,7 @@ impl App {
             self.request_render();
             return Some(prev);
         }
-        // Results arriving late (matching to a reference) must not bring back a deleted
-        // variant or write a sidecar next to a file that was moved away.
-        let (file, n) = sk_core::variant::split(path);
-        if !file.exists() || (n > 1 && !sk_core::variant::of_file(&file).contains(path)) {
+        if !still_there(path) {
             return None;
         }
         let mut sc = match self.sidecar_for_update(path) {
@@ -499,13 +529,18 @@ impl App {
         };
         let prev = std::mem::replace(&mut sc.adjustments, adj);
         self.save_sidecar(path, &sc);
+        self.forget_rendered(path);
+        Some(prev)
+    }
+
+    /// Drops what was shown of an image that is not open, after its settings changed.
+    fn forget_rendered(&mut self, path: &PathBuf) {
         self.thumb_requested.remove(path);
         self.compare_textures.remove(path);
         self.compare_requested.remove(path);
         self.focus_maps.remove(path);
         self.compare_details.remove(path);
         self.forget_prepared(path);
-        Some(prev)
     }
 
     pub fn reload_styles(&mut self) {
@@ -951,4 +986,11 @@ pub fn sort_records(records: &mut [ImageRecord], key: SortKey, desc: bool) {
         };
         if desc { ord.reverse() } else { ord }
     });
+}
+
+/// Results arriving late (matching to a reference) must not bring back a deleted variant or
+/// write a sidecar next to a file that was moved away.
+fn still_there(path: &Path) -> bool {
+    let (file, n) = sk_core::variant::split(path);
+    file.exists() && (n == 1 || sk_core::variant::of_file(&file).iter().any(|p| p == path))
 }

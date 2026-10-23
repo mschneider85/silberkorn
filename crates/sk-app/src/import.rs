@@ -22,6 +22,9 @@ const TILE: f32 = 128.0;
 const THUMB: u32 = 200;
 const CAPTION: f32 = 18.0;
 const GAP: f32 = 8.0;
+/// Previews are read up to this many files before and after the first one in view, and dropped
+/// beyond twice that (about 100 KB each; a card can hold thousands of pictures).
+const NEAR: usize = 300;
 
 /// Where the catalog import puts the files.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -155,6 +158,33 @@ enum Found {
 struct Loader {
     rx: Receiver<Found>,
     stop: Arc<AtomicBool>,
+    previews: Arc<Previews>,
+}
+
+/// Which previews are read or being read, and where the view is: those from there on come
+/// first.
+struct Previews {
+    taken: std::sync::Mutex<Vec<bool>>,
+    first_shown: AtomicUsize,
+}
+
+impl Previews {
+    /// The next preview to read: the first not taken from the view on, then those before it,
+    /// all within [`NEAR`].
+    fn next(&self) -> Option<usize> {
+        let mut taken = self.taken.lock().unwrap_or_else(|e| e.into_inner());
+        let from = self.first_shown.load(Ordering::Relaxed).min(taken.len());
+        let i = (from..(from + NEAR).min(taken.len())).chain((from.saturating_sub(NEAR)..from).rev()).find(|&i| !taken[i])?;
+        taken[i] = true;
+        Some(i)
+    }
+
+    /// Preview `i` was dropped: read it again when needed.
+    fn forget(&self, i: usize) {
+        if let Some(t) = self.taken.lock().unwrap_or_else(|e| e.into_inner()).get_mut(i) {
+            *t = false;
+        }
+    }
 }
 
 impl Drop for Loader {
@@ -190,15 +220,19 @@ impl Loader {
                 })
                 .ok();
         }
-        let next = Arc::new(AtomicUsize::new(0));
+        let previews = Arc::new(Previews { taken: std::sync::Mutex::new(vec![false; paths.len()]), first_shown: AtomicUsize::new(0) });
         for _ in 0..std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 4)) {
-            let (tx, stop, paths, next, ctx) = (tx.clone(), stop.clone(), paths.clone(), next.clone(), ctx.clone());
+            let (tx, stop, paths, previews, ctx) = (tx.clone(), stop.clone(), paths.clone(), previews.clone(), ctx.clone());
             std::thread::Builder::new()
                 .name("Import-Vorschauen".into())
                 .spawn(move || {
                     while !stop.load(Ordering::Relaxed) {
-                        let i = next.fetch_add(1, Ordering::Relaxed);
-                        let Some(path) = paths.get(i) else { return };
+                        // All near the view read: waits for scrolling.
+                        let Some(i) = previews.next() else {
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                            continue;
+                        };
+                        let path = &paths[i];
                         // A broken file shows no preview; the others go on.
                         let thumb = crate::guard::catch(|| raw::embedded_preview_at_least(path, THUMB as usize).ok().map(|img| img.thumbnail(THUMB, THUMB)));
                         if let Ok(Some(img)) = thumb {
@@ -211,7 +245,7 @@ impl Loader {
                 })
                 .ok();
         }
-        Self { rx, stop }
+        Self { rx, stop, previews }
     }
 }
 
@@ -253,6 +287,14 @@ impl ImportDialog {
                 Found::Thumb(i, image) => {
                     self.items[i].thumb = Some(ctx.load_texture(format!("import:{i}"), image, egui::TextureOptions::LINEAR));
                 }
+            }
+        }
+        // Far from the view: dropped (read again when scrolled back).
+        let at = self.loader.previews.first_shown.load(Ordering::Relaxed);
+        for (i, item) in self.items.iter_mut().enumerate() {
+            if item.thumb.is_some() && i.abs_diff(at) > 2 * NEAR {
+                item.thumb = None;
+                self.loader.previews.forget(i);
             }
         }
     }
@@ -502,6 +544,7 @@ fn grid(ui: &mut egui::Ui, dialog: &mut ImportDialog, badge: &str, height: f32) 
     let mut clicked = None;
     egui::Frame::new().fill(theme::BROWSER).corner_radius(8).inner_margin(8).show(ui, |ui| {
         egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).auto_shrink([false, false]).show_rows(ui, TILE + CAPTION + GAP, rows, |ui, range| {
+            dialog.loader.previews.first_shown.store(range.start * cols, Ordering::Relaxed);
             for row in range {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = GAP;
@@ -577,6 +620,21 @@ fn tile(ui: &mut egui::Ui, item: &Item, badge: &str) -> egui::Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Previews from the view on first, then those before it; none far from it.
+    #[test]
+    fn previews_near_the_view_first() {
+        let p = Previews { taken: std::sync::Mutex::new(vec![false; 2000]), first_shown: AtomicUsize::new(1000) };
+        assert_eq!(p.next(), Some(1000));
+        assert_eq!(p.next(), Some(1001));
+        let order: Vec<usize> = std::iter::from_fn(|| p.next()).collect();
+        assert_eq!(order.len(), 2 * NEAR - 2);
+        assert_eq!(order[NEAR - 2], 999);
+        assert!(order.iter().all(|i| i.abs_diff(1000) <= NEAR));
+        // Dropped and scrolled back to: read again.
+        p.forget(1001);
+        assert_eq!(p.next(), Some(1001));
+    }
 
     #[test]
     fn date_folders() {

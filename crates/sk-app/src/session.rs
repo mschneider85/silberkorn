@@ -473,18 +473,7 @@ impl App {
             });
         });
 
-        // Whether the favorites are reachable, checked every few seconds rather than every frame
-        // (slow on network paths).
-        let reach_id = egui::Id::new("favorites reachable");
-        let now = ui.input(|i| i.time);
-        let reachable = match ui.data(|d| d.get_temp::<(f64, Vec<PathBuf>, Vec<bool>)>(reach_id)) {
-            Some((t, favs, r)) if now - t < 5.0 && favs == self.lists.favorites => r,
-            _ => {
-                let r: Vec<bool> = self.lists.favorites.iter().map(|f| f.is_dir()).collect();
-                ui.data_mut(|d| d.insert_temp(reach_id, (now, self.lists.favorites.clone(), r.clone())));
-                r
-            }
-        };
+        let reachable = favorites_reachable(ui, &self.lists.favorites);
         section(ui, "Session-Favoriten", None, |ui| {
             for (fav, reachable) in self.lists.favorites.iter().zip(reachable) {
                 let selected = matches!(&self.scope, Scope::Folder { path, .. } if path == fav);
@@ -493,7 +482,7 @@ impl App {
                     text = text.color(theme::TEXT_DIM).strikethrough();
                 }
                 let resp = ui.selectable_label(selected, text).on_hover_text(fav.display().to_string());
-                if resp.clicked() && fav.is_dir() {
+                if resp.clicked() && reachable {
                     open = Some(fav.clone());
                 }
                 crate::widgets::context_menu(&resp, |ui| {
@@ -615,5 +604,73 @@ impl App {
                 self.session_ui.confirm_empty_trash = None;
             }
         }
+    }
+}
+
+/// Whether the favorites are reachable: looked at every few seconds in a thread of its own (an
+/// unreachable network path takes Windows seconds to answer); taken as reachable until known.
+fn favorites_reachable(ui: &egui::Ui, favorites: &[PathBuf]) -> Vec<bool> {
+    /// A check's result, filled in by its thread.
+    type Pending = std::sync::Arc<std::sync::Mutex<Option<Vec<bool>>>>;
+    #[derive(Clone, Default)]
+    struct Reach {
+        checked: f64,
+        favorites: Vec<PathBuf>,
+        reachable: Vec<bool>,
+        /// The check under way: for which favorites, and its result once there.
+        running: Option<(Vec<PathBuf>, Pending)>,
+    }
+    let id = egui::Id::new("favorites reachable");
+    let now = ui.input(|i| i.time);
+    let mut r: Reach = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    if let Some((of, done)) = r.running.as_ref().and_then(|(of, m)| Some((of.clone(), m.lock().unwrap_or_else(|e| e.into_inner()).take()?))) {
+        r.running = None;
+        // Of a list changed meanwhile: looked at again at once.
+        r.checked = if of == favorites { now } else { f64::NEG_INFINITY };
+        if of == favorites {
+            r.reachable = done;
+        }
+    }
+    if r.favorites != favorites {
+        r = Reach { checked: f64::NEG_INFINITY, favorites: favorites.to_vec(), running: r.running, ..Default::default() };
+    }
+    if r.running.is_none() && now - r.checked >= 5.0 {
+        let result = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let (paths, out, ctx) = (favorites.to_vec(), result.clone(), ui.ctx().clone());
+        let spawned = std::thread::Builder::new().name("Favoriten prüfen".into()).spawn(move || {
+            let reachable = paths.iter().map(|p| p.is_dir()).collect();
+            *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(reachable);
+            ctx.request_repaint();
+        });
+        if spawned.is_ok() {
+            r.running = Some((favorites.to_vec(), result));
+        }
+        r.checked = now;
+    }
+    let mut reachable = r.reachable.clone();
+    reachable.resize(favorites.len(), true);
+    ui.data_mut(|d| d.insert_temp(id, r));
+    reachable
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The favorites are looked at in the background; until then they count as reachable.
+    #[test]
+    fn favorites_are_checked_in_the_background() {
+        let ctx = egui::Context::default();
+        let favorites = vec![std::env::temp_dir(), PathBuf::from("/gibt/es/nicht")];
+        let mut seen = Vec::new();
+        for _ in 0..300 {
+            ctx.run_ui(Default::default(), |ui| seen.push(favorites_reachable(ui, &favorites))).textures_delta.clear();
+            if seen.last().is_some_and(|r| r == &[true, false]) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(seen[0], [true, true]);
+        assert_eq!(seen.last().unwrap(), &[true, false]);
     }
 }

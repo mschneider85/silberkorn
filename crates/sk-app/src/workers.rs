@@ -649,19 +649,35 @@ impl Workers {
                 let mut object: Option<(sk_ai::segment::ObjectModel, u64)> = None;
                 // The encoder's result for the last image (by its guide), reused for every click.
                 let mut embedding: Option<(u64, sk_ai::segment::Embedding)> = None;
+                // The guide of the last job, while preview, white balance and exposure stay the
+                // same (every click on an object would render it again), and its key for the
+                // embedding. The preview only weakly: it is not kept for this.
+                let mut guides: Option<(std::sync::Weak<LinearImage>, sk_core::params::WhiteBalance, f32, sk_ai::Guide, u64)> = None;
                 while let Ok(job) = ai_rx.recv() {
                     let prepare = matches!(job.kind, AiKind::ObjectPrepare | AiKind::SubjectPrepare);
                     // A panic must still answer: the layer panel waits for the result.
                     let result = crate::guard::catch(|| {
-                        // Guide: the image in source orientation, only white balance and exposure applied.
-                        let guide_adj = Adjustments {
-                            white_balance: job.adjustments.white_balance.clone(),
-                            exposure: job.adjustments.exposure,
-                            detail: sk_core::params::Detail { sharpen_amount: 0.0, nr_color: 0.0, ..Default::default() },
-                            ..Default::default()
-                        };
-                        let r = Processor::new(&job.meta, &guide_adj).render(&job.preview, None, None);
-                        let guide = sk_ai::guide_from_rgba(r.width, r.height, &r.rgba);
+                        let subject_key = crate::subject_worker::key(&job.meta.path, job.preview.width, job.preview.height);
+                        if matches!(job.kind, AiKind::Subject | AiKind::SubjectPrepare)
+                            && let Some(m) = subjects.get(subject_key)
+                        {
+                            return Ok(m);
+                        }
+                        let (wb, exposure) = (&job.adjustments.white_balance, job.adjustments.exposure);
+                        if !guides.as_ref().is_some_and(|(p, w, e, ..)| std::ptr::eq(p.as_ptr(), Arc::as_ptr(&job.preview)) && w == wb && *e == exposure) {
+                            // Guide: the image in source orientation, only white balance and exposure applied.
+                            let guide_adj = Adjustments {
+                                white_balance: wb.clone(),
+                                exposure,
+                                detail: sk_core::params::Detail { sharpen_amount: 0.0, nr_color: 0.0, ..Default::default() },
+                                ..Default::default()
+                            };
+                            let r = Processor::new(&job.meta, &guide_adj).render(&job.preview, None, None);
+                            let key = cache::fnv1a(format!("{}|{}x{}", job.meta.path.display(), r.width, r.height).as_bytes())
+                                ^ cache::fnv1a(&r.rgba.iter().step_by(97).copied().collect::<Vec<u8>>());
+                            guides = Some((Arc::downgrade(&job.preview), wb.clone(), exposure, sk_ai::guide_from_rgba(r.width, r.height, &r.rgba), key));
+                        }
+                        let Some((.., guide, key)) = &guides else { unreachable!("just made") };
                         match job.kind {
                             AiKind::Object { .. } | AiKind::ObjectPrepare => {
                                 let generation = sk_ai::runtime::config_generation();
@@ -670,12 +686,10 @@ impl Workers {
                                 }
                                 match &object {
                                     Some((m, _)) => {
-                                        let key = cache::fnv1a(format!("{}|{}x{}", job.meta.path.display(), r.width, r.height).as_bytes())
-                                            ^ cache::fnv1a(&r.rgba.iter().step_by(97).copied().collect::<Vec<u8>>());
-                                        if embedding.as_ref().is_none_or(|(k, _)| *k != key) {
+                                        if embedding.as_ref().is_none_or(|(k, _)| k != key) {
                                             embedding = None;
-                                            match m.embed(&guide) {
-                                                Ok(e) => embedding = Some((key, e)),
+                                            match m.embed(guide) {
+                                                Ok(e) => embedding = Some((*key, e)),
                                                 Err(e) => log::warn!("Objekt auswählen: {e:#}"),
                                             }
                                         }
@@ -688,16 +702,13 @@ impl Workers {
                                     None => Err("OBJECT_MODEL_MISSING".into()),
                                 }
                             }
-                            AiKind::Sky => Ok(sk_ai::sky_mask(&guide)),
-                            AiKind::Magic { seeds, tolerance } => Ok(sk_ai::magic_mask(&guide, &seeds, tolerance)),
+                            AiKind::Sky => Ok(sk_ai::sky_mask(guide)),
+                            AiKind::Magic { seeds, tolerance } => Ok(sk_ai::magic_mask(guide, &seeds, tolerance)),
                             AiKind::Subject | AiKind::SubjectPrepare => {
-                                let key = crate::subject_worker::key(&job.meta.path, job.preview.width, job.preview.height);
-                                if let Some(m) = subjects.get(key) {
-                                    return Ok(m);
-                                }
                                 let click = matches!(job.kind, AiKind::Subject);
                                 let deliver = click.then_some(crate::subject_worker::Deliver { generation: job.generation, layer: job.layer });
-                                let _ = subject_tx.send(crate::subject_worker::SubjectJob { key, guide, deliver });
+                                let guide = sk_ai::Guide { width: guide.width, height: guide.height, rgb: guide.rgb.clone() };
+                                let _ = subject_tx.send(crate::subject_worker::SubjectJob { key: subject_key, guide, deliver });
                                 Err(SUBJECT_PENDING.to_string())
                             }
                         }

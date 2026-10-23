@@ -104,7 +104,7 @@ impl App {
     }
 
     /// Writes one result of an auto adjustment or look match (see `record_step`).
-    pub(crate) fn set_batch_result(&mut self, path: &PathBuf, f: impl Fn(&Adjustments) -> Adjustments) {
+    pub(crate) fn set_batch_result(&mut self, path: &PathBuf, f: impl Fn(&Adjustments) -> Adjustments + Sync) {
         self.batch_result = true;
         self.set_adjustments_on(std::slice::from_ref(path), f);
         self.batch_result = false;
