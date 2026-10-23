@@ -132,21 +132,10 @@ impl Demosaicer {
             }
             Ok(())
         };
-        if net.prefers_serial() {
-            for (i, t) in tiles.iter().enumerate() {
-                run(t)?;
-                progress((i + 1) as f32 / tiles.len() as f32);
-            }
-        } else {
-            let threads = PARALLEL_TILES.min(rayon::current_num_threads()).max(1);
-            let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build()?;
-            let mut done = 0;
-            for round in tiles.chunks(threads) {
-                pool.install(|| round.par_iter().try_for_each(run))?;
-                done += round.len();
-                progress(done as f32 / tiles.len() as f32);
-            }
-        }
+        // On ONNX Runtime the network runs one tile at a time; a second tile in flight prepares
+        // its input and takes in its result meanwhile, so the card doesn't wait for that.
+        let threads = if net.prefers_serial() { 2 } else { PARALLEL_TILES.min(rayon::current_num_threads()).max(1) };
+        crate::tiles::run_all(&tiles, threads, run, progress)?;
         Ok(LinearImage::new(w, h, out.into_inner().unwrap_or_else(|e| e.into_inner())))
     }
 }

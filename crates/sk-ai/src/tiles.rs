@@ -62,6 +62,40 @@ pub(crate) fn mirror(i: usize, len: usize) -> usize {
 /// Runs a network over `planes` (`w` x `h` each) in overlapping tiles; returns three planes of
 /// `scale * w` x `scale * h`. Progress (and with it cancelling) is reported from the calling
 /// thread, after each round of tiles.
+/// Runs `run` for every tile, `threads` at a time (in no fixed order), reporting progress.
+pub(crate) fn run_all<T: Sync>(tiles: &[T], threads: usize, run: impl Fn(&T) -> Result<()> + Sync, progress: &dyn Fn(f32)) -> Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    if threads <= 1 {
+        for (i, t) in tiles.iter().enumerate() {
+            run(t)?;
+            progress((i + 1) as f32 / tiles.len() as f32);
+        }
+        return Ok(());
+    }
+    // `progress` may not be called from other threads: they count, this one reports.
+    let done = AtomicUsize::new(0);
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build()?;
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    std::thread::scope(|s| {
+        let worker = s.spawn(|| {
+            let r = pool.install(|| {
+                tiles.par_iter().with_max_len(1).try_for_each(|t| {
+                    run(t)?;
+                    done.fetch_add(1, Ordering::Relaxed);
+                    let _ = tx.send(());
+                    Ok(())
+                })
+            });
+            drop(tx);
+            r
+        });
+        while rx.recv().is_ok() {
+            progress(done.load(Ordering::Relaxed) as f32 / tiles.len() as f32);
+        }
+        worker.join().unwrap_or_else(|p| std::panic::resume_unwind(p))
+    })
+}
+
 pub fn run_tiled(net: &Net, planes: &[Vec<f32>], w: usize, h: usize, t: Tiling, gain: Option<Gain>, progress: &dyn Fn(f32)) -> Result<[Vec<f32>; 3]> {
     let (xs, ys) = (origins(w, t.tile, t.overlap), origins(h, t.tile, t.overlap));
     let tiles: Vec<(usize, usize, usize, usize)> =
@@ -116,21 +150,10 @@ pub fn run_tiled(net: &Net, planes: &[Vec<f32>], w: usize, h: usize, t: Tiling, 
         }
         Ok(())
     };
-    if net.prefers_serial() {
-        for (i, tile) in tiles.iter().enumerate() {
-            run(tile)?;
-            progress((i + 1) as f32 / tiles.len() as f32);
-        }
-    } else {
-        let threads = t.parallel.min(rayon::current_num_threads()).max(1);
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build()?;
-        let mut done = 0;
-        for round in tiles.chunks(threads) {
-            pool.install(|| round.par_iter().try_for_each(run))?;
-            done += round.len();
-            progress(done as f32 / tiles.len() as f32);
-        }
-    }
+    // On ONNX Runtime the network runs one tile at a time; a second tile in flight prepares
+    // its input and takes in its result meanwhile, so the card doesn't wait for that.
+    let threads = if net.prefers_serial() { 2 } else { t.parallel.min(rayon::current_num_threads()).max(1) };
+    run_all(&tiles, threads, run, progress)?;
     let (mut sum, wsum) = acc.into_inner().unwrap();
     for plane in &mut sum {
         plane.par_iter_mut().zip(&wsum).for_each(|(v, s)| *v /= s.max(1e-6));
