@@ -147,6 +147,16 @@ fn device() -> Option<&'static Gpu> {
         match Gpu::new(env_setting().as_deref() == Some("software"), None) {
             Ok(g) => {
                 log::info!("Grafikkarte für die Entwicklung: {} ({})", g.name, g.memory_note());
+                // Without this the pool keeps its buffers while nothing is rendered, memory
+                // other programs (and the networks) could use.
+                let _ = std::thread::Builder::new().name("Grafikspeicher aufräumen".into()).spawn(|| {
+                    loop {
+                        std::thread::sleep(POOL_IDLE);
+                        if let Some(Some(g)) = GPU.get() {
+                            g.pool().trim();
+                        }
+                    }
+                });
                 Some(g)
             }
             Err(e) => {

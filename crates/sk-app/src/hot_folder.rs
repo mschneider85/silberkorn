@@ -52,6 +52,10 @@ impl App {
         }
         let Some(folder) = self.watched_folder() else { return };
         ctx.request_repaint_after(INTERVAL);
+        // Until the folder's list is there, every file in it would look new.
+        if self.folder_loading {
+            return;
+        }
         let h = &mut self.hot_folder;
         if h.next.is_some_and(|t| Instant::now() < t) {
             return;
@@ -92,6 +96,11 @@ impl App {
             return;
         }
         let mut ready = std::mem::take(&mut h.ready);
+        // Listed meanwhile (the folder was read again while they waited).
+        ready.retain(|p| !self.entries.iter().any(|e| e.path == *p));
+        if ready.is_empty() {
+            return;
+        }
         ready.sort();
         let n = ready.len();
         self.status = if n == 1 { "1 neue Aufnahme".into() } else { format!("{n} neue Aufnahmen") };

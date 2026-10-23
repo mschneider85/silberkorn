@@ -81,13 +81,16 @@ impl App {
             return Vec::new();
         }
         let mut cells: Vec<PathBuf> = self.compare_ref.iter().filter(|r| self.entries.iter().any(|e| e.path == **r)).cloned().collect();
-        let mut shown = if self.multi_view && self.selection.len() > 1 { self.selected_paths() } else { Vec::new() };
-        if !shown.contains(&primary) {
-            shown.push(primary.clone());
-        }
-        for p in shown {
-            if !cells.contains(&p) {
-                cells.push(p);
+        // The selection in browser order, then the current image; not collected first (this runs
+        // every frame, also with thousands selected), only until more than fit.
+        let multi = self.multi_view && self.selection.len() > 1;
+        let selected = self.visible.iter().map(|&i| &self.entries[i].path).filter(|p| multi && self.selection.contains(*p));
+        for p in selected.chain([&primary]) {
+            if cells.len() > MAX_CELLS {
+                break;
+            }
+            if !cells.contains(p) {
+                cells.push(p.clone());
             }
         }
         if cells.len() > MAX_CELLS {

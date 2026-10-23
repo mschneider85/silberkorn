@@ -170,16 +170,47 @@ fn snap_edges(depth: &Plane, rgb: &[[f32; 3]], r: usize, sigma: f32) -> Plane {
                     near.push((depth.data[j], (-e * k).exp()));
                 }
             }
-            near.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
             let half = near.iter().map(|n| n.1).sum::<f32>() / 2.0;
-            let mut acc = 0.0;
-            near.iter().find(|n| {
-                acc += n.1;
-                acc >= half
-            }).map_or(d0, |n| n.0)
+            weighted_median(near, half).unwrap_or(d0)
         })
         .collect();
     Plane::new(w, h, data)
+}
+
+/// The smallest value whose weight together with that of all smaller ones reaches `half`
+/// (what sorting and adding up would find), by partitioning instead of sorting.
+fn weighted_median(mut v: &mut [(f32, f32)], half: f32) -> Option<f32> {
+    let mut below = 0.0;
+    while !v.is_empty() {
+        let pivot = v[v.len() / 2].0;
+        // Three parts: smaller, equal, larger than the pivot.
+        let (mut lt, mut i, mut gt) = (0, 0, v.len());
+        let (mut w_lt, mut w_eq) = (0.0, 0.0);
+        while i < gt {
+            let d = v[i].0;
+            if d < pivot {
+                w_lt += v[i].1;
+                v.swap(i, lt);
+                lt += 1;
+                i += 1;
+            } else if d > pivot {
+                gt -= 1;
+                v.swap(i, gt);
+            } else {
+                w_eq += v[i].1;
+                i += 1;
+            }
+        }
+        if below + w_lt >= half {
+            v = &mut v[..lt];
+        } else if below + w_lt + w_eq >= half {
+            return Some(pivot);
+        } else {
+            below += w_lt + w_eq;
+            v = &mut v[gt..];
+        }
+    }
+    None
 }
 
 fn guide_resized(g: &Guide, w: usize, h: usize) -> sk_core::image::LinearImage {
@@ -238,6 +269,31 @@ mod tests {
         for x in 30..40 {
             assert!(at(x) < 0.3, "hinter der Kante bei {x}: {}", at(x));
         }
+    }
+
+    #[test]
+    fn weighted_median_finds_what_sorting_finds() {
+        let mut seed = 3u32;
+        let mut next = || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1 << 24) as f32
+        };
+        for n in [1, 2, 5, 441] {
+            for _ in 0..50 {
+                // Few distinct depths, so that equal ones occur.
+                let v: Vec<(f32, f32)> = (0..n).map(|_| ((next() * 8.0).floor() / 8.0, next())).collect();
+                let half = v.iter().map(|n| n.1).sum::<f32>() / 2.0;
+                let mut sorted = v.clone();
+                sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let mut acc = 0.0;
+                let expected = sorted.iter().find(|n| {
+                    acc += n.1;
+                    acc >= half
+                });
+                assert_eq!(weighted_median(&mut v.clone(), half), expected.map(|n| n.0));
+            }
+        }
+        assert_eq!(weighted_median(&mut [], 0.0), None);
     }
 
     #[test]

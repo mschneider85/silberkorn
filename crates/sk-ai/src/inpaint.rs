@@ -71,15 +71,39 @@ fn sample(img: &LinearImage, x: f32, y: f32) -> [f32; 3] {
     })
 }
 
+/// `mask` grown by `r` pixels (a square). Counts marked pixels up to each place, so the cost
+/// does not grow with `r`.
 fn dilate(mask: &[bool], w: usize, h: usize, r: usize) -> Vec<bool> {
-    let rows: Vec<bool> = (0..w * h).map(|i| {
-        let (x, y) = (i % w, i / w);
-        (x.saturating_sub(r)..(x + r + 1).min(w)).any(|xx| mask[y * w + xx])
-    }).collect();
-    (0..w * h).map(|i| {
-        let (x, y) = (i % w, i / w);
-        (y.saturating_sub(r)..(y + r + 1).min(h)).any(|yy| rows[yy * w + x])
-    }).collect()
+    if w == 0 || h == 0 {
+        return mask.to_vec();
+    }
+    let mut rows = vec![false; w * h];
+    rows.par_chunks_mut(w).zip(mask.par_chunks(w)).for_each(|(out, line)| {
+        let mut before = Vec::with_capacity(w + 1);
+        before.push(0u32);
+        for &m in line {
+            before.push(before[before.len() - 1] + m as u32);
+        }
+        for (x, o) in out.iter_mut().enumerate() {
+            *o = before[(x + r + 1).min(w)] > before[x.saturating_sub(r)];
+        }
+    });
+    // Down the columns the same, with the counts of the rows above each row.
+    let mut above = vec![0u32; (h + 1) * w];
+    for y in 0..h {
+        let (done, next) = above.split_at_mut((y + 1) * w);
+        for ((n, p), m) in next[..w].iter_mut().zip(&done[y * w..]).zip(&rows[y * w..(y + 1) * w]) {
+            *n = p + *m as u32;
+        }
+    }
+    let mut out = vec![false; w * h];
+    out.par_chunks_mut(w).enumerate().for_each(|(y, line)| {
+        let (top, bottom) = (&above[y.saturating_sub(r) * w..][..w], &above[(y + r + 1).min(h) * w..][..w]);
+        for ((o, t), b) in line.iter_mut().zip(top).zip(bottom) {
+            *o = b > t;
+        }
+    });
+    out
 }
 
 /// Largest marked extent (full-resolution pixels) whose patch has full resolution; larger
@@ -208,7 +232,7 @@ fn remove_with(full: &LinearImage, wb: [f32; 3], strokes: &[BrushStroke], fill: 
         }
     }
     let opacity = strokes.iter().filter(|s| !s.erase).map(|s| s.opacity).fold(0.0f32, f32::max).clamp(0.0, 1.0);
-    let mut removal = finish(work, full, wb, opacity)?;
+    let mut removal = finish(work, &hole, full, wb, opacity)?;
     removal.strokes = strokes.to_vec();
     Ok(removal)
 }
@@ -436,11 +460,11 @@ fn fill_windows(work: &mut Work, fill: Fill, progress: &dyn Fn(f32)) -> Result<(
 
 /// The patch: filled pixels (camera RGB again) with a soft-edged coverage, cut to the marked
 /// part and reduced if very large.
-fn finish(work: Work, full: &LinearImage, wb: [f32; 3], opacity: f32) -> Result<Removal> {
+fn finish(work: Work, hole: &[bool], full: &LinearImage, wb: [f32; 3], opacity: f32) -> Result<Removal> {
     let (w, h) = (work.w, work.h);
     // The fill reaches a little beyond the marks and fades over a few pixels (matched to the
     // surroundings, see `match_edges`, it may).
-    let grown = dilate(&work.hole(), w, h, 3);
+    let grown = dilate(hole, w, h, 3);
     let alpha = gaussian_blur(&Plane::new(w, h, grown.iter().map(|g| if *g { 1.0 } else { 0.0 }).collect()), 3.0);
     let (mut bx0, mut by0, mut bx1, mut by1) = (w, h, 0, 0);
     for (i, a) in alpha.data.iter().enumerate() {
@@ -481,6 +505,30 @@ fn finish(work: Work, full: &LinearImage, wb: [f32; 3], opacity: f32) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dilate_grows_by_the_radius() {
+        let naive = |mask: &[bool], w: usize, h: usize, r: usize| -> Vec<bool> {
+            (0..w * h)
+                .map(|i| {
+                    let (x, y) = (i % w, i / w);
+                    (y.saturating_sub(r)..(y + r + 1).min(h)).any(|yy| (x.saturating_sub(r)..(x + r + 1).min(w)).any(|xx| mask[yy * w + xx]))
+                })
+                .collect()
+        };
+        let mut seed = 7u32;
+        for (w, h) in [(1, 1), (1, 9), (13, 1), (37, 23)] {
+            let mask: Vec<bool> = (0..w * h)
+                .map(|_| {
+                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    seed >> 28 == 0
+                })
+                .collect();
+            for r in [0, 1, 3, 40] {
+                assert_eq!(dilate(&mask, w, h, r), naive(&mask, w, h, r), "{w}x{h} r={r}");
+            }
+        }
+    }
 
     #[test]
     fn every_marked_pixel_is_filled() {

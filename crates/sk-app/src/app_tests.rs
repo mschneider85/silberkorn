@@ -3871,6 +3871,27 @@ fn watched_folder_shows_new_pictures() {
     assert!(f.app.current_path().is_some_and(|p| p.ends_with("_DSC0011.dng")));
 }
 
+/// While the folder's list is still loading (at the start, after switching), the pictures
+/// already in it are not taken for new ones.
+#[test]
+fn watched_folder_waits_for_the_folder_list() {
+    let Some(mut f) = Fixture::new("hot-folder-start") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let listed = f.app.entries.len();
+    f.app.hot_folder.on = true;
+    let entries = std::mem::take(&mut f.app.entries);
+    f.app.folder_loading = true;
+    let ctx = f.ctx.clone();
+    f.app.pump_hot_folder(&ctx);
+    f.app.entries = entries;
+    f.app.folder_loading = false;
+    // Long enough for files seen in the first look to count as complete.
+    let start = Instant::now();
+    f.pump("zwei Durchgänge", |_| start.elapsed() > Duration::from_millis(2500));
+    assert!(!f.app.status.contains("neue Aufnahme"), "{}", f.app.status);
+    assert_eq!(f.app.entries.len(), listed);
+}
+
 /// Commands that could do nothing right now are unavailable, not silently ignored.
 #[test]
 fn commands_without_effect_are_unavailable() {

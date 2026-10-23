@@ -4436,6 +4436,7 @@ name = "sk-ai"
 version = "0.2.21"
 dependencies = [
  "anyhow",
+ "bytemuck",
  "flate2",
  "image",
  "libloading 0.8.9",

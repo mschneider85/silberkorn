@@ -296,6 +296,25 @@ fn label_from_str(s: &str) -> ColorLabel {
     serde_json::from_str(&format!("\"{s}\"")).unwrap_or_default()
 }
 
+/// Paths stored with Windows' `\\?\` prefix (folders opened before `paths::canonical`) in the
+/// form keys have now; once per database. One already stored in both forms keeps the old row.
+fn drop_verbatim_prefixes(conn: &Connection) -> Result<()> {
+    const DONE: &str = "plain_paths";
+    if conn.query_row("SELECT 1 FROM meta WHERE key = ?1", [DONE], |_| Ok(())).optional()?.is_some() {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    for (table, column) in [("images", "path"), ("images", "folder"), ("settings", "path"), ("settings_aside", "path"), ("favorites", "path")] {
+        tx.execute_batch(&format!(
+            r"UPDATE OR IGNORE {table} SET {column} = CASE WHEN {column} LIKE '\\?\UNC\%' THEN '\\' || substr({column}, 9) ELSE substr({column}, 5) END
+              WHERE {column} LIKE '\\?\_:%' OR {column} LIKE '\\?\UNC\%'"
+        ))?;
+    }
+    tx.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?1, '1')", [DONE])?;
+    tx.commit()?;
+    Ok(())
+}
+
 impl Catalog {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(dir) = path.parent() {
@@ -303,7 +322,7 @@ impl Catalog {
         }
         let conn = Connection::open(path).with_context(|| format!("Katalog {} nicht lesbar", path.display()))?;
         let is_session = path.extension().is_some_and(|e| e.eq_ignore_ascii_case(crate::session::SESSION_EXT));
-        let base = is_session.then(|| path.parent().map(|d| d.canonicalize().unwrap_or_else(|_| d.to_path_buf()))).flatten();
+        let base = is_session.then(|| path.parent().map(crate::paths::canonical)).flatten();
         Self::init(conn, path.to_path_buf(), base)
     }
 
@@ -313,6 +332,8 @@ impl Catalog {
 
     /// Text stored for a path: relative to the base folder (joined with `/`) if inside it, else absolute.
     fn key(&self, path: &Path) -> String {
+        let plain = path.to_str().and_then(crate::paths::without_verbatim).map(PathBuf::from);
+        let path = plain.as_deref().unwrap_or(path);
         match self.base.as_ref().and_then(|b| path.strip_prefix(b).ok()) {
             Some(rel) => rel.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/"),
             None => path.to_string_lossy().to_string(),
@@ -426,7 +447,9 @@ impl Catalog {
                  person_id INTEGER REFERENCES persons(id) ON DELETE SET NULL
              );
              CREATE INDEX IF NOT EXISTS faces_image ON faces(image_id);
-             CREATE INDEX IF NOT EXISTS faces_person ON faces(person_id);",
+             CREATE INDEX IF NOT EXISTS faces_person ON faces(person_id);
+             -- Deleting an image looks up its album entries (the key starts with the album).
+             CREATE INDEX IF NOT EXISTS album_images_image ON album_images(image_id);",
         )?;
         for (name, def) in [
             ("stack", "TEXT"),
@@ -461,8 +484,14 @@ impl Catalog {
         if !person_columns.iter().any(|c| c == "manual") {
             conn.execute_batch("ALTER TABLE persons ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")?;
         }
+        if cfg!(windows) {
+            drop_verbatim_prefixes(&conn)?;
+        }
         let target = if base.is_some() { SESSION_SCHEMA_VERSION } else { SCHEMA_VERSION };
-        conn.execute_batch(&format!("PRAGMA user_version = {}", version.max(target)))?;
+        // Only when it changes: writing takes the write lock, also for every connection opened.
+        if version < target {
+            conn.execute_batch(&format!("PRAGMA user_version = {target}"))?;
+        }
         let catalog = Self { conn, path, base };
         if catalog.base.is_some() {
             catalog.make_paths_relative()?;
@@ -1024,6 +1053,33 @@ impl Catalog {
         Ok(rows.collect::<rusqlite::Result<_>>()?)
     }
 
+    /// The SQL condition (on `images i`) for the images of a folder, its arguments added to `args`.
+    fn folder_condition(&self, path: &Path, recursive: bool, args: &mut Vec<Value>) -> String {
+        let folder = self.key(path);
+        let relative = self.base.as_ref().is_some_and(|b| path.starts_with(b));
+        if recursive && relative && folder.is_empty() {
+            // The whole session.
+            String::new()
+        } else if recursive {
+            let sep = if relative { '/' } else { std::path::MAIN_SEPARATOR };
+            let pattern = subfolder_pattern(&folder, sep);
+            args.push(Value::Text(folder));
+            args.push(Value::Text(pattern));
+            " AND (i.folder = ? OR i.folder LIKE ? ESCAPE '\\')".into()
+        } else {
+            args.push(Value::Text(folder));
+            " AND i.folder = ?".into()
+        }
+    }
+
+    /// Whether the catalog has images in `path` (and its subfolders if `recursive`); cheaper
+    /// than [`Self::query`] for that.
+    pub fn has_images_in(&self, path: &Path, recursive: bool) -> Result<bool> {
+        let mut args = Vec::new();
+        let sql = format!("SELECT EXISTS (SELECT 1 FROM images i WHERE 1=1{})", self.folder_condition(path, recursive, &mut args));
+        Ok(self.conn.query_row(&sql, params_from_iter(args), |r| r.get(0))?)
+    }
+
     pub fn query(&self, scope: &Scope, filter: &Filter, sort: SortKey, descending: bool) -> Result<Vec<ImageRecord>> {
         let mut sql = String::from(
             "SELECT i.id, i.path, i.name, i.capture_date, i.camera, i.lens, i.iso, i.rating, i.color_label,
@@ -1035,22 +1091,7 @@ impl Catalog {
         let mut args: Vec<Value> = Vec::new();
         match scope {
             Scope::All => {}
-            Scope::Folder { path, recursive } => {
-                let folder = self.key(path);
-                let relative = self.base.as_ref().is_some_and(|b| path.starts_with(b));
-                if *recursive && relative && folder.is_empty() {
-                    // The whole session.
-                } else if *recursive {
-                    sql += " AND (i.folder = ? OR i.folder LIKE ? ESCAPE '\\')";
-                    let sep = if relative { '/' } else { std::path::MAIN_SEPARATOR };
-                    let pattern = subfolder_pattern(&folder, sep);
-                    args.push(Value::Text(folder));
-                    args.push(Value::Text(pattern));
-                } else {
-                    sql += " AND i.folder = ?";
-                    args.push(Value::Text(folder));
-                }
-            }
+            Scope::Folder { path, recursive } => sql += &self.folder_condition(path, *recursive, &mut args),
             Scope::Album(id) => {
                 let smart: Option<Option<String>> =
                     self.conn.query_row("SELECT smart FROM albums WHERE id = ?1", [id], |r| r.get(0)).optional()?;
@@ -1365,8 +1406,9 @@ impl std::ops::Deref for Lease<'_> {
 impl Drop for Lease<'_> {
     fn drop(&mut self) {
         let mut idle = self.store.idle.lock().unwrap_or_else(|e| e.into_inner());
-        // More than this many threads at once are rare; the rest open again when needed.
-        if idle.len() < 8 {
+        // One per thread that may ask at once (rayon's and a few workers); opening one again
+        // costs about a millisecond.
+        if idle.len() < rayon::current_num_threads() + 4 {
             idle.extend(self.catalog.take());
         }
     }
@@ -1418,6 +1460,33 @@ mod tests {
     use crate::color::CameraColor;
     use crate::image::Orientation;
     use crate::raw::CaptureInfo;
+
+    #[test]
+    fn verbatim_paths_are_stored_plain() {
+        let c = Catalog::open_in_memory().unwrap();
+        c.conn
+            .execute_batch(
+                r"INSERT INTO images(path, folder, name) VALUES ('\\?\C:\Fotos\a.ARW', '\\?\C:\Fotos', 'a.ARW');
+                  INSERT INTO images(path, folder, name) VALUES ('\\?\UNC\nas\f\b.ARW', '\\?\UNC\nas\f', 'b.ARW');
+                  INSERT INTO images(path, folder, name) VALUES ('\\?\C:\Fotos\c.ARW', '\\?\C:\Fotos', 'c.ARW');
+                  INSERT INTO images(path, folder, name) VALUES ('C:\Fotos\c.ARW', 'C:\Fotos', 'c.ARW');
+                  INSERT INTO favorites(path) VALUES ('\\?\C:\Fotos');
+                  DELETE FROM meta WHERE key = 'plain_paths';",
+            )
+            .unwrap();
+        drop_verbatim_prefixes(&c.conn).unwrap();
+        let rows: Vec<(String, String)> =
+            c.conn.prepare("SELECT path, folder FROM images ORDER BY id").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+        let row = |p: &str, f: &str| (p.to_string(), f.to_string());
+        assert_eq!(rows[0], row(r"C:\Fotos\a.ARW", r"C:\Fotos"));
+        assert_eq!(rows[1], row(r"\\nas\f\b.ARW", r"\\nas\f"));
+        // Already there in the plain form: the old row keeps its path (its folder may change).
+        assert_eq!(rows[2].0, r"\\?\C:\Fotos\c.ARW");
+        let fav: String = c.conn.query_row("SELECT path FROM favorites", [], |r| r.get(0)).unwrap();
+        assert_eq!(fav, r"C:\Fotos");
+        // Keys of verbatim paths are the plain ones.
+        assert_eq!(c.key(Path::new(r"\\?\C:\Fotos\a.ARW")), r"C:\Fotos\a.ARW");
+    }
 
     fn meta(path: &str, date: &str, lens: &str) -> RawMeta {
         let id = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -1681,6 +1750,9 @@ mod tests {
         assert_eq!(c.query(&folder, &Filter::default(), SortKey::Name, false).unwrap().len(), 2);
         let rec = Scope::Folder { path: "/p/a".into(), recursive: true };
         assert_eq!(c.query(&rec, &Filter::default(), SortKey::Name, false).unwrap().len(), 3);
+        assert!(c.has_images_in(Path::new("/p/a"), true).unwrap());
+        assert!(c.has_images_in(Path::new("/p/a"), false).unwrap());
+        assert!(!c.has_images_in(Path::new("/p/x"), true).unwrap());
 
         let f = Filter { min_rating: 3, ..Default::default() };
         assert_eq!(c.query(&Scope::All, &f, SortKey::Name, false).unwrap().len(), 2);

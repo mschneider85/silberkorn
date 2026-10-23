@@ -128,7 +128,7 @@ impl Session {
         } else {
             bail!("{} ist keine Session-Datei", path.display());
         };
-        let file = file.canonicalize().unwrap_or(file);
+        let file = crate::paths::canonical(&file);
         let root = file.parent().map(Path::to_path_buf).unwrap_or_default();
         let name = file.file_stem().unwrap_or_default().to_string_lossy().to_string();
         let session = Session { file, root, name };
@@ -213,7 +213,12 @@ pub fn rename_image(image: &Path, stem: &str) -> Result<PathBuf> {
     if image.file_name() == Some(std::ffi::OsStr::new(&name)) {
         return Ok(image.to_path_buf());
     }
-    let target = free_target(dir, std::ffi::OsStr::new(&name));
+    // Only the case changes: on Windows the "other" name is the image itself, not a clash.
+    let same = dir.join(&name);
+    let target = match (same.canonicalize(), image.canonicalize()) {
+        (Ok(a), Ok(b)) if a == b => same,
+        _ => free_target(dir, std::ffi::OsStr::new(&name)),
+    };
     relocate(image, &target)?;
     Ok(target)
 }
@@ -327,6 +332,11 @@ mod tests {
         // Taken name: a number is appended; the same name: nothing happens.
         assert_eq!(rename_image(&b, "Hochzeit_001").unwrap(), dir.join("Hochzeit_001-2.ARW"));
         assert_eq!(rename_image(&new, "Hochzeit_001").unwrap(), new);
+        // Only the case changed: the same file where names ignore case (Windows), else a clash
+        // only if another file has that name.
+        let upper = rename_image(&new, "HOCHZEIT_001").unwrap();
+        assert_eq!(upper, dir.join("HOCHZEIT_001.ARW"));
+        assert!(sidecar::sidecar_path(&upper).exists());
         std::fs::remove_dir_all(dir).ok();
     }
 

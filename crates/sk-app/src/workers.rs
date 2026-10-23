@@ -546,7 +546,9 @@ impl Workers {
             crate::guard::spawn("Volle Auflösung laden", move || {
                 while let Some((generation, path)) = recv_latest(&full_rx) {
                     activity.touch();
-                    let result = raw::load_full(&path).map(|(_, img)| Arc::new(img)).map_err(|e| format!("{e:#}"));
+                    // A crash must still answer, else the view waits for it forever.
+                    let result = crate::guard::catch(|| raw::load_full(&path).map(|(_, img)| Arc::new(img)).map_err(|e| format!("{e:#}")))
+                        .and_then(|r| r);
                     let _ = ev_tx.send(Event::FullLoaded { generation, result });
                     ctx.request_repaint();
                 }
@@ -946,7 +948,8 @@ impl Workers {
                                 continue;
                             }
                             let _ = ev_tx.send(Event::ProxyProgress(Some((done, total))));
-                            if let Some(p) = prepare(path, session.as_deref()) {
+                            // A broken file is skipped, not the rest of the list.
+                            if let Some(p) = crate::guard::catch(|| prepare(path, session.as_deref())).ok().flatten() {
                                 // The browser thumbnail then shows this rendering too (not the camera JPEG).
                                 let thumb = ::image::RgbaImage::from_raw(p.image.size[0] as u32, p.image.size[1] as u32, p.image.as_raw().to_vec())
                                     .map(|img| ::image::DynamicImage::ImageRgba8(img).thumbnail(THUMB_EDGE, THUMB_EDGE));
@@ -970,7 +973,7 @@ impl Workers {
             let (ev_tx, ctx, source) = (ev_tx.clone(), ctx.clone(), thumb_source.clone());
             crate::guard::spawn("Thumbnails", move || {
                 while let Some((path, session)) = source.next() {
-                    if let Some(image) = make_thumbnail(&path, session.as_deref()) {
+                    if let Some(image) = crate::guard::catch(|| make_thumbnail(&path, session.as_deref())).ok().flatten() {
                         let _ = ev_tx.send(Event::Thumbnail { path, image });
                         ctx.request_repaint();
                     }
@@ -990,7 +993,7 @@ impl Workers {
                         let adj = sidecar::load(&path).adjustments;
                         let image = match cache::load_preview(&path, &preview_key(&adj), session.as_deref()) {
                             Some(img) => Some(to_color_image(&img)),
-                            None => prepare(&path, session.as_deref()).map(|p| p.image),
+                            None => crate::guard::catch(|| prepare(&path, session.as_deref())).ok().flatten().map(|p| p.image),
                         };
                         if let Some(image) = image {
                             let _ = ev_tx.send(Event::CompareImage { path, image });
@@ -1017,7 +1020,11 @@ impl Workers {
             crate::guard::spawn("Ordner lesen", move || {
                 // Only the latest folder: those clicked through meanwhile are no longer shown.
                 while let Some((run, folder, recursive)) = recv_latest(&folder_rx) {
-                    let files = sidecar::load_all(&sk_core::catalog::scan_folder(&folder, recursive));
+                    // Always answers: the library waits for it.
+                    let files = crate::guard::catch(|| sidecar::load_all(&sk_core::catalog::scan_folder(&folder, recursive))).unwrap_or_else(|e| {
+                        log::error!("{}: {e}", folder.display());
+                        Vec::new()
+                    });
                     let _ = ev_tx.send(Event::FolderLoaded { run, files });
                     ctx.request_repaint();
                 }
@@ -1164,18 +1171,19 @@ impl Workers {
                             ctx.request_repaint();
                             break;
                         }
-                        // An image never opened gets the camera's look it would show (see `camera_look`).
-                        let for_new = sk_core::camera_look::for_new();
-                        let adj = match sk_core::camera_look::wanted(&adj, for_new) {
-                            true => raw::load_preview_and_keep(&path, 1024)
-                                .ok()
-                                .and_then(|(meta, preview)| sk_core::camera_look::apply_if_wanted(&meta, &preview, &adj, for_new))
-                                .unwrap_or(adj),
-                            false => adj,
-                        };
                         // A bug on one image fails its outputs, not the whole export.
-                        let results =
-                            crate::guard::catch(|| export::export_many_with(&path, &adj, &job.recipes, i as u32 + 1, &job.session, &mut written));
+                        let results = crate::guard::catch(|| {
+                            // An image never opened gets the camera's look it would show (see `camera_look`).
+                            let for_new = sk_core::camera_look::for_new();
+                            let adj = match sk_core::camera_look::wanted(&adj, for_new) {
+                                true => raw::load_preview_and_keep(&path, 1024)
+                                    .ok()
+                                    .and_then(|(meta, preview)| sk_core::camera_look::apply_if_wanted(&meta, &preview, &adj, for_new))
+                                    .unwrap_or_else(|| adj.clone()),
+                                false => adj.clone(),
+                            };
+                            export::export_many_with(&path, &adj, &job.recipes, i as u32 + 1, &job.session, &mut written)
+                        });
                         if results.is_err() && job.cancel.load(Ordering::Relaxed) {
                             let _ = ev_tx.send(Event::ExportCancelled { done, total });
                             ctx.request_repaint();
@@ -1332,6 +1340,11 @@ impl Workers {
     pub fn thumbnail(&self, path: PathBuf, session: Option<PathBuf>) {
         // Newest first: cells just scrolled into view before those scrolled past.
         self.thumb_queue.request(self.ctx.cumulative_pass_nr(), path, session);
+    }
+
+    /// Forgets the thumbnails asked for that `keep` no longer wants.
+    pub fn forget_thumbnails(&self, keep: impl Fn(&std::path::Path) -> bool) {
+        self.thumb_queue.retain(keep);
     }
 
     pub fn export(&self, job: ExportJob) {

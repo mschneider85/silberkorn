@@ -98,7 +98,7 @@ impl App {
 
     /// Switches the browser to a folder (like a session folder).
     pub fn open_folder(&mut self, folder: PathBuf) {
-        let folder = folder.canonicalize().unwrap_or(folder);
+        let folder = sk_core::paths::canonical(&folder);
         if !folder.is_dir() {
             self.report_error(format!("Ordner nicht lesbar: {}", folder.display()));
             return;
@@ -108,8 +108,11 @@ impl App {
             .into_iter()
             .flatten()
             .flatten()
+            // The type from the listing (no further look at each file, slow on network drives);
+            // links are followed.
+            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir() || (t.is_symlink() && e.path().is_dir())))
             .map(|e| e.path())
-            .filter(|p| p.is_dir() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+            .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
             // The session's own data folder (cache) is not for browsing.
             .filter(|p| !self.session.as_ref().is_some_and(|s| *p == s.root.join(sk_core::session::APP_FOLDER)))
             .collect();
@@ -122,9 +125,9 @@ impl App {
         self.open_scope(Scope::Folder { path: folder.clone(), recursive: false });
         // A session's own folders are its database: indexed silently, so that dates, cameras
         // and search work. The catalog only holds what was imported.
-        let paths = catalog::scan_folder(&folder, false);
         let belongs = self.session.as_ref().is_some_and(|s| folder.starts_with(&s.root));
-        if !paths.is_empty() && belongs {
+        let paths = if belongs { catalog::scan_folder(&folder, false) } else { Vec::new() };
+        if !paths.is_empty() {
             self.workers.index(IndexJob { catalog: self.catalog_path(), paths, import: false, copy_to: None });
         }
     }
@@ -219,7 +222,7 @@ impl App {
             // file system: slow for a large tree, so only then).
             Scope::Folder { path, recursive }
                 if !*recursive
-                    || (self.session.is_none() && self.catalog.as_ref().is_some_and(|c| c.query(&self.scope, &Filter::default(), SortKey::Name, false).is_ok_and(|r| r.is_empty()))) =>
+                    || (self.session.is_none() && self.catalog.as_ref().is_some_and(|c| c.has_images_in(path, true).is_ok_and(|has| !has))) =>
             {
                 Some((path.clone(), *recursive))
             }

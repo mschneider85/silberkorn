@@ -27,8 +27,9 @@ pub struct StyleGrid {
 /// The previews of the snapshots of the current image.
 #[derive(Default)]
 pub struct SnapshotGrid {
-    /// What the previews show: image and the snapshots' adjustments.
-    shown: Option<(PathBuf, Vec<Adjustments>)>,
+    /// What the previews show: image, the snapshots' adjustments and their ids (hashing the
+    /// settings each frame cost milliseconds with a mask).
+    shown: Option<(PathBuf, Vec<Adjustments>, Vec<String>)>,
     key: u64,
     textures: HashMap<String, TextureHandle>,
 }
@@ -229,14 +230,15 @@ impl App {
         let Some(cur) = &self.current else { return };
         let path = cur.meta.path.clone();
         let adjs: Vec<Adjustments> = cur.snapshots.iter().map(|s| s.adjustments.clone()).collect();
-        if self.snapshot_grid.shown.as_ref().is_some_and(|(p, a)| *p == path && *a == adjs) {
+        if self.snapshot_grid.shown.as_ref().is_some_and(|(p, a, _)| *p == path && *a == adjs) {
             return;
         }
-        let variants = adjs.iter().enumerate().map(|(i, a)| (snapshot_id(i, a), a.clone())).collect();
+        let ids: Vec<String> = adjs.iter().enumerate().map(|(i, a)| snapshot_id(i, a)).collect();
+        let variants = ids.iter().cloned().zip(adjs.iter().cloned()).collect();
         let key = self.snapshot_grid.key + 1;
         self.workers.snapshot_thumbs(crate::workers::StyleThumbJob { key, meta: cur.meta.clone(), source: cur.preview.clone(), variants, snapshots: true });
         self.snapshot_grid.key = key;
-        self.snapshot_grid.shown = Some((path, adjs));
+        self.snapshot_grid.shown = Some((path, adjs, ids));
     }
 
     pub(crate) fn snapshot_thumb_arrived(&mut self, ctx: &egui::Context, key: u64, id: String, image: ColorImage) {
@@ -254,7 +256,9 @@ impl App {
 
     /// The preview of snapshot `i` with these adjustments, once rendered.
     pub(crate) fn snapshot_texture(&self, i: usize, adj: &Adjustments) -> Option<&TextureHandle> {
-        self.snapshot_grid.textures.get(&snapshot_id(i, adj))
+        let (_, adjs, ids) = self.snapshot_grid.shown.as_ref()?;
+        let id = if adjs.get(i) == Some(adj) { ids[i].clone() } else { snapshot_id(i, adj) };
+        self.snapshot_grid.textures.get(&id)
     }
 }
 

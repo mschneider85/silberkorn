@@ -112,7 +112,7 @@ impl App {
     /// Selects a created file once it is in the browser (after indexing in catalog scopes).
     pub(crate) fn select_created(&mut self) {
         let Some(p) = self.select_when_listed.clone() else { return };
-        let p = p.canonicalize().unwrap_or(p);
+        let p = sk_core::paths::canonical(&p);
         if self.index_of(&p).is_some() {
             self.select_when_listed = None;
             self.select_path(&p, egui::Modifiers::NONE);

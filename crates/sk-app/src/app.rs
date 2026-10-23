@@ -2887,6 +2887,8 @@ impl App {
         self.thumb_requested.retain(|p| listed.contains(p));
         self.thumb_focus.retain(|p, _| listed.contains(p));
         self.thumb_focus_requested.retain(|p| listed.contains(p));
+        // Else the workers still make those of the folder before (thousands after scrolling).
+        self.workers.forget_thumbnails(|p| listed.contains(&p.to_path_buf()));
     }
 
     pub(crate) fn send_render(&mut self) {

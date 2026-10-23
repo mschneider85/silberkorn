@@ -832,9 +832,11 @@ fn fit_luma_curve(reference: &LookStats, now: &LookStats, base: &Curve, out: &mu
     let mut best = (f32::MAX, 1.0, 0.0);
     for gi in 0..=24 {
         let gamma = bounds.gamma.0 * (bounds.gamma.1 / bounds.gamma.0).powf(gi as f32 / 24.0);
+        // Once per gamma, not per contrast.
+        let lifted: Vec<f32> = u.iter().map(|x| x.powf(gamma)).collect();
         for ci in 0..=15 {
             let c = bounds.contrast.0 + (bounds.contrast.1 - bounds.contrast.0) * ci as f32 / 15.0;
-            let (m, sd) = mean_std(u.iter().map(|x| s_curve(x.powf(gamma), c)));
+            let (m, sd) = mean_std(lifted.iter().map(|x| s_curve(*x, c)));
             let cost = (m - mean_v).powi(2) + (sd - std_v).powi(2) + 0.002 * (gamma.ln().powi(2) + c * c);
             if cost < best.0 {
                 best = (cost, gamma, c);

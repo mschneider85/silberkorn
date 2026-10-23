@@ -3,14 +3,13 @@
 
 use crate::params::{Adjustments, Layer};
 
-/// "0,8", "-12", "1,25"
+/// "0.8", "-12", "1.25"
 pub fn number(v: f32) -> String {
     let s = format!("{v:.2}");
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    s.replace('.', ",")
+    s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-/// What changed from `before` to `after`, e.g. "Belichtung 0,8" or "Kontrast, Lichter".
+/// What changed from `before` to `after`, e.g. "Belichtung 0.8" or "Kontrast, Lichter".
 pub fn describe(before: &Adjustments, after: &Adjustments) -> String {
     let mut changes = changes(before, after);
     if changes.is_empty() && before != after {
@@ -24,7 +23,7 @@ pub fn describe(before: &Adjustments, after: &Adjustments) -> String {
     join(&changes)
 }
 
-/// "Ebene „Himmel“: Belichtung 0,4" when one layer changed (and the list did not).
+/// "Ebene „Himmel“: Belichtung 0.4" when one layer changed (and the list did not).
 fn describe_layer(before: &Adjustments, after: &Adjustments) -> Option<String> {
     if before.layers.len() != after.layers.len() {
         return None;
@@ -76,7 +75,7 @@ fn layer_changes(a: &Layer, b: &Layer) -> Vec<(&'static str, Option<f32>)> {
     out
 }
 
-/// "Belichtung 0,8", "Kontrast, Lichter" or "Kontrast, Lichter +1".
+/// "Belichtung 0.8", "Kontrast, Lichter" or "Kontrast, Lichter +1".
 fn join(changes: &[(&str, Option<f32>)]) -> String {
     match changes {
         [] => "Keine Änderung".into(),
@@ -173,7 +172,7 @@ mod tests {
     fn names_the_changes() {
         let a = Adjustments::default();
         let b = Adjustments { exposure: 0.8, ..a.clone() };
-        assert_eq!(describe(&a, &b), "Belichtung 0,8");
+        assert_eq!(describe(&a, &b), "Belichtung 0.8");
         let mut c = b.clone();
         c.geometry.straighten = 2.0;
         c.geometry.keystone_v = 10.0;
@@ -194,7 +193,7 @@ mod tests {
         let a = Adjustments { layers: vec![sky.clone(), Layer { id: 2, ..Default::default() }], ..Default::default() };
         let mut b = a.clone();
         b.layers[0].adjustments.exposure = 0.4;
-        assert_eq!(describe(&a, &b), "Ebene „Himmel“: Belichtung 0,4");
+        assert_eq!(describe(&a, &b), "Ebene „Himmel“: Belichtung 0.4");
         b.layers[0].mask.fill = true;
         assert_eq!(describe(&a, &b), "Ebene „Himmel“: Belichtung, Maske");
         b.layers[1].opacity = 50.0;

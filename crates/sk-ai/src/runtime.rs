@@ -27,6 +27,12 @@ pub fn config_generation() -> u64 {
     CONFIG.load(Ordering::Relaxed)
 }
 
+/// Networks loaded so far are to be loaded again (they went on with tract after the separate
+/// process crashed; loaded again they get a new one).
+pub(crate) fn reload_networks() {
+    CONFIG.fetch_add(1, Ordering::Relaxed);
+}
+
 /// Where the most recently loaded network runs (for display).
 static LAST_DEVICE: Mutex<Option<&'static str>> = Mutex::new(None);
 
@@ -290,6 +296,7 @@ pub struct Output {
 }
 
 /// Input data with its shape, owned (for ONNX Runtime and the separate process).
+#[derive(Debug, PartialEq)]
 pub(crate) enum Tensor {
     F32(Vec<usize>, Vec<f32>),
     U8(Vec<usize>, Vec<u8>),
@@ -453,7 +460,7 @@ impl Net {
         let ort = if !gpu_enabled() || !gpu_installed() {
             None
         } else if crate::worker::configured() {
-            crate::worker::usable().then(|| crate::worker::load(path, gpu, lane).map(|(session, gpu, dml)| (Backend::Remote { session, gpu, fallback: Mutex::default() }, gpu, dml)))
+            crate::worker::usable(lane).then(|| crate::worker::load(path, gpu, lane).map(|(session, gpu, dml)| (Backend::Remote { session, gpu, fallback: Mutex::default() }, gpu, dml)))
         } else {
             Some(ort_session(path, gpu).map(|(session, gpu, dml)| (Backend::Ort { session: Mutex::new(session), gpu }, gpu, dml)))
         };

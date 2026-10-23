@@ -21,6 +21,29 @@ pub fn app_dir(base: &Path) -> PathBuf {
     dir
 }
 
+/// The absolute path with links resolved (`path` itself if that fails), without Windows'
+/// `\\?\` prefix: paths from dialogs and the command line come without it, and the same file
+/// must give the same text (catalog keys, comparisons).
+pub fn canonical(path: &Path) -> PathBuf {
+    let full = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    match full.to_str().and_then(without_verbatim) {
+        Some(plain) => PathBuf::from(plain),
+        None => full,
+    }
+}
+
+/// `\\?\C:\a` -> `C:\a`, `\\?\UNC\server\share` -> `\\server\share`; `None` for other paths
+/// and for those too long without the prefix.
+pub fn without_verbatim(path: &str) -> Option<String> {
+    let rest = path.strip_prefix(r"\\?\")?;
+    let plain = match rest.strip_prefix(r"UNC\") {
+        Some(unc) => format!(r"\\{unc}"),
+        None if rest.as_bytes().get(1) == Some(&b':') && rest.as_bytes()[0].is_ascii_alphabetic() => rest.to_string(),
+        None => return None,
+    };
+    (plain.len() < 260).then_some(plain)
+}
+
 fn env_dir(var: &str) -> Option<PathBuf> {
     std::env::var_os(var).filter(|v| !v.is_empty()).map(PathBuf::from)
 }
@@ -63,5 +86,16 @@ mod tests {
         assert!(dir.join("catalog.sqlite").exists());
         assert!(!base.join(LEGACY_APP_DIR).exists());
         std::fs::remove_dir_all(base).ok();
+    }
+
+    #[test]
+    fn verbatim_prefix_is_dropped() {
+        assert_eq!(without_verbatim(r"\\?\C:\Fotos\a.ARW").as_deref(), Some(r"C:\Fotos\a.ARW"));
+        assert_eq!(without_verbatim(r"\\?\UNC\nas\fotos\a.ARW").as_deref(), Some(r"\\nas\fotos\a.ARW"));
+        assert_eq!(without_verbatim(r"C:\Fotos"), None);
+        assert_eq!(without_verbatim("/home/a"), None);
+        // Device paths and paths only reachable with the prefix keep it.
+        assert_eq!(without_verbatim(r"\\?\Volume{1234}\a"), None);
+        assert_eq!(without_verbatim(&format!(r"\\?\C:\{}", "a".repeat(300))), None);
     }
 }

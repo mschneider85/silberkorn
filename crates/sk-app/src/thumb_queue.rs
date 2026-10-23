@@ -48,6 +48,11 @@ impl ThumbQueue {
         self.0.ready.notify_one();
     }
 
+    /// Drops the requests for images no longer listed (another folder was opened).
+    pub fn retain(&self, keep: impl Fn(&std::path::Path) -> bool) {
+        self.0.lock().pending.retain(|(_, p, _)| keep(p));
+    }
+
     #[cfg(test)]
     fn len(&self) -> usize {
         self.0.lock().pending.len()
@@ -101,6 +106,16 @@ mod tests {
         assert_eq!(q.len(), 5);
         let order: Vec<PathBuf> = (0..5).map(|_| src.next().unwrap().0).collect();
         assert_eq!(order, ["x", "y", "a", "b", "c"].map(p));
+    }
+
+    #[test]
+    fn requests_of_another_folder_are_dropped() {
+        let (q, src) = queue();
+        q.request(1, PathBuf::from("/alt/a"), None);
+        q.request(1, PathBuf::from("/neu/b"), None);
+        q.retain(|p| p.starts_with("/neu"));
+        assert_eq!(q.len(), 1);
+        assert_eq!(src.next().unwrap().0, PathBuf::from("/neu/b"));
     }
 
     #[test]

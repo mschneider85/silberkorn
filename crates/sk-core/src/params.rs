@@ -582,10 +582,50 @@ pub struct AiMask {
     pub height: usize,
     /// 8-bit mask values, row-major. Shared between copies (undo steps, history): it doesn't
     /// change once made.
+    #[serde(with = "mask_bytes")]
     pub data: std::sync::Arc<Vec<u8>>,
     /// The depth range the mask was made from (kind "depth"), so it can be changed later.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub depth: Option<DepthRange>,
+}
+
+/// Mask bytes in a sidecar: compressed and base64 encoded (a JSON array of numbers took a
+/// line per byte in a pretty-printed file, megabytes per mask). The array is still read.
+mod mask_bytes {
+    use std::io::{Read, Write};
+    use std::sync::Arc;
+
+    use base64::Engine;
+    use serde::{Deserialize, Deserializer, Serializer, de::Error};
+
+    const MAX: u64 = 1 << 26;
+
+    pub fn serialize<S: Serializer>(data: &Arc<Vec<u8>>, s: S) -> Result<S::Ok, S::Error> {
+        let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::fast());
+        z.write_all(data).map_err(serde::ser::Error::custom)?;
+        let packed = z.finish().map_err(serde::ser::Error::custom)?;
+        s.serialize_str(&base64::engine::general_purpose::STANDARD.encode(packed))
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Stored {
+        Packed(String),
+        Plain(Vec<u8>),
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Arc<Vec<u8>>, D::Error> {
+        Ok(Arc::new(match Stored::deserialize(d)? {
+            Stored::Plain(v) => v,
+            Stored::Packed(text) => {
+                let packed = base64::engine::general_purpose::STANDARD.decode(text).map_err(D::Error::custom)?;
+                let mut v = Vec::new();
+                // Bounded: a damaged file must not unpack to gigabytes (masks are at most a few MB).
+                flate2::read::ZlibDecoder::new(&packed[..]).take(MAX).read_to_end(&mut v).map_err(D::Error::custom)?;
+                v
+            }
+        }))
+    }
 }
 
 /// A range of the depth map (see `depth`): 0 is the farthest part of the image, 1 the nearest.
@@ -1538,6 +1578,18 @@ mod tests {
         let adj = Adjustments { layers: vec![layer(ai(vec![0; 10])), layer(ai(vec![0; 16]))], ..Default::default() }.normalized();
         assert!(adj.layers[0].mask.ai.is_none());
         assert!(adj.layers[1].mask.ai.is_some());
+    }
+
+    /// Mask bytes are stored packed; sidecars from before are still read.
+    #[test]
+    fn ai_mask_is_stored_packed() {
+        let data: Vec<u8> = (0..64 * 64).map(|i| if i % 64 < 20 { 255 } else { 0 }).collect();
+        let mask = AiMask { kind: "subject".into(), width: 64, height: 64, data: data.into(), depth: None };
+        let json = serde_json::to_string_pretty(&mask).unwrap();
+        assert!(json.len() < 500, "{}", json.len());
+        assert_eq!(serde_json::from_str::<AiMask>(&json).unwrap(), mask);
+        let old = r#"{"kind":"subject","width":2,"height":1,"data":[0,255]}"#;
+        assert_eq!(*serde_json::from_str::<AiMask>(old).unwrap().data, vec![0, 255]);
     }
 
     /// Details shares the amount between the methods; beyond the full deconvolution the unsharp
