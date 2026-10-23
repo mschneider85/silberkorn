@@ -491,14 +491,12 @@ fn key(s: &str) -> u64 {
 
 /// Uploads a part (x, y, w, h) of an image as RGBA floats.
 fn upload_window(g: &Gpu, img: &LinearImage, (x0, y0, w, h): (usize, usize, usize, usize)) -> Buffer {
-    let mut data = vec![[0.0f32; 4]; w * h];
-    data.par_chunks_mut(w).enumerate().for_each(|(y, row)| {
+    g.upload_rows(w * h * 16, w * 16, |y, row| {
         let start = (y0 + y) * img.width + x0;
-        for (o, p) in row.iter_mut().zip(&img.data[start..start + w]) {
-            *o = [p[0], p[1], p[2], 0.0];
+        for (o, p) in row.into_chunks::<16>().0.into_iter().zip(&img.data[start..start + w]) {
+            o.write(bytemuck::cast([p[0], p[1], p[2], 0.0f32]));
         }
-    });
-    g.upload(&data)
+    })
 }
 
 /// Rasterized masks on the graphics card (uploaded again only when the mask changes), per

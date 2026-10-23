@@ -438,18 +438,58 @@ impl Gpu {
         buf
     }
 
+    /// A storage buffer of `bytes` whose content `fill` writes straight into wgpu's staging
+    /// memory, in rows of `row` bytes (in parallel); no copy of the whole data in between.
+    pub(crate) fn upload_rows(&self, bytes: usize, row: usize, fill: impl Fn(usize, wgpu::WriteOnly<[u8]>) + Sync) -> wgpu::Buffer {
+        use rayon::prelude::*;
+        let size = (bytes as u64).max(16).next_multiple_of(4);
+        let buf = self.buffer(size);
+        // `None`: the error went to the error scope (see `checked`).
+        if let Some(mut view) = self.queue.write_buffer_with(&buf, 0, wgpu::BufferSize::new(size).expect("at least 16")) {
+            let (mut rest, mut tail) = view.slice(..).split_at(bytes);
+            tail.fill(0);
+            /// A row of the mapping for another thread. wgpu marks only `WriteOnly` of sized types
+            /// `Send`; a slice of one is just as safe to write from another thread: the rows
+            /// don't overlap, and the view outlives the loop.
+            struct Row<'a>(wgpu::WriteOnly<'a, [u8]>);
+            unsafe impl Send for Row<'_> {}
+            let mut rows = Vec::with_capacity(bytes / row.max(1));
+            while rest.len() >= row && row > 0 {
+                let (r, more) = rest.split_at(row);
+                rows.push(Row(r));
+                rest = more;
+            }
+            rows.into_par_iter().enumerate().for_each(|(y, r)| fill(y, r.0));
+        }
+        buf
+    }
+
     pub(crate) fn encoder(&self) -> Encoder<'_> {
         Encoder { gpu: self, enc: self.device.create_command_encoder(&Default::default()) }
     }
 
     /// Copies `count` values of a buffer back into memory (waits for all submitted work).
-    pub(crate) fn read<T: bytemuck::Pod>(&self, buf: &wgpu::Buffer, count: usize) -> Result<Vec<T>> {
-        let [bytes] = self.read_bytes([(buf, count * size_of::<T>())])?;
-        Ok(bytemuck::pod_collect_to_vec(&bytes))
+    pub(crate) fn read<T: bytemuck::Pod + Send>(&self, buf: &wgpu::Buffer, count: usize) -> Result<Vec<T>> {
+        use rayon::prelude::*;
+        // Straight from the mapping into the result, in parallel (hundreds of MB for an export).
+        self.read_mapped([(buf, count * size_of::<T>())], |view, [offset]| {
+            let mut out = vec![T::zeroed(); count];
+            let bytes: &mut [u8] = bytemuck::cast_slice_mut(&mut out);
+            let len = bytes.len();
+            bytes.par_chunks_mut(1 << 20).zip(view[offset..offset + len].par_chunks(1 << 20)).for_each(|(o, i)| o.copy_from_slice(i));
+            out
+        })
     }
 
     /// Like [`Self::read`] for several buffers (bytes of each) with one wait for the card.
     pub(crate) fn read_bytes<const N: usize>(&self, parts: [(&wgpu::Buffer, usize); N]) -> Result<[Vec<u8>; N]> {
+        let lens = parts.map(|p| p.1);
+        self.read_mapped(parts, |view, offsets| std::array::from_fn(|i| view[offsets[i]..offsets[i] + lens[i]].to_vec()))
+    }
+
+    /// Copies the parts (bytes of each) into a mapped buffer, waits for the card once, and gives
+    /// `f` the mapping with the offset of each part.
+    fn read_mapped<const N: usize, R>(&self, parts: [(&wgpu::Buffer, usize); N], f: impl FnOnce(&[u8], [usize; N]) -> R) -> Result<R> {
         // Each part at an offset the copy accepts.
         let mut offsets = [0u64; N];
         let mut total = 0u64;
@@ -458,7 +498,7 @@ impl Gpu {
             total += (*bytes as u64).next_multiple_of(8);
         }
         if total == 0 {
-            return Ok(std::array::from_fn(|_| Vec::new()));
+            return Ok(f(&[], [0; N]));
         }
         let staging = self.pool().take(total, true).unwrap_or_else(|| {
             self.create_buffer(&wgpu::BufferDescriptor {
@@ -486,7 +526,7 @@ impl Gpu {
         }
         rx.recv_timeout(Duration::from_secs(1)).map_err(|_| anyhow!("Grafikkarte: Ergebnis kam nicht zurück"))??;
         let view = staging.get_mapped_range(..)?;
-        let out = std::array::from_fn(|i| view[offsets[i] as usize..offsets[i] as usize + parts[i].1].to_vec());
+        let out = f(&view, offsets.map(|o| o as usize));
         drop(view);
         staging.unmap();
         self.pool().give(staging, true);

@@ -62,7 +62,6 @@ pub(crate) fn demosaic(g: &Gpu, m: &Mosaic, wb: [f32; 3]) -> Result<Vec<[f32; 3]
         ops.enc.run_2d(HOMO, &[&args, &raw, &green, &homo], w, h);
         ops.enc.run_2d(OUT, &[&args, &raw, &green, &homo, &out], w, h);
         ops.flush();
-        let [bytes] = g.read_bytes([(&out, n * 12)])?;
-        Ok(bytemuck::pod_collect_to_vec::<u8, [f32; 3]>(&bytes))
+        g.read::<[f32; 3]>(&out, n)
     })
 }

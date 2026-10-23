@@ -463,16 +463,29 @@ fn develop_bayer(mut raw: RawImage) -> Result<Result<LinearImage, RawImage>> {
     let wb = raw.wb_coeffs;
     let wb = if wb[1].is_finite() && wb[1] > 0.0 { [wb[0] / wb[1], 1.0, wb[2] / wb[1]] } else { [1.0; 3] };
     let mosaic = crate::ahd::Mosaic { data: &input.data, width: input.width, height: input.height, pattern };
-    let mut rgb = rawler::pixarray::Color2D::<f32, 3>::new_with(crate::ahd::demosaic(&mosaic, wb), input.width, input.height);
+    let rgb = rawler::pixarray::Color2D::<f32, 3>::new_with(crate::ahd::demosaic(&mosaic, wb), input.width, input.height);
     if let Some(mut crop) = raw.crop_area.or(raw.active_area) {
         if let Some(active) = &raw.active_area {
             crop = crop.adapt(active);
         }
         if crop.d != rgb.dim() {
-            rgb = rgb.crop(crop);
+            return Ok(Ok(crop_rgb(&rgb.data, rgb.width, crop)));
         }
     }
     Ok(Ok(LinearImage::new(rgb.width, rgb.height, rgb.data)))
+}
+
+/// `rect` of an image `width` wide, row by row in parallel (rawler's `crop` copies on one thread:
+/// up to 300 MB per picture).
+fn crop_rgb(data: &[[f32; 3]], width: usize, rect: rawler::imgop::Rect) -> LinearImage {
+    use rayon::prelude::*;
+    let (x, y, w, h) = (rect.p.x, rect.p.y, rect.d.w, rect.d.h);
+    let mut out = vec![[0.0f32; 3]; w * h];
+    out.par_chunks_mut(w.max(1)).enumerate().for_each(|(r, row)| {
+        let start = (y + r) * width + x;
+        row.copy_from_slice(&data[start..start + w]);
+    });
+    LinearImage::new(w, h, out)
 }
 
 /// The scaled (black level subtracted, 0..1) photosites of a Bayer sensor within the area that
@@ -542,14 +555,14 @@ fn develop_xtrans(mut raw: RawImage, quality: XTransQuality) -> Result<Result<Li
     let RawImageData::Float(data) = std::mem::replace(&mut raw.data, RawImageData::Float(Vec::new())) else { bail!("Unerwartetes Datenformat") };
     let pixels = rawler::pixarray::PixF32::new_with(data, raw.width, raw.height);
     let roi = raw.active_area.unwrap_or(pixels.rect());
-    let mut rgb = XTransMarkesteijnDemosaic::new(quality as usize).demosaic(&pixels, &config.cfa, &config.colors, roi);
+    let rgb = XTransMarkesteijnDemosaic::new(quality as usize).demosaic(&pixels, &config.cfa, &config.colors, roi);
     // Default crop, relative to the active area the demosaic already cut out.
     if let Some(mut crop) = raw.crop_area.or(raw.active_area) {
         if let Some(active) = &raw.active_area {
             crop = crop.adapt(active);
         }
         if crop.d != rgb.dim() {
-            rgb = rgb.crop(crop);
+            return Ok(Ok(crop_rgb(&rgb.data, rgb.width, crop)));
         }
     }
     Ok(Ok(LinearImage::new(rgb.width, rgb.height, rgb.data)))
