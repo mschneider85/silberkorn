@@ -2343,7 +2343,8 @@ impl App {
         let session = self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         self.export_cancel = Some(cancel.clone());
-        self.workers.export(ExportJob { items, recipes, session, cancel });
+        let shown = self.current.as_ref().and_then(|c| Some((c.meta.clone(), c.full.clone()?)));
+        self.workers.export(ExportJob { items, recipes, session, cancel, shown });
     }
 
     /// Average camera RGB of a 7x7 spot; `image_pos` is in displayed preview pixels.

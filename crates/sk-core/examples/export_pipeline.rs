@@ -1,5 +1,5 @@
 //! Times an export: the stages of one image (load, develop on the CPU and on the graphics card,
-//! JPEG), then a batch exported as the app does it, with and without the card. Files go to
+//! JPEG), one image exported from its file and from memory, then a batch exported as the app does it, with and without the card. Files go to
 //! `<out>`. On a laptop the results vary with its temperature: compare variants in the order
 //! A B B A.
 //!
@@ -44,7 +44,7 @@ fn batch_export(paths: &[PathBuf], recipe: &ExportRecipe) -> Duration {
     timed(|| {
         let mut written = HashSet::new();
         for (i, p) in paths.iter().enumerate() {
-            for r in export::export_many_with(p, &adj, std::slice::from_ref(recipe), i as u32 + 1, "", &mut written) {
+            for r in export::export_many_with(p, None, &adj, std::slice::from_ref(recipe), i as u32 + 1, "", &mut written) {
                 r.expect("exported");
             }
         }
@@ -77,6 +77,15 @@ fn main() {
     }
     let (_, t_encode) = timed(|| encode(developed.as_ref().expect("developed")));
     println!("  laden: {t_load:.2?}, JPEG kodieren: {t_encode:.2?}");
+
+    println!("\nEin Bild exportieren, A B B A (A: Datei lesen, B: schon im Speicher wie das angezeigte):");
+    let recipe = ExportRecipe { output_dir: out.join("einzeln"), ..Default::default() };
+    for shown in [false, true, true, false] {
+        let loaded = shown.then_some((&meta, &linear));
+        let (r, t) = timed(|| export::export_many_with(&files[0], loaded, &Adjustments::default(), std::slice::from_ref(&recipe), 1, "", &mut HashSet::new()));
+        r.into_iter().for_each(|r| drop(r.expect("exported")));
+        println!("  {}: {t:.2?}", if shown { "im Speicher " } else { "Datei lesen " });
+    }
 
     let batch: Vec<PathBuf> = files.iter().cycle().take(BATCH.max(files.len())).cloned().collect();
     println!("\nExport von {} Bildern:", batch.len());

@@ -528,6 +528,26 @@ fn edit_copy_apply_style_and_export() {
 }
 
 #[test]
+fn export_of_the_shown_image_uses_its_full_resolution() {
+    let Some(mut f) = Fixture::new("export-shown") else { return };
+    f.pump("Vollauflösung", |a| a.current.as_ref().is_some_and(|c| c.full.is_some()));
+    let shown = f.app.current.as_ref().unwrap().meta.path.clone();
+    // The file is not read again: exporting works without it.
+    let away = f.dir.join("weg.dng");
+    std::fs::rename(&shown, &away).unwrap();
+    f.app.recipes[0].output_dir = f.dir.join("out");
+    f.app.recipes[0].size = Some(800);
+    f.app.selection = [shown.clone()].into_iter().collect();
+    f.app.export_selection();
+    f.pump("Export", |app| app.export_progress.is_none() && app.export_log.len() == 1);
+    std::fs::rename(&away, &shown).unwrap();
+    assert!(f.app.export_log[0].starts_with('✔'), "{:?}", f.app.export_log);
+    let name = shown.with_extension("jpg");
+    let img = ::image::open(f.dir.join("out").join(name.file_name().unwrap())).unwrap();
+    assert_eq!(img.width().max(img.height()), 800);
+}
+
+#[test]
 #[ignore = "langsam: läuft mit cargo t-all"]
 fn crop_full_resolution_and_tiles() {
     let Some(mut f) = Fixture::new("tiles") else { return };

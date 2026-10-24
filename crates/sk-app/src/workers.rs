@@ -246,6 +246,8 @@ pub struct ExportJob {
     pub session: String,
     /// Set to stop after the image being processed.
     pub cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// The image on screen with its full resolution, if decoded: not read again.
+    pub shown: Option<(Arc<RawMeta>, Arc<LinearImage>)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1203,7 +1205,8 @@ impl Workers {
                                     .unwrap_or_else(|| adj.clone()),
                                 false => adj.clone(),
                             };
-                            export::export_many_with(&path, &adj, &job.recipes, i as u32 + 1, &job.session, &mut written)
+                            let loaded = job.shown.as_ref().filter(|(meta, _)| meta.path == path).map(|(meta, full)| (&**meta, &**full));
+                            export::export_many_with(&path, loaded, &adj, &job.recipes, i as u32 + 1, &job.session, &mut written)
                         });
                         if results.is_err() && job.cancel.load(Ordering::Relaxed) {
                             let _ = ev_tx.send(Event::ExportCancelled { done, total });

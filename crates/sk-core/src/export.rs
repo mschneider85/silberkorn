@@ -223,56 +223,70 @@ pub fn export(image: &Path, adj: &Adjustments, recipe: &ExportRecipe) -> Result<
 /// Develops `image` once and writes one file per recipe. `counter` and `session` are for
 /// recipes' name templates.
 pub fn export_many(image: &Path, adj: &Adjustments, recipes: &[ExportRecipe], counter: u32, session: &str) -> Vec<Result<PathBuf>> {
-    export_many_with(image, adj, recipes, counter, session, &mut HashSet::new())
+    export_many_with(image, None, adj, recipes, counter, session, &mut HashSet::new())
 }
 
 /// [`export_many`], where `written` holds the files written so far in this batch: an output whose
 /// name is among them gets `-2`, `-3` … instead of replacing it (same file names from two folders,
 /// a name template that gives a burst the same name). Names differing only in case count as the
-/// same: Windows and macOS would write the same file.
+/// same: Windows and macOS would write the same file. `loaded` is the image's full resolution
+/// if it is already in memory (as [`raw::load_full`] gives it), else the file is read.
 pub fn export_many_with(
     image: &Path,
+    loaded: Option<(&raw::RawMeta, &crate::image::LinearImage)>,
     adj: &Adjustments,
     recipes: &[ExportRecipe],
     counter: u32,
     session: &str,
     written: &mut HashSet<PathBuf>,
 ) -> Vec<Result<PathBuf>> {
-    let loaded = raw::load_full(image).and_then(|(meta, linear)| {
-        // Never silently without the Raw-Details and denoising the image shows.
-        if adj.detail.effective_raw_details() > 0.0 && !meta.hdr && meta.bayer {
-            crate::ai_products::DETAILS.ensure(image, &|_| {}).context("Raw-Details")?;
-        }
-        if adj.detail.ai_denoise > 0.0 && !meta.hdr {
-            crate::ai_products::DENOISE.ensure(image, &|_| {}).context("KI-Entrauschen")?;
-        }
-        // Nor without the lens blur, relight or atmosphere.
-        if adj.needs_depth() {
-            crate::depth::ensure(image, &|_| {}).context("Tiefenkarte")?;
-        }
-        Ok((meta, linear))
-    });
-    let (meta, linear) = match loaded {
-        Ok(v) => v,
-        Err(e) => {
-            let msg = format!("{e:#}");
-            return recipes.iter().map(|_| Err(anyhow::anyhow!(msg.clone()))).collect();
-        }
+    let failed = |e: anyhow::Error| {
+        let msg = format!("{e:#}");
+        recipes.iter().map(|_| Err(anyhow::anyhow!(msg.clone()))).collect()
     };
-    let processor = Processor::new(&meta, adj);
+    let read;
+    let (meta, linear) = match loaded {
+        Some(l) => l,
+        None => match raw::load_full(image) {
+            Ok(l) => {
+                read = l;
+                (&read.0, &read.1)
+            }
+            Err(e) => return failed(e),
+        },
+    };
+    if let Err(e) = ensure_products(image, meta, adj) {
+        return failed(e);
+    }
+    let processor = Processor::new(meta, adj);
     // Recipes sharing a color space share the processing.
     let mut cache: Vec<(OutputSpace, crate::image::LinearImage)> = Vec::new();
     recipes
         .iter()
         .map(|recipe| {
             if !cache.iter().any(|(s, _)| *s == recipe.output_space) {
-                cache.push((recipe.output_space, processor.process(&linear, None, recipe.output_space)));
+                cache.push((recipe.output_space, processor.process(linear, None, recipe.output_space)));
             }
             let out = &cache.iter().find(|(s, _)| *s == recipe.output_space).unwrap().1;
             let fields = NameFields { image, capture: Some(&meta.info), counter, session };
             write_output(&fields, out, recipe, written)
         })
         .collect()
+}
+
+/// Never silently without the Raw-Details, denoising, lens blur, relight or atmosphere the
+/// image shows.
+fn ensure_products(image: &Path, meta: &raw::RawMeta, adj: &Adjustments) -> Result<()> {
+    if adj.detail.effective_raw_details() > 0.0 && !meta.hdr && meta.bayer {
+        crate::ai_products::DETAILS.ensure(image, &|_| {}).context("Raw-Details")?;
+    }
+    if adj.detail.ai_denoise > 0.0 && !meta.hdr {
+        crate::ai_products::DENOISE.ensure(image, &|_| {}).context("KI-Entrauschen")?;
+    }
+    if adj.needs_depth() {
+        crate::depth::ensure(image, &|_| {}).context("Tiefenkarte")?;
+    }
+    Ok(())
 }
 
 fn write_output(f: &NameFields, out: &crate::image::LinearImage, recipe: &ExportRecipe, written: &mut HashSet<PathBuf>) -> Result<PathBuf> {
