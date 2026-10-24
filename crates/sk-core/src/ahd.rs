@@ -22,6 +22,8 @@ pub struct Mosaic<'a> {
     pub pattern: [[usize; 2]; 2],
 }
 
+/// Photosite and color at any position (mirrored at the edges), for the tests' reference.
+#[cfg(test)]
 impl Mosaic<'_> {
     #[inline]
     fn at(&self, x: isize, y: isize) -> f32 {
@@ -95,15 +97,17 @@ fn tile(m: &Mosaic, wb: [f32; 3], x0: usize, y0: usize) -> Tile {
     let (ex, ey) = (x0 as isize - BORDER as isize, y0 as isize - BORDER as isize);
     let (ew, eh) = (ow + 2 * BORDER, oh + 2 * BORDER);
     let idx = |x: usize, y: usize| y * ew + x;
+    // Color of the extended area's photosites (same parity as `m.color`, also left of 0).
+    let (px, py) = ((ex & 1) as usize, (ey & 1) as usize);
+    let color = |x: usize, y: usize| m.pattern[(y + py) & 1][(x + px) & 1];
     // Balanced mosaic of the extended area (edges mirrored).
-    let raw: Vec<f32> = (0..eh)
-        .flat_map(|y| (0..ew).map(move |x| (x, y)))
-        .map(|(x, y)| {
-            let (gx, gy) = (ex + x as isize, ey + y as isize);
-            m.at(gx, gy) * wb[m.color(gx, gy)]
-        })
-        .collect();
-    let color = |x: usize, y: usize| m.color(ex + x as isize, ey + y as isize);
+    let cols: Vec<usize> = (0..ew).map(|x| mirror(ex + x as isize, m.width)).collect();
+    let mut raw = Vec::with_capacity(ew * eh);
+    for y in 0..eh {
+        let row = &m.data[mirror(ey + y as isize, m.height) * m.width..][..m.width];
+        let gains = [wb[color(0, y)], wb[color(1, y)]];
+        raw.extend(cols.iter().enumerate().map(|(x, &c)| row[c] * gains[x & 1]));
+    }
     let r = |x: usize, y: usize| raw[idx(x, y)];
 
     // 1. Green along rows and along columns, with a second-order correction from the pixel's
@@ -156,12 +160,11 @@ fn tile(m: &Mosaic, wb: [f32; 3], x0: usize, y0: usize) -> Tile {
     }
 
     // 3. Both candidates in a perceptual space (cube roots: lightness and two opponent axes).
-    let lab = |p: [f32; 3]| {
-        let c = p.map(|v| crate::color::fast_cbrt(v.max(0.0)));
-        [(c[0] + 2.0 * c[1] + c[2]) / 4.0, c[0] - c[1], c[1] - c[2]]
-    };
-    let labs: [Vec<[f32; 3]>; 2] = [rgb[0].iter().map(|p| lab(*p)).collect(), rgb[1].iter().map(|p| lab(*p)).collect()];
-
+    let labs: [Vec<[f32; 3]>; 2] = rgb.each_ref().map(|img| {
+        // Cube roots in one flat loop (faster than per pixel).
+        let c: Vec<f32> = img.as_flattened().iter().map(|&v| cbrt_nonneg(v)).collect();
+        c.as_chunks::<3>().0.iter().map(|c| [(c[0] + 2.0 * c[1] + c[2]) / 4.0, c[0] - c[1], c[1] - c[2]]).collect()
+    });
     // 4. Homogeneity: neighbors within the smaller of the two directions' typical differences.
     let mut homo = [vec![0u8; ew * eh], vec![0u8; ew * eh]];
     for y in 4..eh - 4 {
@@ -171,29 +174,30 @@ fn tile(m: &Mosaic, wb: [f32; 3], x0: usize, y0: usize) -> Tile {
                 let (a, b) = (labs[d][i], labs[d][j]);
                 ((a[0] - b[0]).abs(), (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2))
             };
-            let (left, right, up, down) = (idx(x - 1, y), idx(x + 1, y), idx(x, y - 1), idx(x, y + 1));
-            let (hl, hr) = (dist(0, left), dist(0, right));
-            let (vu, vd) = (dist(1, up), dist(1, down));
+            // Distances to the four neighbors (left, right, up, down) in each direction's image.
+            let near = [idx(x - 1, y), idx(x + 1, y), idx(x, y - 1), idx(x, y + 1)];
+            let dists = [near.map(|j| dist(0, j)), near.map(|j| dist(1, j))];
+            let ([hl, hr, ..], [.., vu, vd]) = (dists[0], dists[1]);
             let eps_l = hl.0.max(hr.0).min(vu.0.max(vd.0));
             let eps_c = hl.1.max(hr.1).min(vu.1.max(vd.1));
-            for (d, h) in homo.iter_mut().enumerate() {
-                h[i] = [left, right, up, down].iter().filter(|j| {
-                    let (dl, dc) = dist(d, **j);
-                    dl <= eps_l && dc <= eps_c
-                }).count() as u8;
+            for (h, ds) in homo.iter_mut().zip(&dists) {
+                h[i] = ds.iter().filter(|(dl, dc)| *dl <= eps_l && *dc <= eps_c).count() as u8;
             }
         }
     }
 
     // 5. Per pixel the direction more homogeneous over 3×3; the mean where both are equal.
+    // Sums over 3×3: first of three rows, then of three of those.
+    let sums = homo.each_ref().map(|h| {
+        let cols: Vec<u32> = (0..ew * oh).map(|k| (0..3).map(|dy| h[k + (BORDER - 1 + dy) * ew] as u32).sum()).collect();
+        (0..ow * oh).map(|k| (k / ow, k % ow)).map(|(ty, tx)| (0..3).map(|dx| cols[ty * ew + tx + BORDER - 1 + dx]).sum::<u32>()).collect::<Vec<u32>>()
+    });
     let mut out = vec![[0.0f32; 3]; ow * oh];
     for ty in 0..oh {
         for tx in 0..ow {
-            let (x, y) = (tx + BORDER, ty + BORDER);
-            let sum = |d: usize| -> u32 { (y - 1..=y + 1).flat_map(|yy| (x - 1..=x + 1).map(move |xx| (xx, yy))).map(|(xx, yy)| homo[d][idx(xx, yy)] as u32).sum() };
-            let (sh, sv) = (sum(0), sum(1));
-            let i = idx(x, y);
-            out[ty * ow + tx] = match sh.cmp(&sv) {
+            let i = idx(tx + BORDER, ty + BORDER);
+            let k = ty * ow + tx;
+            out[k] = match sums[0][k].cmp(&sums[1][k]) {
                 std::cmp::Ordering::Greater => rgb[0][i],
                 std::cmp::Ordering::Less => rgb[1][i],
                 std::cmp::Ordering::Equal => [0, 1, 2].map(|c| (rgb[0][i][c] + rgb[1][i][c]) / 2.0),
@@ -201,6 +205,18 @@ fn tile(m: &Mosaic, wb: [f32; 3], x0: usize, y0: usize) -> Tile {
         }
     }
     Tile { w: ow, h: oh, out }
+}
+
+/// [`crate::color::fast_cbrt`] of `v.max(0.0)`, with the same steps but without branches.
+#[inline]
+fn cbrt_nonneg(v: f32) -> f32 {
+    let a = v.max(0.0);
+    let mut y = f32::from_bits(a.to_bits() / 3 + 0x2a51_4067);
+    for _ in 0..2 {
+        let y3 = y * y * y;
+        y *= (y3 + 2.0 * a) / (2.0 * y3 + a);
+    }
+    if a == 0.0 || !a.is_finite() { a } else { y }
 }
 
 #[cfg(test)]
