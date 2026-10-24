@@ -370,7 +370,7 @@ impl App {
                 .fill(theme::ACCENT)
                 .corner_radius(CARD_RADIUS)
                 .min_size(Vec2::new(ui.available_width(), 30.0));
-            if ui.add_enabled(enabled, button).on_disabled_hover_text(self.look_blocked()).clicked() {
+            if ui.add_enabled(enabled, crate::dialog::unless_enabled(button, enabled)).on_disabled_hover_text(self.look_blocked()).clicked() {
                 run = true;
             }
             ui.add_space(2.0);

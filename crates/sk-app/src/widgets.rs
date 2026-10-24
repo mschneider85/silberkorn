@@ -427,7 +427,10 @@ fn label_width(ui: &Ui) -> f32 {
 pub fn field<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        let w = label_width(ui);
+        // A label longer than the column ("Ausgabeschärfung") widens its own row, not every form.
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let text_w = ui.painter().layout_no_wrap(label.to_string(), font, Color32::WHITE).size().x + 4.0;
+        let w = label_width(ui).max(text_w.min(ui.available_width() * 0.45));
         ui.allocate_ui_with_layout(vec2(w, 22.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.set_min_width(w);
             ui.add(egui::Label::new(RichText::new(label).color(theme::TEXT_DIM)).truncate());

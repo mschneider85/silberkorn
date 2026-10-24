@@ -655,7 +655,8 @@ impl App {
             let k = self.recipes.iter().filter(|r| r.enabled).count();
             let text = RichText::new(format!("{}  {} × {} exportieren", crate::theme::icon::EXPORT, widgets::image_count(n), if k == 1 { "1 Rezept".to_string() } else { format!("{k} Rezepte") })).color(Color32::WHITE);
             let button = egui::Button::new(text).fill(crate::theme::ACCENT).corner_radius(6).min_size(egui::vec2(ui.available_width(), 30.0));
-            if ui.add_enabled(self.command_available("export"), button).on_disabled_hover_text(self.export_blocked_reason()).clicked() {
+            let enabled = self.command_available("export");
+            if ui.add_enabled(enabled, crate::dialog::unless_enabled(button, enabled)).on_disabled_hover_text(self.export_blocked_reason()).clicked() {
                 self.export_selection();
             }
             if let (Some((done, total)), Some(f)) = (self.export_progress, self.export_fraction()) {

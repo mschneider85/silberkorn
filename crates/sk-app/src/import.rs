@@ -394,8 +394,7 @@ impl App {
         };
         let modal = Dialog::new("import", icon::FOLDER_PLUS, title).subtitle(subtitle).width(820.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new(icon::FOLDER).color(theme::TEXT_DIM));
-                ui.label(RichText::new(dialog.source.display().to_string()).color(theme::TEXT)).on_hover_text("Quelle");
+                // The controls first (from the right), the source in the room left, shortened in front.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Andere Quelle …").clicked() {
                         change_source = true;
@@ -403,6 +402,12 @@ impl App {
                     if crate::widgets::checkbox(ui, &mut dialog.recursive, "Unterordner einbeziehen").changed() {
                         rescan = true;
                     }
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(icon::FOLDER).color(theme::TEXT_DIM));
+                        let source = dialog.source.display().to_string();
+                        let shown = crate::widgets::elide_start(ui, &source, ui.available_width() - 12.0);
+                        ui.label(RichText::new(shown).color(theme::TEXT)).on_hover_text(format!("Quelle: {source}"));
+                    });
                 });
             });
             ui.add_space(4.0);

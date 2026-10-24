@@ -487,7 +487,8 @@ impl App {
                 let n = self.selected_count();
                 let text = RichText::new(format!("{}  Exportieren", icon::EXPORT)).color(Color32::WHITE).strong();
                 let button = Button::new(text).fill(theme::ACCENT).corner_radius(6).min_size(vec2(0.0, 28.0));
-                let resp = ui.add_enabled(self.command_available("export"), button).on_disabled_hover_text(self.export_blocked_reason());
+                let enabled = self.command_available("export");
+                let resp = ui.add_enabled(enabled, crate::dialog::unless_enabled(button, enabled)).on_disabled_hover_text(self.export_blocked_reason());
                 if resp.on_hover_text(crate::commands::hint(&format!("{} mit den gewählten Rezepten exportieren", image_count(n)), "export")).clicked() {
                     self.export_selection();
                 }

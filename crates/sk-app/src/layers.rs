@@ -1233,11 +1233,7 @@ impl App {
             // As with the layers: the opacity of the chosen one above the list.
             ui.add_enabled_ui(has, |ui| {
                 let opacity = if is_removal { &mut r.opacity } else { &mut s.opacity };
-                let mut percent = *opacity * 100.0;
-                if slider_row(ui, "Deckkraft", &mut percent, 0.0..=100.0, 100.0, 0) {
-                    *opacity = percent / 100.0;
-                    changed = true;
-                }
+                changed |= crate::widgets::unit_percent_row(ui, "Deckkraft", opacity, 0.0..=1.0, 1.0, Default::default());
             });
             ui.add_space(4.0);
             ui.scope(|ui| {
@@ -1491,9 +1487,9 @@ impl App {
         crate::widgets::list_section(ui, "Ebenen", help, count, None, |ui| {
             // Opacity of the chosen layer; greyed out for the background.
             match active {
-                Some(li) => changed |= slider_row(ui, "Deckkraft", &mut layers[li].opacity, 0.0..=100.0, 100.0, 0),
+                Some(li) => changed |= crate::widgets::percent_row(ui, "Deckkraft", &mut layers[li].opacity, 0.0..=100.0, 100.0),
                 None => {
-                    ui.add_enabled_ui(false, |ui| slider_row(ui, "Deckkraft", &mut 100.0, 0.0..=100.0, 100.0, 0));
+                    ui.add_enabled_ui(false, |ui| crate::widgets::percent_row(ui, "Deckkraft", &mut 100.0, 0.0..=100.0, 100.0));
                 }
             }
             ui.add_space(4.0);

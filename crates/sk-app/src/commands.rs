@@ -124,7 +124,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("export", icon::EXPORT, "Exportieren", "Datei", [CTRL => Key::D], "export ausgabe speichern verarbeiten", can_export, |a, _| a.export_selection()),
     // Bearbeiten
     cmd!("undo", icon::ARROW_U_UP_LEFT, "Rückgängig", "Bearbeiten", [CTRL => Key::Z], "undo", |a| a.can_undo(), |a, _| a.undo()),
-    cmd!("redo", icon::ARROW_U_UP_RIGHT, "Wiederholen", "Bearbeiten", [CTRL => Key::Y, CTRL_SHIFT => Key::Z], "redo", |a| a.can_redo(), |a, _| a.redo()),
+    cmd!("redo", icon::ARROW_U_UP_RIGHT, "Wiederholen", "Bearbeiten", [CTRL => Key::Y], "redo", |a| a.can_redo(), |a, _| a.redo()),
     cmd!("copy-adjustments", icon::COPY, "Anpassungen kopieren", "Bearbeiten", [CTRL_SHIFT => Key::C], "copy", has_image, |a, _| a.copy_adjustments()),
     cmd!("copy-adjustments-choose", icon::LIST_CHECKS, "Anpassungen auswählen und kopieren …", "Bearbeiten", [], "copy clipboard zwischenablage werkzeuge auswählen", has_image, |a, _| a.open_copy_dialog()),
     cmd!("paste-adjustments", icon::CLIPBOARD_TEXT, "Anpassungen einfügen", "Bearbeiten", [CTRL_SHIFT => Key::V], "paste anwenden auswahl", |a| a.clipboard.is_some() && !a.on_layer(), |a, _| a.paste_adjustments()),
@@ -196,7 +196,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("row-up", icon::CARET_UP, "Bild darüber", "Foto", [NONE => Key::ArrowUp], "raster zeile hoch up", in_grid, |a, ctx| a.step_row(-1, shift(ctx))),
     cmd!("row-down", icon::CARET_DOWN, "Bild darunter", "Foto", [NONE => Key::ArrowDown], "raster zeile runter down", in_grid, |a, ctx| a.step_row(1, shift(ctx))),
     cmd!("to-selects", icon::FOLDER_SIMPLE_STAR, "Nach „Selects“ verschieben", "Foto", [CTRL => Key::J], "selects session", in_session, |a, _| a.move_to_session_folder(sk_core::session::SessionFolder::Selects)),
-    cmd!("trash", icon::TRASH, "In den Papierkorb", "Foto", [CTRL => Key::Delete, CTRL => Key::Backspace], "löschen delete", can_trash, |a, _| a.trash_selection()),
+    cmd!("trash", icon::TRASH, "In den Papierkorb", "Foto", [CTRL => Key::Delete], "löschen delete", can_trash, |a, _| a.trash_selection()),
     // Ebenen und Retusche
     cmd!("tool-brush", icon::PAINT_BRUSH, "Pinsel", "Ebenen", [NONE => Key::B], "brush maske malen", has_image, |a, _| tool(a, LocalTool::Brush)),
     cmd!("tool-eraser", icon::ERASER, "Radierer", "Ebenen", [NONE => Key::N], "eraser maske", has_image, |a, _| tool(a, LocalTool::Eraser)),
@@ -220,7 +220,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("edit-background", icon::X, "Hintergrund bearbeiten", "Ebenen", [], "ebene abwählen global ganzes bild background", on_layer, |a, _| a.select_layer(None)),
     cmd!("layer-up", icon::ARROW_UP, "Ebene darüber bearbeiten", "Ebenen", [ALT => Key::ArrowUp], "nächste ebene wählen layer", has_layers, |a, _| a.step_layer(true)),
     cmd!("layer-down", icon::ARROW_DOWN, "Ebene darunter bearbeiten", "Ebenen", [ALT => Key::ArrowDown], "vorherige ebene wählen layer hintergrund", has_layers, |a, _| a.step_layer(false)),
-    cmd!("delete-spot", icon::TRASH, "Gewähltes löschen (im Raster: in den Papierkorb)", "Bearbeiten", [NONE => Key::Delete, NONE => Key::Backspace], "spot verlauf gradient ebene layer entfernen papierkorb trash", can_delete_chosen, |a, _| {
+    cmd!("delete-spot", icon::TRASH, "Gewähltes löschen (im Raster: in den Papierkorb)", "Bearbeiten", [NONE => Key::Delete], "spot verlauf gradient ebene layer entfernen papierkorb trash", can_delete_chosen, |a, _| {
         if a.grid_view {
             a.trash_selection()
         } else {

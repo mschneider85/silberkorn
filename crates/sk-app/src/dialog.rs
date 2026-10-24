@@ -174,7 +174,7 @@ pub fn footer(ui: &mut Ui, buttons: impl FnOnce(&mut Ui)) {
 /// Enter belongs to another widget that has the focus ("Abbrechen" presses itself, a text
 /// field ends its input), also when that field gave the focus up earlier in this frame.
 pub fn default_button(ui: &mut Ui, enabled: bool, button: Button<'static>) -> bool {
-    let response = ui.add_enabled(enabled, button);
+    let response = ui.add_enabled(enabled, unless_enabled(button, enabled));
     let others = other_focus(ui.ctx(), response.id);
     response.clicked() || (enabled && !others && ui.input(|i| i.key_pressed(egui::Key::Enter)))
 }
@@ -204,6 +204,12 @@ fn other_focus(ctx: &egui::Context, own: egui::Id) -> bool {
 
 fn focused_elsewhere(before: Option<egui::Id>, now: Option<egui::Id>, own: egui::Id) -> bool {
     [before, now].into_iter().flatten().any(|id| id != own)
+}
+
+/// A button filled with the accent, grey while it can't be used (faded blue still looks like
+/// the thing to click).
+pub fn unless_enabled(button: Button<'_>, enabled: bool) -> Button<'_> {
+    if enabled { button } else { button.fill(theme::CONTROL) }
 }
 
 /// The main action: filled with the accent.
