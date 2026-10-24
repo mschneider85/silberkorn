@@ -77,10 +77,10 @@ pub fn apply(src: &LinearImage, depth: &DepthMap, p: &LensBlur, clip: bool) -> L
     if max_r < 0.75 || w < 2 || h < 2 {
         return src.clone();
     }
-    let depth = Snapped::new(depth);
+    let depth = Snapped::new(depth, src);
     let rad: Vec<f32> = (0..w * h)
         .into_par_iter()
-        .map(|i| radius(p, depth.sample(((i % w) as f32 + 0.5) / w as f32, ((i / w) as f32 + 0.5) / h as f32), max_r))
+        .map(|i| radius(p, depth.sample(((i % w) as f32 + 0.5) / w as f32, ((i / w) as f32 + 0.5) / h as f32, src.data[i]), max_r))
         .collect();
     let levels = ((max_r / 5.0).ceil() as usize).clamp(1, MAX_LEVELS);
     let step = max_r / levels as f32;
@@ -162,17 +162,25 @@ pub fn apply(src: &LinearImage, depth: &DepthMap, p: &LensBlur, clip: bool) -> L
 
 /// A depth map whose soft transitions at depth edges jump to the near or the far side: there is
 /// nothing in between, and the values in between would pass through the focus and leave a sharp
-/// seam around blurred foreground.
+/// seam around blurred foreground. Which side a pixel at an edge belongs to, its color decides
+/// (the map is coarser than the image: its cells would show as steps along the edge).
 struct Snapped {
     map: DepthMap,
+    /// The image at the map's size, in [`Snapped::tone`].
+    colors: Vec<[f32; 3]>,
 }
+
+/// Weight of the distance (in map cells, squared) against the color difference when a pixel
+/// at an edge picks the side it belongs to: where the colors don't tell, the nearer cell does.
+const NEARNESS: f32 = 2e-3;
 
 /// Depth difference that counts as an edge.
 const EDGE: f32 = 0.15;
 
 impl Snapped {
-    fn new(d: &DepthMap) -> Self {
+    fn new(d: &DepthMap, src: &LinearImage) -> Self {
         let (w, h) = (d.width, d.height);
+        let colors = src.resize_area(w, h).data.into_iter().map(Self::tone).collect();
         let r = 2usize;
         // Single specks of another depth (stray pixels along edges) go first.
         let d = &DepthMap {
@@ -208,11 +216,17 @@ impl Snapped {
                 if hi - lo < EDGE { v } else if v - lo < hi - v { lo } else { hi }
             })
             .collect();
-        Self { map: DepthMap { width: w, height: h, data } }
+        Self { map: DepthMap { width: w, height: h, data }, colors }
     }
 
-    /// Bilinear, but across an edge the nearest of the four values.
-    fn sample(&self, u: f32, v: f32) -> f32 {
+    /// Colors compared roughly as seen (linear values would make dark differences vanish).
+    fn tone(c: [f32; 3]) -> [f32; 3] {
+        c.map(|v| v.max(0.0).sqrt())
+    }
+
+    /// Bilinear, but across an edge the value of the cell nearby whose color is most like the
+    /// pixel's (`color`).
+    fn sample(&self, u: f32, v: f32, color: [f32; 3]) -> f32 {
         let m = &self.map;
         let x = (u * m.width as f32 - 0.5).clamp(0.0, (m.width - 1) as f32);
         let y = (v * m.height as f32 - 0.5).clamp(0.0, (m.height - 1) as f32);
@@ -223,13 +237,20 @@ impl Snapped {
         if spread < EDGE {
             return m.sample(u, v);
         }
-        let (tx, ty) = (x - x0 as f32, y - y0 as f32);
-        c[match (tx < 0.5, ty < 0.5) {
-            (true, true) => 0,
-            (false, true) => 1,
-            (true, false) => 2,
-            (false, false) => 3,
-        }]
+        let tone = Self::tone(color);
+        let mut best = (f32::MAX, 0.0);
+        for yy in y0.saturating_sub(1)..(y0 + 3).min(m.height) {
+            for xx in x0.saturating_sub(1)..(x0 + 3).min(m.width) {
+                let j = yy * m.width + xx;
+                let c = self.colors[j];
+                let (dx, dy) = (xx as f32 - x, yy as f32 - y);
+                let score = (0..3).map(|k| (c[k] - tone[k]).powi(2)).sum::<f32>() + NEARNESS * (dx * dx + dy * dy);
+                if score < best.0 {
+                    best = (score, m.data[j]);
+                }
+            }
+        }
+        best.1
     }
 }
 
@@ -490,11 +511,28 @@ mod tests {
                 .collect(),
         };
         let p = LensBlur { amount: 100.0, focus: 0.5, range: 0.1, bokeh: 0.0 };
-        let snapped = Snapped::new(&depth);
-        let rad: Vec<f32> = (0..w * h).map(|i| radius(&p, snapped.sample(((i % w) as f32 + 0.5) / w as f32, ((i / w) as f32 + 0.5) / h as f32), 5.0)).collect();
+        let img = LinearImage::new(w, h, vec![[0.5; 3]; w * h]);
+        let snapped = Snapped::new(&depth, &img);
+        let rad: Vec<f32> = (0..w * h).map(|i| radius(&p, snapped.sample(((i % w) as f32 + 0.5) / w as f32, ((i / w) as f32 + 0.5) / h as f32, img.data[i]), 5.0)).collect();
         // Every pixel across the square's edge is blurred, in front or behind.
         for x in 72..88 {
             assert!(rad[60 * w + x].abs() > 2.0, "x {x}: {}", rad[60 * w + x]);
+        }
+    }
+
+    #[test]
+    fn edges_follow_the_image_not_the_coarser_map() {
+        // A diagonal edge: bright and near above it, dark and far below; the map has a quarter
+        // of the resolution (its cells would show as steps of 4 pixels).
+        let (w, n) = (80usize, 20usize);
+        let img = LinearImage::new(w, w, (0..w * w).map(|i| if i % w > i / w { [0.9; 3] } else { [0.1; 3] }).collect());
+        let depth = DepthMap { width: n, height: n, data: (0..n * n).map(|i| if i % n > i / n { 1.0 } else { 0.0 }).collect() };
+        let snapped = Snapped::new(&depth, &img);
+        for y in 0..w {
+            for x in (0..w).filter(|x| x.abs_diff(y) > 1) {
+                let d = snapped.sample((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / w as f32, img.data[y * w + x]);
+                assert_eq!(d > 0.5, x > y, "({x}, {y}): {d}");
+            }
         }
     }
 
