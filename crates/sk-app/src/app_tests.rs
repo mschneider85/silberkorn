@@ -260,7 +260,8 @@ fn info_overlay_cycles_with_i() {
     f.app.info_overlay = InfoOverlay::Full;
     let full = f.app.info_lines().unwrap();
     assert!(full.len() > short.len() && full.iter().any(|l| l.contains("px")), "{full:?}");
-    assert_eq!(crate::browser::exif_date("2024:05:17 14:03:22"), "17.05.2024 14:03");
+    assert_eq!(crate::browser::exif_date("2024:05:17 14:03:22"), "2024-05-17 14:03:22");
+    assert_eq!(crate::browser::exif_date("2024-05-17T14:03:22.5+02"), "2024-05-17 14:03:22");
     assert_eq!(crate::browser::exif_date("irgendwann"), "irgendwann");
 }
 

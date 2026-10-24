@@ -50,12 +50,13 @@ pub(crate) fn clamp_pan(pan: Vec2, image: Vec2, view: Vec2, margin: f32) -> Vec2
     vec2(pan.x.clamp(-limit(image.x, view.x), limit(image.x, view.x)), pan.y.clamp(-limit(image.y, view.y), limit(image.y, view.y)))
 }
 
-/// "2024:05:17 14:03:22" (EXIF) as "17.05.2024 14:03"; anything else as it is.
+/// "2024:05:17 14:03:22" (EXIF) as "2024-05-17 14:03:22"; anything else as it is.
 pub(crate) fn exif_date(d: &str) -> String {
     let p: Vec<&str> = d.split([':', ' ', '-', 'T']).collect();
     match p.as_slice() {
-        [y, m, day, hh, mm, ..] if y.len() == 4 => format!("{day}.{m}.{y} {hh}:{mm}"),
-        [y, m, day] if y.len() == 4 => format!("{day}.{m}.{y}"),
+        [y, m, day, hh, mm, ss, ..] if y.len() == 4 => format!("{y}-{m}-{day} {hh}:{mm}:{}", ss.chars().take(2).collect::<String>()),
+        [y, m, day, hh, mm] if y.len() == 4 => format!("{y}-{m}-{day} {hh}:{mm}"),
+        [y, m, day] if y.len() == 4 => format!("{y}-{m}-{day}"),
         _ => d.to_string(),
     }
 }

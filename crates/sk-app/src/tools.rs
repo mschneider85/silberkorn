@@ -477,7 +477,7 @@ impl App {
                 row("Blende", info.aperture.clone());
                 row("Belichtungszeit", info.exposure_time.clone());
                 row("ISO", info.iso.map(|v| v.to_string()));
-                row("Datum", info.date.clone());
+                row("Datum", info.date.as_deref().map(crate::browser::exif_date));
                 row("Sensor", Some(format!("{} × {}", info.width, info.height)));
             });
         });
