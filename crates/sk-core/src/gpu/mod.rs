@@ -442,6 +442,7 @@ impl Gpu {
     /// memory, in rows of `row` bytes (in parallel); no copy of the whole data in between.
     pub(crate) fn upload_rows(&self, bytes: usize, row: usize, fill: impl Fn(usize, wgpu::WriteOnly<[u8]>) + Sync) -> wgpu::Buffer {
         use rayon::prelude::*;
+        assert!(bytes == 0 || (row > 0 && bytes.is_multiple_of(row)), "{bytes} Bytes sind keine ganzen Zeilen zu {row}");
         let size = (bytes as u64).max(16).next_multiple_of(4);
         let buf = self.buffer(size);
         // `None`: the error went to the error scope (see `checked`).
@@ -454,7 +455,7 @@ impl Gpu {
             struct Row<'a>(wgpu::WriteOnly<'a, [u8]>);
             unsafe impl Send for Row<'_> {}
             let mut rows = Vec::with_capacity(bytes / row.max(1));
-            while rest.len() >= row && row > 0 {
+            while !rest.is_empty() {
                 let (r, more) = rest.split_at(row);
                 rows.push(Row(r));
                 rest = more;

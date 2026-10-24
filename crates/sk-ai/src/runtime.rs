@@ -516,21 +516,31 @@ impl Net {
         anyhow::ensure!(data.len() == self.inputs.len(), "Falsche Anzahl Eingaben");
         match &self.backend {
             Backend::Cpu(plan) => tract_run(plan, &self.inputs, data),
-            Backend::Ort { session, .. } => ort_run(&mut session.lock().unwrap_or_else(|e| e.into_inner()), tensors(&self.inputs, data)?).inspect_err(|e| note_device_reset(&format!("{e:#}"))),
+            Backend::Ort { session, .. } => {
+                // Built before the lock: a second tile in flight prepares while the first runs.
+                let data = tensors(&self.inputs, data)?;
+                ort_run(&mut session.lock().unwrap_or_else(|e| e.into_inner()), data).inspect_err(|e| note_device_reset(&format!("{e:#}")))
+            }
             Backend::Remote { session, fallback, .. } => {
-                let mut fallback = fallback.lock().unwrap_or_else(|e| e.into_inner());
-                let plan = match &*fallback {
-                    Some(plan) => plan.clone(),
+                // Not locked during the request: a second tile in flight prepares meanwhile.
+                let known = fallback.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let plan = match known {
+                    Some(plan) => plan,
                     None => match crate::worker::run(session, tensors(&self.inputs, data)?) {
                         Ok(out) => return Ok(out),
                         Err(e) => {
                             note_device_reset(&format!("{e:#}"));
-                            log::warn!("{}: {e:#}, rechne mit tract weiter", self.path.display());
-                            fallback.insert(tract_plan_any(&self.path, &self.inputs, self.keep.as_deref())?).clone()
+                            let mut fallback = fallback.lock().unwrap_or_else(|e| e.into_inner());
+                            match &*fallback {
+                                Some(plan) => plan.clone(),
+                                None => {
+                                    log::warn!("{}: {e:#}, rechne mit tract weiter", self.path.display());
+                                    fallback.insert(tract_plan_any(&self.path, &self.inputs, self.keep.as_deref())?).clone()
+                                }
+                            }
                         }
                     },
                 };
-                drop(fallback);
                 tract_run(&plan, &self.inputs, data)
             }
         }

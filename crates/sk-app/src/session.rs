@@ -482,7 +482,8 @@ impl App {
                     text = text.color(theme::TEXT_DIM).strikethrough();
                 }
                 let resp = ui.selectable_label(selected, text).on_hover_text(fav.display().to_string());
-                if resp.clicked() && reachable {
+                // Checked again: the last check is up to 5 s old, or not done yet.
+                if resp.clicked() && reachable && fav.is_dir() {
                     open = Some(fav.clone());
                 }
                 crate::widgets::context_menu(&resp, |ui| {
@@ -617,22 +618,21 @@ fn favorites_reachable(ui: &egui::Ui, favorites: &[PathBuf]) -> Vec<bool> {
         checked: f64,
         favorites: Vec<PathBuf>,
         reachable: Vec<bool>,
-        /// The check under way: for which favorites, and its result once there.
-        running: Option<(Vec<PathBuf>, Pending)>,
+        /// The check under way, its result once there.
+        running: Option<Pending>,
     }
     let id = egui::Id::new("favorites reachable");
     let now = ui.input(|i| i.time);
     let mut r: Reach = ui.data(|d| d.get_temp(id)).unwrap_or_default();
-    if let Some((of, done)) = r.running.as_ref().and_then(|(of, m)| Some((of.clone(), m.lock().unwrap_or_else(|e| e.into_inner()).take()?))) {
-        r.running = None;
-        // Of a list changed meanwhile: looked at again at once.
-        r.checked = if of == favorites { now } else { f64::NEG_INFINITY };
-        if of == favorites {
-            r.reachable = done;
-        }
-    }
     if r.favorites != favorites {
-        r = Reach { checked: f64::NEG_INFINITY, favorites: favorites.to_vec(), running: r.running, ..Default::default() };
+        // A check of the old list still under way (maybe hanging on a network path) is not
+        // waited for: its result is dropped.
+        r = Reach { checked: f64::NEG_INFINITY, favorites: favorites.to_vec(), ..Default::default() };
+    }
+    if let Some(done) = r.running.as_ref().and_then(|m| m.lock().unwrap_or_else(|e| e.into_inner()).take()) {
+        r.running = None;
+        r.checked = now;
+        r.reachable = done;
     }
     if r.running.is_none() && now - r.checked >= 5.0 {
         let result = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -643,7 +643,7 @@ fn favorites_reachable(ui: &egui::Ui, favorites: &[PathBuf]) -> Vec<bool> {
             ctx.request_repaint();
         });
         if spawned.is_ok() {
-            r.running = Some((favorites.to_vec(), result));
+            r.running = Some(result);
         }
         r.checked = now;
     }

@@ -59,12 +59,10 @@ pub(crate) fn mirror(i: usize, len: usize) -> usize {
     if i < len { i } else { (2 * len).saturating_sub(i + 2).min(len - 1) }
 }
 
-/// Runs a network over `planes` (`w` x `h` each) in overlapping tiles; returns three planes of
-/// `scale * w` x `scale * h`. Progress (and with it cancelling) is reported from the calling
-/// thread, after each round of tiles.
-/// Runs `run` for every tile, `threads` at a time (in no fixed order), reporting progress.
+/// Runs `run` for every tile, `threads` at a time (in no fixed order). Progress (and with it
+/// cancelling) is reported from the calling thread, after each tile.
 pub(crate) fn run_all<T: Sync>(tiles: &[T], threads: usize, run: impl Fn(&T) -> Result<()> + Sync, progress: &dyn Fn(f32)) -> Result<()> {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     if threads <= 1 {
         for (i, t) in tiles.iter().enumerate() {
             run(t)?;
@@ -73,13 +71,18 @@ pub(crate) fn run_all<T: Sync>(tiles: &[T], threads: usize, run: impl Fn(&T) -> 
         return Ok(());
     }
     // `progress` may not be called from other threads: they count, this one reports.
-    let done = AtomicUsize::new(0);
+    // Cancelling unwinds out of `progress`; the scope still waits for the worker, which then
+    // takes no further tile.
+    let (done, stop) = (AtomicUsize::new(0), AtomicBool::new(false));
     let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build()?;
     let (tx, rx) = std::sync::mpsc::channel::<()>();
     std::thread::scope(|s| {
         let worker = s.spawn(|| {
             let r = pool.install(|| {
                 tiles.par_iter().with_max_len(1).try_for_each(|t| {
+                    if stop.load(Ordering::Relaxed) {
+                        bail!("abgebrochen");
+                    }
                     run(t)?;
                     done.fetch_add(1, Ordering::Relaxed);
                     let _ = tx.send(());
@@ -89,13 +92,21 @@ pub(crate) fn run_all<T: Sync>(tiles: &[T], threads: usize, run: impl Fn(&T) -> 
             drop(tx);
             r
         });
-        while rx.recv().is_ok() {
-            progress(done.load(Ordering::Relaxed) as f32 / tiles.len() as f32);
+        let reported = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            while rx.recv().is_ok() {
+                progress(done.load(Ordering::Relaxed) as f32 / tiles.len() as f32);
+            }
+        }));
+        if let Err(p) = reported {
+            stop.store(true, Ordering::Relaxed);
+            std::panic::resume_unwind(p);
         }
         worker.join().unwrap_or_else(|p| std::panic::resume_unwind(p))
     })
 }
 
+/// Runs a network over `planes` (`w` x `h` each) in overlapping tiles; returns three planes of
+/// `scale * w` x `scale * h`.
 pub fn run_tiled(net: &Net, planes: &[Vec<f32>], w: usize, h: usize, t: Tiling, gain: Option<Gain>, progress: &dyn Fn(f32)) -> Result<[Vec<f32>; 3]> {
     let (xs, ys) = (origins(w, t.tile, t.overlap), origins(h, t.tile, t.overlap));
     let tiles: Vec<(usize, usize, usize, usize)> =
@@ -190,5 +201,27 @@ mod tests {
     fn overlap_of_a_whole_tile_terminates() {
         assert_eq!(origins(12, 8, 8), vec![0, 1, 2, 3, 4]);
         assert_eq!(origins(12, 8, 20), vec![0, 1, 2, 3, 4]);
+    }
+
+    /// Cancelling (unwinding out of `progress`) stops before the remaining tiles.
+    #[test]
+    fn cancelling_takes_no_further_tile() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let ran = AtomicUsize::new(0);
+        let tiles: Vec<usize> = (0..200).collect();
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_all(
+                &tiles,
+                2,
+                |_| {
+                    ran.fetch_add(1, Ordering::Relaxed);
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                    Ok(())
+                },
+                &|_| std::panic::resume_unwind(Box::new("abgebrochen")),
+            )
+        }));
+        assert!(r.is_err());
+        assert!(ran.load(Ordering::Relaxed) < 10, "{} Kacheln", ran.load(Ordering::Relaxed));
     }
 }

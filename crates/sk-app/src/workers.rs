@@ -652,8 +652,19 @@ impl Workers {
                 // The guide of the last job, while preview, white balance and exposure stay the
                 // same (every click on an object would render it again), and its key for the
                 // embedding. The preview only weakly: it is not kept for this.
-                let mut guides: Option<(std::sync::Weak<LinearImage>, sk_core::params::WhiteBalance, f32, sk_ai::Guide, u64)> = None;
-                while let Ok(job) = ai_rx.recv() {
+                let mut guides: Option<(std::sync::Weak<LinearImage>, sk_core::params::WhiteBalance, f32, Arc<sk_ai::Guide>, u64)> = None;
+                loop {
+                    let job = match ai_rx.recv_timeout(Duration::from_secs(30)) {
+                        Ok(job) => job,
+                        // The image closed meanwhile: its guide and embedding go too.
+                        Err(RecvTimeoutError::Timeout) => {
+                            if guides.as_ref().is_some_and(|(p, ..)| p.strong_count() == 0) {
+                                (guides, embedding) = (None, None);
+                            }
+                            continue;
+                        }
+                        Err(RecvTimeoutError::Disconnected) => break,
+                    };
                     let prepare = matches!(job.kind, AiKind::ObjectPrepare | AiKind::SubjectPrepare);
                     // A panic must still answer: the layer panel waits for the result.
                     let result = crate::guard::catch(|| {
@@ -675,7 +686,7 @@ impl Workers {
                             let r = Processor::new(&job.meta, &guide_adj).render(&job.preview, None, None);
                             let key = cache::fnv1a(format!("{}|{}x{}", job.meta.path.display(), r.width, r.height).as_bytes())
                                 ^ cache::fnv1a(&r.rgba.iter().step_by(97).copied().collect::<Vec<u8>>());
-                            guides = Some((Arc::downgrade(&job.preview), wb.clone(), exposure, sk_ai::guide_from_rgba(r.width, r.height, &r.rgba), key));
+                            guides = Some((Arc::downgrade(&job.preview), wb.clone(), exposure, Arc::new(sk_ai::guide_from_rgba(r.width, r.height, &r.rgba)), key));
                         }
                         let Some((.., guide, key)) = &guides else { unreachable!("just made") };
                         match job.kind {
@@ -707,8 +718,7 @@ impl Workers {
                             AiKind::Subject | AiKind::SubjectPrepare => {
                                 let click = matches!(job.kind, AiKind::Subject);
                                 let deliver = click.then_some(crate::subject_worker::Deliver { generation: job.generation, layer: job.layer });
-                                let guide = sk_ai::Guide { width: guide.width, height: guide.height, rgb: guide.rgb.clone() };
-                                let _ = subject_tx.send(crate::subject_worker::SubjectJob { key: subject_key, guide, deliver });
+                                let _ = subject_tx.send(crate::subject_worker::SubjectJob { key: subject_key, guide: guide.clone(), deliver });
                                 Err(SUBJECT_PENDING.to_string())
                             }
                         }

@@ -166,30 +166,67 @@ struct Loader {
 struct Previews {
     taken: std::sync::Mutex<Vec<bool>>,
     first_shown: AtomicUsize,
+    /// Woken when there may be more to read (scrolled, dropped, closed); with `taken`.
+    more: std::sync::Condvar,
 }
 
 impl Previews {
+    fn new(n: usize, first_shown: usize) -> Self {
+        Self { taken: std::sync::Mutex::new(vec![false; n]), first_shown: AtomicUsize::new(first_shown), more: std::sync::Condvar::new() }
+    }
+
     /// The next preview to read: the first not taken from the view on, then those before it,
     /// all within [`NEAR`].
+    #[cfg(test)]
     fn next(&self) -> Option<usize> {
-        let mut taken = self.taken.lock().unwrap_or_else(|e| e.into_inner());
+        self.next_in(&mut self.taken.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    fn next_in(&self, taken: &mut [bool]) -> Option<usize> {
         let from = self.first_shown.load(Ordering::Relaxed).min(taken.len());
         let i = (from..(from + NEAR).min(taken.len())).chain((from.saturating_sub(NEAR)..from).rev()).find(|&i| !taken[i])?;
         taken[i] = true;
         Some(i)
     }
 
+    /// Like `next`, but waits until there is one; `None` once `stop` is set.
+    fn wait_next(&self, stop: &AtomicBool) -> Option<usize> {
+        let mut taken = self.taken.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return None;
+            }
+            if let Some(i) = self.next_in(&mut taken) {
+                return Some(i);
+            }
+            taken = self.more.wait(taken).unwrap_or_else(|e| e.into_inner());
+        }
+    }
+
+    /// The view now starts at preview `i`.
+    fn show_from(&self, i: usize) {
+        if self.first_shown.load(Ordering::Relaxed) != i {
+            let _taken = self.taken.lock().unwrap_or_else(|e| e.into_inner());
+            self.first_shown.store(i, Ordering::Relaxed);
+            self.more.notify_all();
+        }
+    }
+
     /// Preview `i` was dropped: read it again when needed.
     fn forget(&self, i: usize) {
         if let Some(t) = self.taken.lock().unwrap_or_else(|e| e.into_inner()).get_mut(i) {
             *t = false;
+            self.more.notify_all();
         }
     }
 }
 
 impl Drop for Loader {
     fn drop(&mut self) {
+        // Set under the lock: a thread about to wait would miss the wake-up otherwise.
+        let _taken = self.previews.taken.lock().unwrap_or_else(|e| e.into_inner());
         self.stop.store(true, Ordering::Relaxed);
+        self.previews.more.notify_all();
     }
 }
 
@@ -220,18 +257,14 @@ impl Loader {
                 })
                 .ok();
         }
-        let previews = Arc::new(Previews { taken: std::sync::Mutex::new(vec![false; paths.len()]), first_shown: AtomicUsize::new(0) });
+        let previews = Arc::new(Previews::new(paths.len(), 0));
         for _ in 0..std::thread::available_parallelism().map_or(2, |n| n.get().clamp(2, 4)) {
             let (tx, stop, paths, previews, ctx) = (tx.clone(), stop.clone(), paths.clone(), previews.clone(), ctx.clone());
             std::thread::Builder::new()
                 .name("Import-Vorschauen".into())
                 .spawn(move || {
-                    while !stop.load(Ordering::Relaxed) {
-                        // All near the view read: waits for scrolling.
-                        let Some(i) = previews.next() else {
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                            continue;
-                        };
+                    // All near the view read: waits for scrolling.
+                    while let Some(i) = previews.wait_next(&stop) {
                         let path = &paths[i];
                         // A broken file shows no preview; the others go on.
                         let thumb = crate::guard::catch(|| raw::embedded_preview_at_least(path, THUMB as usize).ok().map(|img| img.thumbnail(THUMB, THUMB)));
@@ -544,7 +577,7 @@ fn grid(ui: &mut egui::Ui, dialog: &mut ImportDialog, badge: &str, height: f32) 
     let mut clicked = None;
     egui::Frame::new().fill(theme::BROWSER).corner_radius(8).inner_margin(8).show(ui, |ui| {
         egui::ScrollArea::vertical().max_height(height).min_scrolled_height(height).auto_shrink([false, false]).show_rows(ui, TILE + CAPTION + GAP, rows, |ui, range| {
-            dialog.loader.previews.first_shown.store(range.start * cols, Ordering::Relaxed);
+            dialog.loader.previews.show_from(range.start * cols);
             for row in range {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = GAP;
@@ -624,7 +657,7 @@ mod tests {
     /// Previews from the view on first, then those before it; none far from it.
     #[test]
     fn previews_near_the_view_first() {
-        let p = Previews { taken: std::sync::Mutex::new(vec![false; 2000]), first_shown: AtomicUsize::new(1000) };
+        let p = Previews::new(2000, 1000);
         assert_eq!(p.next(), Some(1000));
         assert_eq!(p.next(), Some(1001));
         let order: Vec<usize> = std::iter::from_fn(|| p.next()).collect();
@@ -634,6 +667,30 @@ mod tests {
         // Dropped and scrolled back to: read again.
         p.forget(1001);
         assert_eq!(p.next(), Some(1001));
+    }
+
+    /// A reader with nothing left waits, and wakes for scrolling and for closing.
+    #[test]
+    fn preview_readers_wait_for_scrolling() {
+        let p = Arc::new(Previews::new(3 * NEAR, 0));
+        let stop = Arc::new(AtomicBool::new(false));
+        while p.next().is_some_and(|i| i < NEAR - 1) {}
+        let reader = {
+            let (p, stop) = (p.clone(), stop.clone());
+            std::thread::spawn(move || std::iter::from_fn(|| p.wait_next(&stop)).collect::<Vec<_>>())
+        };
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        p.show_from(2 * NEAR);
+        while !p.taken.lock().unwrap()[3 * NEAR - 1] {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        {
+            let _taken = p.taken.lock().unwrap();
+            stop.store(true, Ordering::Relaxed);
+            p.more.notify_all();
+        }
+        let read = reader.join().unwrap();
+        assert!(read.contains(&(2 * NEAR)) && read.contains(&(3 * NEAR - 1)));
     }
 
     #[test]

@@ -480,6 +480,7 @@ fn develop_bayer(mut raw: RawImage) -> Result<Result<LinearImage, RawImage>> {
 fn crop_rgb(data: &[[f32; 3]], width: usize, rect: rawler::imgop::Rect) -> LinearImage {
     use rayon::prelude::*;
     let (x, y, w, h) = (rect.p.x, rect.p.y, rect.d.w, rect.d.h);
+    assert!(x + w <= width && (y + h) * width <= data.len(), "Ausschnitt {rect:?} außerhalb des Bildes");
     let mut out = vec![[0.0f32; 3]; w * h];
     out.par_chunks_mut(w.max(1)).enumerate().for_each(|(r, row)| {
         let start = (y + r) * width + x;

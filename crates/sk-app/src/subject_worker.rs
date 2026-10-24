@@ -20,7 +20,7 @@ pub struct Deliver {
 
 pub struct SubjectJob {
     pub key: u64,
-    pub guide: sk_ai::Guide,
+    pub guide: Arc<sk_ai::Guide>,
     /// `None`: computed ahead, only kept.
     pub deliver: Option<Deliver>,
 }
