@@ -50,7 +50,17 @@ impl App {
         if self.spot_search.is_some() {
             v.push(Activity { label: "Suche Staub und Flecken".into(), progress: None, in_viewer: false, cancel: self.spot_cancel.clone() });
         }
-        for j in &self.jobs {
+        // What startup fetches on its own: one entry (the X stops all of it).
+        let preload = self.ai_preload_progress();
+        if let Some((p, finished, total)) = preload {
+            v.push(Activity {
+                label: format!("Lade KI-Modelle ({} von {total})", (finished + 1).min(total)),
+                progress: Some(p),
+                in_viewer: false,
+                cancel: Some(self.ai_downloads.preload_cancel.clone()),
+            });
+        }
+        for j in self.jobs.iter().filter(|j| preload.is_none() || !self.quiet_download(&j.label)) {
             v.push(Activity { label: running(&j.label), progress: Some(j.progress), in_viewer: false, cancel: Some(j.cancel.clone()) });
         }
         if let Some((done, total)) = self.export_progress {
@@ -90,6 +100,11 @@ impl App {
             self.look_run += 1;
             if let Some((done, total)) = self.look_progress.take() {
                 self.status = format!("Look angleichen abgebrochen ({done} von {total} fertig)");
+            }
+        }
+        if self.ai_downloads.preload_cancel.swap(false, Ordering::Relaxed) {
+            for j in self.jobs.iter().filter(|j| self.quiet_download(&j.label)) {
+                j.cancel.store(true, Ordering::Relaxed);
             }
         }
         if set(&self.spot_cancel) {

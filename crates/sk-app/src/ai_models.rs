@@ -96,6 +96,11 @@ pub type AfterDownload = Box<dyn FnOnce(&mut App)>;
 pub struct AiDownloads {
     after: Vec<(AiFeature, AfterDownload)>,
     quiet: Vec<AiFeature>,
+    /// Everything fetched at startup (job label, MB): one entry in the status bar, one
+    /// progress by size.
+    preload: Vec<(String, f32)>,
+    /// The X of that entry: stops those still running quietly.
+    pub(crate) preload_cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// When a download last failed: the features that want a model every frame (denoising,
     /// depth) try again only after a pause, not in a loop without network.
     failed: std::collections::HashMap<AiFeature, std::time::Instant>,
@@ -104,12 +109,16 @@ pub struct AiDownloads {
 /// Pause before a failed download is tried again.
 const RETRY: std::time::Duration = std::time::Duration::from_secs(30);
 
+const FACES_JOB: &str = "KI-Modell für Gesichtserkennung laden";
+
 /// The face models that the face analysis needs besides `AiFeature::Faces`'s.
 const FACES_AT_STARTUP: [&ModelInfo; 2] = [&models::FACE_DETECT, &models::EYE_STATE];
 
 impl App {
     /// Whether `f` can run now; otherwise starts downloading its model (once).
     pub fn ensure_ai(&mut self, f: AiFeature) -> bool {
+        // Wanted now: no longer only fetched ahead (shown at the tool, reported when done).
+        self.ai_downloads.quiet.retain(|q| *q != f);
         if f.available() {
             return true;
         }
@@ -143,6 +152,28 @@ impl App {
         self.jobs.iter().find(|j| j.label == label).map(|j| j.progress)
     }
 
+    /// [`Self::ai_download_progress`] for the tool's panel: only once the user wants it, not
+    /// while it is only fetched ahead (that shows in the status bar alone).
+    pub fn ai_download_shown(&self, f: AiFeature) -> Option<f32> {
+        self.ai_download_progress(f).filter(|_| !self.ai_downloads.quiet.contains(&f))
+    }
+
+    /// As if startup were fetching the models of `features` (with these progresses).
+    #[cfg(test)]
+    pub(crate) fn pretend_preload(&mut self, features: &[(AiFeature, f32)]) {
+        for (i, &(f, progress)) in features.iter().enumerate() {
+            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            self.jobs.push(crate::jobs::RunningJob { id: 1000 + i as u64, label: f.job_label(), progress, cancel });
+            self.ai_downloads.quiet.push(f);
+            self.ai_downloads.preload.push((f.job_label(), f.download_mb() as f32));
+        }
+    }
+
+    /// Whether the job `label` is a download started at startup that nobody waits for.
+    pub(crate) fn quiet_download(&self, label: &str) -> bool {
+        self.quiet_jobs.iter().any(|l| l == label) || self.ai_downloads.quiet.iter().any(|f| f.job_label() == label)
+    }
+
     /// Fetches every missing model in the background (at startup), and on Windows the AI
     /// acceleration; quiet also without network (a function used later tries again).
     pub fn preload_ai(&mut self) {
@@ -160,8 +191,8 @@ impl App {
         });
         for f in AiFeature::ALL {
             if !f.available() {
-                self.ai_downloads.quiet.push(f);
                 self.ensure_ai(f);
+                self.ai_downloads.quiet.push(f);
             }
         }
         if sk_ai::runtime::gpu_supported() && !sk_ai::runtime::gpu_installed() {
@@ -169,7 +200,7 @@ impl App {
             self.quiet_jobs.push(crate::gpu::GPU_JOB.to_string());
         }
         if FACES_AT_STARTUP.iter().any(|m| !models::available(m)) {
-            let label = "KI-Modell für Gesichtserkennung laden";
+            let label = FACES_JOB;
             self.start_job(label, Box::new(|_| {
                 for m in FACES_AT_STARTUP.iter().filter(|m| !models::available(m)) {
                     models::download(m, &|_| {})?;
@@ -178,19 +209,27 @@ impl App {
             }));
             self.quiet_jobs.push(label.to_string());
         }
+        let mut sizes: Vec<(String, f32)> = AiFeature::ALL.iter().map(|f| (f.job_label(), f.download_mb() as f32)).collect();
+        sizes.push((crate::gpu::GPU_JOB.to_string(), sk_ai::runtime::GPU_DOWNLOAD_MB as f32));
+        sizes.push((FACES_JOB.to_string(), FACES_AT_STARTUP.iter().map(|m| m.bytes).sum::<u64>() as f32 / 1e6));
+        self.ai_downloads.preload = sizes.into_iter().filter(|(l, _)| self.jobs.iter().any(|j| &j.label == l)).collect();
         // The first Strg+L would otherwise wait for loading them (seconds on the graphics card).
         self.workers.preload_auto();
         self.status = status;
     }
 
-    /// Progress of the downloads started at startup (by size), while any runs.
-    pub fn ai_preload_progress(&self) -> Option<f32> {
-        let mut parts: Vec<(f32, f32)> =
-            AiFeature::ALL.iter().filter_map(|f| self.ai_download_progress(*f).map(|p| (f.download_mb() as f32, p))).collect();
-        let gpu = self.jobs.iter().find(|j| j.label == crate::gpu::GPU_JOB).map(|j| (sk_ai::runtime::GPU_DOWNLOAD_MB as f32, j.progress));
-        parts.extend(gpu);
-        let total: f32 = parts.iter().map(|(mb, _)| mb).sum();
-        (total > 0.0).then(|| parts.iter().map(|(mb, p)| mb * p).sum::<f32>() / total)
+    /// Progress of the downloads started at startup (by size, finished ones as done), and how
+    /// many of them are finished; while any runs.
+    pub fn ai_preload_progress(&self) -> Option<(f32, usize, usize)> {
+        let running = |l: &str| self.jobs.iter().find(|j| j.label == l);
+        let all = &self.ai_downloads.preload;
+        if !all.iter().any(|(l, _)| running(l).is_some()) {
+            return None;
+        }
+        let total: f32 = all.iter().map(|(_, mb)| mb).sum();
+        let done: f32 = all.iter().map(|(l, mb)| mb * running(l).map_or(1.0, |j| j.progress)).sum();
+        let finished = all.iter().filter(|(l, _)| running(l).is_none()).count();
+        Some((if total > 0.0 { done / total } else { 0.0 }, finished, all.len()))
     }
 
     /// A model download finished (`true` if the job was one): runs what waited for it.

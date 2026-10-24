@@ -507,7 +507,7 @@ impl App {
     /// Settings of the object tool.
     fn object_controls(&mut self, ui: &mut Ui) {
         let faint = |t: &str| egui::RichText::new(t).small().color(crate::theme::TEXT_FAINT);
-        if let Some(p) = self.ai_download_progress(AiFeature::Object) {
+        if let Some(p) = self.ai_download_shown(AiFeature::Object) {
             crate::ai_models::download_progress(ui, AiFeature::Object, p, self.job_cancel(None, Some(&AiFeature::Object.job_label())));
             return;
         }
@@ -1030,7 +1030,7 @@ impl App {
         let mut ai_action = None;
         let mut pick = false;
         let busy = self.ai_busy;
-        let subject_download = self.ai_download_progress(AiFeature::Subject);
+        let subject_download = self.ai_download_shown(AiFeature::Subject);
         let subject_cancel = self.job_cancel(None, Some(&AiFeature::Subject.job_label()));
         let busy = busy || subject_download.is_some();
         let tool = self.local_tool;
@@ -1832,7 +1832,7 @@ impl App {
             shortcut_of("brush-smaller"),
             shortcut_of("brush-larger")
         );
-        let downloading = self.ai_download_progress(AiFeature::Inpaint);
+        let downloading = self.ai_download_shown(AiFeature::Inpaint);
         let cancel = self.job_cancel(None, Some(&AiFeature::Inpaint.job_label()));
         let mut find = false;
         crate::widgets::section_help(ui, "Werkzeuge", &help, None, |ui| {

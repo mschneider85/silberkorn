@@ -115,7 +115,7 @@ fn spaced(text: &str, size: f32, spacing: f32, color: Color32) -> LayoutJob {
 impl App {
     /// What the app is doing, for the start screen.
     fn startup_status(&self) -> String {
-        if let Some(p) = self.ai_preload_progress() {
+        if let Some((p, ..)) = self.ai_preload_progress() {
             format!("Lade KI-Modelle … {:.0} %", p * 100.0)
         } else if let Some((done, total)) = self.index_progress {
             format!("Indexiere {done} / {total} …")
@@ -133,7 +133,7 @@ impl App {
         let status = self.startup_status();
         // Downloading the AI models: the start screen stays its longest time to show it, then
         // the status bar carries on.
-        let ai = self.ai_preload_progress();
+        let ai = self.ai_preload_progress().map(|(p, ..)| p);
         let ready = ready && ai.is_none();
         let Some(splash) = &mut self.splash else { return };
         let now = ctx.input(|i| i.time);

@@ -202,7 +202,7 @@ impl App {
     /// State of an image's data, for the panel.
     pub fn product_state(&self, kind: AiProduct, path: &Path) -> ProductState {
         if let Some(f) = kind.feature() {
-            if let Some(p) = self.ai_download_progress(f) {
+            if let Some(p) = self.ai_download_shown(f) {
                 return ProductState::Downloading(p);
             }
             if !f.available() {

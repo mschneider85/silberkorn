@@ -83,7 +83,7 @@ enum DepthState {
 
 impl App {
     fn depth_state(&self, path: &Path) -> DepthState {
-        if let Some(p) = self.ai_download_progress(AiFeature::Depth) {
+        if let Some(p) = self.ai_download_shown(AiFeature::Depth) {
             return DepthState::Downloading(p);
         }
         if !AiFeature::Depth.available() {

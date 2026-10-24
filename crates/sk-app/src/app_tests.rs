@@ -2870,6 +2870,30 @@ fn cancelled_model_download_is_not_restarted_by_itself() {
     assert!(f.app.status.contains("abgebrochen"), "{}", f.app.status);
 }
 
+/// The models fetched at startup: one entry in the status bar, no bars at the tools; a tool the
+/// user turns to shows its own download again.
+#[test]
+fn startup_downloads_show_as_one_entry() {
+    use crate::ai_models::AiFeature;
+    use std::sync::atomic::Ordering;
+    let Some(mut f) = Fixture::new("preload") else { return };
+    f.app.jobs.clear();
+    f.app.pretend_preload(&[(AiFeature::Inpaint, 0.5), (AiFeature::Depth, 0.0)]);
+    let labels = |a: &App| a.activities().into_iter().map(|a| a.label).collect::<Vec<_>>();
+    assert_eq!(labels(&f.app), ["Lade KI-Modelle (1 von 2)"]);
+    assert!(f.app.ai_download_shown(AiFeature::Inpaint).is_none());
+    // Wanted now: shown at its tool and on its own.
+    f.app.ensure_ai(AiFeature::Inpaint);
+    assert_eq!(f.app.ai_download_shown(AiFeature::Inpaint), Some(0.5));
+    assert_eq!(labels(&f.app), ["Lade KI-Modelle (1 von 2)", "Lade KI-Modell für Entfernen"]);
+    // The X of the entry stops only what still runs quietly.
+    f.app.ai_downloads.preload_cancel.store(true, Ordering::Relaxed);
+    f.app.poll_cancelled();
+    let cancelled = |a: &App, l: String| a.jobs.iter().find(|j| j.label == l).unwrap().cancel.load(Ordering::Relaxed);
+    assert!(cancelled(&f.app, AiFeature::Depth.job_label()));
+    assert!(!cancelled(&f.app, AiFeature::Inpaint.job_label()));
+}
+
 #[test]
 fn running_jobs_can_be_cancelled() {
     let Some(mut f) = Fixture::new("cancel") else { return };
