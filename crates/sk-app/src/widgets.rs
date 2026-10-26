@@ -1392,11 +1392,11 @@ pub struct HistogramMarks {
 
 /// The histogram; hovering it shows the tonal ranges, dragging in one moves its slider (returned
 /// as the range and the way since the last frame, in histogram widths).
-pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>, marks: HistogramMarks) -> (Rect, Option<(ToneZone, f32)>) {
+pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>, marks: HistogramMarks) -> (Response, Option<(ToneZone, f32)>) {
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 110.0), Sense::click_and_drag());
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 4.0, theme::BROWSER);
-    let Some(h) = hist else { return (rect, None) };
+    let Some(h) = hist else { return (resp, None) };
     // The range where a drag began holds while it lasts.
     let drag_id = resp.id.with("zone");
     if resp.drag_started()
@@ -1485,7 +1485,7 @@ pub fn histogram(ui: &mut Ui, hist: Option<&Histogram>, marks: HistogramMarks) -
         painter.galley(at, galley, theme::TEXT);
     }
     let moved = dragging.map(|z| (z, resp.drag_delta().x / rect.width().max(1.0))).filter(|(_, d)| *d != 0.0);
-    (rect, moved)
+    (resp, moved)
 }
 
 /// Levels: the histogram of what goes into them (`bins`, 256) with handles below it for the black

@@ -42,6 +42,7 @@ mod palette;
 mod print_preview;
 mod remove;
 mod rename;
+mod scopes;
 mod session;
 mod shortcut_editor;
 mod side_column;

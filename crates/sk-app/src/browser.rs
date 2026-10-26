@@ -748,13 +748,18 @@ impl App {
 
     /// The histogram with the color under the mouse and the range of the slider under it;
     /// dragging in it moves the slider of that range (on the active layer, or the background).
+    /// Or the waveform or vectorscope in its place (see `scopes.rs`).
     pub(crate) fn histogram_widget(&mut self, ui: &mut egui::Ui) -> egui::Rect {
+        if self.scope_view != crate::scopes::ScopeView::Histogram {
+            return self.scope_widget(ui).rect;
+        }
         let marks = widgets::HistogramMarks { rgb: self.hover_rgb, zone: self.hover_zone };
-        let (rect, moved) = widgets::histogram(ui, self.histogram.as_ref(), marks);
+        let (resp, moved) = widgets::histogram(ui, self.histogram.as_ref(), marks);
         if let Some((zone, way)) = moved {
             self.move_tone_zone(zone, way);
         }
-        rect
+        widgets::context_menu(&resp, |ui| self.scope_menu(ui));
+        resp.rect
     }
 
     /// Moves the slider of a tonal range by `way` histogram widths (the whole width: half its range).

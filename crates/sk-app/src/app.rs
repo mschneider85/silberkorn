@@ -197,9 +197,13 @@ struct Ready {
     meta: Arc<RawMeta>,
     preview: Arc<LinearImage>,
     adjustments: Adjustments,
-    /// Rendering with `adjustments`, if still valid.
-    rendered: Option<(TextureHandle, Histogram)>,
+    /// Rendering with `adjustments`, if still valid (with its pixels, when known).
+    rendered: Option<Rendering>,
 }
+
+/// A rendering kept for later: texture, histogram and pixels (for the values under the mouse and
+/// the scopes).
+type Rendering = (TextureHandle, Histogram, Option<Arc<egui::ColorImage>>);
 
 /// Edit version, view region with its reduction, and grid tiles (in order) of a tile request.
 pub(crate) type TileKey = (u64, Option<(sk_core::geometry::Region, usize)>, Vec<(usize, usize)>);
@@ -331,6 +335,7 @@ struct Settings {
     softproof: sk_core::softproof::ProofSettings,
     print: sk_core::print::PrintSettings,
     hdr_options: sk_core::hdr::HdrOptions,
+    long_exposure_options: sk_core::long_exposure::LongExposureOptions,
     pano_options: sk_core::panorama::PanoramaOptions,
     auto_options: sk_core::auto::AutoOptions,
     look_options: sk_core::look_match::LookOptions,
@@ -363,6 +368,7 @@ struct Settings {
     import: crate::import::ImportOptions,
     viewer_background: ViewerBackground,
     info_overlay: InfoOverlay,
+    scope_view: crate::scopes::ScopeView,
 }
 
 /// Information about the picture over it (I switches): off, short, or with everything.
@@ -525,7 +531,7 @@ pub struct App {
     generation: u64,
     pub texture: Option<TextureHandle>,
     /// The pixels of `texture` (sRGB), for the values under the mouse.
-    shown_image: Option<Arc<egui::ColorImage>>,
+    pub(crate) shown_image: Option<Arc<egui::ColorImage>>,
     /// The displayed color under the mouse (0..255), shown in the histogram.
     pub(crate) hover_rgb: Option<[u8; 3]>,
     /// The tonal range of the slider under the mouse, marked in the histogram.
@@ -819,6 +825,10 @@ pub struct App {
     pub viewer_background: ViewerBackground,
     /// Information about the picture over it.
     pub info_overlay: InfoOverlay,
+    /// Histogram, waveform or vectorscope.
+    pub scope_view: crate::scopes::ScopeView,
+    /// The waveform or vectorscope drawn from this displayed image.
+    pub(crate) scope_texture: Option<(Arc<egui::ColorImage>, crate::scopes::ScopeView, TextureHandle)>,
     pub side_column: crate::side_column::SideColumn,
     /// The right column is shown this frame.
     pub side_column_shown: bool,
@@ -907,6 +917,7 @@ pub struct App {
     pub(crate) select_when_listed: Option<PathBuf>,
     pub merge_dialog: Option<crate::merge::MergeDialog>,
     pub hdr_options: sk_core::hdr::HdrOptions,
+    pub long_exposure_options: sk_core::long_exposure::LongExposureOptions,
     pub pano_options: sk_core::panorama::PanoramaOptions,
     /// Model downloads and what waits for them (see `ai_models`).
     pub ai_downloads: crate::ai_models::AiDownloads,
@@ -1036,6 +1047,8 @@ impl App {
             show_navigator: !settings.hide_navigator,
             viewer_background: settings.viewer_background,
             info_overlay: settings.info_overlay,
+            scope_view: settings.scope_view,
+            scope_texture: None,
             side_column: settings.side_column,
             side_column_shown: false,
             viewer_rect: None,
@@ -1284,6 +1297,7 @@ impl App {
             select_when_listed: None,
             merge_dialog: None,
             hdr_options: settings.hdr_options,
+            long_exposure_options: settings.long_exposure_options,
             pano_options: settings.pano_options,
             ai_downloads: Default::default(),
             quiet_jobs: Vec::new(),
@@ -1349,6 +1363,7 @@ impl App {
             hide_navigator: !self.show_navigator,
             viewer_background: self.viewer_background,
             info_overlay: self.info_overlay,
+            scope_view: self.scope_view,
             side_column: self.side_column,
             focus_sensitivity: Some(self.focus_sensitivity),
             guides: self.guides,
@@ -1359,6 +1374,7 @@ impl App {
             softproof: self.softproof.settings.clone(),
             print: self.print.settings.clone(),
             hdr_options: self.hdr_options,
+            long_exposure_options: self.long_exposure_options,
             pano_options: self.pano_options,
             auto_options: self.auto_options,
             look_options: self.look_options,
@@ -1512,7 +1528,8 @@ impl App {
             && !self.softproof.on
             && self.mask_overlay().is_none();
         let texture = self.texture.take();
-        let rendered = texture.filter(|_| plain).zip(self.histogram.clone());
+        let shown = self.shown_image.take();
+        let rendered = texture.filter(|_| plain).zip(self.histogram.clone()).map(|(t, h)| (t, h, shown));
         // Its focus mask stays only if it belongs to this rendering.
         if self.focus_maps.get(&cur.meta.path).is_some_and(|m| !plain || m.version != Some(self.texture_version)) {
             self.focus_maps.remove(&cur.meta.path);
@@ -1522,7 +1539,7 @@ impl App {
             self.compare_details.remove(&cur.meta.path);
         }
         match &rendered {
-            Some((t, _)) => {
+            Some((t, ..)) => {
                 self.compare_textures.insert(cur.meta.path.clone(), t.clone());
             }
             None => {
@@ -1558,7 +1575,7 @@ impl App {
     }
 
     /// Shows a loaded image. `rendered` is used if it was made with the saved adjustments.
-    fn install(&mut self, meta: Arc<RawMeta>, preview: Arc<LinearImage>, rendered: Option<(Adjustments, TextureHandle, Histogram)>) {
+    fn install(&mut self, meta: Arc<RawMeta>, preview: Arc<LinearImage>, rendered: Option<(Adjustments, Rendering)>) {
         let (sc, unreadable) = match sidecar::try_load(&meta.path) {
             Ok(sc) => (sc, None),
             Err(e) => {
@@ -1644,18 +1661,19 @@ impl App {
         // With the print preview, each image starts at its printed size (zooming stays possible).
         self.print.zoom = self.print.on;
         match rendered {
-            Some((_, texture, histogram)) if !self.clip_warning && self.slider_view.is_none() && !self.show_before && !self.split_view => {
+            Some((_, (texture, histogram, pixels))) if !self.clip_warning && self.slider_view.is_none() && !self.show_before && !self.split_view => {
                 self.view_size = Some(texture.size_vec2());
                 self.texture_draft = false;
                 self.texture = Some(texture);
                 self.texture_version = self.edit_version;
                 self.histogram = Some(histogram);
+                self.shown_image = pixels;
                 self.placeholder = None;
                 self.prefetch_neighbours();
             }
             other => {
                 // Keep something on screen until the new rendering arrives.
-                if let Some((_, texture, _)) = other {
+                if let Some((_, (texture, ..))) = other {
                     self.placeholder = Some(texture);
                 }
                 self.texture = None;
@@ -1711,7 +1729,7 @@ impl App {
     }
 
     pub(crate) fn prepared_texture(&self, path: &std::path::Path) -> Option<&TextureHandle> {
-        self.prepared.iter().find(|r| r.meta.path == path).and_then(|r| r.rendered.as_ref()).map(|(t, _)| t)
+        self.prepared.iter().find(|r| r.meta.path == path).and_then(|r| r.rendered.as_ref()).map(|(t, ..)| t)
     }
 
     #[cfg(test)]
@@ -1981,7 +1999,7 @@ impl App {
             self.full_due = None;
             match self.prepared.iter().position(|r| r.meta.path == *path).map(|i| self.prepared.remove(i)) {
                 Some(r) => {
-                    let rendered = r.rendered.map(|(t, h)| (r.adjustments, t, h));
+                    let rendered = r.rendered.map(|rendering| (r.adjustments, rendering));
                     self.install(r.meta, r.preview, rendered);
                 }
                 None => {
@@ -2567,9 +2585,12 @@ impl App {
                     let p = *p;
                     let too_big = p.preview.width.max(p.preview.height) > max_side;
                     let preview = fit_texture(p.preview);
-                    let rendered = (!too_big).then(|| (ctx.load_texture("prepared", p.image, TextureOptions::LINEAR), p.histogram));
+                    let rendered = (!too_big).then(|| {
+                        let image = Arc::new(p.image);
+                        (ctx.load_texture("prepared", image.clone(), TextureOptions::LINEAR), p.histogram, Some(image))
+                    });
                     if self.loading.as_ref() == Some(&p.meta.path) {
-                        self.install(p.meta, preview, rendered.map(|(t, h)| (p.adjustments, t, h)));
+                        self.install(p.meta, preview, rendered.map(|rendering| (p.adjustments, rendering)));
                     } else if self.current_path().as_ref() != Some(&p.meta.path) {
                         self.remember(Ready { meta: p.meta, preview, adjustments: p.adjustments, rendered });
                     }

@@ -532,10 +532,10 @@ Weitere Funktionen: **Dunst entfernen** (Dark-Channel-Prior, global und pro Eben
 mit gemeinsamem Zoom und Ausschnitt (Umschalt+U), und **mehrere Ausgaberezepte**, die in einem Durchgang
 verarbeitet werden (das RAW wird pro Bild nur einmal entwickelt).
 
-### HDR, Panorama und Focus Stacking
+### HDR, Panorama, Focus Stacking und Langzeitbelichtung
 
 **Entwickeln → Zusammenfügen** (mindestens zwei Bilder ausgewählt) erzeugt ein neues
-**lineares DNG** neben den Originalen (`…-HDR.dng`, `…-Pano.dng`, `…-Fokus.dng`): demosaicte Kameradaten als
+**lineares DNG** neben den Originalen (`…-HDR.dng`, `…-Pano.dng`, `…-Fokus.dng`, `…-Langzeit.dng`): demosaicte Kameradaten als
 16-Bit-Gleitkomma, verlustfrei komprimiert. Weißabgleich, Farbe und Tonwerte bleiben daher voll
 bearbeitbar, und auch Lightroom und Capture One öffnen die Datei. Alles läuft im Hintergrund
 (Fortschritt in der Statusleiste); das Ergebnis wird danach ausgewählt.
@@ -560,6 +560,17 @@ bearbeitbar, und auch Lightroom und Capture One öffnen die Datei. Alles läuft 
   (geglättetes Quadrat des Laplace-Operators der Helligkeit): Das schärfste Bild überwiegt, Flächen
   ohne Struktur mitteln alle Bilder und rauschen weniger. Die Bilder werden nacheinander addiert,
   der Speicherbedarf hängt also nicht von ihrer Zahl ab.
+- **Langzeitbelichtung:** Eine Serie derselben Szene wird zu einem Bild, als wäre lange belichtet
+  worden. Referenz ist die mittlere Aufnahme; die anderen werden wie beim Focus Stacking
+  ausgerichtet (abschaltbar, vom Stativ unnötig) und, falls die Kamera sie anders belichtet hat, auf
+  ihre Helligkeit gebracht. Drei Verfahren:
+  **Mittelwert** (`…-Langzeit.dng`) wie eine lange Belichtung ohne ND-Filter: Wasser und Wolken
+  werden weich, das Rauschen sinkt. **Median** (`…-Median.dng`) nimmt je Pixel die Aufnahme, die der
+  Helligkeit nach in der Mitte liegt, als Ganzes: Was durchs Bild läuft (Passanten, Autos),
+  verschwindet. **Hellste** (`…-Lichtspuren.dng`) nimmt je Pixel die hellste Aufnahme: Licht- und
+  Sternspuren, Feuerwerk; hier ohne Ausrichten, sonst richten sich die Sterne aus. Mittelwert und
+  Hellste addieren nacheinander. Der Median braucht alle Aufnahmen zugleich (16 Bit je Kanal) und
+  nimmt höchstens so viele, gleichmäßig über die Serie verteilt, wie in 2 GB passen (bei 24 MP 14).
 
 Kommandozeile: `cargo run --release -p sk-core --example merge -- hdr|pano <raw>...`
 
@@ -703,6 +714,21 @@ Belichtung, Lichter und Weiß (0–10, 10–35, 35–65, 65–90, 90–100 %); *
 Regler des Bereichs (die ganze Breite: sein halber Bereich), auf der aktiven Ebene oder dem ganzen
 Bild, ein Rückgängig-Schritt je Zug. Umgekehrt markiert ein Regler im Tab „Belichtung“ seinen Bereich,
 solange die Maus darauf steht.
+
+**Messanzeige** (Umschalt+H, Ansicht → „Messanzeige“ oder Rechtsklick darauf) zeigt an derselben
+Stelle statt des Histogramms:
+
+- **Wellenform:** für jede Spalte des Bildes, wie hell seine Pixel dort sind (unten Schwarz, oben
+  Weiß), R, G und B übereinander; wo sie zusammenfallen, wird es weiß. Anders als im Histogramm
+  bleibt jeder Tonwert an seiner Stelle im Bild: Der helle Himmel links steht auch links oben. Die
+  Werte unter der Maus erscheinen als Linien.
+- **Vektorskop:** die Farben nach Farbton (Winkel) und Sättigung (Abstand von der Mitte), auf der
+  Cb/Cr-Ebene wie in der Videotechnik. Kästchen markieren Rot, Gelb, Grün, Cyan, Blau und Magenta
+  bei 75 %. Die Linie zwischen Rot und Gelb ist die Hauttonlinie: Haut jeder Farbe liegt auf ihr, nur
+  verschieden weit außen. Die Farbe unter der Maus ist ein weißer Punkt.
+
+Gemessen wird das angezeigte Bild, und nur solange Wellenform oder Vektorskop zu sehen sind. Die
+Wahl bleibt über Programmstarts.
 
 ### Ansicht: Bildinfo, Hintergrund, Weißabgleich-Pipette
 

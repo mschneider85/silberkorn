@@ -368,6 +368,28 @@ fn histogram_shows_the_color_under_the_mouse_and_moves_tone_sliders() {
     assert_eq!(f.app.current.as_ref().unwrap().adjustments.whites, -10.0);
 }
 
+/// Shift+H switches the histogram to the waveform and the vectorscope of the displayed image.
+#[test]
+fn scopes_measure_the_displayed_image() {
+    use crate::scopes::ScopeView;
+    let Some(mut f) = Fixture::new("scopes") else { return };
+    f.pump("Bild gerendert", |a| a.current.is_some() && a.texture.is_some() && a.shown_image.is_some());
+    f.app.tab = crate::app::Tab::Exposure;
+    tool_panel_frame(&mut f, vec![]);
+    assert!(f.app.scope_texture.is_none(), "beim Histogramm wird nichts gemessen");
+    for want in [ScopeView::Waveform, ScopeView::Vectorscope] {
+        f.app.next_scope();
+        assert_eq!(f.app.scope_view, want);
+        tool_panel_frame(&mut f, vec![]);
+        let (img, view, tex) = f.app.scope_texture.as_ref().expect("Messanzeige gezeichnet");
+        assert_eq!(*view, want);
+        assert!(std::sync::Arc::ptr_eq(img, f.app.shown_image.as_ref().unwrap()));
+        assert!(tex.size()[0] >= 128);
+    }
+    f.app.next_scope();
+    assert_eq!(f.app.scope_view, ScopeView::Histogram);
+}
+
 /// Holding a slider with Alt shows what it does instead of the image, as long as it is held.
 #[test]
 fn sliders_show_their_effect_with_alt() {
@@ -2382,6 +2404,23 @@ fn hdr_merge_job_creates_and_selects_dng() {
     f.pump("DNG ausgewählt", |a| a.current_path().is_some_and(|p| p.ends_with("_DSC0009-HDR.dng")) && a.texture.is_some());
     assert!(f.app.current.as_ref().unwrap().meta.hdr);
     f.pump("Indexiert", |a| a.lists.total == 3);
+}
+
+#[test]
+fn long_exposure_job_creates_dng() {
+    let Some(mut f) = Fixture::new("long-exposure") else { return };
+    f.index_photos();
+    f.pump("Indexiert", |a| a.lists.total == 2);
+    f.app.select_all();
+    f.app.open_merge(crate::merge::MergeKind::LongExposure);
+    let dialog = f.app.merge_dialog.take().expect("Dialog");
+    assert!(dialog.pixels.is_some_and(|px| px > 1_000_000));
+    let files = dialog.files.clone();
+    let opts = sk_core::long_exposure::LongExposureOptions { blend: sk_core::long_exposure::Blend::Median, align: false };
+    f.app.start_job("Langzeitbelichtung", Box::new(move |p| Ok(vec![sk_core::long_exposure::combine_files(&files, &opts, p)?])));
+    f.pump("Fertig", |a| a.jobs.is_empty());
+    assert!(f.dir.join("photos/_DSC0009-Median.dng").exists(), "{}", f.app.status);
+    f.pump("DNG ausgewählt", |a| a.current_path().is_some_and(|p| p.ends_with("_DSC0009-Median.dng")) && a.texture.is_some());
 }
 
 #[test]

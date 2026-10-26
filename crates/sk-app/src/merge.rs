@@ -1,11 +1,12 @@
-//! "Merge" dialogs: HDR from an exposure bracket, panoramas and focus stacks (see
-//! `sk_core::hdr`, `sk_core::panorama` and `sk_core::focus_stack`). All run as background jobs
-//! and create a linear DNG.
+//! "Merge" dialogs: HDR from an exposure bracket, panoramas, focus stacks and long exposures (see
+//! `sk_core::hdr`, `sk_core::panorama`, `sk_core::focus_stack` and `sk_core::long_exposure`). All
+//! run as background jobs and create a linear DNG.
 
 use std::path::PathBuf;
 
 use egui::Ui;
 use sk_core::hdr::Deghost;
+use sk_core::long_exposure::Blend;
 use sk_core::panorama::Projection;
 
 use crate::app::App;
@@ -17,11 +18,14 @@ pub enum MergeKind {
     Hdr,
     Panorama,
     FocusStack,
+    LongExposure,
 }
 
 pub struct MergeDialog {
     pub kind: MergeKind,
     pub files: Vec<PathBuf>,
+    /// Pixels of an image of the series (long exposure: how many fit into a median).
+    pub pixels: Option<usize>,
 }
 
 impl App {
@@ -32,7 +36,12 @@ impl App {
             self.status = "Zum Zusammenfügen mindestens zwei Bilder auswählen".into();
             return;
         }
-        self.merge_dialog = Some(MergeDialog { kind, files });
+        let pixels = (kind == MergeKind::LongExposure)
+            .then(|| sk_core::raw::read_meta(&files[0]).ok())
+            .flatten()
+            .map(|m| m.info.width * m.info.height)
+            .filter(|&px| px > 0);
+        self.merge_dialog = Some(MergeDialog { kind, files, pixels });
     }
 
     /// Entries of the image menu.
@@ -48,6 +57,9 @@ impl App {
                 }
                 if ui.button(format!("{}  Focus Stacking …", icon::APERTURE)).clicked() {
                     self.open_merge(MergeKind::FocusStack);
+                }
+                if ui.button(format!("{}  Langzeitbelichtung …", icon::HOURGLASS_MEDIUM)).clicked() {
+                    self.open_merge(MergeKind::LongExposure);
                 }
             })
             .response
@@ -70,17 +82,22 @@ impl App {
             MergeKind::FocusStack => {
                 self.start_job("Focus Stacking", Box::new(move |p| Ok(vec![sk_core::focus_stack::stack_files(&files, p)?])));
             }
+            MergeKind::LongExposure => {
+                let opts = self.long_exposure_options;
+                self.start_job("Langzeitbelichtung", Box::new(move |p| Ok(vec![sk_core::long_exposure::combine_files(&files, &opts, p)?])));
+            }
         }
     }
 
     pub(crate) fn merge_dialogs(&mut self, ctx: &egui::Context) {
         let Some(dialog) = &self.merge_dialog else { return };
-        let (kind, n) = (dialog.kind, dialog.files.len());
+        let (kind, n, pixels) = (dialog.kind, dialog.files.len(), dialog.pixels);
         let (mut run, mut cancel) = (false, false);
         let (ic, title) = match kind {
             MergeKind::Hdr => (icon::SUN_HORIZON, "HDR zusammenfügen"),
             MergeKind::Panorama => (icon::PANORAMA, "Panorama zusammenfügen"),
             MergeKind::FocusStack => (icon::APERTURE, "Focus Stacking"),
+            MergeKind::LongExposure => (icon::HOURGLASS_MEDIUM, "Langzeitbelichtung"),
         };
         let modal = Dialog::new("merge", ic, title).subtitle(format!("{n} Bilder · ergibt ein DNG")).width(460.0).show(ctx, |ui| {
             match kind {
@@ -123,6 +140,27 @@ impl App {
                         "{n} Aufnahmen mit unterschiedlicher Schärfeebene werden zu einem überall scharfen DNG zusammengefügt."
                     ));
                     dialog::note(ui, "Verwacklung und die Größenänderung beim Fokussieren werden ausgeglichen.");
+                }
+                MergeKind::LongExposure => {
+                    ui.label(format!("{n} Aufnahmen derselben Szene werden zu einem DNG zusammengefügt, als wäre lange belichtet worden."));
+                    ui.add_space(6.0);
+                    dialog::card(ui, "Optionen", None, |ui| {
+                        let opts = &mut self.long_exposure_options;
+                        crate::widgets::combo_field(ui, "Verfahren", opts.blend.label(), |ui| {
+                            for b in Blend::ALL {
+                                ui.selectable_value(&mut opts.blend, b, b.label());
+                            }
+                        });
+                        dialog::note(ui, opts.blend.note());
+                        crate::widgets::checkbox(ui, &mut opts.align, "Automatisch ausrichten (aus der Hand fotografiert)");
+                        let used = match pixels {
+                            Some(px) if opts.blend == Blend::Median => sk_core::long_exposure::median_shots(n, px).len(),
+                            _ => n,
+                        };
+                        if used < n {
+                            dialog::note(ui, format!("Der Median nutzt {used} gleichmäßig verteilte der {n} Aufnahmen (Arbeitsspeicher)."));
+                        }
+                    });
                 }
             }
             dialog::footer(ui, |ui| {

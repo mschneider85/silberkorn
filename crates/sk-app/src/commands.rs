@@ -172,6 +172,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("merge-hdr", icon::SUN_HORIZON, "HDR zusammenfügen …", "Entwickeln", [], "merge belichtungsreihe", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Hdr)),
     cmd!("merge-pano", icon::PANORAMA, "Panorama zusammenfügen …", "Entwickeln", [], "merge stitch", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Panorama)),
     cmd!("merge-focus", icon::APERTURE, "Focus Stacking …", "Entwickeln", [], "merge fokus schärfentiefe stack makro focus stacking", several_files, |a, _| a.open_merge(crate::merge::MergeKind::FocusStack)),
+    cmd!("merge-long", icon::HOURGLASS_MEDIUM, "Langzeitbelichtung …", "Entwickeln", [], "merge serie mittelwert median lichtspuren sternspuren nd-filter wasser passanten entfernen long exposure", several_files, |a, _| a.open_merge(crate::merge::MergeKind::LongExposure)),
     cmd!("enhance", icon::SPARKLE, "Verbessern", "Entwickeln", [], "enhance verbessern raw-details raw details demosaic ki entrauschen denoise rauschen feinzeichnung farbsäume moiré", image_tool, |a, ctx| a.open_enhance(ctx)),
     cmd!("reference", icon::PUSH_PIN, "Referenzbild festlegen / entfernen", "Entwickeln", [SHIFT => Key::Enter], "vergleich compare", has_image, |a, _| a.toggle_reference()),
     cmd!("match-look", icon::SWATCHES, "Look angleichen", "Entwickeln", [], "match look referenz angleichen stil übertragen belichtung weißabgleich", |a| a.can_match_look() && !a.on_layer(), |a, _| {
@@ -239,6 +240,7 @@ pub const COMMANDS: &[Command] = &[
         };
         a.save_settings();
     }),
+    cmd!("scope", icon::WAVE_SINE, "Messanzeige: Histogramm / Wellenform / Vektorskop", "Ansicht", [SHIFT => Key::H], "histogramm waveform wellenform vektorskop vectorscope parade hauttöne scope", always, |a, _| a.next_scope()),
     cmd!("navigator", icon::MAP_TRIFOLD, "Navigator beim Zoomen", "Ansicht", [], "minimap", always, |a, _| {
         a.show_navigator = !a.show_navigator;
         a.save_settings();

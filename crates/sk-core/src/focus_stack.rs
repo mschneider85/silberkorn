@@ -28,49 +28,26 @@ const MAX_WARP: f64 = 0.08;
 /// Softening of the images corners are found in (pixels of the feature image).
 const FEATURE_BLUR: f32 = 2.0;
 
-/// Accumulates aligned images weighted by their sharpness.
-pub struct Stacker {
+/// Aligns images of a series to a reference by scale, rotation and shift (also used by
+/// [`crate::long_exposure`]).
+pub struct Aligner {
     width: usize,
     height: usize,
     /// Corners of the reference (in its feature image) and that image's size.
     reference: Features,
     guide_size: (usize, usize),
-    sum: Vec<[f32; 3]>,
-    weights: Vec<f32>,
-    /// Images that could not be aligned (added unaligned).
-    pub unaligned: usize,
 }
 
-impl Stacker {
-    /// Starts with the reference image.
+impl Aligner {
     pub fn new(reference: &LinearImage) -> Self {
-        let (reference_features, guide_size) = features(reference);
-        let mut s = Self {
-            width: reference.width,
-            height: reference.height,
-            guide_size,
-            reference: reference_features,
-            sum: vec![[0.0; 3]; reference.width * reference.height],
-            weights: vec![0.0; reference.width * reference.height],
-            unaligned: 0,
-        };
-        s.accumulate(reference, None);
-        s
+        let (features, guide_size) = features(reference);
+        Self { width: reference.width, height: reference.height, reference: features, guide_size }
     }
 
-    /// Adds an image of the series (same size as the reference).
-    pub fn add(&mut self, img: &LinearImage) -> Result<()> {
-        if (img.width, img.height) != (self.width, self.height) {
-            bail!("andere Bildgröße als die Referenz");
-        }
-        let h = self.alignment(img);
-        if h.is_none() {
-            self.unaligned += 1;
-        }
-        let warped = h.map(|h| self.warp(img, &h));
-        let valid = warped.as_ref().map(|(_, v)| v.as_slice());
-        self.accumulate(warped.as_ref().map_or(img, |(w, _)| w), valid);
-        Ok(())
+    /// `img` (same size as the reference) resampled into the reference's frame, and where it has
+    /// data; `None` if it could not be aligned.
+    pub fn align(&self, img: &LinearImage) -> Option<(LinearImage, Vec<bool>)> {
+        self.alignment(img).map(|h| self.warp(img, &h))
     }
 
     /// The homography from reference to `img` in the feature images (centered coordinates).
@@ -125,6 +102,43 @@ impl Stacker {
             .unzip();
         (LinearImage::new(w, ht, data), valid)
     }
+}
+
+/// Accumulates aligned images weighted by their sharpness.
+pub struct Stacker {
+    aligner: Aligner,
+    sum: Vec<[f32; 3]>,
+    weights: Vec<f32>,
+    /// Images that could not be aligned (added unaligned).
+    pub unaligned: usize,
+}
+
+impl Stacker {
+    /// Starts with the reference image.
+    pub fn new(reference: &LinearImage) -> Self {
+        let mut s = Self {
+            aligner: Aligner::new(reference),
+            sum: vec![[0.0; 3]; reference.width * reference.height],
+            weights: vec![0.0; reference.width * reference.height],
+            unaligned: 0,
+        };
+        s.accumulate(reference, None);
+        s
+    }
+
+    /// Adds an image of the series (same size as the reference).
+    pub fn add(&mut self, img: &LinearImage) -> Result<()> {
+        if (img.width, img.height) != (self.aligner.width, self.aligner.height) {
+            bail!("andere Bildgröße als die Referenz");
+        }
+        let warped = self.aligner.align(img);
+        if warped.is_none() {
+            self.unaligned += 1;
+        }
+        let valid = warped.as_ref().map(|(_, v)| v.as_slice());
+        self.accumulate(warped.as_ref().map_or(img, |(w, _)| w), valid);
+        Ok(())
+    }
 
     fn accumulate(&mut self, img: &LinearImage, valid: Option<&[bool]>) {
         let weights = sharpness(img);
@@ -143,7 +157,7 @@ impl Stacker {
 
     pub fn finish(self) -> LinearImage {
         let data = self.sum.into_par_iter().zip(self.weights).map(|(s, w)| s.map(|v| v / w.max(1e-30))).collect();
-        LinearImage::new(self.width, self.height, data)
+        LinearImage::new(self.aligner.width, self.aligner.height, data)
     }
 }
 

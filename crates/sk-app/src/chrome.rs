@@ -314,6 +314,9 @@ impl App {
             self.show_navigator = !self.show_navigator;
         }
         self.command_item(ui, "info-overlay");
+        crate::widgets::menu_button(ui, "Messanzeige", |ui| self.scope_menu(ui))
+            .response
+            .on_hover_text(format!("Histogramm, Wellenform oder Vektorskop ({}; auch per Rechtsklick darauf)", shortcut("scope")));
         crate::widgets::menu_button(ui, "Hintergrund", |ui| {
             for b in crate::app::ViewerBackground::ALL {
                 if check(ui, self.viewer_background == b, b.label(), "") {
