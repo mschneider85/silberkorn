@@ -891,6 +891,8 @@ pub struct App {
     pub(crate) pixels_per_point: f32,
     /// Window size and scale as last written to the log, and a newer state waiting to settle.
     logged_geometry: (String, Option<(String, Instant)>),
+    /// Clicks compared with Windows since the window last changed (see `check_click`).
+    clicks_checked: u32,
     /// Saved after the window's graphics device was lost, before the restart (see `guard`).
     saved_for_restart: bool,
     /// When the frames that ended in a panic happened (see `ui`).
@@ -1213,6 +1215,7 @@ impl App {
             zoom_fit_pct: None,
             pixels_per_point: 1.0,
             logged_geometry: Default::default(),
+            clicks_checked: 0,
             saved_for_restart: false,
             frame_panics: Vec::new(),
             // egui's assumption until the viewer is first shown.
@@ -1804,12 +1807,15 @@ impl App {
 
     /// Writes window size and scale to the log once they have rested for a moment after a change
     /// (for clicks landing beside their target on some machines; not every step of a resize).
+    /// Under Windows also its own size of the window: if the app draws for another size, Windows
+    /// stretches the picture and clicks land beside their target, a warning says so.
     fn log_geometry(&mut self, ctx: &egui::Context) {
         let area = ctx.content_rect().size();
-        let now = ctx.input(|i| {
+        let facts = self.native_window.and_then(crate::window_probe::window);
+        let (now, app_px) = ctx.input(|i| {
             let v = i.viewport();
             let size = |r: Option<egui::Rect>| r.map_or("?".into(), |r| format!("{:.0}×{:.0}", r.width(), r.height()));
-            format!(
+            let text = format!(
                 "Fenster: Skalierung {:.3} (System {:?}), Fläche {:.0}×{:.0}, innen {}, außen {}, Monitor {:?}, maximiert {:?}",
                 i.pixels_per_point,
                 v.native_pixels_per_point,
@@ -1819,8 +1825,13 @@ impl App {
                 size(v.outer_rect),
                 v.monitor_size,
                 v.maximized,
-            )
+            );
+            (text, v.inner_rect.map(|r| [r.width() * i.pixels_per_point, r.height() * i.pixels_per_point]))
         });
+        let now = match &facts {
+            Some(f) => format!("{now} (in Punkten); Windows: {}×{} px, {} dpi, {}", f.client[0], f.client[1], f.dpi, f.awareness),
+            None => format!("{now} (in Punkten)"),
+        };
         let (logged, pending) = &mut self.logged_geometry;
         if now == *logged {
             *pending = None;
@@ -1829,9 +1840,53 @@ impl App {
             ctx.request_repaint_after(Duration::from_millis(600));
         } else if pending.as_ref().is_some_and(|(_, since)| since.elapsed() >= Duration::from_millis(500)) {
             *logged = pending.take().unwrap().0;
-            log::info!("{logged} (in Punkten)");
+            log::info!("{logged}");
+            self.clicks_checked = 0;
+            if let (Some(f), Some(app)) = (&facts, app_px)
+                && (0..2).any(|k| (f.client[k] as f32 - app[k]).abs() > 2.0)
+            {
+                log::warn!(
+                    "Fenstergröße weicht ab: die App zeichnet für {:.0}×{:.0} px, Windows zeigt {}×{} px – das Bild wird gestreckt, Klicks liegen daneben",
+                    app[0],
+                    app[1],
+                    f.client[0],
+                    f.client[1]
+                );
+            }
         } else {
             ctx.request_repaint_after(Duration::from_millis(100));
+        }
+    }
+
+    /// Compares where a click lands for the app with where Windows has the mouse (physical
+    /// pixels in the window). Logged for the first click after each window change, and up to a
+    /// few clicks that differ (a fast moving mouse may differ by a little on a slow machine).
+    fn check_click(&mut self, ctx: &egui::Context) {
+        const DIFFERING: u32 = 5;
+        if self.clicks_checked > DIFFERING {
+            return;
+        }
+        let Some(hwnd) = self.native_window else { return };
+        let Some((pos, ppp)) = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::PointerButton { pos, pressed: true, .. } => Some((*pos, i.pixels_per_point)),
+                _ => None,
+            })
+        }) else {
+            return;
+        };
+        let Some(win) = crate::window_probe::cursor(hwnd) else { return };
+        let app = [pos.x * ppp, pos.y * ppp];
+        let off = [win[0] as f32 - app[0], win[1] as f32 - app[1]];
+        let differs = off[0].abs() > 3.0 || off[1].abs() > 3.0;
+        if self.clicks_checked == 0 || differs {
+            let text = format!("Klick: App bei {:.0}, {:.0} px, Windows bei {}, {} px", app[0], app[1], win[0], win[1]);
+            if differs {
+                log::warn!("{text} – Abstand {:.0}, {:.0} px", off[0], off[1]);
+            } else {
+                log::info!("{text}");
+            }
+            self.clicks_checked += 1;
         }
     }
 
@@ -3452,6 +3507,7 @@ impl App {
         self.restore_window_animations();
         self.pixels_per_point = ctx.pixels_per_point();
         self.log_geometry(&ctx);
+        self.check_click(&ctx);
         if self.viewer_detached() && !self.viewer_window_shown {
             self.monitors = crate::viewer_window::monitors(frame, self.pixels_per_point);
         }

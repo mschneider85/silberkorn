@@ -62,6 +62,7 @@ mod variants;
 mod viewer_window;
 mod widgets;
 mod window_placement;
+mod window_probe;
 mod workers;
 
 use std::path::PathBuf;
