@@ -17,6 +17,7 @@ pub mod models;
 pub mod runtime;
 pub mod segment;
 pub mod subject;
+pub mod super_resolution;
 pub mod tiles;
 pub mod worker;
 

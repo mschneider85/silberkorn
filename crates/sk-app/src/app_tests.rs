@@ -2434,6 +2434,26 @@ fn long_exposure_job_creates_dng() {
     f.pump("DNG ausgewählt", |a| a.current_path().is_some_and(|p| p.ends_with("_DSC0009-Median.dng")) && a.texture.is_some());
 }
 
+/// Super Resolution takes each selected image once (variants of the same file too) and reads the
+/// "Verbessern" settings of the selected version.
+#[test]
+fn super_resolution_dialog_takes_each_file_once() {
+    let Some(mut f) = Fixture::new("super-resolution") else { return };
+    f.index_photos();
+    f.pump("Indexiert", |a| a.lists.total == 2);
+    f.app.select_all();
+    f.app.open_merge(crate::merge::MergeKind::SuperResolution);
+    let dialog = f.app.merge_dialog.take().expect("Dialog");
+    assert_eq!(dialog.files.len(), 2);
+    let e = sk_ai::super_resolution::Enhanced::of(&sk_core::sidecar::load(&dialog.files[0]).adjustments);
+    assert!((0.0..=1.0).contains(&e.ai_denoise) && (0.0..=1.0).contains(&e.raw_details), "{e:?}");
+    // Nothing selected: no dialog.
+    f.app.selection.clear();
+    f.app.current = None;
+    f.app.open_merge(crate::merge::MergeKind::SuperResolution);
+    assert!(f.app.merge_dialog.is_none());
+}
+
 #[test]
 fn remove_tool_fills_the_painted_area() {
     if !sk_ai::models::available(&sk_ai::models::INPAINT) {

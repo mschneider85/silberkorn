@@ -26,6 +26,7 @@ fn sections() -> [(&'static str, Vec<Entry>); 3] {
                 ("MobileSAM (Chaoning Zhang et al.), Segment Anything (Meta)", "Objekt auswählen", models::OBJECT_ENCODER.license),
                 ("LaMa (Roman Suvorov et al., Samsung AI Center), ONNX: Carve, für DirectML angepasst", "Entfernen", models::INPAINT.license),
                 ("Depth Anything V2 Small (Lihe Yang et al.)", "Tiefenkarte", models::DEPTH.license),
+                ("SPAN (Cheng Wan, Hongyuan Yu et al.)", "Super Resolution (mitgeliefert)", "Apache-2.0"),
                 ("YuNet (OpenCV Zoo)", "Gesichtserkennung", models::FACE_DETECT.license),
                 ("SFace (OpenCV Zoo)", "Gesichtsvergleich", models::FACE_EMBED.license),
                 ("open-closed-eye-0001 (Intel OpenVINO)", "Augen offen/geschlossen", models::EYE_STATE.license),
@@ -61,6 +62,8 @@ impl App {
                                 // Comes with the program: its license text with it.
                                 if name.starts_with("DemosaicNet") {
                                     r.on_hover_text(sk_ai::demosaic::LICENSE);
+                                } else if name.starts_with("SPAN") {
+                                    r.on_hover_text(sk_ai::super_resolution::LICENSE);
                                 }
                                 ui.label(RichText::new(used_for).size(11.5).color(theme::TEXT_DIM));
                             });
@@ -70,7 +73,7 @@ impl App {
                     });
                 });
             }
-            dialog::note(ui, "Die KI-Modelle (außer DemosaicNet), die Objektivprofile und die KI-Beschleunigung werden nicht mitgeliefert, sondern bei Bedarf geladen.");
+            dialog::note(ui, "Die KI-Modelle (außer DemosaicNet und SPAN), die Objektivprofile und die KI-Beschleunigung werden nicht mitgeliefert, sondern bei Bedarf geladen.");
             dialog::footer(ui, |ui| {
                 if dialog::default_button(ui, true, dialog::primary("Schließen")) {
                     close = true;

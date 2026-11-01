@@ -574,6 +574,23 @@ bearbeitbar, und auch Lightroom und Capture One öffnen die Datei. Alles läuft 
 
 Kommandozeile: `cargo run --release -p sk-core --example merge -- hdr|pano <raw>...`
 
+### Super Resolution
+
+**Entwickeln → Super Resolution …** verdoppelt Breite und Höhe eines Bildes (viermal so viele
+Pixel) und legt das Ergebnis wie beim Zusammenfügen als neues **lineares DNG** neben das Original
+(`…-SR.dng`); bei mehreren ausgewählten Bildern je eines. Das Netz ist SPAN 2× (Sieger der
+NTIRE 2024 Efficient Super-Resolution, offizielle Gewichte, Apache-2.0, ohne GAN-Training: es erfindet
+keine Texturen) und wird mitgeliefert (1.6 MB). Ein 24-MP-Bild braucht auf einer GTX 1650 Ti etwa
+30 s; RealPLKSR, das größere Netz aus darktable, war dort im Ausschnitt kaum besser, aber rund
+150-mal langsamer. Das Netz kennt kein Rauschen und würde es zu scharfen Sprenkeln machen: Es bekommt
+das Bild deshalb so, wie „Verbessern“ es am Bild liefert (KI-Entrauschen, Raw-Details). Es rechnet
+auf den demosaicten Kameradaten, weißabgeglichen und sRGB-kodiert so skaliert, dass nichts beschnitten
+wird, und die Umrechnung wird danach umgekehrt: Weißabgleich, Farbe und Tonwerte bleiben voll
+bearbeitbar. Übersteuerte Lichter werden nur weich vergrößert, damit die Lichter-Rekonstruktion
+sie weiter erkennt. Die übrige Bearbeitung des Originals wird nicht übernommen.
+
+Kommandozeile: `cargo run --release -p sk-ai --example super_resolution -- <raw> <ausgabeordner>`
+
 ### Kamera-Kurve
 
 In jeder RAW-Datei steckt das JPEG, das die Kamera selbst entwickelt hat. Neue Bilder starten mit

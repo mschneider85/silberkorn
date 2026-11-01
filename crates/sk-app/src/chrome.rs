@@ -282,6 +282,7 @@ impl App {
         self.command_item(ui, "auto-adjust");
         self.command_item_labeled(ui, "wb-picker", "Weißabgleich-Pipette");
         self.command_item(ui, "enhance");
+        self.command_item(ui, "super-resolution");
         ui.separator();
         self.merge_menu(ui);
         ui.separator();

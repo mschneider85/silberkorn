@@ -1,6 +1,7 @@
 //! "Merge" dialogs: HDR from an exposure bracket, panoramas, focus stacks and long exposures (see
-//! `sk_core::hdr`, `sk_core::panorama`, `sk_core::focus_stack` and `sk_core::long_exposure`). All
-//! run as background jobs and create a linear DNG.
+//! `sk_core::hdr`, `sk_core::panorama`, `sk_core::focus_stack` and `sk_core::long_exposure`), and
+//! Super Resolution of single images (`sk_ai::super_resolution`). All run as background jobs and
+//! create linear DNGs.
 
 use std::path::PathBuf;
 
@@ -19,6 +20,8 @@ pub enum MergeKind {
     Panorama,
     FocusStack,
     LongExposure,
+    /// Each image on its own, twice the edges.
+    SuperResolution,
 }
 
 pub struct MergeDialog {
@@ -31,6 +34,15 @@ pub struct MergeDialog {
 impl App {
     pub fn open_merge(&mut self, kind: MergeKind) {
         self.commit_and_save();
+        if kind == MergeKind::SuperResolution {
+            let files = sk_core::variant::files_of(&self.selected_paths());
+            if files.is_empty() {
+                self.status = "Für Super Resolution ein Bild auswählen".into();
+                return;
+            }
+            self.merge_dialog = Some(MergeDialog { kind, files, pixels: None });
+            return;
+        }
         let files = self.merge_files();
         if files.len() < 2 {
             self.status = "Zum Zusammenfügen mindestens zwei Bilder oder einen Stapel auswählen".into();
@@ -86,6 +98,33 @@ impl App {
                 let opts = self.long_exposure_options;
                 self.start_job("Langzeitbelichtung", Box::new(move |p| Ok(vec![sk_core::long_exposure::combine_files(&files, &opts, p)?])));
             }
+            MergeKind::SuperResolution => {
+                // Each file once, with the settings of the first selected version of it.
+                let mut jobs: Vec<(PathBuf, sk_ai::super_resolution::Enhanced)> = Vec::new();
+                for p in self.selected_paths() {
+                    let file = sk_core::variant::file_of(&p);
+                    if files.contains(&file) && !jobs.iter().any(|(f, _)| *f == file) {
+                        jobs.push((file, sk_ai::super_resolution::Enhanced::of(&sk_core::sidecar::load(&p).adjustments)));
+                    }
+                }
+                let denoise = jobs.iter().any(|(_, e)| e.ai_denoise > 0.0);
+                let start = move |app: &mut App| {
+                    app.start_job("Super Resolution", Box::new(move |p| {
+                        let n = jobs.len() as f32;
+                        let mut out = Vec::new();
+                        for (k, (f, e)) in jobs.iter().enumerate() {
+                            out.push(sk_ai::super_resolution::enlarge_file(f, *e, &|q| p((k as f32 + q) / n))?);
+                        }
+                        Ok(out)
+                    }));
+                };
+                // The denoised data first needs its model.
+                if denoise {
+                    self.with_ai(crate::ai_models::AiFeature::Denoise, start);
+                } else {
+                    start(self);
+                }
+            }
         }
     }
 
@@ -98,8 +137,14 @@ impl App {
             MergeKind::Panorama => (icon::PANORAMA, "Panorama zusammenfügen"),
             MergeKind::FocusStack => (icon::APERTURE, "Focus Stacking"),
             MergeKind::LongExposure => (icon::HOURGLASS_MEDIUM, "Langzeitbelichtung"),
+            MergeKind::SuperResolution => (icon::RESIZE, "Super Resolution"),
         };
-        let modal = Dialog::new("merge", ic, title).subtitle(format!("{n} Bilder · ergibt ein DNG")).width(460.0).show(ctx, |ui| {
+        let subtitle = match kind {
+            MergeKind::SuperResolution if n == 1 => "ergibt ein DNG".to_string(),
+            MergeKind::SuperResolution => format!("{n} Bilder · ergibt je ein DNG"),
+            _ => format!("{n} Bilder · ergibt ein DNG"),
+        };
+        let modal = Dialog::new("merge", ic, title).subtitle(subtitle).width(460.0).show(ctx, |ui| {
             match kind {
                 MergeKind::Hdr => {
                     ui.label(format!(
@@ -162,9 +207,22 @@ impl App {
                         }
                     });
                 }
+                MergeKind::SuperResolution => {
+                    ui.label(
+                        "Die KI verdoppelt Breite und Höhe (viermal so viele Pixel) und arbeitet feine Details heraus, \
+                         ohne welche zu erfinden. Das Ergebnis ist ein neues DNG neben dem Original (Name mit „-SR“). \
+                         Weißabgleich, Farbe und Tonwerte bleiben voll bearbeitbar.",
+                    );
+                    dialog::note(
+                        ui,
+                        "KI-Entrauschen und Raw-Details (Verbessern) werden so eingerechnet, wie sie am Bild eingestellt sind, \
+                         sonst würde das Rauschen mit vergrößert. Die übrige Bearbeitung des Originals wird nicht übernommen.",
+                    );
+                }
             }
             dialog::footer(ui, |ui| {
-                if dialog::default_button(ui, true, dialog::primary("Zusammenfügen")) {
+                let action = if kind == MergeKind::SuperResolution { "Vergrößern" } else { "Zusammenfügen" };
+                if dialog::default_button(ui, true, dialog::primary(action)) {
                     run = true;
                 }
                 if ui.add(dialog::secondary("Abbrechen")).clicked() {

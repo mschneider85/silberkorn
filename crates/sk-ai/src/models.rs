@@ -165,7 +165,7 @@ pub const SUBJECT_EDGES: ModelInfo = ModelInfo {
 /// Files of models that Silberkorn no longer uses (removed at startup): NAFNet of
 /// "Verwacklung entfernen", which came with 0.2.6 only, MI-GAN, which "Entfernen" used before
 /// LaMa (up to 0.2.14), and Carve's LaMa as it is (up to 0.2.18).
-const OBSOLETE: [&str; 4] = ["nafnet_deblur.onnx", "nafnet_deblur.data", "migan.onnx", "lama_fp32.onnx"];
+const OBSOLETE: [&str; 6] = ["nafnet_deblur.onnx", "nafnet_deblur.data", "migan.onnx", "lama_fp32.onnx", "realplksr_x2.onnx", "realplksr_x4.onnx"];
 
 /// Deletes the files of models that are no longer used.
 pub fn remove_obsolete() {

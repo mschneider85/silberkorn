@@ -12,6 +12,19 @@ torch.onnx.export(net, torch.zeros(1, 3, 768, 768), "demosaicnet_bayer.onnx",
                   input_names=["mosaic"], output_names=["rgb"], opset_version=13, dynamo=False)
 ```
 
+`span_x2.onnx`: SPAN 2× (Cheng Wan, Hongyuan Yu et al., „Swift Parameter-free Attention Network
+for Efficient Super-Resolution“, NTIRE 2024) aus [hongyuanyu/SPAN](https://github.com/hongyuanyu/SPAN)
+(Commit `c77a591`), die offiziellen Gewichte `spanx2_ch48.pth` (Apache-2.0, siehe `span_LICENSE`;
+SHA-256 `0b20caee…d3f93`, wie bei OpenModelDB `2x-spanx2-ch48`), mit spandrel 0.4.2 geladen
+(dabei werden die Faltungsblöcke zu einfachen Faltungen zusammengefasst) und unverändert nach ONNX
+exportiert (Opset 17, Eingabe 1×3×512×512, Ausgabe 1×3×1024×1024):
+
+```python
+d = spandrel.ModelLoader().load_from_file("2x-spanx2-ch48.pth")
+torch.onnx.export(d.model.eval(), torch.rand(1, 3, 512, 512), "span_x2.onnx",
+                  input_names=["input"], output_names=["output"], opset_version=17, dynamo=False)
+```
+
 # Selbst bereitgestellte Modelle
 
 `lama_dml.onnx` (Release `lama-dml-1`): LaMa (Roman Suvorov et al., Samsung AI Center,

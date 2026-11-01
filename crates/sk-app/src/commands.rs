@@ -178,6 +178,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("merge-focus", icon::APERTURE, "Focus Stacking …", "Entwickeln", [], "merge fokus schärfentiefe stack makro focus stacking", merge_ready, |a, _| a.open_merge(crate::merge::MergeKind::FocusStack)),
     cmd!("merge-long", icon::HOURGLASS_MEDIUM, "Langzeitbelichtung …", "Entwickeln", [], "merge serie mittelwert median lichtspuren sternspuren nd-filter wasser passanten entfernen long exposure", merge_ready, |a, _| a.open_merge(crate::merge::MergeKind::LongExposure)),
     cmd!("enhance", icon::SPARKLE, "Verbessern", "Entwickeln", [], "enhance verbessern raw-details raw details demosaic ki entrauschen denoise rauschen feinzeichnung farbsäume moiré", image_tool, |a, ctx| a.open_enhance(ctx)),
+    cmd!("super-resolution", icon::RESIZE, "Super Resolution …", "Entwickeln", [], "super resolution vergrößern hochskalieren upscale auflösung ki doppelte größe", has_selection, |a, _| a.open_merge(crate::merge::MergeKind::SuperResolution)),
     cmd!("reference", icon::PUSH_PIN, "Referenzbild festlegen / entfernen", "Entwickeln", [SHIFT => Key::Enter], "vergleich compare", has_image, |a, _| a.toggle_reference()),
     cmd!("match-look", icon::SWATCHES, "Look angleichen", "Entwickeln", [], "match look referenz angleichen stil übertragen belichtung weißabgleich", |a| a.can_match_look() && !a.on_layer(), |a, _| {
         a.tab = Tab::Color;
@@ -441,7 +442,7 @@ fn parse_bindings(saved: &BTreeMap<String, Vec<String>>) -> Bindings {
 /// `text` with the shortcut of command `id` in brackets, e.g. "Rückgängig (Strg+Z)".
 /// Commands of AI functions (marked with the yellow sparkle in menus and the palette).
 pub fn is_ai(id: &str) -> bool {
-    matches!(id, "enhance" | "tool-object" | "tool-remove")
+    matches!(id, "enhance" | "super-resolution" | "tool-object" | "tool-remove")
 }
 
 pub fn hint(text: &str, id: &str) -> String {
