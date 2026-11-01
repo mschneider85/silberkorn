@@ -43,8 +43,8 @@ impl Blend {
     pub fn note(self) -> &'static str {
         match self {
             Blend::Mean => "Wie eine lange Belichtung: Wasser und Wolken werden weich, das Rauschen sinkt.",
-            Blend::Median => "Was sich bewegt (Passanten, Autos), verschwindet; was bleibt, bleibt.",
-            Blend::Brightest => "Lichtspuren, Sternspuren, Feuerwerk. Vom Stativ ohne Ausrichten, sonst richten sich die Sterne aus.",
+            Blend::Median => "Was nur kurz durchs Bild läuft (Passanten, Autos), verschwindet. Übrig bleibt, was in den meisten Aufnahmen gleich aussieht.",
+            Blend::Brightest => "Lichtspuren, Sternspuren, Feuerwerk. Vom Stativ „Automatisch ausrichten“ ausschalten: sonst werden womöglich die Sterne übereinandergelegt, und die Spuren fehlen.",
         }
     }
 

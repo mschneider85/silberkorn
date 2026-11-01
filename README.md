@@ -534,7 +534,7 @@ verarbeitet werden (das RAW wird pro Bild nur einmal entwickelt).
 
 ### HDR, Panorama, Focus Stacking und Langzeitbelichtung
 
-**Entwickeln → Zusammenfügen** (mindestens zwei Bilder ausgewählt) erzeugt ein neues
+**Entwickeln → Zusammenfügen** (mindestens zwei Bilder oder ein zugeklappter Stapel ausgewählt; ein zugeklappter Stapel bringt alle seine Aufnahmen mit) erzeugt ein neues
 **lineares DNG** neben den Originalen (`…-HDR.dng`, `…-Pano.dng`, `…-Fokus.dng`, `…-Langzeit.dng`): demosaicte Kameradaten als
 16-Bit-Gleitkomma, verlustfrei komprimiert. Weißabgleich, Farbe und Tonwerte bleiben daher voll
 bearbeitbar, und auch Lightroom und Capture One öffnen die Datei. Alles läuft im Hintergrund

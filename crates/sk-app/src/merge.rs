@@ -31,9 +31,9 @@ pub struct MergeDialog {
 impl App {
     pub fn open_merge(&mut self, kind: MergeKind) {
         self.commit_and_save();
-        let files = sk_core::variant::files_of(&self.selected_paths());
+        let files = self.merge_files();
         if files.len() < 2 {
-            self.status = "Zum Zusammenfügen mindestens zwei Bilder auswählen".into();
+            self.status = "Zum Zusammenfügen mindestens zwei Bilder oder einen Stapel auswählen".into();
             return;
         }
         let pixels = (kind == MergeKind::LongExposure)
@@ -46,7 +46,7 @@ impl App {
 
     /// Entries of the image menu.
     pub fn merge_menu(&mut self, ui: &mut Ui) {
-        let n = sk_core::variant::files_of(&self.selected_paths()).len();
+        let n = self.merge_files().len();
         ui.add_enabled_ui(n >= 2, |ui| {
             crate::widgets::menu_button(ui, format!("{}  Zusammenfügen", icon::STACK), |ui| {
                 if ui.button(format!("{}  HDR …", icon::SUN_HORIZON)).clicked() {
@@ -63,7 +63,7 @@ impl App {
                 }
             })
             .response
-            .on_disabled_hover_text("Mindestens zwei Bilder auswählen");
+            .on_disabled_hover_text("Mindestens zwei Bilder oder einen Stapel auswählen");
         });
     }
 
@@ -142,7 +142,7 @@ impl App {
                     dialog::note(ui, "Verwacklung und die Größenänderung beim Fokussieren werden ausgeglichen.");
                 }
                 MergeKind::LongExposure => {
-                    ui.label(format!("{n} Aufnahmen derselben Szene werden zu einem DNG zusammengefügt, als wäre lange belichtet worden."));
+                    ui.label(format!("{n} Aufnahmen derselben Szene werden zu einem DNG zusammengefügt."));
                     ui.add_space(6.0);
                     dialog::card(ui, "Optionen", None, |ui| {
                         let opts = &mut self.long_exposure_options;
@@ -158,7 +158,7 @@ impl App {
                             _ => n,
                         };
                         if used < n {
-                            dialog::note(ui, format!("Der Median nutzt {used} gleichmäßig verteilte der {n} Aufnahmen (Arbeitsspeicher)."));
+                            dialog::note(ui, format!("Der Arbeitsspeicher reicht für den Median nur für {used} der {n} Aufnahmen. Sie werden gleichmäßig über die Serie verteilt ausgewählt."));
                         }
                     });
                 }

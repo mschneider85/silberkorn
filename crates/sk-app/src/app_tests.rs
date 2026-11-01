@@ -2355,15 +2355,26 @@ fn stacks_collapse_and_expand() {
     assert_eq!(f.app.entries[f.app.visible[0]].path, b);
     assert!(sidecar::load(&a).stack.is_some_and(|s| !s.top));
     assert_eq!(f.app.stack_size(f.app.visible[0]), 2);
+    // Merging the collapsed stack (its top image selected) takes all of its images.
+    f.app.selection = [b.clone()].into_iter().collect();
+    let mut merged = f.app.merge_files();
+    merged.sort();
+    assert_eq!(merged, vec![a.clone(), b.clone()]);
     // A variant joins its file's stack.
     f.app.select_path(&a, egui::Modifiers::NONE);
     f.pump("a geladen", |app| app.current.is_some() && app.loading.is_none());
     f.app.new_variant(false);
     assert_eq!(f.app.stack_size(f.app.visible[0]), 3);
+    // The variant is no image of its own to merge.
+    f.app.selection = [b.clone()].into_iter().collect();
+    assert_eq!(f.app.merge_files().len(), 2);
     // Expanded: all of them, the top image first.
     f.app.run_stack_action(StackAction::ExpandAll);
     assert_eq!(f.app.visible.len(), 3);
     assert_eq!(f.app.entries[f.app.visible[0]].path, b);
+    // There only the images picked are merged.
+    f.app.selection = [b.clone()].into_iter().collect();
+    assert_eq!(f.app.merge_files(), vec![b.clone()]);
     // The catalog knows the stack after reloading.
     f.app.reload_entries();
     assert_eq!(f.app.visible.len(), 3);

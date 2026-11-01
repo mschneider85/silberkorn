@@ -92,6 +92,36 @@ impl App {
             .collect()
     }
 
+    /// The files to merge (HDR, panorama, ...): the selected ones, and for a selected stack that
+    /// is collapsed all of its images (only its top one is shown). In an expanded stack the
+    /// images picked count, so a part of a series can be merged.
+    pub(crate) fn merge_files(&self) -> Vec<PathBuf> {
+        let selected = self.selected_paths();
+        let stack_of = |p: &PathBuf| self.entries.iter().find(|e| e.path == *p).and_then(|e| e.stack.as_ref()).map(|s| s.id.as_str());
+        let collapsed: HashSet<&str> = selected.iter().filter_map(stack_of).filter(|id| !self.expanded_stacks.contains(*id)).collect();
+        if collapsed.is_empty() {
+            return variant::files_of(&selected);
+        }
+        let mut members: HashMap<&str, Vec<PathBuf>> = HashMap::new();
+        for e in &self.entries {
+            if let Some(s) = &e.stack
+                && collapsed.contains(s.id.as_str())
+                && variant::number(&e.path) == 1
+            {
+                members.entry(s.id.as_str()).or_default().push(e.path.clone());
+            }
+        }
+        let mut out = Vec::new();
+        for p in &selected {
+            match stack_of(p).filter(|id| collapsed.contains(id)) {
+                // All of the stack where its top image is (once).
+                Some(id) => out.extend(members.remove(id).unwrap_or_default()),
+                None => out.push(p.clone()),
+            }
+        }
+        variant::files_of(&out)
+    }
+
     pub(crate) fn selected_stack_ids(&self) -> HashSet<String> {
         let selected: HashSet<PathBuf> = self.selected_paths().into_iter().collect();
         self.entries.iter().filter(|e| selected.contains(&e.path)).filter_map(|e| e.stack.as_ref().map(|s| s.id.clone())).collect()

@@ -52,6 +52,10 @@ fn in_grid(a: &App) -> bool {
 fn several_files(a: &App) -> bool {
     sk_core::variant::files_of(&a.selected_paths()).len() >= 2
 }
+/// Two or more files to merge, or a collapsed stack (see `App::merge_files`).
+fn merge_ready(a: &App) -> bool {
+    a.merge_files().len() >= 2
+}
 fn in_session(a: &App) -> bool {
     a.session.is_some() && has_selection(a)
 }
@@ -169,10 +173,10 @@ pub const COMMANDS: &[Command] = &[
     cmd!("stack-create", icon::STACK_PLUS, "Stapel bilden", "Foto", [CTRL => Key::G], "stack gruppieren", several_files, |a, _| a.run_stack_action(crate::stacks::StackAction::Create)),
     cmd!("stack-dissolve", icon::STACK_MINUS, "Stapel auflösen", "Foto", [CTRL_SHIFT => Key::G], "stack", |a| !a.selected_stack_ids().is_empty(), |a, _| a.run_stack_action(crate::stacks::StackAction::Dissolve)),
     cmd!("stack-toggle", icon::STACK, "Stapel auf-/zuklappen", "Foto", [SHIFT => Key::G], "stack", has_selection, |a, _| a.run_stack_action(crate::stacks::StackAction::Toggle)),
-    cmd!("merge-hdr", icon::SUN_HORIZON, "HDR zusammenfügen …", "Entwickeln", [], "merge belichtungsreihe", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Hdr)),
-    cmd!("merge-pano", icon::PANORAMA, "Panorama zusammenfügen …", "Entwickeln", [], "merge stitch", several_files, |a, _| a.open_merge(crate::merge::MergeKind::Panorama)),
-    cmd!("merge-focus", icon::APERTURE, "Focus Stacking …", "Entwickeln", [], "merge fokus schärfentiefe stack makro focus stacking", several_files, |a, _| a.open_merge(crate::merge::MergeKind::FocusStack)),
-    cmd!("merge-long", icon::HOURGLASS_MEDIUM, "Langzeitbelichtung …", "Entwickeln", [], "merge serie mittelwert median lichtspuren sternspuren nd-filter wasser passanten entfernen long exposure", several_files, |a, _| a.open_merge(crate::merge::MergeKind::LongExposure)),
+    cmd!("merge-hdr", icon::SUN_HORIZON, "HDR zusammenfügen …", "Entwickeln", [], "merge belichtungsreihe", merge_ready, |a, _| a.open_merge(crate::merge::MergeKind::Hdr)),
+    cmd!("merge-pano", icon::PANORAMA, "Panorama zusammenfügen …", "Entwickeln", [], "merge stitch", merge_ready, |a, _| a.open_merge(crate::merge::MergeKind::Panorama)),
+    cmd!("merge-focus", icon::APERTURE, "Focus Stacking …", "Entwickeln", [], "merge fokus schärfentiefe stack makro focus stacking", merge_ready, |a, _| a.open_merge(crate::merge::MergeKind::FocusStack)),
+    cmd!("merge-long", icon::HOURGLASS_MEDIUM, "Langzeitbelichtung …", "Entwickeln", [], "merge serie mittelwert median lichtspuren sternspuren nd-filter wasser passanten entfernen long exposure", merge_ready, |a, _| a.open_merge(crate::merge::MergeKind::LongExposure)),
     cmd!("enhance", icon::SPARKLE, "Verbessern", "Entwickeln", [], "enhance verbessern raw-details raw details demosaic ki entrauschen denoise rauschen feinzeichnung farbsäume moiré", image_tool, |a, ctx| a.open_enhance(ctx)),
     cmd!("reference", icon::PUSH_PIN, "Referenzbild festlegen / entfernen", "Entwickeln", [SHIFT => Key::Enter], "vergleich compare", has_image, |a, _| a.toggle_reference()),
     cmd!("match-look", icon::SWATCHES, "Look angleichen", "Entwickeln", [], "match look referenz angleichen stil übertragen belichtung weißabgleich", |a| a.can_match_look() && !a.on_layer(), |a, _| {
