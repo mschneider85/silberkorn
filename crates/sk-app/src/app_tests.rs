@@ -4925,3 +4925,31 @@ fn leaving_a_tool_out_keeps_the_view_sharp_meanwhile() {
     assert_eq!(f.app.tiles.view.iter().map(|v| v.texture.id()).collect::<Vec<_>>(), before);
     assert_eq!(f.app.tiles.version, f.app.edit_version);
 }
+
+/// On a low screen (a laptop with a large scaling) the import fits: the previews give way, the
+/// title and the buttons stay in view. With room they are as large as before.
+#[test]
+fn import_dialog_fits_a_low_screen() {
+    let Some(mut f) = Fixture::new("import-low") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    // With the copy choices (folder and date folders), as from a card.
+    f.app.import_options.target = crate::import::Target::Library;
+    f.app.open_import(f.dir.join("photos"), true);
+    let dialog_at = |f: &mut Fixture, h: f32| {
+        let mut rect = egui::Rect::NOTHING;
+        // The dialog settles within a few frames (it grows into its size, then gives way).
+        for _ in 0..30 {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, h))), ..Default::default() };
+            let app = &mut f.app;
+            let out = f.ctx.run_ui(input, |ui| app.import_dialog(ui.ctx()));
+            let mut delta = out.textures_delta;
+            delta.clear();
+            rect = f.ctx.memory(|m| m.area_rect(egui::Id::new("import"))).unwrap();
+        }
+        rect
+    };
+    let low = dialog_at(&mut f, 620.0);
+    assert!(low.top() >= 0.0 && low.bottom() <= 620.0, "passt nicht: {low:?}");
+    let high = dialog_at(&mut f, 1100.0);
+    assert!(high.height() > low.height() + 50.0, "mit Platz wieder groß: {high:?} vs {low:?}");
+}

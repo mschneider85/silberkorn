@@ -141,7 +141,17 @@ pub struct ImportDialog {
     loader: Loader,
     /// Capture data of the files in the name preview.
     infos: std::collections::HashMap<PathBuf, Option<raw::CaptureInfo>>,
+    /// Height of the previews, smaller when the dialog would not fit on the screen (see
+    /// `import_dialog`); `None` until the first frame.
+    grid_height: Option<f32>,
+    /// Largest height of the part between title and buttons (it scrolls beyond); `None`: all.
+    body_max: Option<f32>,
 }
+
+/// Room kept above and below the dialog.
+const SCREEN_MARGIN: f32 = 16.0;
+/// The previews are not made smaller than this (one row and a bit).
+const GRID_MIN: f32 = 150.0;
 
 /// Files shown in the name preview.
 const PREVIEW: usize = 3;
@@ -374,7 +384,7 @@ impl App {
         let inside = self.session.as_ref().map(|s| s.root.clone());
         let loader = Loader::start(&self.workers.context(), paths, inside, known);
         self.import_source = Some(source.clone());
-        self.import = Some(ImportDialog { source, recursive, items, anchor: None, loader, infos: Default::default() });
+        self.import = Some(ImportDialog { source, recursive, items, anchor: None, loader, infos: Default::default(), grid_height: None, body_max: None });
     }
 
     pub(crate) fn import_dialog(&mut self, ctx: &egui::Context) {
@@ -402,96 +412,105 @@ impl App {
         } else {
             ("Bilder in den Katalog importieren", "Die gewählten Bilder werden in den Katalog aufgenommen", "im Katalog", "Im Katalog")
         };
+        // In a session the "Dateien" card is left out: room for more previews.
+        let grid_max = if in_session { 340.0 } else { 270.0 };
+        let body_max = dialog.body_max.unwrap_or(f32::INFINITY);
+        let mut body_shown = (0.0, 0.0);
         let modal = Dialog::new("import", icon::FOLDER_PLUS, title).subtitle(subtitle).width(820.0).show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                // The controls first (from the right), the source in the room left, shortened in front.
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Andere Quelle …").clicked() {
-                        change_source = true;
-                    }
-                    if crate::widgets::checkbox(ui, &mut dialog.recursive, "Unterordner einbeziehen").changed() {
-                        rescan = true;
-                    }
-                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.label(RichText::new(icon::FOLDER).color(theme::TEXT_DIM));
-                        let source = dialog.source.display().to_string();
-                        let shown = crate::widgets::elide_start(ui, &source, ui.available_width() - 12.0);
-                        ui.label(RichText::new(shown).color(theme::TEXT)).on_hover_text(format!("Quelle: {source}"));
+            // Between title and buttons: scrolls when even the smallest previews leave too
+            // little room (see below).
+            let body = egui::ScrollArea::vertical().id_salt("import_body").max_height(body_max).auto_shrink([false, true]).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    // The controls first (from the right), the source in the room left, shortened in front.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Andere Quelle …").clicked() {
+                            change_source = true;
+                        }
+                        if crate::widgets::checkbox(ui, &mut dialog.recursive, "Unterordner einbeziehen").changed() {
+                            rescan = true;
+                        }
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.label(RichText::new(icon::FOLDER).color(theme::TEXT_DIM));
+                            let source = dialog.source.display().to_string();
+                            let shown = crate::widgets::elide_start(ui, &source, ui.available_width() - 12.0);
+                            ui.label(RichText::new(shown).color(theme::TEXT)).on_hover_text(format!("Quelle: {source}"));
+                        });
                     });
                 });
-            });
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if ui.add_enabled(n > 0, egui::Button::new("Alle")).clicked() {
-                    dialog.items.iter_mut().for_each(|i| (i.chosen, i.touched) = (true, true));
-                }
-                if ui.add_enabled(n > 0, egui::Button::new("Keine")).clicked() {
-                    dialog.items.iter_mut().for_each(|i| (i.chosen, i.touched) = (false, true));
-                }
-                if ui.add_enabled(known > 0, egui::Button::new("Nur neue")).on_hover_text(format!("Alle Bilder wählen, die noch nicht {place} sind")).clicked() {
-                    dialog.items.iter_mut().for_each(|i| (i.chosen, i.touched) = (i.known != Some(true), true));
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if checking {
-                        ui.spinner();
-                        dialog::note(ui, "Prüfe …");
-                    } else if known > 0 {
-                        dialog::pill(ui, Tone::Warn, &format!("{} bereits {place}", crate::widgets::image_count(known)));
-                    }
-                    dialog::note(ui, format!("{chosen} von {n} gewählt"));
-                });
-            });
-            ui.add_space(4.0);
-            grid(ui, dialog, badge, if in_session { 340.0 } else { 270.0 });
-            dialog::note(ui, "Klick wählt ein Bild ab oder wieder an, Umschalt+Klick einen Bereich.");
-            if !in_session {
                 ui.add_space(4.0);
-                // Each choice says what happens to the files ("Im Katalog" sounded like "only
-                // take in", which is what leaving them does).
-                dialog::card(ui, "Dateien", None, |ui| {
-                    let shown = options.target_for(card);
-                    let mut target = shown;
-                    ui.horizontal(|ui| {
-                        let stay = ui.add_enabled_ui(!card, |ui| ui.radio_value(&mut target, Target::InPlace, "Nicht kopieren")).inner;
-                        stay.on_hover_text("Die Bilder bleiben, wo sie sind").on_disabled_hover_text("Von einer Speicherkarte wird immer kopiert");
-                        ui.radio_value(&mut target, Target::Library, "In den Bilderordner kopieren").on_hover_text("In den Bilderordner des Katalogs kopieren");
-                        if ui.radio(target == Target::Folder, "In einen Ordner kopieren").on_hover_text("In einen Ordner nach Wahl kopieren").clicked() {
-                            target = Target::Folder;
-                            if options.folder.is_none() {
-                                pick = Some(Target::Folder);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(n > 0, egui::Button::new("Alle")).clicked() {
+                        dialog.items.iter_mut().for_each(|i| (i.chosen, i.touched) = (true, true));
+                    }
+                    if ui.add_enabled(n > 0, egui::Button::new("Keine")).clicked() {
+                        dialog.items.iter_mut().for_each(|i| (i.chosen, i.touched) = (false, true));
+                    }
+                    if ui.add_enabled(known > 0, egui::Button::new("Nur neue")).on_hover_text(format!("Alle Bilder wählen, die noch nicht {place} sind")).clicked() {
+                        dialog.items.iter_mut().for_each(|i| (i.chosen, i.touched) = (i.known != Some(true), true));
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if checking {
+                            ui.spinner();
+                            dialog::note(ui, "Prüfe …");
+                        } else if known > 0 {
+                            dialog::pill(ui, Tone::Warn, &format!("{} bereits {place}", crate::widgets::image_count(known)));
+                        }
+                        dialog::note(ui, format!("{chosen} von {n} gewählt"));
+                    });
+                });
+                ui.add_space(4.0);
+                grid(ui, dialog, badge, dialog.grid_height.unwrap_or(grid_max));
+                dialog::note(ui, "Klick wählt ein Bild ab oder wieder an, Umschalt+Klick einen Bereich.");
+                if !in_session {
+                    ui.add_space(4.0);
+                    // Each choice says what happens to the files ("Im Katalog" sounded like "only
+                    // take in", which is what leaving them does).
+                    dialog::card(ui, "Dateien", None, |ui| {
+                        let shown = options.target_for(card);
+                        let mut target = shown;
+                        ui.horizontal(|ui| {
+                            let stay = ui.add_enabled_ui(!card, |ui| ui.radio_value(&mut target, Target::InPlace, "Nicht kopieren")).inner;
+                            stay.on_hover_text("Die Bilder bleiben, wo sie sind").on_disabled_hover_text("Von einer Speicherkarte wird immer kopiert");
+                            ui.radio_value(&mut target, Target::Library, "In den Bilderordner kopieren").on_hover_text("In den Bilderordner des Katalogs kopieren");
+                            if ui.radio(target == Target::Folder, "In einen Ordner kopieren").on_hover_text("In einen Ordner nach Wahl kopieren").clicked() {
+                                target = Target::Folder;
+                                if options.folder.is_none() {
+                                    pick = Some(Target::Folder);
+                                }
+                            }
+                        });
+                        if target != shown {
+                            options.target = target;
+                        }
+                        let folder = match target {
+                            Target::InPlace => None,
+                            Target::Library => Some(Some(options.library())),
+                            Target::Folder => Some(options.folder.clone()),
+                        };
+                        match folder {
+                            None => dialog::note(ui, "Die Bilder werden nur in den Katalog aufgenommen, die Dateien bleiben unverändert."),
+                            Some(folder) => {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new(icon::FOLDER).color(theme::TEXT_DIM));
+                                    match &folder {
+                                        Some(f) => ui.label(RichText::new(f.display().to_string()).color(theme::TEXT)),
+                                        None => ui.label(RichText::new("Noch kein Ordner gewählt").color(theme::TEXT_DIM)),
+                                    };
+                                    if ui.button(if folder.is_some() { "Ändern …" } else { "Wählen …" }).clicked() {
+                                        pick = Some(options.target);
+                                    }
+                                });
+                                let example = date_folder(Some("2026:10:18")).display().to_string();
+                                crate::widgets::checkbox(ui, &mut options.by_date, format!("Unterordner nach Aufnahmedatum ({example})"));
                             }
                         }
                     });
-                    if target != shown {
-                        options.target = target;
-                    }
-                    let folder = match target {
-                        Target::InPlace => None,
-                        Target::Library => Some(Some(options.library())),
-                        Target::Folder => Some(options.folder.clone()),
-                    };
-                    match folder {
-                        None => dialog::note(ui, "Die Bilder werden nur in den Katalog aufgenommen, die Dateien bleiben unverändert."),
-                        Some(folder) => {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(icon::FOLDER).color(theme::TEXT_DIM));
-                                match &folder {
-                                    Some(f) => ui.label(RichText::new(f.display().to_string()).color(theme::TEXT)),
-                                    None => ui.label(RichText::new("Noch kein Ordner gewählt").color(theme::TEXT_DIM)),
-                                };
-                                if ui.button(if folder.is_some() { "Ändern …" } else { "Wählen …" }).clicked() {
-                                    pick = Some(options.target);
-                                }
-                            });
-                            let example = date_folder(Some("2026:10:18")).display().to_string();
-                            crate::widgets::checkbox(ui, &mut options.by_date, format!("Unterordner nach Aufnahmedatum ({example})"));
-                        }
-                    }
-                });
-            }
-            let copies = if in_session { session_copies } else { options.target_for(card) != Target::InPlace };
-            ui.add_space(4.0);
-            names_card(ui, dialog, options, copies, &session_name);
+                }
+                let copies = if in_session { session_copies } else { options.target_for(card) != Target::InPlace };
+                ui.add_space(4.0);
+                names_card(ui, dialog, options, copies, &session_name);
+            });
+            body_shown = (body.inner_rect.height(), body.content_size.y);
             dialog::footer(ui, |ui| {
                 let label = if checking { "Prüfe …".to_string() } else { format!("{} importieren", crate::widgets::image_count(chosen)) };
                 if dialog::default_button(ui, chosen > 0 && !checking && ready, dialog::primary(label)) {
@@ -506,6 +525,28 @@ impl App {
                 });
             });
         });
+        // Too tall for the screen (a low window, a large scaling, the copy choices of a card):
+        // first the previews give way, then the part between title and buttons scrolls, so that
+        // both stay in view. Measured on the frame drawn, applied to the next; with more room
+        // both grow back.
+        if let Some(d) = &mut self.import {
+            let over = modal.response.rect.height() + 2.0 * SCREEN_MARGIN - ctx.content_rect().height();
+            let grid = d.grid_height.unwrap_or(grid_max);
+            let fitted = (grid - over).clamp(GRID_MIN, grid_max);
+            let rest = over - (grid - fitted);
+            let (shown, content) = body_shown;
+            let body = if rest > 0.5 || (rest < -0.5 && d.body_max.is_some()) {
+                // The previews' change shows in the content only next frame.
+                let limit = shown - rest - (grid - fitted);
+                (limit < content - 0.5).then_some(limit.max(GRID_MIN))
+            } else {
+                d.body_max
+            };
+            if (fitted - grid).abs() > 0.5 || body != d.body_max {
+                (d.grid_height, d.body_max) = (Some(fitted), body);
+                ctx.request_repaint();
+            }
+        }
         if let Some(target) = pick {
             let start = match target {
                 Target::Folder => options.folder.clone(),

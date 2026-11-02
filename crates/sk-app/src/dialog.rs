@@ -163,7 +163,10 @@ pub fn footer(ui: &mut Ui, buttons: impl FnOnce(&mut Ui)) {
     let x = ui.max_rect().x_range().expand(PAD);
     ui.painter().hline(x, y, Stroke::new(1.0, Color32::from_rgb(54, 54, 60)));
     ui.add_space(14.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    // One row high, as `ui.horizontal`: a layout of its own would take all the height the
+    // dialog had, and the dialog could then grow but never shrink again.
+    let row = vec2(ui.available_width(), ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(row, egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         buttons(ui);
     });
