@@ -29,6 +29,8 @@ pub struct MergeDialog {
     pub files: Vec<PathBuf>,
     /// Pixels of an image of the series (long exposure: how many fit into a median).
     pub pixels: Option<usize>,
+    /// Size of the result (Super Resolution of one image).
+    pub size: Option<(usize, usize)>,
 }
 
 impl App {
@@ -40,7 +42,15 @@ impl App {
                 self.status = "Für Super Resolution ein Bild auswählen".into();
                 return;
             }
-            self.merge_dialog = Some(MergeDialog { kind, files, pixels: None });
+            // The selected version of a single image, with its crop.
+            let size = match files.as_slice() {
+                [file] => self.selected_paths().into_iter().find(|p| sk_core::variant::file_of(p) == *file).and_then(|p| {
+                    let meta = sk_core::raw::read_meta(file).ok()?;
+                    Some(sk_ai::super_resolution::target_size(&meta, &sk_core::sidecar::load(&p).adjustments))
+                }),
+                _ => None,
+            };
+            self.merge_dialog = Some(MergeDialog { kind, files, pixels: None, size });
             return;
         }
         let files = self.merge_files();
@@ -53,7 +63,7 @@ impl App {
             .flatten()
             .map(|m| m.info.width * m.info.height)
             .filter(|&px| px > 0);
-        self.merge_dialog = Some(MergeDialog { kind, files, pixels });
+        self.merge_dialog = Some(MergeDialog { kind, files, pixels, size: None });
     }
 
     /// Entries of the image menu.
@@ -100,20 +110,23 @@ impl App {
             }
             MergeKind::SuperResolution => {
                 // Each file once, with the settings of the first selected version of it.
-                let mut jobs: Vec<(PathBuf, sk_ai::super_resolution::Enhanced)> = Vec::new();
+                let mut jobs: Vec<(PathBuf, sk_core::params::Adjustments)> = Vec::new();
                 for p in self.selected_paths() {
                     let file = sk_core::variant::file_of(&p);
                     if files.contains(&file) && !jobs.iter().any(|(f, _)| *f == file) {
-                        jobs.push((file, sk_ai::super_resolution::Enhanced::of(&sk_core::sidecar::load(&p).adjustments)));
+                        jobs.push((file, sk_core::sidecar::load(&p).adjustments));
                     }
                 }
-                let denoise = jobs.iter().any(|(_, e)| e.ai_denoise > 0.0);
+                let denoise = jobs.iter().any(|(_, a)| sk_ai::super_resolution::Enhanced::of(&a.visible()).ai_denoise > 0.0);
                 let start = move |app: &mut App| {
                     app.start_job("Super Resolution", Box::new(move |p| {
                         let n = jobs.len() as f32;
                         let mut out = Vec::new();
-                        for (k, (f, e)) in jobs.iter().enumerate() {
-                            out.push(sk_ai::super_resolution::enlarge_file(f, *e, &|q| p((k as f32 + q) / n))?);
+                        for (k, (f, adj)) in jobs.iter().enumerate() {
+                            let (dng, adjustments) = sk_ai::super_resolution::enlarge_file(f, adj, &|q| p((k as f32 + q) / n))?;
+                            // Looks like the original right away.
+                            sk_core::sidecar::save(&dng, &sk_core::sidecar::Sidecar { adjustments, ..Default::default() })?;
+                            out.push(dng);
                         }
                         Ok(out)
                     }));
@@ -130,7 +143,7 @@ impl App {
 
     pub(crate) fn merge_dialogs(&mut self, ctx: &egui::Context) {
         let Some(dialog) = &self.merge_dialog else { return };
-        let (kind, n, pixels) = (dialog.kind, dialog.files.len(), dialog.pixels);
+        let (kind, n, pixels, size) = (dialog.kind, dialog.files.len(), dialog.pixels, dialog.size);
         let (mut run, mut cancel) = (false, false);
         let (ic, title) = match kind {
             MergeKind::Hdr => (icon::SUN_HORIZON, "HDR zusammenfügen"),
@@ -213,10 +226,19 @@ impl App {
                          ohne welche zu erfinden. Das Ergebnis ist ein neues DNG neben dem Original (Name mit „-SR“). \
                          Weißabgleich, Farbe und Tonwerte bleiben voll bearbeitbar.",
                     );
+                    if let Some((w, h)) = size {
+                        ui.add_space(4.0);
+                        ui.label(format!("Zielgröße: {w} × {h}"));
+                    }
                     dialog::note(
                         ui,
                         "KI-Entrauschen und Raw-Details (Verbessern) werden so eingerechnet, wie sie am Bild eingestellt sind, \
-                         sonst würde das Rauschen mit vergrößert. Die übrige Bearbeitung des Originals wird nicht übernommen.",
+                         sonst würde das Rauschen mit vergrößert. Die übrige Bearbeitung wird übernommen.",
+                    );
+                    dialog::note(
+                        ui,
+                        "Ist das Bild zugeschnitten, wird nur der Ausschnitt vergrößert. Begradigen, Perspektive und \
+                         Objektivkorrektur werden dann fest eingerechnet, Ebenen und Retusche nicht übernommen.",
                     );
                 }
             }

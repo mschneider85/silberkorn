@@ -587,7 +587,11 @@ das Bild deshalb so, wie „Verbessern“ es am Bild liefert (KI-Entrauschen, Ra
 auf den demosaicten Kameradaten, weißabgeglichen und sRGB-kodiert so skaliert, dass nichts beschnitten
 wird, und die Umrechnung wird danach umgekehrt: Weißabgleich, Farbe und Tonwerte bleiben voll
 bearbeitbar. Übersteuerte Lichter werden nur weich vergrößert, damit die Lichter-Rekonstruktion
-sie weiter erkennt. Die übrige Bearbeitung des Originals wird nicht übernommen.
+sie weiter erkennt. Die übrige Bearbeitung des Originals wird übernommen, das neue Bild sieht also
+gleich aus, nur größer; der Dialog zeigt die Zielgröße. Ist das Bild zugeschnitten, wird nur der
+Ausschnitt vergrößert (schneller, und die Grenze von 250 MP greift später). Begradigen, Perspektive
+und Objektivkorrektur werden dabei fest eingerechnet, weil ein Ausschnitt sie später nicht mehr
+richtig bekäme; Ebenen und Retusche werden dann nicht übernommen, sie lägen an anderer Stelle.
 
 Kommandozeile: `cargo run --release -p sk-ai --example super_resolution -- <raw> <ausgabeordner>`
 

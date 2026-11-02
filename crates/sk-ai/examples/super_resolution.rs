@@ -3,13 +3,15 @@
 //! Lanczos (`lanczos.png`) and the result (`sr.png`), and the crop of the original without
 //! enlarging (`original.png`). `--nur-ausschnitt` writes only `original.png`.
 //! `--entrauschen` enlarges the image with KI-Entrauschen at 100 % (the model is downloaded if
-//! needed).
+//! needed). `--zuschnitt` enlarges only the middle 40 % (straightened by 2°) and writes the
+//! original with that crop (`zuschnitt.png`) and the result (`sr-zuschnitt.png`), both whole.
 
 use sk_core::geometry::Region;
 
 fn main() -> anyhow::Result<()> {
     let only_crop = std::env::args().any(|a| a == "--nur-ausschnitt");
     let denoise = std::env::args().any(|a| a == "--entrauschen");
+    let crop = std::env::args().any(|a| a == "--zuschnitt");
     let args: Vec<String> = std::env::args().filter(|a| !a.starts_with("--")).collect();
     let (path, out) = (std::path::PathBuf::from(&args[1]), std::path::PathBuf::from(&args[2]));
     let render = |p: &std::path::Path, k: usize| -> anyhow::Result<image::RgbaImage> {
@@ -23,18 +25,34 @@ fn main() -> anyhow::Result<()> {
     if only_crop {
         return Ok(render(&path, 2)?.save(out.join("original.png"))?);
     }
-    let mut enhanced = sk_ai::super_resolution::Enhanced::default();
+    let mut adj = sk_core::params::Adjustments::default();
     if denoise {
         if !sk_ai::denoise::available() {
             sk_ai::denoise::download(&|p| eprint!("\rModelle laden {:3.0} %", p * 100.0))?;
             eprintln!();
         }
         sk_ai::denoise::register();
-        enhanced.ai_denoise = 1.0;
+        adj.detail.ai_denoise = 100.0;
+    }
+    if crop {
+        adj.geometry.crop = sk_core::params::CropRect { x: 0.3, y: 0.3, w: 0.4, h: 0.4 };
+        adj.geometry.straighten = 2.0;
     }
     let start = std::time::Instant::now();
-    let dng = sk_ai::super_resolution::enlarge_file(&path, enhanced, &|p| eprint!("\r{:3.0} %", p * 100.0))?;
+    let (dng, settings) = sk_ai::super_resolution::enlarge_file(&path, &adj, &|p| eprint!("\r{:3.0} %", p * 100.0))?;
     eprintln!("\n{} in {:.1?}", dng.display(), start.elapsed());
+    if crop {
+        let whole = |p: &std::path::Path, adj: &sk_core::params::Adjustments| -> anyhow::Result<image::RgbaImage> {
+            let (meta, full) = sk_core::raw::load_full(p)?;
+            let r = sk_core::pipeline::Processor::new(&meta, adj).render(&full, None, None);
+            Ok(image::RgbaImage::from_raw(r.width as u32, r.height as u32, r.rgba).unwrap())
+        };
+        whole(&path, &adj)?.save(out.join("zuschnitt.png"))?;
+        let sr = whole(&dng, &settings)?;
+        eprintln!("Ergebnis {} x {}", sr.width(), sr.height());
+        sr.save(out.join("sr-zuschnitt.png"))?;
+        return Ok(());
+    }
     let small = render(&path, 2)?;
     small.save(out.join("original.png"))?;
     image::imageops::resize(&small, 800, 600, image::imageops::FilterType::Lanczos3).save(out.join("lanczos.png"))?;

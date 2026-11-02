@@ -2447,6 +2447,18 @@ fn super_resolution_dialog_takes_each_file_once() {
     assert_eq!(dialog.files.len(), 2);
     let e = sk_ai::super_resolution::Enhanced::of(&sk_core::sidecar::load(&dialog.files[0]).adjustments);
     assert!((0.0..=1.0).contains(&e.ai_denoise) && (0.0..=1.0).contains(&e.raw_details), "{e:?}");
+    assert!(dialog.size.is_none(), "Zielgröße nur bei einem Bild");
+    // One image, cropped to the left half: twice the size of the half.
+    let path = f.app.selected_paths()[0].clone();
+    let mut sc = sk_core::sidecar::load(&path);
+    sc.adjustments.geometry.crop = sk_core::params::CropRect { x: 0.0, y: 0.0, w: 0.5, h: 1.0 };
+    sk_core::sidecar::save(&path, &sc).unwrap();
+    f.app.selection.clear();
+    f.app.select_path(&path, egui::Modifiers::NONE);
+    f.app.open_merge(crate::merge::MergeKind::SuperResolution);
+    let (w, h) = f.app.merge_dialog.take().expect("Dialog").size.expect("Zielgröße");
+    let info = sk_core::raw::read_meta(&sk_core::variant::file_of(&path)).unwrap().info;
+    assert_eq!((w, h), (2 * (info.width / 2), 2 * info.height));
     // Nothing selected: no dialog.
     f.app.selection.clear();
     f.app.current = None;

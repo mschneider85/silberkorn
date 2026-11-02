@@ -9,6 +9,11 @@
 //! otherwise become sharp specks), white balanced and sRGB-encoded, scaled so that nothing
 //! clips; that is undone afterwards. Clipped highlights, which the network knows nothing about,
 //! are only enlarged smoothly, so the highlight reconstruction still finds them.
+//!
+//! A cropped image is enlarged only as far as the crop goes: the crop is cut out with the
+//! whole geometry (straightening, perspective, lens correction) applied, which a part of the
+//! image could not get right later. The new file gets the original's settings (see
+//! [`result_settings`]), so it looks the same, only larger.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -16,7 +21,10 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result, ensure};
 use rayon::prelude::*;
 use sk_core::color::{srgb_decode, srgb_encode};
+use sk_core::geometry::Region;
 use sk_core::image::LinearImage;
+use sk_core::params::{Adjustments, Geometry, LensCorrection};
+use sk_core::raw::RawMeta;
 
 use crate::runtime::{Input, Net};
 use crate::tiles::{Tiling, run_tiled};
@@ -93,7 +101,8 @@ pub fn enlarge(img: &LinearImage, wb: [f32; 3], clipped: bool, progress: &dyn Fn
             }
             let smooth = bilinear(img, (i % ow) as f32 / FACTOR as f32, (i / ow) as f32 / FACTOR as f32);
             let keep = ((smooth.iter().copied().fold(0.0f32, f32::max) - 0.9) / 0.08).clamp(0.0, 1.0);
-            [0, 1, 2].map(|c| (sr[c] + (smooth[c] - sr[c]) * keep).clamp(0.0, 1.0))
+            // A cut-out with the vignetting corrected goes above 1.0 towards the corners.
+            [0, 1, 2].map(|c| (sr[c] + (smooth[c] - sr[c]) * keep).clamp(0.0, smooth[c].max(1.0)))
         })
         .collect();
     Ok(LinearImage::new(ow, oh, data))
@@ -125,9 +134,43 @@ impl Enhanced {
     }
 }
 
-/// Enlarges the raw file `path` into `<name>-SR.dng` next to it, with Raw-Details and
-/// KI-Entrauschen by `enhanced` (computed first if needed). `progress` gets 0..1.
-pub fn enlarge_file(path: &Path, enhanced: Enhanced, progress: &dyn Fn(f32)) -> Result<PathBuf> {
+/// Whether the image is enlarged only as far as its crop goes.
+fn cropped(adj: &Adjustments) -> bool {
+    !adj.visible().geometry.crop.clamped().is_full()
+}
+
+/// Size of the result for an image with the settings `adj`: twice the size it is shown in
+/// (with its crop).
+pub fn target_size(meta: &RawMeta, adj: &Adjustments) -> (usize, usize) {
+    let g = sk_core::pipeline::geomap(meta, adj, false, meta.info.width, meta.info.height);
+    (FACTOR * g.out_w, FACTOR * g.out_h)
+}
+
+/// The settings of the result made from an image with the settings `adj`: the same, without
+/// what is already in it (Raw-Details and KI-Entrauschen; for a crop also the geometry and the
+/// lens correction). The layers, retouching and removals of a cropped image would land in
+/// other places and are left out.
+pub fn result_settings(adj: &Adjustments) -> Adjustments {
+    let mut out = adj.clone();
+    out.detail.raw_details = 0.0;
+    out.detail.ai_denoise = 0.0;
+    if cropped(adj) {
+        out.geometry = Geometry::default();
+        out.rotation = 0;
+        let l = &adj.lens;
+        out.lens = LensCorrection { camera: false, defringe_purple: l.defringe_purple, defringe_green: l.defringe_green, ..LensCorrection::default() };
+        out.layers.clear();
+        out.retouch.clear();
+        out.removals.clear();
+    }
+    out
+}
+
+/// Enlarges the raw file `path` (edited with `adj`) into `<name>-SR.dng` next to it, with
+/// Raw-Details and KI-Entrauschen as set (computed first if needed) and only the crop if there
+/// is one. Returns the file and its settings (see [`result_settings`]). `progress` gets 0..1.
+pub fn enlarge_file(path: &Path, adj: &Adjustments, progress: &dyn Fn(f32)) -> Result<(PathBuf, Adjustments)> {
+    let enhanced = Enhanced::of(&adj.visible());
     let context = || format!("{}", path.display());
     let meta = sk_core::raw::read_meta(path).with_context(context)?;
     // Merged files have no raw data to improve (as in the pipeline).
@@ -144,9 +187,17 @@ pub fn enlarge_file(path: &Path, enhanced: Enhanced, progress: &dyn Fn(f32)) -> 
     let (meta, plain) = sk_core::raw::load_full(path).with_context(context)?;
     let prepared = sk_core::ai_products::prepared(path, &plain, details, denoise);
     let src = prepared.as_deref().unwrap_or(&plain);
+    let cropped = cropped(adj);
+    // The crop as shown, with the whole geometry (a plain copy if there is nothing but the crop).
+    let cut = cropped.then(|| {
+        let g = sk_core::pipeline::geomap(&meta, adj, false, src.width, src.height);
+        g.resample(src, Region { x: 0, y: 0, w: g.out_w, h: g.out_h })
+    });
+    let src = cut.as_ref().unwrap_or(src);
     let rest = 1.0 - share;
     progress(share + 0.05 * rest);
     let big = enlarge(src, meta.as_shot_wb, !meta.hdr, &|p| progress(share + rest * (0.05 + 0.85 * p)))?;
+    drop(cut);
     drop(prepared);
     drop(plain);
     let out = sk_core::hdr::output_path(path, SUFFIX);
@@ -162,11 +213,11 @@ pub fn enlarge_file(path: &Path, enhanced: Enhanced, progress: &dyn Fn(f32)) -> 
             info: &meta.info,
             baseline_exposure: 0.0,
             preview: Some(&preview),
-            lens_corrected: meta.lens_corrected,
+            lens_corrected: meta.lens_corrected || cropped,
         },
     )?;
     progress(1.0);
-    Ok(out)
+    Ok((out, result_settings(adj)))
 }
 
 #[cfg(test)]
@@ -210,6 +261,22 @@ mod tests {
         assert_eq!(bilinear(&img, 1.5, 0.0), [1.0; 3]);
         // Output pixel 1 (center 0.75 in input pixels) lies a quarter between the two centers.
         assert!((bilinear(&img, 0.5, 0.0)[0] - 0.25).abs() < 1e-6);
+    }
+
+    /// The result keeps the editing, without what is already in it.
+    #[test]
+    fn result_settings_leave_out_what_is_done() {
+        let mut adj = Adjustments { exposure: 0.7, rotation: 1, ..Default::default() };
+        adj.detail.ai_denoise = 80.0;
+        adj.lens.distortion = 20.0;
+        adj.lens.defringe_purple = 30.0;
+        let whole = result_settings(&adj);
+        assert_eq!((whole.exposure, whole.rotation, whole.lens.distortion, whole.detail.ai_denoise), (0.7, 1, 20.0, 0.0));
+        adj.geometry.crop = sk_core::params::CropRect { x: 0.1, y: 0.2, w: 0.5, h: 0.5 };
+        adj.geometry.straighten = 3.0;
+        let cut = result_settings(&adj);
+        assert_eq!((cut.exposure, cut.rotation, cut.lens.distortion, cut.lens.defringe_purple), (0.7, 0, 0.0, 30.0));
+        assert_eq!(cut.geometry, Geometry::default());
     }
 
     #[test]
