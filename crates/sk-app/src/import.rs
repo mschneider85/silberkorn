@@ -52,6 +52,8 @@ pub struct ImportOptions {
     /// Copies are named after `template` (see `naming`); also in a session.
     pub rename: bool,
     pub template: String,
+    /// The import opens when a memory card is inserted (see `card_watch`).
+    pub open_on_card: bool,
 }
 
 /// Template proposed for renaming on import.
@@ -59,11 +61,17 @@ const TEMPLATE: &str = "{Datum}_{Zeit}_{Name}";
 
 impl Default for ImportOptions {
     fn default() -> Self {
-        Self { target: Target::InPlace, library: None, folder: None, by_date: true, rename: false, template: TEMPLATE.into() }
+        Self { target: Target::InPlace, library: None, folder: None, by_date: true, rename: false, template: TEMPLATE.into(), open_on_card: true }
     }
 }
 
 impl ImportOptions {
+    /// Where the files go: from a memory card they are copied even with "Nicht kopieren" chosen
+    /// (into the picture folder; the choice stays for other sources).
+    pub fn target_for(&self, card: bool) -> Target {
+        if card && self.target == Target::InPlace { Target::Library } else { self.target }
+    }
+
     pub fn library(&self) -> PathBuf {
         self.library.clone().unwrap_or_else(default_library)
     }
@@ -383,6 +391,8 @@ impl App {
         let session_name = self.session.as_ref().map(|s| s.name.clone()).unwrap_or_default();
         // A session copies unless the files already are in it.
         let session_copies = self.session.as_ref().is_some_and(|s| !source.starts_with(&s.root));
+        // The files of a memory card leave with it: they are always copied.
+        let card = self.card_watch.holds(&source);
         let options = &mut self.import_options;
         let before = options.clone();
         // Choosing "In einen Ordner kopieren" without a folder yet asks for one.
@@ -439,17 +449,23 @@ impl App {
                 // Each choice says what happens to the files ("Im Katalog" sounded like "only
                 // take in", which is what leaving them does).
                 dialog::card(ui, "Dateien", None, |ui| {
+                    let shown = options.target_for(card);
+                    let mut target = shown;
                     ui.horizontal(|ui| {
-                        ui.radio_value(&mut options.target, Target::InPlace, "Nicht kopieren").on_hover_text("Die Bilder bleiben, wo sie sind");
-                        ui.radio_value(&mut options.target, Target::Library, "In den Bilderordner kopieren").on_hover_text("In den Bilderordner des Katalogs kopieren");
-                        if ui.radio(options.target == Target::Folder, "In einen Ordner kopieren").on_hover_text("In einen Ordner nach Wahl kopieren").clicked() {
-                            options.target = Target::Folder;
+                        let stay = ui.add_enabled_ui(!card, |ui| ui.radio_value(&mut target, Target::InPlace, "Nicht kopieren")).inner;
+                        stay.on_hover_text("Die Bilder bleiben, wo sie sind").on_disabled_hover_text("Von einer Speicherkarte wird immer kopiert");
+                        ui.radio_value(&mut target, Target::Library, "In den Bilderordner kopieren").on_hover_text("In den Bilderordner des Katalogs kopieren");
+                        if ui.radio(target == Target::Folder, "In einen Ordner kopieren").on_hover_text("In einen Ordner nach Wahl kopieren").clicked() {
+                            target = Target::Folder;
                             if options.folder.is_none() {
                                 pick = Some(Target::Folder);
                             }
                         }
                     });
-                    let folder = match options.target {
+                    if target != shown {
+                        options.target = target;
+                    }
+                    let folder = match target {
                         Target::InPlace => None,
                         Target::Library => Some(Some(options.library())),
                         Target::Folder => Some(options.folder.clone()),
@@ -473,7 +489,7 @@ impl App {
                     }
                 });
             }
-            let copies = if in_session { session_copies } else { options.target != Target::InPlace };
+            let copies = if in_session { session_copies } else { options.target_for(card) != Target::InPlace };
             ui.add_space(4.0);
             names_card(ui, dialog, options, copies, &session_name);
             dialog::footer(ui, |ui| {
@@ -484,6 +500,10 @@ impl App {
                 if ui.add(dialog::secondary("Abbrechen")).clicked() {
                     cancel = true;
                 }
+                // Left, beside the buttons (a row of its own made the dialog too tall).
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    crate::widgets::checkbox(ui, &mut options.open_on_card, "Importdialog öffnen, wenn eine Speicherkarte erkannt wird");
+                });
             });
         });
         if let Some(target) = pick {
@@ -528,7 +548,7 @@ impl App {
                 rename: self.import_options.template(),
                 session: s.name.clone(),
             }),
-            None => self.import_options.copy_to(),
+            None => ImportOptions { target: self.import_options.target_for(self.card_watch.holds(source)), ..self.import_options.clone() }.copy_to(),
         }
     }
 }

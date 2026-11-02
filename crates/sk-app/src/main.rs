@@ -8,6 +8,7 @@ mod auto_tools;
 #[cfg(test)]
 mod app_tests;
 mod browser;
+mod card_watch;
 mod chrome;
 mod clipboard;
 mod commands;

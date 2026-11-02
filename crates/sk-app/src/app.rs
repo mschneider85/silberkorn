@@ -812,6 +812,7 @@ pub struct App {
     pub export_errors: usize,
     pub updates: crate::update::Updates,
     pub hot_folder: crate::hot_folder::HotFolder,
+    pub(crate) card_watch: crate::card_watch::CardWatch,
     pub show_filmstrip: bool,
     /// Thumbnail size (long edge) in the grid.
     pub grid_thumb: f32,
@@ -1282,6 +1283,12 @@ impl App {
             export_log: Vec::new(),
             updates: crate::update::Updates::new(settings.update_check_off, settings.update_last_check, settings.update_skipped.clone()),
             hot_folder: crate::hot_folder::HotFolder::new(settings.watch_folder, !settings.watch_no_open),
+            // Not in tests and screenshots: a card in the reader would open the import there.
+            card_watch: if opts.persist_settings && std::env::var_os("SILBERKORN_SCREENSHOT").is_none() {
+                crate::card_watch::CardWatch::start(ctx)
+            } else {
+                crate::card_watch::CardWatch::off()
+            },
             status,
             last_error: None,
             export_errors: 0,
@@ -2606,6 +2613,7 @@ impl App {
         }
         self.pump_products();
         self.pump_hot_folder(ctx);
+        self.pump_card_watch(ctx);
         self.pump_depth();
         self.poll_spot_search();
         self.poll_cancelled();
