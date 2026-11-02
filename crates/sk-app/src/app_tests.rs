@@ -2911,6 +2911,47 @@ fn wheel_zooms_while_cropping_and_space_pans() {
     assert!(f.app.crop_tool.is_some());
 }
 
+/// The crop starts with the frame's own ratio; a chosen ratio keeps the crop's orientation and
+/// "Hochformat" turns it, but only where there is an orientation.
+#[test]
+fn crop_ratio_starts_original_and_turns() {
+    use sk_core::params::AspectRatio;
+    let Some(mut f) = Fixture::new("crop_ratio") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    f.app.start_crop_tool();
+    f.pump("Unbeschnittene Vorschau", |a| a.texture.is_some());
+    viewer_frame(&mut f, vec![]);
+    let geo = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.geometry.clone();
+    let frame = f.app.texture.as_ref().unwrap().size_vec2();
+    let ratio = |f: &Fixture| {
+        let c = geo(f).crop;
+        c.w * frame.x / (c.h * frame.y)
+    };
+    assert_eq!(geo(&f).aspect, AspectRatio::Original);
+    assert!(!f.app.aspect_turnable(), "das eigene Seitenverhältnis hat keine Ausrichtung");
+    f.app.toggle_aspect_portrait();
+    assert!(!geo(&f).aspect_portrait);
+
+    // A ratio takes the orientation of the (still full) crop, i.e. of the image.
+    f.app.choose_aspect(AspectRatio::Ratio(3, 2));
+    let landscape = frame.x >= frame.y;
+    assert_eq!(geo(&f).aspect_portrait, !landscape, "Ausrichtung des Zuschnitts");
+    let r = ratio(&f);
+    assert!((r - if landscape { 1.5 } else { 1.0 / 1.5 }).abs() < 0.02, "{r}");
+    f.app.toggle_aspect_portrait();
+    let r = ratio(&f);
+    assert!((r - if landscape { 1.0 / 1.5 } else { 1.5 }).abs() < 0.02, "gedreht: {r}");
+    // Another ratio keeps the turned orientation.
+    f.app.choose_aspect(AspectRatio::Ratio(16, 9));
+    assert_eq!(geo(&f).aspect_portrait, landscape);
+    f.app.choose_aspect(AspectRatio::Ratio(1, 1));
+    assert!(!f.app.aspect_turnable(), "ein Quadrat hat keine Ausrichtung");
+    // Esc: everything as when the tool started.
+    f.app.cancel_viewer_tools();
+    assert_eq!(geo(&f).aspect, AspectRatio::Original);
+    assert!(geo(&f).crop.is_full());
+}
+
 /// Cursor of a few frames with the pointer at `p` over `ui`.
 fn cursor_over(p: egui::Pos2, add: impl Fn(&mut egui::Ui)) -> egui::CursorIcon {
     let ctx = egui::Context::default();
@@ -4138,6 +4179,8 @@ fn crop_corner_with_alt_keeps_the_middle_and_shift_the_proportions() {
     use sk_core::params::CropRect;
     let Some(mut f) = Fixture::new("crop-keys") else { return };
     f.pump("Bild gerendert", |a| a.current.is_some() && a.texture.is_some());
+    // Free proportions (the default is the frame's own ratio).
+    f.app.current.as_mut().unwrap().adjustments.geometry.aspect = sk_core::params::AspectRatio::Free;
     f.app.start_crop_tool();
     let start = CropRect { x: 0.25, y: 0.25, w: 0.5, h: 0.4 };
     let drag_corner = |f: &mut Fixture, m: egui::Modifiers, by: egui::Vec2| {

@@ -937,8 +937,9 @@ impl CropRect {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AspectRatio {
-    #[default]
     Free,
+    /// The frame's own ratio and orientation: what one usually wants to keep.
+    #[default]
     Original,
     Ratio(u16, u16),
 }
@@ -963,6 +964,12 @@ impl AspectRatio {
             AspectRatio::Ratio(65, 24) => "Panorama 65:24".into(),
             AspectRatio::Ratio(a, b) => format!("{a}:{b}"),
         }
+    }
+
+    /// Whether "Hochformat" changes anything: not for a free crop, the frame's own ratio
+    /// (it keeps the frame's orientation) or a square.
+    pub fn has_orientation(self) -> bool {
+        matches!(self, AspectRatio::Ratio(a, b) if a != b)
     }
 
     /// Width/height ratio in pixels, given the frame's pixel aspect.
@@ -1424,6 +1431,13 @@ impl Adjustments {
         for l in &mut self.layers {
             l.mask.ai.take_if(|a| a.data.len() != a.width * a.height);
         }
+        // "Frei" was the default ratio up to 0.2.27, so every older file holds it: without a
+        // crop it was no choice and becomes the new default (else such a file would count as
+        // edited). A crop made with it keeps it.
+        let g = &mut self.geometry;
+        if g.aspect == AspectRatio::Free && g.crop.is_full() {
+            (g.aspect, g.aspect_portrait) = (AspectRatio::default(), false);
+        }
         if (Adjustments { process: PROCESS_LATEST, ..self.clone() }) == Adjustments::default() {
             self.process = PROCESS_LATEST;
         }
@@ -1622,6 +1636,17 @@ mod tests {
         let mut pasted = new.clone();
         pasted.keep_geometry_from(&old);
         assert_eq!(pasted.process, PROCESS_LEGACY);
+    }
+
+    /// An older file without a crop held the former default "Frei": it counts as untouched and
+    /// gets the new default; a crop made with "Frei" keeps it.
+    #[test]
+    fn free_ratio_of_older_files_without_crop_becomes_original() {
+        let untouched: Adjustments = serde_json::from_str(r#"{"geometry":{"aspect":"Free"}}"#).unwrap();
+        assert_eq!(untouched.normalized(), Adjustments::default());
+        let cropped: Adjustments =
+            serde_json::from_str(r#"{"geometry":{"aspect":"Free","crop":{"x":0.1,"y":0.1,"w":0.5,"h":0.5}}}"#).unwrap();
+        assert_eq!(cropped.normalized().geometry.aspect, AspectRatio::Free);
     }
 
     #[test]

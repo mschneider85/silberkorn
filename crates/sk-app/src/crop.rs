@@ -1,6 +1,6 @@
 //! Interactive crop and straighten tools in the viewer.
 
-use sk_core::params::CropRect;
+use sk_core::params::{AspectRatio, CropRect};
 use egui::{Color32, Pos2, Rect, Response, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
 use crate::app::App;
@@ -188,7 +188,7 @@ impl App {
             }
         }
 
-        match apply_or_cancel(ui, img_rect) {
+        match image_bar(ui, img_rect, |_| {}) {
             Some(true) => self.apply_keystone_guides(),
             Some(false) => self.cancel_viewer_tools(),
             None => {}
@@ -196,22 +196,32 @@ impl App {
     }
 }
 
-/// "Übernehmen" and "Abbrechen" at the bottom of the image, for the tools that are confirmed
-/// (crop, keystone lines): Some(true) when applied, Some(false) when cancelled.
-fn apply_or_cancel(ui: &mut Ui, img_rect: Rect) -> Option<bool> {
-    // Wide enough for the tick and "Übernehmen" in one line (it wrapped and grew taller).
-    let size = vec2(130.0, 28.0);
-    let at = pos2(img_rect.center().x, img_rect.bottom().min(ui.clip_rect().bottom()) - 44.0);
-    let button = |text: String| egui::Button::new(text).wrap_mode(egui::TextWrapMode::Extend);
-    let apply = ui.put(Rect::from_center_size(at - vec2(size.x / 2.0 + 4.0, 0.0), size), button(format!("{}  Übernehmen", crate::theme::icon::CHECK)));
-    let cancel = ui.put(Rect::from_center_size(at + vec2(size.x / 2.0 + 4.0, 0.0), size), button("Abbrechen".into()));
-    if apply.on_hover_text(crate::commands::shortcut_of("finish-crop")).clicked() {
-        Some(true)
-    } else if cancel.on_hover_text("Esc").clicked() {
-        Some(false)
-    } else {
-        None
-    }
+/// The bar at the bottom of the image for the tools that are confirmed (crop, keystone lines):
+/// the tool's settings from `settings` (may be empty), then "Übernehmen" and "Abbrechen".
+/// Some(true) when applied, Some(false) when cancelled.
+pub(crate) fn image_bar(ui: &mut Ui, img_rect: Rect, settings: impl FnOnce(&mut Ui)) -> Option<bool> {
+    let at = pos2(img_rect.center().x, img_rect.bottom().min(ui.clip_rect().bottom()) - 16.0);
+    let mut done = None;
+    egui::Area::new(egui::Id::new("image_bar")).order(egui::Order::Middle).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(at).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).corner_radius(8).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let before = ui.min_rect().width();
+                settings(ui);
+                if ui.min_rect().width() > before {
+                    ui.separator();
+                }
+                // In one line each (the tick and "Übernehmen" wrapped and grew taller).
+                let button = |text: String| egui::Button::new(text).wrap_mode(egui::TextWrapMode::Extend);
+                if ui.add(button(format!("{}  Übernehmen", crate::theme::icon::CHECK))).on_hover_text(crate::commands::shortcut_of("finish-crop")).clicked() {
+                    done = Some(true);
+                }
+                if ui.add(button("Abbrechen".into())).on_hover_text("Esc").clicked() {
+                    done = Some(false);
+                }
+            });
+        });
+    });
+    done
 }
 
 /// Shortest distance from `p` to the segment `a`–`b`.
@@ -372,16 +382,48 @@ impl App {
         }
     }
 
-    /// Applies the selected aspect ratio to the current crop.
-    pub fn apply_aspect(&mut self) {
-        let Some(tex) = &self.texture else { return };
-        let Some(cur) = &self.current else { return };
-        let frame = if self.crop_tool.is_some() {
+    /// Size of the uncropped frame (its proportions count).
+    fn crop_frame(&self) -> Option<Vec2> {
+        let tex = self.texture.as_ref()?;
+        let cur = self.current.as_ref()?;
+        Some(if self.crop_tool.is_some() {
             tex.size_vec2()
         } else {
             let g = sk_core::pipeline::geomap(&cur.meta, &cur.adjustments, true, cur.preview.width, cur.preview.height);
             vec2(g.out_w as f32, g.out_h as f32)
-        };
+        })
+    }
+
+    /// Chooses an aspect ratio and applies it. A ratio with an orientation takes the one the
+    /// crop has (as in Lightroom): a portrait crop stays portrait.
+    pub fn choose_aspect(&mut self, aspect: AspectRatio) {
+        let Some(frame) = self.crop_frame() else { return };
+        self.edit(|a| {
+            let g = &mut a.geometry;
+            g.aspect = aspect;
+            if aspect.has_orientation() {
+                g.aspect_portrait = g.crop.w * frame.x < g.crop.h * frame.y;
+            }
+        });
+        self.apply_aspect();
+    }
+
+    /// Whether the crop's ratio can be turned (see [`AspectRatio::has_orientation`]).
+    pub fn aspect_turnable(&self) -> bool {
+        !self.on_layer() && self.current.as_ref().is_some_and(|c| c.adjustments.geometry.aspect.has_orientation())
+    }
+
+    /// Switches between portrait and landscape ("Hochformat").
+    pub fn toggle_aspect_portrait(&mut self) {
+        if self.aspect_turnable() {
+            self.edit(|a| a.geometry.aspect_portrait = !a.geometry.aspect_portrait);
+            self.apply_aspect();
+        }
+    }
+
+    /// Applies the selected aspect ratio to the current crop.
+    pub fn apply_aspect(&mut self) {
+        let Some(frame) = self.crop_frame() else { return };
         let ratio = self.aspect_value(frame);
         self.edit(|a| {
             let c = a.geometry.crop;
@@ -561,16 +603,38 @@ impl App {
         for c in [r.left_top(), r.right_top(), r.left_bottom(), r.right_bottom()] {
             painter.rect_filled(Rect::from_center_size(c, Vec2::splat(9.0)), 1.0, Color32::WHITE);
         }
-        // In percent of the frame, as in the panel.
-        painter.text(
-            r.center_bottom() + vec2(0.0, -8.0),
-            egui::Align2::CENTER_BOTTOM,
-            format!("{:.0} % × {:.0} %", crop.w * 100.0, crop.h * 100.0),
-            egui::FontId::proportional(12.0),
-            Color32::WHITE,
-        );
-        // Like the keystone lines: confirm or cancel right in the image.
-        match apply_or_cancel(ui, img_rect) {
+        self.crop_bar(ui, img_rect);
+    }
+
+    /// The crop's settings in the [`image_bar`], where one looks while cropping: aspect ratio,
+    /// orientation and size, the same as in the panel and under the same names.
+    fn crop_bar(&mut self, ui: &mut Ui, img_rect: Rect) {
+        let Some(g) = self.current.as_ref().map(|c| c.adjustments.geometry.clone()) else { return };
+        let (mut chosen, mut turn) = (None, false);
+        let done = image_bar(ui, img_rect, |ui| {
+            let combo = egui::ComboBox::from_id_salt("crop_bar_aspect").selected_text(g.aspect.label()).width(120.0).show_ui(ui, |ui| {
+                for a in AspectRatio::PRESETS {
+                    if ui.selectable_label(g.aspect == a, a.label()).clicked() {
+                        chosen = Some(a);
+                    }
+                }
+            });
+            combo.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Seitenverhältnis"));
+            combo.response.on_hover_text("Seitenverhältnis");
+            let portrait = egui::Button::new(format!("{}  Hochformat", crate::theme::icon::DEVICE_ROTATE)).selected(g.aspect_portrait && g.aspect.has_orientation());
+            if ui.add_enabled(g.aspect.has_orientation(), portrait).on_hover_text(crate::commands::shortcut_of("crop-portrait")).clicked() {
+                turn = true;
+            }
+            // In percent of the frame, as in the panel.
+            ui.label(egui::RichText::new(format!("{:.0} % × {:.0} %", g.crop.w * 100.0, g.crop.h * 100.0)).color(Color32::from_gray(150)));
+        });
+        if let Some(a) = chosen {
+            self.choose_aspect(a);
+        }
+        if turn {
+            self.toggle_aspect_portrait();
+        }
+        match done {
             Some(true) => self.finish_crop_tool(),
             Some(false) => self.cancel_viewer_tools(),
             None => {}

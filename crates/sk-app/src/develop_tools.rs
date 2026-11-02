@@ -269,7 +269,7 @@ impl App {
         let mut start_crop = false;
         let mut finish_crop = false;
         let mut cancel_crop = false;
-        let mut apply_aspect = false;
+        let (mut chosen_aspect, mut turn_aspect) = (None, false);
         let mut toggle_straighten = false;
         let mut upright = None;
         let auto_free = self.auto_progress.is_none();
@@ -384,16 +384,17 @@ impl App {
             ui.horizontal(|ui| {
                 widgets::combo_field(ui, "Seitenverhältnis", g.aspect.label(), |ui| {
                     for a in AspectRatio::PRESETS {
-                        if ui.selectable_value(&mut g.aspect, a, a.label()).changed() {
-                            apply_aspect = true;
+                        if ui.selectable_label(g.aspect == a, a.label()).clicked() {
+                            chosen_aspect = Some(a);
                         }
                     }
                 });
             });
-            // A free crop has no orientation: shown, but disabled.
-            let fixed = !matches!(g.aspect, AspectRatio::Free);
-            if ui.add_enabled(fixed, crate::widgets::Check::new(&mut g.aspect_portrait, "Hochformat")).changed() {
-                apply_aspect = true;
+            // Free, the frame's own ratio and a square have no orientation: shown, but disabled.
+            let mut portrait = g.aspect_portrait && g.aspect.has_orientation();
+            let check = ui.add_enabled(g.aspect.has_orientation(), crate::widgets::Check::new(&mut portrait, "Hochformat"));
+            if check.on_hover_text(crate::commands::shortcut_of("crop-portrait")).changed() {
+                turn_aspect = true;
             }
             let c = g.crop;
             ui.label(RichText::new(format!("{:.0} % × {:.0} %", c.w * 100.0, c.h * 100.0)).color(Color32::from_gray(150)));
@@ -511,11 +512,11 @@ impl App {
         if cancel_crop {
             self.cancel_viewer_tools();
         }
-        if apply_aspect {
-            self.apply_aspect();
-            if self.crop_tool.is_none() {
-                self.request_render();
-            }
+        if let Some(a) = chosen_aspect {
+            self.choose_aspect(a);
+        }
+        if turn_aspect {
+            self.toggle_aspect_portrait();
         }
         if let Some(mode) = upright {
             self.run_auto(crate::auto_tools::AutoKind::Upright(mode));
