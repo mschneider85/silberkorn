@@ -141,7 +141,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("rotate-right", icon::ARROW_CLOCKWISE, "Rechts drehen", "Entwickeln", [CTRL => Key::CloseBracket], "rotate", image_tool, |a, _| a.rotate(1)),
     cmd!("crop", icon::CROP, "Zuschneiden", "Entwickeln", [NONE => Key::C], "crop", image_tool, |a, _| a.toggle_crop()),
     cmd!("finish-crop", icon::CHECK, "Zuschnitt bzw. Trapezkorrektur übernehmen", "Entwickeln", [NONE => Key::Enter], "crop fertig trapez anwenden", |a| a.crop_tool.is_some() || a.keystone_guides_active(), |a, _| a.finish_viewer_tool()),
-    cmd!("crop-portrait", icon::DEVICE_ROTATE, "Hochformat", "Entwickeln", [SHIFT => Key::X], "zuschnitt seitenverhältnis hochformat querformat drehen tauschen", |a| a.crop_tool.is_some() && a.aspect_turnable(), |a, _| a.toggle_aspect_portrait()),
+    cmd!("crop-portrait", icon::DEVICE_ROTATE, "Hoch-/Querformat wechseln", "Entwickeln", [SHIFT => Key::X], "zuschnitt seitenverhältnis hochformat querformat drehen tauschen", |a| a.crop_tool.is_some() && a.aspect_turnable(), |a, _| a.toggle_aspect_portrait()),
     cmd!("straighten", icon::RULER, "Geraderichten (Linie ziehen)", "Entwickeln", [], "straighten horizont", image_tool, |a, _| a.toggle_straighten()),
     cmd!("auto-adjust", icon::MAGIC_WAND, "Automatisch anpassen", "Entwickeln", [CTRL => Key::L], "auto adjust automatisch belichtung weißabgleich tonwerte", |a| has_selection(a) && a.can_auto(AutoKind::Adjust(a.auto_options)), |a, _| a.auto_adjust_selection()),
     cmd!("auto-wb", icon::MAGIC_WAND, "Weißabgleich automatisch", "Entwickeln", [], "auto wb white balance weißabgleich automatisch", |a| auto(a, Tool::WhiteBalance), |a, _| a.auto_tool(Tool::WhiteBalance)),

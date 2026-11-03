@@ -210,12 +210,13 @@ pub(crate) fn image_bar(ui: &mut Ui, img_rect: Rect, settings: impl FnOnce(&mut 
                 if ui.min_rect().width() > before {
                     ui.separator();
                 }
-                // In one line each (the tick and "Übernehmen" wrapped and grew taller).
-                let button = |text: String| egui::Button::new(text).wrap_mode(egui::TextWrapMode::Extend);
-                if ui.add(button(format!("{}  Übernehmen", crate::theme::icon::CHECK))).on_hover_text(crate::commands::shortcut_of("finish-crop")).clicked() {
+                // In one line each (the tick and "Übernehmen" wrapped and grew taller), with the
+                // key beside the name, as in the menus.
+                let button = |text: String, key: String| egui::Button::new(text).shortcut_text(key).wrap_mode(egui::TextWrapMode::Extend);
+                if ui.add(button(format!("{}  Übernehmen", crate::theme::icon::CHECK), crate::commands::shortcut_of("finish-crop"))).clicked() {
                     done = Some(true);
                 }
-                if ui.add(button("Abbrechen".into())).on_hover_text("Esc").clicked() {
+                if ui.add(button("Abbrechen".into(), "Esc".into())).clicked() {
                     done = Some(false);
                 }
             });
@@ -413,7 +414,14 @@ impl App {
         !self.on_layer() && self.current.as_ref().is_some_and(|c| c.adjustments.geometry.aspect.has_orientation())
     }
 
-    /// Switches between portrait and landscape ("Hochformat").
+    /// Hochformat or Querformat.
+    pub fn set_aspect_portrait(&mut self, portrait: bool) {
+        if self.current.as_ref().is_some_and(|c| c.adjustments.geometry.aspect_portrait != portrait) {
+            self.toggle_aspect_portrait();
+        }
+    }
+
+    /// Switches between Hochformat and Querformat.
     pub fn toggle_aspect_portrait(&mut self) {
         if self.aspect_turnable() {
             self.edit(|a| a.geometry.aspect_portrait = !a.geometry.aspect_portrait);
@@ -610,7 +618,7 @@ impl App {
     /// orientation and size, the same as in the panel and under the same names.
     fn crop_bar(&mut self, ui: &mut Ui, img_rect: Rect) {
         let Some(g) = self.current.as_ref().map(|c| c.adjustments.geometry.clone()) else { return };
-        let (mut chosen, mut turn) = (None, false);
+        let (mut chosen, mut turn) = (None, None);
         let done = image_bar(ui, img_rect, |ui| {
             let combo = egui::ComboBox::from_id_salt("crop_bar_aspect").selected_text(g.aspect.label()).width(120.0).show_ui(ui, |ui| {
                 for a in AspectRatio::PRESETS {
@@ -621,18 +629,15 @@ impl App {
             });
             combo.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, "Seitenverhältnis"));
             combo.response.on_hover_text("Seitenverhältnis");
-            let portrait = egui::Button::new(format!("{}  Hochformat", crate::theme::icon::DEVICE_ROTATE)).selected(g.aspect_portrait && g.aspect.has_orientation());
-            if ui.add_enabled(g.aspect.has_orientation(), portrait).on_hover_text(crate::commands::shortcut_of("crop-portrait")).clicked() {
-                turn = true;
-            }
+            turn = crate::widgets::orientation(ui, g.aspect.has_orientation(), g.aspect_portrait, &crate::commands::shortcut_of("crop-portrait"));
             // In percent of the frame, as in the panel.
             ui.label(egui::RichText::new(format!("{:.0} % × {:.0} %", g.crop.w * 100.0, g.crop.h * 100.0)).color(Color32::from_gray(150)));
         });
         if let Some(a) = chosen {
             self.choose_aspect(a);
         }
-        if turn {
-            self.toggle_aspect_portrait();
+        if let Some(portrait) = turn {
+            self.set_aspect_portrait(portrait);
         }
         match done {
             Some(true) => self.finish_crop_tool(),

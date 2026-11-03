@@ -516,9 +516,10 @@ impl App {
         let mode = if let Some(msg) = &self.speed_message {
             Some(msg.trim().to_string())
         } else if self.crop_tool.is_some() {
-            Some(format!("Zuschneiden – {} übernimmt, Esc bricht ab", crate::commands::key_or("finish-crop", "„Übernehmen“")))
+            // The keys are on the buttons of the bar below.
+            Some("Zuschneiden".into())
         } else if self.keystone_guides_active() {
-            Some(format!("Trapezkorrektur – Linien an Kanten legen, {} übernimmt, Esc bricht ab", crate::commands::key_or("finish-crop", "„Übernehmen“")))
+            Some("Trapezkorrektur – Linien an Kanten legen".into())
         } else if self.straighten_tool.is_some() {
             Some("Geraderichten – Linie entlang des Horizonts ziehen, Esc beendet".into())
         } else if self.picking_wb {

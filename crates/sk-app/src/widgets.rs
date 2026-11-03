@@ -2315,3 +2315,27 @@ pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, add_cont
     let (response, inner) = egui::containers::menu::MenuButton::new(atoms).config(config).ui(ui, add_contents);
     egui::InnerResponse::new(inner.map(|i| i.inner), response)
 }
+
+/// Querformat and Hochformat as two small buttons, each with a framed rectangle of its shape:
+/// Some(portrait) when one is clicked. Disabled, neither is shown as chosen. `key` (switching
+/// between them) is named in the tooltips.
+pub fn orientation(ui: &mut Ui, enabled: bool, portrait: bool, key: &str) -> Option<bool> {
+    let mut clicked = None;
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (p, name, shape) in [(false, "Querformat", vec2(15.0, 10.0)), (true, "Hochformat", vec2(10.0, 15.0))] {
+                let on = enabled && portrait == p;
+                let r = ui.add(egui::Button::new("").selected(on).min_size(vec2(30.0, ui.spacing().interact_size.y)));
+                let color = if on { ui.visuals().selection.stroke.color } else { ui.visuals().widgets.style(&r).fg_stroke.color };
+                ui.painter().rect_stroke(Rect::from_center_size(r.rect.center(), shape), 2.0, Stroke::new(1.5, color), StrokeKind::Inside);
+                r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, on, name));
+                let tip = if key.is_empty() { name.to_string() } else { format!("{name} · {key} wechselt") };
+                if r.on_hover_text(tip).clicked() {
+                    clicked = Some(p);
+                }
+            }
+        });
+    });
+    clicked
+}
