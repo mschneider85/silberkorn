@@ -1087,8 +1087,8 @@ zeigt die aktuell eingestellten Tasten.
 **Tutorials …** (Menü Hilfe, auch auf der Startseite ohne geöffneten Ordner) führt in kurzen
 Touren durch das Programm: Erste Schritte, Ebenen und Masken, Retusche und Entfernen, Bibliothek.
 Die Tour hebt die Stelle hervor, um die es geht, und geht weiter, sobald der Schritt erledigt ist;
-das Programm bleibt dabei bedienbar. Liegt neben dem Programm ein Ordner `Beispiel`, öffnet eine
-Tour ihn, wenn noch kein Bild offen ist.
+das Programm bleibt dabei bedienbar. Ist noch kein Bild offen, lädt die Tour einmal ein
+Beispielbild herunter (ein RAW, 25 MB, aus der Release `beispiel-1`) und öffnet es.
 
 Die Kapitel stehen als Markdown in `crates/sk-app/help/` (eine kleine Teilmenge, siehe
 `help.rs`; `{taste:befehl}` steht für die aktuelle Taste) und als Webseiten in `docs/hilfe/`. Der

@@ -186,6 +186,9 @@ pub const TOURS: &[Tour] = &[
     },
 ];
 
+/// The job that downloads the example image.
+const DOWNLOAD: &str = "Beispielbild laden";
+
 /// The running tour.
 #[derive(Default)]
 pub struct TourState {
@@ -198,12 +201,32 @@ pub struct TourState {
     /// The step was already done when it began (or was gone back to): then it does not go on
     /// by itself, only with "Weiter".
     done_on_entry: bool,
+    /// The download of the example image (job id), for a tour started without an image.
+    download: Option<u64>,
 }
 
-/// The example image of the tutorials, when installed (`Beispiel` next to the program).
+/// The example image of the tours: a raw file of the author's (a mountain lake under clouds),
+/// provided with a release of Silberkorn and downloaded the first time a tour starts without an
+/// open image.
+pub const EXAMPLE: sk_ai::models::ModelInfo = sk_ai::models::ModelInfo {
+    label: "Beispielbild",
+    file: "DSC09197.ARW",
+    url: "https://github.com/mschneider85/silberkorn/releases/download/beispiel-1/DSC09197.ARW",
+    bytes: 25_324_288,
+    sha256: "05194398cbeaf06b38f82cddd83b5916197109468caa38f832cb7af056ea8b47",
+    license: "Martin Schneider, zur Nutzung mit Silberkorn",
+    entry: None,
+};
+
+/// Where the example image is kept (its own folder, so that it is opened alone).
+fn example_dir() -> PathBuf {
+    sk_core::paths::data_dir().join("Beispiel")
+}
+
+/// The folder with the example image, once it is downloaded.
 pub fn example_folder() -> Option<PathBuf> {
-    let dir = std::env::current_exe().ok()?.parent()?.join("Beispiel");
-    dir.is_dir().then_some(dir)
+    let dir = example_dir();
+    std::fs::metadata(dir.join(EXAMPLE.file)).is_ok_and(|m| m.len() == EXAMPLE.bytes).then_some(dir)
 }
 
 impl App {
@@ -211,12 +234,44 @@ impl App {
         self.tour.dialog_open = false;
         self.tour.running = Some((i, 0));
         self.tour.entered = None;
-        // Without an open image the example is opened, if there is one.
-        if self.current.is_none()
-            && let Some(dir) = example_folder()
-        {
-            self.open_folder(dir);
+        // Without an open image the example is opened, downloaded first if need be.
+        if self.current.is_none() {
+            match example_folder() {
+                Some(dir) => self.open_folder(dir),
+                None if self.tour.download.is_none() => {
+                    let target = example_dir().join(EXAMPLE.file);
+                    self.start_job(DOWNLOAD, Box::new(move |progress| {
+                        sk_ai::models::download_to(&EXAMPLE, &target, progress)?;
+                        Ok(Vec::new())
+                    }));
+                    self.tour.download = self.jobs.last().map(|j| j.id);
+                }
+                None => {}
+            }
         }
+    }
+
+    /// The example image arrived: opened, if the tour still waits for an image.
+    pub(crate) fn example_job_done(&mut self, id: u64, result: &Result<Vec<PathBuf>, String>) -> bool {
+        if self.tour.download != Some(id) {
+            return false;
+        }
+        self.tour.download = None;
+        self.jobs.retain(|j| j.id != id);
+        match result {
+            Ok(_) => {
+                self.status = "Beispielbild geladen".into();
+                if self.tour.running.is_some()
+                    && self.current.is_none()
+                    && let Some(dir) = example_folder()
+                {
+                    self.open_folder(dir);
+                }
+            }
+            Err(e) if e == crate::jobs::CANCELLED => self.status = format!("{DOWNLOAD} abgebrochen"),
+            Err(e) => self.report_error(format!("{DOWNLOAD} fehlgeschlagen: {e}")),
+        }
+        true
     }
 
     /// "Tutorials …": the tours to choose from.
@@ -242,7 +297,7 @@ impl App {
                 });
             }
             if self.current.is_none() && example_folder().is_none() {
-                dialog::note(ui, "Die Touren brauchen ein geöffnetes Bild: erst einen Ordner mit Bildern öffnen.");
+                dialog::note(ui, &format!("Ohne geöffnetes Bild laden die Touren ein Beispielbild herunter ({} MB).", EXAMPLE.size_mb()));
             }
             dialog::footer(ui, |ui| {
                 if ui.add(dialog::secondary("Schließen")).clicked() {
@@ -338,7 +393,11 @@ impl App {
                         crate::help::show_spans(ui, &spans);
                     }
                 }
-                if step.target.is_some() && rect.is_none() {
+                let loading = self.tour.download.and_then(|id| self.jobs.iter().find(|j| j.id == id));
+                if let Some(job) = loading {
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(format!("Beispielbild wird geladen … {:.0} %", job.progress * 100.0)).small().color(theme::TEXT_DIM));
+                } else if step.target.is_some() && rect.is_none() {
                     ui.label(RichText::new("Die Stelle ist gerade nicht zu sehen.").small().color(theme::TEXT_FAINT));
                 }
                 ui.add_space(8.0);
