@@ -896,7 +896,9 @@ impl App {
                 "{}, bei mehreren ausgewählten Bildern für alle.",
                 crate::commands::hint("Weißabgleich, Belichtung, Kontrast und Dynamik in einem Schritt einstellen", "auto-adjust")
             );
-            if ui.add_enabled(!busy, egui::Button::new(format!("{}  {text}", icon::MAGIC_WAND))).on_hover_text(hover).clicked() {
+            let auto = ui.add_enabled(!busy, egui::Button::new(format!("{}  {text}", icon::MAGIC_WAND)));
+            crate::tour::target(ui.ctx(), "auto-adjust", auto.rect);
+            if auto.on_hover_text(hover).clicked() {
                 self.auto_adjust_selection();
             }
             let mut opts = self.auto_options;

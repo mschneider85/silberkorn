@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bibliothek – Silberkorn</title>
+<link rel="stylesheet" href="hilfe.css">
+</head>
+<body>
+<nav><a class="home" href="../index.html">Silberkorn</a> · <a href="index.html">Hilfe</a>
+<ul>
+<li><a href="erste-schritte.html">Erste Schritte</a></li>
+<li><a href="bibliothek.html">Bibliothek</a></li>
+<li><a href="ansicht.html">Ansicht</a></li>
+<li><a href="objektiv.html">Objektiv &amp; Geometrie</a></li>
+<li><a href="entwickeln.html">Entwickeln</a></li>
+<li><a href="ebenen-masken.html">Ebenen &amp; Masken</a></li>
+<li><a href="retusche.html">Retusche</a></li>
+<li><a href="ki-werkzeuge.html">KI-Werkzeuge</a></li>
+<li><a href="zusammenfuegen.html">Zusammenfügen</a></li>
+<li><a href="vergleichen.html">Vergleichen und Looks</a></li>
+<li><a href="verlauf.html">Verlauf und Anpassungen</a></li>
+<li><a href="ausgabe.html">Ausgabe</a></li>
+<li><a href="tastenkuerzel.html">Tastenkürzel</a></li>
+</ul></nav>
+<main>
+<h1 id="bibliothek">Bibliothek</h1>
+<p>Der Tab <b>Bibliothek</b> ordnet die Bilder: woher sie kommen, welche gezeigt werden und wie sie zusammengehören. Bewertung, Farb-Label und Keywords stehen zusätzlich im Tab <b>Metadaten</b>.</p>
+<h2 id="ordner-katalog-und-sessions">Ordner, Katalog und Sessions</h2>
+<p>Silberkorn kennt drei Arten, mit Bildern zu arbeiten. Sie schließen sich nicht aus: Ordner lassen sich immer durchsuchen, der Katalog ist immer da, eine Session ersetzt ihn nur, solange sie geöffnet ist.</p>
+<h3 id="ordner">Ordner</h3>
+<p><b>Ordner öffnen …</b> (Strg+O) oder <b>Durchsuchen …</b> im Abschnitt <b>Ordner</b> zeigt die Bilder eines Ordners. Darunter stehen seine Unterordner; <b>Übergeordnet</b> geht eine Ebene höher, <b>mit Unterordnern</b> zeigt auch alle Bilder darunter.</p>
+<p>Ein nur durchsuchter Ordner wird nicht in den Katalog aufgenommen. Erst wenn man ein Bild bearbeitet, kommt es an seinem Ort in den Katalog. <b>Importieren …</b> im Abschnitt <b>Katalog</b> nimmt den ganzen Ordner samt Unterordnern auf.</p>
+<h3 id="katalog">Katalog</h3>
+<p>Der Katalog sammelt Bilder aus beliebigen Ordnern und Laufwerken. Er bietet <b>Alle Bilder</b>, <b>Letzter Import</b>, die <b>Katalogordner</b> sowie Alben, Filter und Suche über alles. Die Einstellungen der Bilder liegen im Katalog selbst, sodass auch Bilder auf schreibgeschützten Laufwerken bearbeitet werden können. Silberkorn sichert den Katalog jede Woche.</p>
+<p><b>Bereinigen</b> entfernt Einträge, deren Dateien es nicht mehr gibt.</p>
+<h3 id="sessions">Sessions</h3>
+<p>Eine Session ist ein abgeschlossener Projektordner, etwa für ein Shooting oder einen Kunden. Er enthält feste Unterordner:</p>
+<ul>
+<li><b>Aufnahmen</b>: neue Bilder (Ordner <code>Capture</code>)</li>
+<li><b>Selects</b>: die ausgewählten Bilder (<code>Selects</code>)</li>
+<li><b>Ausgabe</b>: die exportierten Dateien (<code>Output</code>)</li>
+<li><b>Papierkorb</b>: bis er geleert wird (<code>Trash</code>)</li>
+</ul>
+<p><b>Neue Session …</b> (Strg+N) im Menü <b>Datei</b> fragt nach Name und Speicherort und legt den Ordner an. <b>Session öffnen …</b> (Strg+Umschalt+O) öffnet eine <code>.sksession</code>-Datei, <b>Zuletzt verwendet</b> die letzten Sessions; die zuletzt offene öffnet sich beim Start wieder. <b>Session schließen</b> (Strg+W) kehrt zum Katalog zurück.</p>
+<p>Im Tab <b>Bibliothek</b> stehen dann oben die Ordner der Session und <b>Session-Favoriten</b> für häufig genutzte Ordner (<b>Aktuellen Ordner hinzufügen</b>). Alben, Filter und Suche wirken nur auf die Bilder der Session. Die Einstellungen liegen als Datei neben jedem Bild; die ganze Session lässt sich verschieben, umbenennen oder auf einen anderen Rechner kopieren.</p>
+<p class="note">Faustregel: der Katalog für das Archiv, eine Session für ein einzelnes Projekt, das man als Ganzes abgeben oder archivieren will.</p>
+<h2 id="import">Import</h2>
+<p><b>Bilder in den Katalog importieren …</b> (in einer Session <b>Bilder in die Session importieren …</b>) im Menü <b>Datei</b> oder in der Werkzeugleiste fragt nach einem Quellordner und öffnet den Importdialog.</p>
+<ol>
+<li>Der Dialog zeigt alle RAW-Dateien der Quelle als Vorschauen. <b>Unterordner einbeziehen</b> nimmt auch Unterordner dazu, <b>Andere Quelle …</b> wechselt den Ordner.</li>
+<li>Ein Klick wählt ein Bild ab oder wieder an, Umschalt+Klick einen Bereich. <b>Alle</b>, <b>Keine</b> und <b>Nur neue</b> helfen bei vielen Bildern; schon vorhandene Bilder sind markiert.</li>
+<li>Unter <b>Dateien</b> (nur Katalog) legt man fest, was mit den Dateien geschieht: <b>Nicht kopieren</b> (die Bilder bleiben, wo sie sind), <b>In den Bilderordner kopieren</b> (Standard: <code>Bilder/Silberkorn</code> im Benutzerordner) oder <b>In einen Ordner kopieren</b>. Beim Kopieren legt <b>Unterordner nach Aufnahmedatum</b> Ordner wie <code>2026/10-18</code> an.</li>
+<li><b>Beim Kopieren umbenennen</b> gibt den Kopien Namen nach einer Vorlage, mit denselben Platzhaltern wie beim <a href="bibliothek.html#umbenennen">Umbenennen</a>. Die Originale bleiben, wie sie sind.</li>
+<li>Der Knopf unten startet den Import.</li>
+</ol>
+<p>In einer Session werden die Bilder immer in den Ordner <b>Aufnahmen</b> kopiert.</p>
+<h3 id="speicherkarte">Speicherkarte</h3>
+<p>Steckt man eine Speicherkarte ein, öffnet sich der Importdialog von selbst mit ihrem Bilderordner. Von einer Karte wird immer kopiert, auch wenn <b>Nicht kopieren</b> gewählt war: Die Dateien verschwinden ja mit der Karte. Wird die Karte herausgezogen, schließt sich der Dialog.</p>
+<p>Das automatische Öffnen schaltet <b>Importdialog öffnen, wenn eine Speicherkarte erkannt wird</b> unten im Dialog ab.</p>
+<h2 id="bewerten-und-markieren">Bewerten und markieren</h2>
+<p>Alle drei wirken auf die ganze Auswahl und lassen sich mit Strg+Z zurücknehmen. Sie stehen im Tab <b>Metadaten</b>, im Menü <b>Foto</b> und im Rechtsklick-Menü eines Vorschaubilds.</p>
+<h3 id="bewertung">Bewertung</h3>
+<p>1 bis 5 vergeben ein bis fünf Sterne, 0 entfernt sie.</p>
+<h3 id="farb-label">Farb-Label</h3>
+<p>6 Rot, 7 Gelb, 8 Grün, 9 Blau. <b>Farb-Label: Keine</b> entfernt es.</p>
+<h3 id="keywords">Keywords</h3>
+<p>Im Tab <b>Metadaten</b> unter <b>Keywords</b> ein Wort eingeben und Enter drücken; Vorschläge kommen aus den vorhandenen Keywords. ✕ an einem Keyword entfernt es.</p>
+<h3 id="aufnahme">Aufnahme</h3>
+<p>Im Tab <b>Metadaten</b> zeigt <b>Aufnahme</b> Datei, Ordner, Kamera, Objektiv, Brennweite, Blende, Belichtungszeit, ISO und Datum des gewählten Bildes. Lange Einträge stehen beim Überfahren ganz da.</p>
+<h2 id="filter-suche">Filter &amp; Suche</h2>
+<p>Der Abschnitt <b>Filter &amp; Suche</b> grenzt die Ansicht ein:</p>
+<ul>
+<li>Suchfeld: Dateiname, Kamera, Objektiv oder Keyword.</li>
+<li><b>Mindestens</b>: Mindestbewertung in Sternen.</li>
+<li><b>Farb-Label</b> und <b>Keyword</b>.</li>
+<li>Sortierung nach <b>Dateiname</b>, <b>Aufnahmedatum</b> oder <b>Bewertung</b>, daneben die Sortierrichtung.</li>
+</ul>
+<p><b>✕ Filter</b> hebt alle Filter auf. Strg+F springt von überall in die Bibliothek.</p>
+<h2 id="alben">Alben</h2>
+<p>Ein Album sammelt Bilder unabhängig von ihrem Ordner. Namen eingeben, dann:</p>
+<ul>
+<li><b>+ Album</b> legt ein Album mit der aktuellen Auswahl an.</li>
+<li><b>+ Filteralbum</b> speichert den aktuellen Filter: Das Album zeigt immer alle Bilder, die gerade dazu passen.</li>
+</ul>
+<p>Rechtsklick auf ein Album bietet <b>Auswahl hinzufügen</b>, <b>Umbenennen</b> und <b>Löschen …</b>; die Bilder selbst bleiben dabei erhalten. <b>Auswahl aus Album entfernen</b> steht unter der Liste, solange ein Album gezeigt wird.</p>
+<h2 id="stapel">Stapel</h2>
+<p>Ein Stapel fasst zusammengehörige Bilder zusammen, etwa eine Serie oder Belichtungsreihe. Das Raster zeigt nur das oberste Bild; die Zahl oben links nennt die Bilder im Stapel, ein Klick darauf klappt ihn auf und zu.</p>
+<ul>
+<li><b>Stapel bilden</b> (Strg+G): aus der Auswahl; das angezeigte Bild kommt nach oben.</li>
+<li><b>Stapel auflösen</b> (Strg+Umschalt+G), <b>Stapel auf-/zuklappen</b> (Umschalt+G).</li>
+<li>Im Menü <b>Foto → Stapel</b> außerdem <b>Aus Stapel entfernen</b>, <b>Als oberstes Bild</b>, <b>Schärfstes Bild nach oben</b>, <b>Alle Stapel aufklappen</b> und <b>Alle Stapel zuklappen</b>.</li>
+<li><b>Automatisch nach Aufnahmezeit …</b> stapelt die Auswahl (oder alle Bilder der Ansicht): Eine Pause von mehr als der eingestellten Zeit beginnt einen neuen Stapel.</li>
+</ul>
+<p>Ein zugeklappter Stapel bringt beim <a href="zusammenfuegen.html">Zusammenfügen</a> alle seine Bilder mit.</p>
+<h2 id="varianten">Varianten</h2>
+<p>Eine Variante ist eine weitere Bearbeitung derselben RAW-Datei, etwa eine Farb- und eine Schwarzweiß-Fassung. <b>Neue Variante</b> (F2) beginnt mit Standardeinstellungen, <b>Variante klonen</b> (F3) übernimmt die aktuelle Bearbeitung.</p>
+<p>Varianten erscheinen als eigene Bilder mit eigener Bewertung, eigenem Label und eigenen Keywords und lassen sich wie normale Bilder vergleichen, in Alben legen und exportieren. <b>Variante löschen …</b> im Menü <b>Foto</b> entfernt eine weitere Variante; die erste gehört zur Datei selbst.</p>
+<h2 id="gesichter-sichtung">Gesichter &amp; Sichtung</h2>
+<p>Der Abschnitt <b>Gesichter &amp; Sichtung</b> hilft, aus vielen ähnlichen Bildern die guten zu finden. <b>Ansicht analysieren</b> untersucht alle noch nicht analysierten Bilder der Ansicht im Hintergrund, <b>Erneut</b> analysiert alle noch einmal. Beim ersten Mal werden etwa 40 MB geladen.</p>
+<p>Danach filtern die Knöpfe <b>Augen geschlossen</b>, <b>Unscharf</b>, <b>Mit Gesichtern</b> und <b>Nicht analysiert</b>. Im Raster markiert ein Augen-Symbol geschlossene Augen, ein Tropfen-Symbol ein unscharfes Bild. Auch die Filter lassen sich als Filteralbum speichern.</p>
+<p>Unter <b>Personen</b> stehen die erkannten Personen als Kacheln:</p>
+<ul>
+<li>Klick zeigt ihre Bilder, ein zweiter wieder alle. Doppelklick gibt ihr einen Namen; er wird zum Keyword ihrer Bilder.</li>
+<li>Wurde dieselbe Person doppelt erkannt, eine Kachel auf die andere ziehen.</li>
+<li>Ist eine Person gewählt, stehen darunter ihre Gesichter einzeln. Falsch zugeordnete auf die richtige Person ziehen oder auf <b>Neue Person</b>, die beim Ziehen erscheint.</li>
+</ul>
+<p>Die <a href="ansicht.html#schärfemaske">Schärfemaske</a> zeigt zusätzlich, welche Teile eines Bildes scharf sind.</p>
+<h2 id="umbenennen">Umbenennen</h2>
+<p><b>Umbenennen …</b> (Strg+Umschalt+R) benennt die ausgewählten Dateien nach einer Vorlage um, mit Vorschau. Platzhalter fügt ein Klick ein: <code>{Name}</code>, <code>{Zähler}</code> (<code>{Zähler:3}</code> dreistellig, Startwert unter <b>Zähler ab</b>), <code>{Datum}</code>, <code>{Zeit}</code>, <code>{Jahr}</code>, <code>{Monat}</code>, <code>{Tag}</code>, <code>{Kamera}</code>, <code>{Objektiv}</code>, <code>{Session}</code> und <code>{Variante}</code>. Einstellungen und Varianten wandern mit; ist ein Name schon vergeben, wird „-2“ usw. angehängt.</p>
+<h2 id="xmp">XMP</h2>
+<p>Bewertung, Farb-Label und Keywords lassen sich mit Lightroom, Bridge und Capture One über XMP-Dateien austauschen (Menü <b>Foto → XMP</b>):</p>
+<ul>
+<li><b>Metadaten in XMP schreiben</b> und <b>Metadaten aus XMP lesen</b> für die Auswahl.</li>
+<li><b>Änderungen automatisch in XMP schreiben</b> hält die XMP-Dateien laufend aktuell (standardmäßig aus).</li>
+</ul>
+<p>Ändert ein anderes Programm eine XMP-Datei, übernimmt Silberkorn die Werte beim nächsten Laden. Entwicklungseinstellungen anderer Programme bleiben in der Datei unberührt.</p>
+<h2 id="verschieben-und-papierkorb">Verschieben und Papierkorb</h2>
+<p>In einer Session verschiebt <b>Nach „Selects“ verschieben</b> (Strg+J) die Auswahl in den Ordner <b>Selects</b>, <b>In den Papierkorb</b> (Strg+Entf) in den <b>Papierkorb</b> der Session; im Raster genügt auch Entf. <b>Verschieben nach</b> im Menü <b>Foto</b> bietet die anderen Session-Ordner, die Favoriten und <b>Ordner wählen …</b>. Einstellungen wandern immer mit.</p>
+<p><b>Papierkorb leeren …</b> (Menü <b>Datei</b> oder Rechtsklick auf den Papierkorb) löscht die Bilder darin nach einer Rückfrage endgültig.</p>
+<p class="note">Den Papierkorb gibt es nur in Sessions. Im Katalog lassen sich auf diesem Weg nur weitere Varianten löschen; die Dateien selbst bleiben.</p>
+<h2 id="ordner-überwachen">Ordner überwachen</h2>
+<p><b>Ordner überwachen</b> (im Abschnitt <b>Ordner</b>, in einer Session bei den Session-Ordnern, auch im Menü <b>Datei</b>) lässt neue Bilder im angezeigten Ordner von selbst erscheinen, etwa wenn die Kamerasoftware beim Fotografieren mit Kabel in den Ordner <b>Aufnahmen</b> schreibt. Mit <b>Neue Aufnahme gleich öffnen</b> wird jeweils die neueste groß gezeigt.</p>
+<p>Die Überwachung wirkt, sobald ein Ordner ohne Unterordner angezeigt wird; die Statusleiste zeigt dann „Überwacht: …“ mit dem Ordnernamen.</p>
+</main>
+</body>
+</html>

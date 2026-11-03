@@ -82,6 +82,7 @@ impl App {
     pub fn viewer(&mut self, ui: &mut Ui) {
         let rect = ui.available_rect_before_wrap();
         self.viewer_rect = Some(rect);
+        crate::tour::target(ui.ctx(), "viewer", rect.shrink(40.0));
         self.max_texture_side = ui.ctx().input(|i| i.max_texture_side);
         self.viewer_content(ui);
         // What the user waits for here (mask, removal, matching).
@@ -1287,15 +1288,21 @@ impl App {
         if ui.add(big(format!("{}  Session öffnen …", theme::icon::FOLDER_OPEN), false)).on_hover_text(crate::commands::shortcut_of("open-session")).clicked() {
             self.open_session_dialog();
         }
+        // New here: the tours and the manual (the start without a folder is the first start).
         ui.add_space(18.0);
-        let tip = match crate::commands::shortcut_of("shortcuts") {
-            k if k.is_empty() => "Tipp: Strg+K findet jede Funktion, auch die Tastenkürzel.".to_string(),
-            k => format!("Tipp: Strg+K findet jede Funktion, {k} zeigt alle Tastenkürzel."),
+        if ui.add(big(format!("{}  Tutorials …", theme::icon::GRADUATION_CAP), false)).on_hover_text("Kurze Touren durch das Programm").clicked() {
+            self.tour.dialog_open = true;
+        }
+        ui.add_space(18.0);
+        let tip = match crate::commands::shortcut_of("help") {
+            k if k.is_empty() => "Tipp: Strg+K findet jede Funktion, das Menü Hilfe erklärt sie.".to_string(),
+            k => format!("Tipp: Strg+K findet jede Funktion, {k} öffnet die Hilfe."),
         };
         ui.label(egui::RichText::new(tip).small().color(theme::TEXT_FAINT));
     }
 
     pub fn filmstrip(&mut self, ui: &mut Ui) {
+        crate::tour::target(ui.ctx(), "filmstrip", ui.available_rect_before_wrap());
         let visible = self.visible.clone();
         let mut clicked: Option<(PathBuf, Modifiers)> = None;
         let primary = self.primary_path();

@@ -1,0 +1,10 @@
+body{margin:0;display:flex;gap:32px;background:#1e1e20;color:#dedee2;font:16px/1.6 system-ui,-apple-system,"Segoe UI",sans-serif}
+nav{flex:0 0 220px;padding:24px 16px;background:#18181a;min-height:100vh;box-sizing:border-box}
+nav ul{list-style:none;padding:0;margin:16px 0 0}nav li{margin:4px 0}
+a{color:#4e92e6;text-decoration:none}a:hover{text-decoration:underline}
+nav .home{font-weight:600;color:#fff}
+main{max-width:720px;padding:24px 16px 64px}
+h1{color:#fff;font-size:28px}h2{color:#fff;margin-top:32px}h3{color:#fff}
+code{background:#2a2a2e;padding:1px 4px;border-radius:4px}
+.note{background:#2d4666;border-radius:6px;padding:8px 12px;margin:12px 0}
+@media (max-width:760px){body{display:block}nav{min-height:0}}

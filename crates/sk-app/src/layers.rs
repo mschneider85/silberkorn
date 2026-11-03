@@ -1579,7 +1579,7 @@ impl App {
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                crate::widgets::menu_button(ui, egui::RichText::new(icon::PLUS).size(15.0), |ui| {
+                let plus = crate::widgets::menu_button(ui, egui::RichText::new(icon::PLUS).size(15.0), |ui| {
                     if ui.button("Neue Ebene").on_hover_text("Leere Maske, dann malen oder auswählen").clicked() {
                         action = Some(LayerAction::Add);
                     }
@@ -1612,6 +1612,7 @@ impl App {
                 })
                 .response
                 .on_hover_text("Neue Ebene");
+                crate::tour::target(ui.ctx(), "new-layer", plus.rect);
                 let minus = ui.add_enabled(active.is_some(), egui::Button::new(egui::RichText::new(icon::TRASH).size(15.0)));
                 if minus.on_hover_text(crate::commands::hint("Gewählte Ebene löschen", "delete-spot")).clicked()
                     && let Some(li) = active

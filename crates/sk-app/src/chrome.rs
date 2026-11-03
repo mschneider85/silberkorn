@@ -397,6 +397,8 @@ impl App {
     }
 
     fn help_menu(&mut self, ui: &mut Ui) {
+        self.command_item(ui, "help");
+        self.command_item(ui, "tutorials");
         if item(ui, icon::MAGNIFYING_GLASS, "Befehlssuche …", "Strg+K", true) {
             self.palette.show();
         }
@@ -426,7 +428,9 @@ impl App {
                 self.open_folder_dialog();
             }
             let import = if self.session.is_some() { "Bilder in die Session importieren …" } else { "Bilder in den Katalog importieren …" };
-            if tool(ui, icon::FOLDER_PLUS, import, false, true).clicked() {
+            let import_button = tool(ui, icon::FOLDER_PLUS, import, false, true);
+            crate::tour::target(ui.ctx(), "import", import_button.rect);
+            if import_button.clicked() {
                 self.import_folder_dialog();
             }
             group_gap(ui);
@@ -493,6 +497,7 @@ impl App {
                 let button = Button::new(text).fill(theme::ACCENT).corner_radius(6).min_size(vec2(0.0, 28.0));
                 let enabled = self.command_available("export");
                 let resp = ui.add_enabled(enabled, crate::dialog::unless_enabled(button, enabled)).on_disabled_hover_text(self.export_blocked_reason());
+                crate::tour::target(ui.ctx(), "export", resp.rect);
                 if resp.on_hover_text(crate::commands::hint(&format!("{} mit den gewählten Rezepten exportieren", image_count(n)), "export")).clicked() {
                     self.export_selection();
                 }
@@ -539,7 +544,9 @@ impl App {
                     Seg { icon: icon::SQUARE_SPLIT_HORIZONTAL, label: "", hover: &crate::commands::hint("Geteilter Vergleich mit Trennlinie", "split"), active: self.split_view && !self.split_side, enabled: has },
                     Seg { icon: icon::CIRCLE_HALF, label: "", hover: &crate::commands::hint("Vorher / Nachher", "before"), active: self.show_before, enabled: has },
                 ];
-                match segmented(ui, &compare) {
+                let compared = ui.scope(|ui| segmented(ui, &compare));
+                crate::tour::target(ui.ctx(), "compare", compared.response.rect);
+                match compared.inner {
                     Some(0) => self.toggle_side_by_side(),
                     Some(1) => self.toggle_split(),
                     Some(_) => self.toggle_before(),
@@ -571,6 +578,7 @@ impl App {
                 }
                 let selected = self.tab == tab;
                 let (rect, resp) = ui.allocate_exact_size(vec2(60.0, 46.0), if available { Sense::click() } else { Sense::hover() });
+                crate::tour::target(ui.ctx(), format!("tab:{}", tab.title()), rect);
                 let painter = ui.painter();
                 let t = ui.ctx().animate_bool_with_time(resp.id, selected, 0.12);
                 if resp.hovered() && !selected && available {
@@ -612,6 +620,7 @@ impl App {
                     self.tab = tab;
                 }
             }
+            crate::tour::target(ui.ctx(), "rail", ui.min_rect());
         });
     }
 
@@ -725,6 +734,10 @@ impl App {
         self.copy_dialog(ctx);
         self.shortcut_editor(ctx);
         self.deletion_dialog(ctx);
+        self.help_window(ctx);
+        self.tutorials_dialog(ctx);
+        // Last: it needs where everything was drawn.
+        self.tour_overlay(ctx);
     }
 }
 

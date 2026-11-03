@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entwickeln – Silberkorn</title>
+<link rel="stylesheet" href="hilfe.css">
+</head>
+<body>
+<nav><a class="home" href="../index.html">Silberkorn</a> · <a href="index.html">Hilfe</a>
+<ul>
+<li><a href="erste-schritte.html">Erste Schritte</a></li>
+<li><a href="bibliothek.html">Bibliothek</a></li>
+<li><a href="ansicht.html">Ansicht</a></li>
+<li><a href="objektiv.html">Objektiv &amp; Geometrie</a></li>
+<li><a href="entwickeln.html">Entwickeln</a></li>
+<li><a href="ebenen-masken.html">Ebenen &amp; Masken</a></li>
+<li><a href="retusche.html">Retusche</a></li>
+<li><a href="ki-werkzeuge.html">KI-Werkzeuge</a></li>
+<li><a href="zusammenfuegen.html">Zusammenfügen</a></li>
+<li><a href="vergleichen.html">Vergleichen und Looks</a></li>
+<li><a href="verlauf.html">Verlauf und Anpassungen</a></li>
+<li><a href="ausgabe.html">Ausgabe</a></li>
+<li><a href="tastenkuerzel.html">Tastenkürzel</a></li>
+</ul></nav>
+<main>
+<h1 id="entwickeln">Entwickeln</h1>
+<p>Die Tabs <b>Belichtung</b>, <b>Farbe</b>, <b>Details</b> und <b>Effekte</b> enthalten die Werkzeuge für das ganze Bild. Jedes Werkzeug ist ein Abschnitt, der sich mit einem Klick auf seinen Kopf auf- und zuklappen lässt. Bearbeitungen sind nicht-destruktiv: Die RAW-Datei bleibt unverändert, jeder Schritt lässt sich mit Strg+Z rückgängig machen.</p>
+<p>Die KI-Werkzeuge dieser Tabs (Verbessern, Neu ausleuchten, Objektivunschärfe, Atmosphäre) stehen im Kapitel <a href="ki-werkzeuge.html">KI-Werkzeuge</a>.</p>
+<h2 id="bedienung-der-werkzeuge">Bedienung der Werkzeuge</h2>
+<h3 id="regler">Regler</h3>
+<ul>
+<li>Doppelklick auf den Namen eines Reglers setzt ihn zurück.</li>
+<li>Nach einem Klick auf einen Regler ändern ihn die Pfeiltasten und das Mausrad, mit Umschalt grob, mit Alt fein. Ohne diesen Klick scrollt das Mausrad nur den Werkzeugbereich.</li>
+<li>Ein Zug am Regler ist ein Rückgängig-Schritt.</li>
+<li>Regler, die gerade nichts bewirken, bleiben sichtbar, sind aber ausgegraut.</li>
+</ul>
+<h3 id="knöpfe-im-kopf-eines-werkzeugs">Knöpfe im Kopf eines Werkzeugs</h3>
+<ul>
+<li><b>↺</b> setzt das Werkzeug zurück. Mit gedrückter Umschalttaste und gehaltener Maustaste auf ↺ wird die Wirkung des Werkzeugs nur vorübergehend ausgeblendet: so lässt sich vergleichen, was es beiträgt.</li>
+<li>Ein durchgestrichenes <b>Auge</b> erscheint, wenn die Wirkung eines Werkzeugs ausgeblendet ist; ein Klick darauf blendet sie wieder ein.</li>
+<li><b>A</b> stellt dieses eine Werkzeug automatisch ein, siehe <a href="entwickeln.html#automatisch-anpassen">Automatisch anpassen</a>.</li>
+<li>Das <b>Übertragen</b>-Symbol erscheint, wenn mehrere Bilder ausgewählt sind: Es überträgt nur dieses Werkzeug auf die anderen ausgewählten Bilder.</li>
+<li><b>ⓘ</b> zeigt eine Kurzhilfe; ein Klick darauf öffnet dieses Handbuch an der passenden Stelle.</li>
+</ul>
+<h3 id="schnellbearbeitung">Schnellbearbeitung</h3>
+<p>Eine der Tasten Q, A, D, F, V oder T gedrückt halten und am Mausrad drehen ändert Belichtung, Kontrast, Sättigung, Lichter, Tiefen bzw. Temperatur, ohne zum Regler zu wechseln. Ist eine Ebene gewählt, wirkt es auf sie.</p>
+<h3 id="auf-einer-ebene">Auf einer Ebene</h3>
+<p>Ist eine Ebene gewählt, ändern viele Regler in Belichtung, Farbe und Details nur diese Ebene. Werkzeuge, die nur aufs ganze Bild wirken, sind dann ausgegraut. Mehr dazu unter <a href="ebenen-masken.html">Ebenen &amp; Masken</a>.</p>
+<h2 id="automatisch-anpassen">Automatisch anpassen</h2>
+<p><b>Automatisch anpassen</b> (Strg+L, Knopf oben im Tab Belichtung oder Menü Entwickeln) stellt Weißabgleich, Belichtung, Lichter, Tiefen, Weiß, Schwarz, Kontrast und Dynamik in einem Schritt ein. Das Menü neben dem Knopf legt fest, was gesetzt wird; dort lassen sich auch die Tonwerte (Schwarz- und Weißpunkt) dazunehmen. Sind mehrere Bilder ausgewählt, werden alle angepasst.</p>
+<p>Der Regler <b>Stärke</b> darunter blendet zwischen dem Zustand vorher (0 %) und dem vollen Ergebnis (100 %) über. Er ist erst nach einer automatischen Anpassung des Bildes aktiv.</p>
+<p>Die Helligkeit richtet sich nach dem Bild, das die Kamera selbst entwickelt hat: Ein Waldbild bleibt dunkler als ein Strandbild. Gesichter und das Hauptmotiv zählen mehr als der Rest. Der Weißabgleich wird an fast neutralen Stellen wie Steinen, Wolken oder weißen Wänden gemessen; warmes Abendlicht bleibt warm.</p>
+<h3 id="a-je-werkzeug">A je Werkzeug</h3>
+<p>Werkzeuge, die sich selbst einstellen können, tragen im Kopf ein <b>A</b>. Es stellt nur dieses Werkzeug ein, für alle ausgewählten Bilder:</p>
+<ul>
+<li><b>Weißabgleich</b>: aus den fast neutralen Stellen.</li>
+<li><b>Belichtung</b>: Belichtung und Kontrast.</li>
+<li><b>Lichter &amp; Tiefen</b>: Lichter, Tiefen, Weiß und Schwarz.</li>
+<li><b>Farbe</b>: Dynamik.</li>
+<li><b>Tonwerte</b>: Schwarz- und Weißpunkt.</li>
+<li><b>Drehen &amp; Spiegeln</b>, <b>Trapezkorrektur</b>, <b>Objektivkorrektur</b>: siehe <a href="objektiv.html">Objektiv &amp; Geometrie</a>.</li>
+<li><b>Schärfen</b> und <b>Rauschreduzierung</b>: nach dem gemessenen Rauschen und der Unschärfe des Objektivs.</li>
+<li><b>Verbessern</b>: siehe <a href="ki-werkzeuge.html#verbessern">KI-Werkzeuge</a>.</li>
+</ul>
+<p>Jedes A gibt es auch als Befehl in der Befehlssuche (Strg+K), etwa „Belichtung automatisch“; dort lässt sich ihm eine eigene Taste geben. Auf einer Ebene ist A deaktiviert.</p>
+<h2 id="belichtung">Belichtung</h2>
+<p>Grundlegende Helligkeit des Bildes.</p>
+<ul>
+<li><b>Belichtung</b>: in Blendenstufen (EV), wie eine längere oder kürzere Belichtung.</li>
+<li><b>Kontrast</b>: spreizt oder staucht die Tonwerte um die Mitte.</li>
+<li><b>Helligkeit</b>: hellt vor allem die Mitteltöne auf oder ab, ohne Lichter und Schatten so stark zu verschieben wie die Belichtung.</li>
+</ul>
+<p>Alt beim Ziehen an <b>Belichtung</b> zeigt, wo Lichter ausfressen. Beim Überfahren eines Reglers markiert das Histogramm den Bereich, den er trifft.</p>
+<h2 id="lichter-tiefen">Lichter &amp; Tiefen</h2>
+<p>Holt Zeichnung aus hellen und dunklen Bereichen, ohne den Rest zu verändern.</p>
+<ul>
+<li><b>Lichter</b>: nach links holt ausgefressene Bereiche wie Himmel zurück.</li>
+<li><b>Tiefen</b>: nach rechts hellt Schatten auf.</li>
+<li><b>Weiß</b> und <b>Schwarz</b>: setzen den hellsten und dunkelsten Punkt.</li>
+</ul>
+<p>Alt beim Ziehen zeigt ausgefressene bzw. abgesoffene Stellen. Feine Linien, Äste und Texturen behalten dabei ihren Kontrast.</p>
+<h2 id="tonwerte">Tonwerte</h2>
+<p>Schwarz- und Weißpunkt mit Histogramm, für alle Kanäle zusammen (<b>RGB</b>) oder einzeln (<b>Rot</b>, <b>Grün</b>, <b>Blau</b>).</p>
+<ul>
+<li><b>Eingang Schwarz</b> und <b>Eingang Weiß</b>: was zu Schwarz bzw. Weiß wird.</li>
+<li><b>Mitteltöne</b>: über 1 heller, unter 1 dunkler.</li>
+<li><b>Ausgang Schwarz</b> und <b>Ausgang Weiß</b>: begrenzen den Ausgabebereich, etwa für ein mattes Schwarz.</li>
+</ul>
+<p>Beim Ziehen an den Eingangsgriffen zeigt das Bild, was abgeschnitten wird. Die Kanäle einzeln eignen sich, um einen Farbstich zu entfernen.</p>
+<h2 id="gradationskurve">Gradationskurve</h2>
+<p>Freie Tonkurve für gezielten Kontrast.</p>
+<ul>
+<li>Kanäle <b>RGB</b>, <b>Rot</b>, <b>Grün</b>, <b>Blau</b> und <b>Luma</b>. <b>Luma</b> ändert nur die Helligkeit: Kontrast ohne Farbverschiebung, Farbton und Sättigung bleiben.</li>
+<li>Klicken setzt einen Punkt, Ziehen verschiebt ihn, Rechtsklick entfernt ihn.</li>
+<li>Das Fadenkreuz rechts neben den Kanälen schaltet die <a href="entwickeln.html#zielkorrektur">Zielkorrektur</a> ein.</li>
+</ul>
+<p>Die Kurve gibt es auch auf Ebenen.</p>
+<h2 id="zielkorrektur">Zielkorrektur</h2>
+<p>Statt am Regler wird im Bild gezogen: Das Fadenkreuz neben den Kanälen der <b>Gradationskurve</b> oder neben <b>Farbton</b>, <b>Sättigung</b> und <b>Helligkeit</b> im <b>Farbeditor</b> schaltet sie ein.</p>
+<ol>
+<li>Das Fadenkreuz anklicken.</li>
+<li>Im Bild auf die Stelle zeigen, die sich ändern soll.</li>
+<li>Nach oben oder unten ziehen.</li>
+</ol>
+<p>In der Gradationskurve ändert sich die Kurve beim Ton dieser Stelle; im Farbeditor ändern sich die Farbbereiche, die in der Farbe der Stelle stecken. Esc beendet die Zielkorrektur. Sie wirkt auf die gewählte Ebene oder das ganze Bild.</p>
+<h2 id="basismerkmale">Basismerkmale</h2>
+<p>Die <b>Kurve</b>, auf der alle anderen Regler aufsetzen:</p>
+<ul>
+<li><b>Kamera</b>: die Tonkurve des Bildes, das die Kamera selbst entwickelt hat, für jedes Bild angepasst. Helligkeit, Kontrast und Lichter sehen aus wie in der Kamera. Standard für neue Bilder.</li>
+<li><b>Film Standard</b>: filmähnliche Kurve mit weicher Schulter in den Lichtern.</li>
+<li><b>Film hoher Kontrast</b>: wie Film Standard, mit mehr Kontrast.</li>
+<li><b>Linear</b>: ohne Kurve, Ausgangspunkt für eine eigene Gradation.</li>
+</ul>
+<p>Steckt in der Datei kein passendes Kamerabild (etwa bei zusammengefügten DNGs), bleibt es bei Film Standard.</p>
+<h2 id="weißabgleich">Weißabgleich</h2>
+<p>Neutralisiert oder verändert die Farbe des Lichts.</p>
+<ul>
+<li><b>Modus</b>: <b>Aufnahme</b> übernimmt den Wert der Kamera, <b>Benutzerdefiniert</b> gilt, sobald ein Regler bewegt wird.</li>
+<li><b>Kelvin</b>: Farbtemperatur; höhere Werte machen das Bild wärmer.</li>
+<li><b>Tönung</b>: zwischen Grün und Magenta.</li>
+<li><b>Weißabgleich-Pipette</b> (W): auf eine neutrale, graue Stelle im Bild klicken. Schon beim Überfahren zeigt das Bild das Ergebnis, eine Lupe neben dem Zeiger nennt Kelvin und Tönung.</li>
+</ul>
+<p>Auf einer Ebene stehen <b>Temperatur</b> und <b>Tönung</b> zur Verfügung: Sie machen den Bereich der Ebene wärmer oder kühler als den Rest.</p>
+<h2 id="farbe">Farbe</h2>
+<ul>
+<li><b>Sättigung</b>: verstärkt oder mindert alle Farben gleich.</li>
+<li><b>Dynamik</b>: verstärkt vor allem schwache Farben und schont Hauttöne; meist die bessere Wahl.</li>
+</ul>
+<h2 id="farbeditor">Farbeditor</h2>
+<p>Ändert einzelne Farben: acht Bereiche von Rot über Orange, Gelb, Grün, Cyan, Blau und Lila bis Magenta.</p>
+<ul>
+<li><b>Farbton</b>, <b>Sättigung</b>, <b>Helligkeit</b>: jeweils ein Regler je Farbbereich, etwa um alle Blautöne dunkler zu machen.</li>
+<li><b>Einzeln</b>: alle drei Eigenschaften für einen gewählten Farbbereich.</li>
+<li><b>Eigene</b>: frei festgelegte Farbbereiche, siehe unten.</li>
+</ul>
+<p>Das Fadenkreuz schaltet die <a href="entwickeln.html#zielkorrektur">Zielkorrektur</a> ein.</p>
+<h3 id="eigene-farbbereiche">Eigene Farbbereiche</h3>
+<p>Für eine Farbe, die zwischen die festen Bereiche fällt, etwa ein bestimmtes Türkis:</p>
+<ol>
+<li><b>Aufnehmen</b> wählen und im Bild auf die Farbe klicken.</li>
+<li>Mit <b>Farbe</b>, <b>Breite</b> und <b>Weichheit</b> festlegen, welche Farbtöne erfasst werden.</li>
+<li>Unter <b>Ändern</b> Farbton, Sättigung und Helligkeit dieser Farben ändern.</li>
+</ol>
+<p>Bis zu acht eigene Bereiche sind möglich. Fast neutrale Farben bleiben unberührt. Eigene Bereiche gelten nur für das ganze Bild, nicht auf Ebenen.</p>
+<h2 id="hauttöne">Hauttöne</h2>
+<p>Macht Haut gleichmäßiger und ändert ihren Farbton, ohne den Rest des Bildes zu treffen.</p>
+<ol>
+<li><b>Hautton aufnehmen</b> wählen und auf eine typische Hautstelle klicken.</li>
+<li><b>Bereich</b>: wie weit um diesen Ton herum Farben als Haut gelten.</li>
+<li>Unter <b>Gleichmäßigkeit</b> gleichen <b>Farbton</b>, <b>Sättigung</b> und <b>Helligkeit</b> fleckige oder gerötete Haut an.</li>
+<li>Unter <b>Hautton verändern</b> wird der Hautton als Ganzes verschoben.</li>
+</ol>
+<h2 id="farbbalance">Farbbalance</h2>
+<p>Färbt Schatten, Mitteltöne und Lichter getrennt, etwa kühle Schatten und warme Lichter (Color Grading).</p>
+<ul>
+<li><b>Dreiwege</b> zeigt Farbräder für <b>Schatten</b>, <b>Mitteltöne</b> und <b>Lichter</b> nebeneinander.</li>
+<li><b>Master</b> färbt das ganze Bild.</li>
+<li><b>Schatten</b>, <b>Mitteltöne</b> und <b>Lichter</b> zeigen ein Rad groß.</li>
+</ul>
+<p>Die Mitte eines Rades ist neutral; je weiter nach außen, desto kräftiger die Färbung.</p>
+<h2 id="schwarzweiß">Schwarzweiß</h2>
+<p>Wandelt das Bild in Schwarzweiß um.</p>
+<ul>
+<li><b>Schwarzweiß aktivieren</b> schaltet die Umwandlung ein.</li>
+<li><b>Farbempfindlichkeit</b>: wie hell jede ursprüngliche Farbe im Schwarzweißbild wird, wie Farbfilter vor dem Objektiv. Blau abgedunkelt ergibt etwa einen dramatischen Himmel.</li>
+<li><b>Tonung</b>: färbt <b>Schatten</b> und <b>Lichter</b>, etwa für Sepia oder Split-Toning.</li>
+</ul>
+<h2 id="schärfen">Schärfen</h2>
+<p>Gleicht die leichte Unschärfe aus Objektiv und Sensor aus.</p>
+<ul>
+<li><b>Stärke</b>: wie kräftig geschärft wird.</li>
+<li><b>Radius</b>: wie breit die Kanten sind, die verstärkt werden.</li>
+<li><b>Schwelle</b>: schont ruhige Flächen und Rauschen; höher heißt, nur deutliche Kanten werden geschärft.</li>
+<li><b>Details</b>: wie geschärft wird. Bei 0 klassisches Unscharf maskieren, das auch leicht unscharfe Bilder knackiger macht, aber Säume erzeugen kann. Bei 100 wird die Unschärfe des Objektivs zurückgerechnet: feinere Details, kaum Säume.</li>
+</ul>
+<p>Alt beim Ziehen zeigt in Grau, was der Regler bewirkt. Zum Beurteilen auf 100 % zoomen.</p>
+<h2 id="rauschreduzierung">Rauschreduzierung</h2>
+<p>Klassische Rauschreduzierung, auch zusätzlich zum KI-Entrauschen im Abschnitt <a href="ki-werkzeuge.html#verbessern">Verbessern</a>.</p>
+<ul>
+<li><b>Luminanz</b>: glättet das Helligkeitsrauschen.</li>
+<li><b>Farbe</b>: entfernt bunte Flecken.</li>
+</ul>
+<p>Alt beim Ziehen zeigt, was entfernt wird: Körnchen und Farbflecken sind richtig, erkennbare Umrisse heißen, dass es zu weit geht.</p>
+<h2 id="klarheit">Klarheit</h2>
+<ul>
+<li><b>Klarheit</b>: Kontrast in mittelgroßen Strukturen; gibt Landschaften und Architektur Tiefe. Negative Werte machen das Bild weicher.</li>
+<li><b>Struktur</b>: Kontrast in feinen Details wie Stoff, Rinde oder Haut.</li>
+</ul>
+<h2 id="dunst-entfernen">Dunst entfernen</h2>
+<p><b>Stärke</b> nach rechts entfernt Dunst und Nebel und gibt fernen Bereichen Kontrast und Farbe zurück. Nach links fügt Dunst hinzu. Auch auf Ebenen, etwa nur für den Himmel.</p>
+<h2 id="leuchten">Leuchten</h2>
+<p>Lässt Lichter leuchten und in ihre Umgebung strahlen, wie der Orton-Effekt.</p>
+<ul>
+<li><b>Stärke</b>: wie hell das Leuchten ist.</li>
+<li><b>Größe</b>: wie weit es reicht.</li>
+</ul>
+<h2 id="vignette">Vignette</h2>
+<p><b>Stärke</b> dunkelt die Bildränder ab (negativ) oder hellt sie auf (positiv), um den Blick in die Mitte zu lenken. Für die Randabschattung des Objektivs gibt es die <a href="objektiv.html#objektivkorrektur">Objektivkorrektur</a>.</p>
+<h2 id="körnung">Körnung</h2>
+<p>Fügt Filmkorn hinzu.</p>
+<ul>
+<li><b>Stärke</b>: wie deutlich das Korn ist.</li>
+<li><b>Größe</b>: wie grob es ist.</li>
+</ul>
+<h2 id="prozessversionen">Prozessversionen</h2>
+<p>Silberkorn merkt sich bei jeder Bearbeitung, mit welcher Version der Bildberechnung sie entstand. Ältere Bearbeitungen sehen deshalb auch nach Updates unverändert aus; neue und zurückgesetzte Bilder nutzen die aktuelle Version.</p>
+<p>Neuere Versionen bewahren unter anderem den Farbton gesättigter Farben besser, verschieben mit mehr Kontrast keine Farbtöne mehr, rekonstruieren teilweise ausgebrannte Lichter und lassen den Radius beim Schärfen genauer wirken.</p>
+<p><b>Entwickeln → Auf aktuelle Prozessversion heben</b> stellt die ausgewählten Bilder auf die aktuelle Version um. Das Aussehen kann sich dabei leicht ändern.</p>
+<p class="note">Hotpixel, einzelne zu helle Sensorpunkte, entfernt Silberkorn unabhängig von der Prozessversion immer.</p>
+</main>
+</body>
+</html>

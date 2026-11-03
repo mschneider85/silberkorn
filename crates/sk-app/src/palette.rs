@@ -43,7 +43,7 @@ impl Palette {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum Action {
     /// A command of the command list, by id.
     Command(&'static str),
@@ -52,6 +52,8 @@ enum Action {
     Section(Tab, &'static str),
     Run(fn(&mut App, &egui::Context)),
     Guides(Guides),
+    /// The manual at "chapter#Heading".
+    Help(String),
 }
 
 struct Command {
@@ -146,6 +148,14 @@ impl App {
         // Entries that only the palette offers.
         let import = if self.session.is_some() { "Bilder in die Session importieren …" } else { "Bilder in den Katalog importieren …" };
         add(icon::FOLDER_PLUS, import, "Datei", "", true, "import", Run(|a, _| a.import_folder_dialog()));
+        // The manual: its chapters and their sections, to read about what one looks for.
+        for c in crate::help::CHAPTERS {
+            let title = c.title();
+            add(icon::QUESTION, &format!("Hilfe: {title}"), "Hilfe", "", true, "hilfe handbuch anleitung", Action::Help(c.id.to_string()));
+            for (_, h) in crate::help::headings(&c.source()).into_iter().filter(|(l, _)| *l == 2) {
+                add(icon::QUESTION, &format!("Hilfe: {title} › {h}"), "Hilfe", "", true, "hilfe handbuch", Action::Help(format!("{}#{h}", c.id)));
+            }
+        }
         for gd in Guides::ALL {
             let label = if gd == Guides::Off { "Hilfslinien aus".to_string() } else { format!("Hilfslinien: {}", gd.label()) };
             add(icon::GRID_NINE, &label, "Ansicht", "", true, "guides raster drittel", Action::Guides(gd));
@@ -169,6 +179,7 @@ impl App {
                 self.guides = g;
                 self.save_settings();
             }
+            Action::Help(target) => self.open_help(&target),
         }
     }
 
@@ -291,7 +302,7 @@ impl App {
             self.palette.recent.retain(|l| *l != label);
             self.palette.recent.insert(0, label);
             self.palette.recent.truncate(6);
-            self.run_command(ctx, c.action);
+            self.run_command(ctx, c.action.clone());
         }
     }
 }
@@ -432,5 +443,15 @@ mod tests {
     fn empty_query_lists_recent_first() {
         let cmds = [cmd("A", ""), cmd("B", ""), cmd("C", "")];
         assert_eq!(rank(&cmds, " ", &["C".into()]), vec![2, 0, 1]);
+    }
+}
+
+#[cfg(test)]
+mod help_tests {
+    /// Every section the palette knows explains itself (its info symbol, see `help_sections`).
+    #[test]
+    fn every_section_has_help() {
+        let missing: Vec<&str> = super::SECTIONS.iter().map(|(_, t, _)| *t).filter(|t| crate::help::section_help(t).is_none()).collect();
+        assert!(missing.is_empty(), "ohne Kurzhilfe: {missing:?}");
     }
 }

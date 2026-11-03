@@ -281,7 +281,9 @@ pub const COMMANDS: &[Command] = &[
     cmd!("fullscreen", icon::ARROWS_OUT, "Vollbild ohne Ablenkung", "Ansicht", [NONE => Key::F11, CTRL_SHIFT => Key::F], "fullscreen", |a| a.fullscreen || has_image(a), |a, ctx| a.toggle_fullscreen(ctx)),
     cmd!("find", icon::MAGNIFYING_GLASS, "Suchen (Bibliothek)", "Ansicht", [CTRL => Key::F], "filter suche", always, |a, _| a.tab = Tab::Library),
     // Hilfe
-    cmd!("shortcuts", icon::KEYBOARD, "Tastenkürzel", "Hilfe", [NONE => Key::F1], "shortcuts hilfe", always, |a, _| a.show_shortcuts = !a.show_shortcuts),
+    cmd!("help", icon::QUESTION, "Hilfe", "Hilfe", [NONE => Key::F1], "hilfe handbuch anleitung help manual dokumentation", always, |a, _| a.toggle_help()),
+    cmd!("tutorials", icon::GRADUATION_CAP, "Tutorials …", "Hilfe", [], "tutorial tour einführung lernen anleitung schritt", always, |a, _| a.tour.dialog_open = true),
+    cmd!("shortcuts", icon::KEYBOARD, "Tastenkürzel anpassen …", "Hilfe", [], "shortcuts tasten tastenkürzel ändern belegen", always, |a, _| a.show_shortcuts = !a.show_shortcuts),
     cmd!("update", icon::ARROW_CIRCLE_UP, "Nach Updates suchen …", "Hilfe", [], "update aktualisieren version release neu", always, |a, _| a.update_dialog_open()),
     cmd!("licenses", icon::SCALES, "Lizenzen …", "Hilfe", [], "lizenzen licenses modelle lensfun urheber", always, |a, _| a.show_licenses = true),
     cmd!("about", icon::INFO, "Über Silberkorn", "Hilfe", [], "about version", always, |a, _| a.splash = Some(crate::splash::Splash::about())),

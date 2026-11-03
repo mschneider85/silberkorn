@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KI-Werkzeuge – Silberkorn</title>
+<link rel="stylesheet" href="hilfe.css">
+</head>
+<body>
+<nav><a class="home" href="../index.html">Silberkorn</a> · <a href="index.html">Hilfe</a>
+<ul>
+<li><a href="erste-schritte.html">Erste Schritte</a></li>
+<li><a href="bibliothek.html">Bibliothek</a></li>
+<li><a href="ansicht.html">Ansicht</a></li>
+<li><a href="objektiv.html">Objektiv &amp; Geometrie</a></li>
+<li><a href="entwickeln.html">Entwickeln</a></li>
+<li><a href="ebenen-masken.html">Ebenen &amp; Masken</a></li>
+<li><a href="retusche.html">Retusche</a></li>
+<li><a href="ki-werkzeuge.html">KI-Werkzeuge</a></li>
+<li><a href="zusammenfuegen.html">Zusammenfügen</a></li>
+<li><a href="vergleichen.html">Vergleichen und Looks</a></li>
+<li><a href="verlauf.html">Verlauf und Anpassungen</a></li>
+<li><a href="ausgabe.html">Ausgabe</a></li>
+<li><a href="tastenkuerzel.html">Tastenkürzel</a></li>
+</ul></nav>
+<main>
+<h1 id="ki-werkzeuge">KI-Werkzeuge</h1>
+<p>Einige Werkzeuge rechnen mit neuronalen Netzen. Sie tragen in der Oberfläche ein gelbes Funkeln hinter ihrem Namen: in den Abschnittsköpfen, an Knöpfen, in den Menüs und in der Befehlssuche. Alles läuft auf dem eigenen Rechner; kein Bild verlässt ihn.</p>
+<h2 id="modelle-und-grafikkarte">Modelle und Grafikkarte</h2>
+<p>Die meisten Netze werden nicht mit Silberkorn ausgeliefert, sondern beim Programmstart im Hintergrund heruntergeladen, einmalig und ohne Nachfrage. Der Startbildschirm und danach die Statusleiste zeigen den Fortschritt; man kann sofort arbeiten.</p>
+<ul>
+<li>Wird ein Werkzeug benutzt, bevor sein Modell da ist, zeigt das Werkzeug den Fortschritt und rechnet danach von selbst weiter.</li>
+<li>Ein fehlgeschlagener Download wird beim nächsten Gebrauch wiederholt.</li>
+<li>Was länger dauert, zeigt die Statusleiste mit Fortschritt; manches lässt sich dort mit ✕ abbrechen.</li>
+<li>Die Namen und Lizenzen der Modelle stehen unter <b>Hilfe → Lizenzen …</b>.</li>
+</ul>
+<h3 id="grafikkarte">Grafikkarte</h3>
+<p><b>Bearbeiten → Grafikkarte …</b> zeigt, wo Silberkorn rechnet:</p>
+<ul>
+<li><b>Bildberechnung</b>: Regler, Vorschau und Export rechnen auf der Grafikkarte, mit dem Prozessor als Rückfall.</li>
+<li><b>KI-Berechnung</b> (Windows): Die KI-Werkzeuge rechnen auf der Grafikkarte (jede Karte mit DirectX 12) ein Vielfaches schneller als auf dem Prozessor. Dafür lädt <b>Laden</b> einmalig eine Erweiterung von Microsoft.</li>
+</ul>
+<p>Mit <b>Grafikkarte verwenden</b> lässt sich beides abschalten, etwa bei Problemen mit dem Grafiktreiber. Fällt die Grafikkarte aus, rechnet Silberkorn bis zum nächsten Start auf dem Prozessor weiter; der Dialog nennt den Grund.</p>
+<h2 id="verbessern">Verbessern</h2>
+<p>Abschnitt ganz oben im Tab <b>Details</b>, auch über <b>Entwickeln → Verbessern</b>. Zwei Netze verbessern die RAW-Daten selbst. Sie werden je Bild einmal im Hintergrund berechnet, das angezeigte Bild zuerst; das Original bleibt unverändert.</p>
+<ul>
+<li><b>Raw-Details</b>: setzt die Farben des Sensors neu zusammen (Demosaicing). Feinere Details mit weniger Farbsäumen, Treppen und Moiré, ohne zu glätten. Für rauscharme Bilder, etwa bei niedriger ISO.</li>
+<li><b>KI-Entrauschen</b>: entfernt das Rauschen und erhält dabei feine Details. Für Bilder mit hoher ISO oder stark aufgehellten Schatten.</li>
+</ul>
+<p>Der Regler legt jeweils die Stärke fest, mit der das Ergebnis eingemischt wird. Unter dem Regler steht, ob gerade berechnet wird. Bei 100 % KI-Entrauschen ist Raw-Details ohne Wirkung, weil das Entrauschen die Farben selbst neu zusammensetzt.</p>
+<ul>
+<li>Das <b>A</b> im Kopf wählt nach dem gemessenen Rauschen: Raw-Details für rauscharme Bilder, KI-Entrauschen für verrauschte.</li>
+<li>Das Übertragen-Symbol im Kopf überträgt beide Regler auf die anderen ausgewählten Bilder.</li>
+<li>Raw-Details gibt es nur für die üblichen Bayer-Sensoren, nicht für Fujifilm X-Trans, lineare DNGs und HDR; der Regler ist dann ausgegraut.</li>
+<li>Fehlt das Ergebnis beim Export, wird es dort berechnet.</li>
+</ul>
+<p>Die klassische <a href="entwickeln.html#rauschreduzierung">Rauschreduzierung</a> steht als eigener Abschnitt darunter und lässt sich zusätzlich verwenden.</p>
+<h2 id="entfernen">Entfernen</h2>
+<p><b>Entfernen</b> (X) im Tab Retusche: über Störendes malen, beim Loslassen füllt die KI die Stelle passend zur Umgebung. Das Modell wird geladen, sobald das Werkzeug gewählt wird. Bedienung, Pinsel und die Liste der Retuschen stehen unter <a href="retusche.html">Retusche</a>.</p>
+<h2 id="super-resolution">Super Resolution</h2>
+<p><b>Entwickeln → Super Resolution …</b> verdoppelt Breite und Höhe eines Bildes (viermal so viele Pixel), etwa für große Drucke oder starke Ausschnitte. Die KI arbeitet feine Details heraus, ohne welche zu erfinden.</p>
+<ol>
+<li>Ein oder mehrere Bilder auswählen.</li>
+<li><b>Entwickeln → Super Resolution …</b> wählen; der Dialog zeigt die Zielgröße.</li>
+<li><b>Vergrößern</b> startet die Berechnung im Hintergrund.</li>
+</ol>
+<p>Das Ergebnis ist ein neues DNG neben dem Original, mit „-SR“ im Namen. Weißabgleich, Farbe und Tonwerte bleiben darin voll bearbeitbar, die übrige Bearbeitung wird übernommen.</p>
+<ul>
+<li>KI-Entrauschen und Raw-Details werden so eingerechnet, wie sie unter <b>Verbessern</b> eingestellt sind; sonst würde das Rauschen mit vergrößert.</li>
+<li>Ist das Bild zugeschnitten, wird nur der Ausschnitt vergrößert. Geraderichten, Perspektive und Objektivkorrektur werden dann fest eingerechnet, Ebenen und Retusche nicht übernommen.</li>
+</ul>
+<h2 id="neu-ausleuchten">Neu ausleuchten</h2>
+<p>Abschnitt im Tab <b>Belichtung</b>. Hellt Vorder- und Hintergrund getrennt auf oder ab und färbt sie wärmer oder kühler, etwa um ein Motiv im Gegenlicht aufzuhellen. Dafür schätzt die KI einmal je Bild, wie weit jede Stelle entfernt ist (Tiefenkarte).</p>
+<ul>
+<li><b>Vordergrund</b> und <b>Hintergrund</b> haben je <b>Belichtung</b> und <b>Wärme</b>.</li>
+<li><b>Trennung</b>: über der Verteilung der Entfernungen, links nah, rechts fern. Die Linie ist die Grenze, die gestrichelten Linien Anfang und Ende des Übergangs; jede lässt sich einzeln ziehen.</li>
+</ul>
+<h2 id="objektivunschärfe">Objektivunschärfe</h2>
+<p>Abschnitt im Tab <b>Effekte</b>. Zeichnet Vorder- und Hintergrund weich wie eine offen fotografierte Blende, etwa für ein Porträt vor unruhigem Hintergrund. Nutzt dieselbe Tiefenkarte.</p>
+<ul>
+<li><b>Stärke</b>: wie unscharf es wird.</li>
+<li><b>Fokus setzen</b>: auf die Stelle klicken, die scharf bleiben soll. Alternativ der Regler <b>Fokus</b>. Beim ersten Einschalten liegt der Fokus auf dem nächsten Teil des Bildes, meist dem Motiv.</li>
+<li><b>Schärfebereich</b>: wie viel vor und hinter dem Fokus scharf bleibt.</li>
+<li><b>Lichter</b>: helle Stellen werden in der Unschärfe zu leuchtenden Scheiben (Bokeh).</li>
+</ul>
+<h2 id="atmosphäre">Atmosphäre</h2>
+<p>Abschnitt im Tab <b>Effekte</b>. Legt Dunst über das Bild, der mit der Entfernung dichter wird, etwa für Morgennebel in einer Landschaft. Seine Farbe kommt aus der Ferne des Bildes.</p>
+<ul>
+<li><b>Stärke</b>: wie dicht der Dunst ist.</li>
+<li><b>Reichweite</b>: wie weit nach vorn er reicht.</li>
+<li><b>Helligkeit</b> und <b>Wärme</b>: verändern seine Farbe.</li>
+</ul>
+<p class="note">Neu ausleuchten, Objektivunschärfe und Atmosphäre wirken erst, wenn die Tiefenkarte berechnet ist; der Abschnitt zeigt den Fortschritt. Fehlt sie beim Export, wird sie dort berechnet.</p>
+<h2 id="motiv-himmel-und-tiefe">Motiv, Himmel und Tiefe</h2>
+<p>Im Tab <b>Ebenen</b> erzeugen die Knöpfe unter <b>Maske → Automatisch auswählen</b> eine Maske aus dem Bildinhalt: <b>Motiv</b>, <b>Himmel</b> und <b>Tiefe</b>. Dazu kommt das Werkzeug <b>Objekt</b> (Umschalt+J), das per Klick ein Objekt auswählt. Die Bedienung steht unter <a href="ebenen-masken.html#automatisch-auswählen">Ebenen &amp; Masken</a>.</p>
+<p>Die genaue Motivmaske braucht einige Sekunden. Zeigt der Tab Ebenen ein Bild, wird sie schon vorab im Hintergrund berechnet; kommt der Klick früher, erscheint sofort eine grobe Maske, die die genaue ersetzt, sobald sie fertig ist.</p>
+</main>
+</body>
+</html>

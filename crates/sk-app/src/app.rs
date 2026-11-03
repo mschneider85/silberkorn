@@ -877,6 +877,8 @@ pub struct App {
     proof_cache: Vec<ProofView>,
     proof_key_cache: std::cell::RefCell<ProofKeyCache>,
     pub show_shortcuts: bool,
+    pub help: crate::help::HelpView,
+    pub tour: crate::tour::TourState,
     pub show_licenses: bool,
     pub shortcut_editor: crate::shortcut_editor::ShortcutEditor,
     /// Start screen (also the "about" dialog).
@@ -1206,6 +1208,8 @@ impl App {
             proof_cache: Vec::new(),
             proof_key_cache: Default::default(),
             show_shortcuts: false,
+            help: Default::default(),
+            tour: Default::default(),
             show_licenses: false,
             shortcut_editor: Default::default(),
             // Debug screenshots should show the app, not the start screen.
@@ -1336,6 +1340,15 @@ impl App {
         app.grid_view = std::env::var_os("SILBERKORN_GRID").is_some() || app.viewer_window.open;
         match std::env::var("SILBERKORN_DIALOG").as_deref() {
             Ok("shortcuts") => app.show_shortcuts = true,
+            Ok("tutorials") => app.tour.dialog_open = true,
+            Ok(d) if d.starts_with("hilfe") => app.open_help(d.strip_prefix("hilfe:").unwrap_or("erste-schritte")),
+            Ok(d) if d.starts_with("tour:") => {
+                if let Some(i) = crate::tour::TOURS.iter().position(|t| Some(t.id) == d.strip_prefix("tour:").map(|s| s.split('/').next().unwrap_or(s))) {
+                    app.start_tour(i);
+                    let step = d.split('/').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+                    app.tour.running = Some((i, step));
+                }
+            }
             Ok("licenses") => app.show_licenses = true,
             Ok("about") => app.splash = Some(crate::splash::Splash::about()),
             Ok("gpu") => app.show_gpu_dialog = true,

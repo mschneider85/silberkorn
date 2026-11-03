@@ -86,7 +86,7 @@ impl App {
         }
 
         let (mut close, mut reset_all) = (false, false);
-        let dialog = Dialog::new("shortcuts", icon::KEYBOARD, "Tastenkürzel")
+        let dialog = Dialog::new("shortcuts", icon::KEYBOARD, "Tastenkürzel anpassen")
             .subtitle("Klick auf ein Kürzel ändert es, + fügt eines hinzu, Rechtsklick entfernt es")
             .width(600.0);
         let modal = dialog.show(ctx, |ui| {

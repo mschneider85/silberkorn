@@ -27,6 +27,8 @@ mod gpu;
 mod gradients;
 mod guard;
 mod guides;
+mod help;
+mod help_sections;
 mod history;
 mod hot_folder;
 mod import;
@@ -53,6 +55,7 @@ mod splash;
 mod stacks;
 mod storage;
 mod style_grid;
+mod tour;
 mod subject_worker;
 mod theme;
 mod thumb_queue;
@@ -236,6 +239,7 @@ mod tests {
             include_str!("app.rs"),
             include_str!("auto_tools.rs"),
             include_str!("browser.rs"),
+            include_str!("card_watch.rs"),
             include_str!("chrome.rs"),
             include_str!("clipboard.rs"),
             include_str!("commands.rs"),
@@ -251,6 +255,8 @@ mod tests {
             include_str!("gradients.rs"),
             include_str!("guard.rs"),
             include_str!("guides.rs"),
+            include_str!("help.rs"),
+            include_str!("help_sections.rs"),
             include_str!("history.rs"),
             include_str!("hot_folder.rs"),
             include_str!("import.rs"),
@@ -282,6 +288,7 @@ mod tests {
             include_str!("theme.rs"),
             include_str!("thumb_queue.rs"),
             include_str!("tools.rs"),
+            include_str!("tour.rs"),
             include_str!("undo.rs"),
             include_str!("update.rs"),
             include_str!("variants.rs"),
@@ -290,6 +297,9 @@ mod tests {
             include_str!("window_placement.rs"),
             include_str!("workers.rs"),
         ];
+        // The manual as it is shown (see `help::screen_symbols`).
+        let manual: Vec<String> = crate::help::CHAPTERS.iter().map(|c| crate::help::screen_symbols(&c.source())).collect();
+        let sources: Vec<&str> = sources.into_iter().chain(manual.iter().map(String::as_str)).collect();
         let ctx = egui::Context::default();
         crate::theme::install(&ctx);
         ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();

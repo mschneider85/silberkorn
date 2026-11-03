@@ -274,6 +274,8 @@ fn section_inner(
     if reveal {
         resp.scroll_to_me(Some(egui::Align::TOP));
     }
+    // Tutorials point at sections by their title.
+    crate::tour::target(ui.ctx(), format!("section:{title}"), rect);
     let painter = ui.painter();
     let hovered = resp.hovered();
     painter.hline(rect.x_range(), rect.top(), Stroke::new(1.0, theme::BORDER));
@@ -324,15 +326,27 @@ fn section_inner(
         }
     }
     let mut header_button_clicked = false;
-    if let Some(help) = help {
+    // Every section explains itself: its own text or the short help, and a click opens the
+    // manual where it says more.
+    let manual = crate::help::section_help(title);
+    if let Some(help) = help.or(manual.map(|(short, _)| short)) {
         let r = Rect::from_center_size(pos2(inner.left() + 6.0 + title_w + 14.0, inner.center().y), vec2(20.0, 20.0));
-        let hr = ui.interact(r, id.with("help"), Sense::hover());
+        let hr = ui.interact(r, id.with("help"), if manual.is_some() { Sense::click() } else { Sense::hover() });
         let c = if hr.hovered() { theme::TEXT } else { theme::TEXT_FAINT };
         ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, theme::icon::INFO, egui::FontId::proportional(13.0), c);
+        let clicked = hr.clicked();
         hr.on_hover_ui(|ui| {
             ui.set_max_width(260.0);
             ui.label(help);
+            if manual.is_some() {
+                ui.add_space(4.0);
+                ui.label(RichText::new("Klick: mehr in der Hilfe").small().color(theme::TEXT_DIM));
+            }
         });
+        if clicked && let Some((_, target)) = manual {
+            ui.data_mut(|d| d.insert_temp(crate::help::open_help_id(), target.to_string()));
+            header_button_clicked = true;
+        }
     }
     // Right to left: caret, eye (only for a tool switched off with the former eye, to switch it
     // on again), reset, "A" (tools that set themselves), copy.

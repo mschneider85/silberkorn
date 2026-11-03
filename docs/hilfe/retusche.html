@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Retusche – Silberkorn</title>
+<link rel="stylesheet" href="hilfe.css">
+</head>
+<body>
+<nav><a class="home" href="../index.html">Silberkorn</a> · <a href="index.html">Hilfe</a>
+<ul>
+<li><a href="erste-schritte.html">Erste Schritte</a></li>
+<li><a href="bibliothek.html">Bibliothek</a></li>
+<li><a href="ansicht.html">Ansicht</a></li>
+<li><a href="objektiv.html">Objektiv &amp; Geometrie</a></li>
+<li><a href="entwickeln.html">Entwickeln</a></li>
+<li><a href="ebenen-masken.html">Ebenen &amp; Masken</a></li>
+<li><a href="retusche.html">Retusche</a></li>
+<li><a href="ki-werkzeuge.html">KI-Werkzeuge</a></li>
+<li><a href="zusammenfuegen.html">Zusammenfügen</a></li>
+<li><a href="vergleichen.html">Vergleichen und Looks</a></li>
+<li><a href="verlauf.html">Verlauf und Anpassungen</a></li>
+<li><a href="ausgabe.html">Ausgabe</a></li>
+<li><a href="tastenkuerzel.html">Tastenkürzel</a></li>
+</ul></nav>
+<main>
+<h1 id="retusche">Retusche</h1>
+<p>Der Tab <b>Retusche</b> entfernt Störendes: Sensorstaub, Hautunreinheiten, Stromleitungen, Passanten. Alle Retuschen sind nicht-destruktiv, bleiben beim Zuschneiden oder Drehen am Bildinhalt und lassen sich jederzeit ändern oder löschen. Retusche wirkt immer auf das ganze Bild, nicht auf Ebenen.</p>
+<h2 id="werkzeuge">Werkzeuge</h2>
+<p>Drei Werkzeuge, die jeweils über die Stelle gemalt werden; ein einfacher Klick ergibt einen runden Punkt.</p>
+<ul>
+<li><b>Reparieren</b> (H): übernimmt Struktur von einer automatisch gewählten Quelle und gleicht Farbe und Helligkeit an die Umgebung an. Für Flecken, Staub und kleine Störungen auf Haut, Himmel oder Wänden.</li>
+<li><b>Klonen</b> (S): kopiert eine Quelle 1:1. Wenn Struktur genau fortgesetzt werden muss, etwa an Kanten, oder wenn Reparieren die Farbe verfälscht.</li>
+<li><b>Entfernen</b> (X): die KI füllt die Stelle passend zur Umgebung. Für größere Objekte wie Personen, Schilder oder Leitungen.</li>
+</ul>
+<h3 id="pinsel-einstellen">Pinsel einstellen</h3>
+<ul>
+<li><b>Größe</b>: Durchmesser. [ und ] ändern sie schrittweise; Ziehen mit der rechten Maustaste ändert Größe (links und rechts) und Härte (hoch und runter) im Bild.</li>
+<li><b>Härte</b>: weiche oder harte Kante.</li>
+<li><b>Deckkraft</b>: wie stark die Retusche wirkt.</li>
+<li>Bei <b>Entfernen</b> zusätzlich <b>Fluss</b>, <b>Kanten beachten</b> und <b>Toleranz</b> wie beim Maskenpinsel, siehe <a href="ebenen-masken.html#pinsel-einstellen">Pinsel einstellen</a>.</li>
+</ul>
+<p>Die Stelle großzügig, aber ganz übermalen, samt Schatten und Spiegelungen des Objekts.</p>
+<h2 id="quelle-festlegen">Quelle festlegen</h2>
+<p>Reparieren und Klonen nehmen ihre Quelle automatisch. Mit aktivem Werkzeug zeigt das Bild alle Bereiche mit Pins: Der weiße verschiebt den Bereich, der gelbe (beim gewählten Bereich) die Quelle.</p>
+<p>Eine Quelle von Hand festlegen wie beim Kopierstempel:</p>
+<ul>
+<li><b>Alt-Klick</b> (ohne zu ziehen) ins Bild legt die Quelle fest: für den gewählten Bereich sofort, ohne gewählten Bereich für den nächsten Strich. Ein Fadenkreuz zeigt sie bis dahin.</li>
+<li>Den gelben Pin auf eine passende Stelle ziehen.</li>
+<li><b>Neue Quelle</b> in der Liste sucht automatisch eine andere.</li>
+</ul>
+<h2 id="staub-und-flecken-finden">Staub und Flecken finden</h2>
+<p><b>Staub und Flecken finden</b> sucht kleine, runde, dunkle Flecken auf ruhigen Flächen wie Himmel, Wänden oder Haut und legt für jeden eine Reparieren-Stelle an. Typisch für Sensorstaub bei kleiner Blende.</p>
+<ul>
+<li><b>Empfindlichkeit</b>: höher findet auch schwächere Flecken, aber eher auch falsche.</li>
+<li>Bereits reparierte Stellen werden übersprungen.</li>
+<li>Danach zeigt das Werkzeug Reparieren alle Stellen zum Prüfen; Falsche mit Entf löschen.</li>
+</ul>
+<p>Den Befehl gibt es auch in der Befehlssuche (Strg+K).</p>
+<h2 id="retuschen">Retuschen</h2>
+<p>Alle Retuschen des Bildes stehen in einer Liste wie die Ebenen: Art, Name und Deckkraft, die entfernten zuerst.</p>
+<ul>
+<li>Klick in der Liste oder auf den Pin im Bild wählt einen Bereich.</li>
+<li><b>Deckkraft</b> über der Liste ändert die Stärke des gewählten Bereichs.</li>
+<li><b>Art</b> wechselt zwischen Reparieren und Klonen, <b>Weichheit</b> ändert die Kante.</li>
+<li><b>Neue Quelle</b> wählt die Quelle erneut automatisch.</li>
+<li><b>Löschen</b> oder Entf löscht den gewählten Bereich, ↺ im Kopf alle.</li>
+</ul>
+<p>Was eine Art nicht hat, ist ausgegraut, etwa die Quelle bei Entfernen.</p>
+<h3 id="bereich-erweitern-oder-verkleinern">Bereich erweitern oder verkleinern</h3>
+<p>Einen gewählten Bereich ändert man, indem man mit gedrückter Umschalttaste dazumalt oder mit gedrückter Alt-Taste einen Teil wegnimmt. Dasselbe geht über <b>Malen</b> in der Liste: <b>Neu</b>, <b>Erweitern</b> oder <b>Verkleinern</b>. Ein entfernter Bereich wird danach mit allen seinen Strichen neu gefüllt.</p>
+<p class="note">Bei Entfernen zeigt das Bild umrandet, was entfernt wurde. Der erste Gebrauch lädt das KI-Modell; mehr unter <a href="ki-werkzeuge.html#entfernen">KI-Werkzeuge</a>.</p>
+</main>
+</body>
+</html>

@@ -4953,3 +4953,45 @@ fn import_dialog_fits_a_low_screen() {
     let high = dialog_at(&mut f, 1100.0);
     assert!(high.height() > low.height() + 50.0, "mit Platz wieder groß: {high:?} vs {low:?}");
 }
+
+/// A tour goes on by itself when a step is done (after a moment), and the help opens at the
+/// heading a section's info symbol names.
+#[test]
+fn tour_goes_on_and_help_opens_at_the_heading() {
+    let Some(mut f) = Fixture::new("tour") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let i = crate::tour::TOURS.iter().position(|t| t.id == "ebenen").unwrap();
+    f.app.start_tour(i);
+    f.app.tour.running = Some((i, 1));
+    let frame = |f: &mut Fixture, t: f64| {
+        let input = egui::RawInput { time: Some(t), screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))), ..Default::default() };
+        let app = &mut f.app;
+        let out = f.ctx.run_ui(input, |ui| app.tour_overlay(ui.ctx()));
+        let mut delta = out.textures_delta;
+        delta.clear();
+    };
+    frame(&mut f, 0.0);
+    assert_eq!(f.app.tour.running, Some((i, 1)), "wartet auf den Tab");
+    f.app.tab = crate::app::Tab::Layers;
+    frame(&mut f, 0.1);
+    assert_eq!(f.app.tour.running, Some((i, 1)), "erledigt, aber noch kurz sichtbar");
+    frame(&mut f, 2.0);
+    assert_eq!(f.app.tour.running, Some((i, 2)), "weiter");
+
+    // A step already done when it begins waits for "Weiter" (an image is open: "Ein Bild wählen").
+    let first = crate::tour::TOURS.iter().position(|t| t.id == "erste-schritte").unwrap();
+    let pick = crate::tour::TOURS[first].steps.iter().position(|s| s.title == "Ein Bild wählen").unwrap();
+    f.app.tour.running = Some((first, pick));
+    frame(&mut f, 3.0);
+    frame(&mut f, 6.0);
+    assert_eq!(f.app.tour.running, Some((first, pick)), "schon erledigt: bleibt stehen");
+
+    // The info symbol of "Zuschnitt" leads to its heading in "Objektiv & Geometrie".
+    let (_, target) = crate::help::section_help("Zuschnitt").unwrap();
+    f.app.open_help(target);
+    assert!(f.app.help.open);
+    assert_eq!(crate::help::CHAPTERS[f.app.help.chapter].id, "objektiv");
+    // Titles with a count after them find theirs too.
+    assert_eq!(crate::help::section_help("Bewertung (3 Bilder)"), crate::help::section_help("Bewertung"));
+    assert!(crate::help::section_help("Session-Favoriten") != crate::help::section_help("Session") || crate::help::section_help("Session").is_none());
+}

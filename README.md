@@ -1076,9 +1076,29 @@ Daten aus der Zeit als „Capture Room“ werden übernommen: Ordner `capture-ro
 `~/.local/share` und `~/.cache` werden beim ersten Start nach `silberkorn` verschoben, und alte
 `<Bild>.crs.json`-Sidecars werden gelesen und beim nächsten Speichern durch `.sk.json` ersetzt.
 
+### Hilfe und Tutorials
+
+**Hilfe** (F1) öffnet das Handbuch in einem eigenen Fenster neben der Arbeit: Kapitel links, Suche
+über alle Kapitel, Verweise zwischen den Kapiteln. Das Info-Symbol im Kopf jedes Werkzeugs zeigt
+eine Kurzhilfe, ein Klick darauf öffnet das Handbuch an der passenden Stelle; die Befehlssuche
+findet auch Kapitel und Abschnitte. Das Kapitel „Tastenkürzel“ entsteht aus der Befehlsliste und
+zeigt die aktuell eingestellten Tasten.
+
+**Tutorials …** (Menü Hilfe, auch auf der Startseite ohne geöffneten Ordner) führt in kurzen
+Touren durch das Programm: Erste Schritte, Ebenen und Masken, Retusche und Entfernen, Bibliothek.
+Die Tour hebt die Stelle hervor, um die es geht, und geht weiter, sobald der Schritt erledigt ist;
+das Programm bleibt dabei bedienbar. Liegt neben dem Programm ein Ordner `Beispiel`, öffnet eine
+Tour ihn, wenn noch kein Bild offen ist.
+
+Die Kapitel stehen als Markdown in `crates/sk-app/help/` (eine kleine Teilmenge, siehe
+`help.rs`; `{taste:befehl}` steht für die aktuelle Taste) und als Webseiten in `docs/hilfe/`. Der
+Test `help_site_is_current` prüft, dass die Webseiten aktuell sind;
+`SILBERKORN_WRITE_HELP=1 cargo test -p sk-app help_site` schreibt sie neu. `links_lead_somewhere`
+prüft alle Verweise, `every_section_has_help` die Kurzhilfen.
+
 ## Tastenkürzel
 
-Die Tabelle zeigt die Voreinstellung. Im Fenster **Hilfe → Tastenkürzel** (F1) lässt sich jedem Befehl
+Die Tabelle zeigt die Voreinstellung. Im Fenster **Hilfe → Tastenkürzel anpassen …** lässt sich jedem Befehl
 ein anderes oder ein weiteres Kürzel geben: Klick auf ein Kürzel und die neue Taste drücken, „+“
 fügt eines hinzu, Rechtsklick entfernt es. Ist die Taste schon vergeben, wechselt sie zum neuen
 Befehl (das Fenster sagt, von welchem). Menüs, Befehlssuche und Tooltips zeigen die geänderten
@@ -1087,7 +1107,8 @@ die Leertaste und die Tasten der Schnellbearbeitung.
 
 | Taste | Funktion |
 |---|---|
-| Strg+K | Befehlspalette: jede Funktion, jedes Werkzeug und jeden Tool-Abschnitt per Suche finden (auch über das Suchfeld in der Titelleiste) |
+| F1 | Hilfe (Handbuch) |
+| Strg+K | Befehlssuche: jede Funktion, jedes Werkzeug und jeden Tool-Abschnitt per Suche finden (auch über das Suchfeld in der Titelleiste) |
 | Strg+1 … Strg+0 | Werkzeug-Tabs in der Reihenfolge der Tab-Leiste (außer „Verlauf“; „Ausgabe“ hat keins mehr) |
 | Strg+Mausrad | Vorschaugröße im Raster (auch Regler in der Statusleiste) |
 | ← / → | vorheriges / nächstes Bild |
