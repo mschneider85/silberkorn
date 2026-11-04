@@ -114,6 +114,8 @@ pub const SECTION_HELP: &[(&str, &str, &str)] = &[
     ("Exportieren", "Exportiert die Auswahl mit allen eingeschalteten Rezepten.", "ausgabe#Exportieren"),
     ("Softproof", "Zeigt, wie das Bild in einem anderen Farbraum oder auf einem Drucker aussieht, und markiert Farben außerhalb.", "ausgabe#Softproof"),
     ("Druckvorschau", "Zeigt das Bild in Druckgröße auf dem gewählten Papierformat.", "ausgabe#Druckvorschau"),
+    ("Druckseite", "Rand, Rahmen, Schnittmarken und Beschriftung: was außer dem Bild auf dem Blatt steht.", "ausgabe#Druckseite"),
+    ("Drucken", "Druckt die ausgewählten Bilder oder speichert die Seiten als PDF oder JPEG; mit Druckanpassung, Schärfung und Druckerprofil.", "ausgabe#Drucken"),
     // Seitenleiste rechts neben dem Bild (dazu "Schnappschüsse" und "Verlauf" wie oben)
     ("Bild", "Name, Kamera, Belichtung und Größe des Bildes, dazu Bewertung und Farb-Label.", "ansicht#Seitenleiste"),
     ("Bearbeitung", "Was an diesem Bild geändert ist; ein Klick öffnet das Werkzeug.", "ansicht#Seitenleiste"),

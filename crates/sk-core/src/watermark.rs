@@ -102,10 +102,10 @@ impl Default for Watermark {
 }
 
 /// Premultiplied-free RGBA overlay: color (output encoding) and coverage 0..1.
-struct Overlay {
-    width: usize,
-    height: usize,
-    pixels: Vec<([f32; 3], f32)>,
+pub(crate) struct Overlay {
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+    pub(crate) pixels: Vec<([f32; 3], f32)>,
 }
 
 impl Watermark {
@@ -210,7 +210,7 @@ impl Watermark {
 
 /// The text in one line, `height` pixels from ascender to descender (smaller if it would be
 /// wider than `max_width`). `None` for empty text.
-fn text_overlay(text: &str, height: f32, max_width: f32, gray: f32) -> Option<Overlay> {
+pub(crate) fn text_overlay(text: &str, height: f32, max_width: f32, gray: f32) -> Option<Overlay> {
     let text = text.trim();
     if text.is_empty() {
         return None;

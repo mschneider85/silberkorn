@@ -67,8 +67,9 @@ impl App {
     /// ordinary single view.
     pub fn compare_cells(&self) -> Vec<PathBuf> {
         let Some(primary) = self.primary_path() else { return Vec::new() };
-        // Tools, before/after and proof work in the single view.
-        let single = self.crop_tool.is_some()
+        // Tools, before/after, proof and the print bar work in the single view.
+        let single = self.print.bar
+            || self.crop_tool.is_some()
             || self.straighten_tool.is_some()
             || self.local_tool.is_some()
             || self.picking_wb

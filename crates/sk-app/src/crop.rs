@@ -201,6 +201,13 @@ impl App {
 /// Some(true) when applied, Some(false) when cancelled.
 pub(crate) fn image_bar(ui: &mut Ui, img_rect: Rect, settings: impl FnOnce(&mut Ui)) -> Option<bool> {
     let at = pos2(img_rect.center().x, img_rect.bottom().min(ui.clip_rect().bottom()) - 16.0);
+    let apply = (format!("{}  Übernehmen", crate::theme::icon::CHECK), crate::commands::shortcut_of("finish-crop"));
+    image_bar_at(ui, at, apply, true, settings)
+}
+
+/// [`image_bar`] with its bottom middle at `at` and the confirming button's name and key
+/// (`enabled`: whether it can be pressed now).
+pub(crate) fn image_bar_at(ui: &mut Ui, at: Pos2, apply: (String, String), enabled: bool, settings: impl FnOnce(&mut Ui)) -> Option<bool> {
     let mut done = None;
     egui::Area::new(egui::Id::new("image_bar")).order(egui::Order::Middle).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(at).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).corner_radius(8).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
@@ -213,7 +220,7 @@ pub(crate) fn image_bar(ui: &mut Ui, img_rect: Rect, settings: impl FnOnce(&mut 
                 // In one line each (the tick and "Übernehmen" wrapped and grew taller), with the
                 // key beside the name, as in the menus.
                 let button = |text: String, key: String| egui::Button::new(text).shortcut_text(key).wrap_mode(egui::TextWrapMode::Extend);
-                if ui.add(button(format!("{}  Übernehmen", crate::theme::icon::CHECK), crate::commands::shortcut_of("finish-crop"))).clicked() {
+                if ui.add_enabled(enabled, button(apply.0, apply.1)).clicked() {
                     done = Some(true);
                 }
                 if ui.add(button("Abbrechen".into(), "Esc".into())).clicked() {

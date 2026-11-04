@@ -188,8 +188,8 @@ pub fn inline(s: &str) -> Vec<Span> {
     let mut text = String::new();
     let mut rest = s;
     while let Some(c) = rest.chars().next() {
-        let found = if rest.starts_with("**") {
-            rest[2..].find("**").map(|end| (Span::Bold(rest[2..2 + end].to_string()), 4 + end))
+        let found = if let Some(bold) = rest.strip_prefix("**") {
+            bold.find("**").map(|end| (Span::Bold(bold[..end].to_string()), 4 + end))
         } else if c == '`' {
             rest[1..].find('`').map(|end| (Span::Code(rest[1..1 + end].to_string()), 2 + end))
         } else if c == '[' {

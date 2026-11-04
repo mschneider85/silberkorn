@@ -192,6 +192,8 @@ impl App {
         }
         ui.separator();
         self.command_item_labeled(ui, "export", &format!("Exportieren ({})", image_count(n_sel)));
+        self.command_item(ui, "print");
+        self.command_item(ui, "print-to-file");
         ui.separator();
         if item(ui, icon::X, "Beenden", "Alt+F4", true) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);

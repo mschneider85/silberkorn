@@ -35,6 +35,7 @@ pub mod naming;
 pub mod image;
 pub mod params;
 pub mod print;
+pub mod print_page;
 pub mod paths;
 pub mod pipeline;
 pub mod raw;

@@ -72,6 +72,10 @@ fn can_delete_chosen(a: &App) -> bool {
     a.selected_spot.is_some() || a.selected_removal.is_some() || a.selected_gradient.is_some() || (a.tab == Tab::Layers && a.active_layer.is_some())
 }
 /// One export at a time, and only with a recipe switched on.
+fn can_print_to_file(a: &App) -> bool {
+    has_selection(a) && a.print_blocked_reason(true).is_none()
+}
+
 fn can_export(a: &App) -> bool {
     has_selection(a) && a.export_progress.is_none() && a.recipes.iter().any(|r| r.enabled)
 }
@@ -126,6 +130,8 @@ pub const COMMANDS: &[Command] = &[
     cmd!("open-session", icon::FOLDER_OPEN, "Session öffnen …", "Datei", [CTRL_SHIFT => Key::O], "session", always, |a, _| a.open_session_dialog()),
     cmd!("close-session", icon::SIGN_OUT, "Session schließen", "Datei", [CTRL => Key::W], "session katalog zurück verlassen", in_session, |a, _| a.close_session()),
     cmd!("export", icon::EXPORT, "Exportieren", "Datei", [CTRL => Key::D], "export ausgabe speichern verarbeiten", can_export, |a, _| a.export_selection()),
+    cmd!("print", icon::PRINTER, "Drucken …", "Datei", [CTRL => Key::P], "drucker papier print", has_image, |a, _| a.print_command()),
+    cmd!("print-to-file", icon::FILE_PDF, "In Datei drucken …", "Datei", [], "pdf jpeg druck datei labor", can_print_to_file, |a, _| a.print_to_file_dialog()),
     // Bearbeiten
     cmd!("undo", icon::ARROW_U_UP_LEFT, "Rückgängig", "Bearbeiten", [CTRL => Key::Z], "undo", |a| a.can_undo(), |a, _| a.undo()),
     cmd!("redo", icon::ARROW_U_UP_RIGHT, "Wiederholen", "Bearbeiten", [CTRL => Key::Y], "redo", |a| a.can_redo(), |a, _| a.redo()),
@@ -272,7 +278,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("focus-mask", icon::CROSSHAIR, "Schärfemaske", "Ansicht", [NONE => Key::K], "fokusmaske fokus focus peaking", has_image, |a, _| a.toggle_focus_mask()),
     cmd!("proof", icon::FILE_MAGNIFYING_GLASS, "Ausgabevorschau", "Ansicht", [NONE => Key::P], "vorschau export proof rezept", has_image, |a, _| a.toggle_proof()),
     cmd!("softproof", icon::PRINTER, "Softproof", "Ansicht", [SHIFT => Key::P], "drucker profil gamut", has_image, |a, _| a.toggle_softproof()),
-    cmd!("print-preview", icon::PRINTER, "Druckvorschau", "Ansicht", [CTRL => Key::P], "drucken papier", has_image, |a, _| a.toggle_print_preview()),
+    cmd!("print-preview", icon::PRINTER, "Druckvorschau", "Ansicht", [CTRL_SHIFT => Key::P], "drucken papier", has_image, |a, _| a.toggle_print_preview()),
     cmd!("guides-next", icon::GRID_NINE, "Hilfslinien wechseln", "Ansicht", [NONE => Key::O], "guides raster drittel", always, |a, _| {
         a.guides = a.guides.next();
         a.save_settings();

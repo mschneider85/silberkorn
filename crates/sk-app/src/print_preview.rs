@@ -2,7 +2,8 @@
 //! resolution on paper and, on a calibrated screen, the image at its printed size.
 
 use egui::{Color32, RichText, Ui, Vec2, vec2};
-use sk_core::print::{Fit, Layout, PPI_LOW, PPI_POOR, PRESETS, PrintFormat, PrintSettings};
+use sk_core::print::{Caption, Fit, Layout, PPI_LOW, PPI_POOR, PRESETS, Paper, PrintFormat, PrintSettings, PrintSharpening};
+use sk_core::softproof::RenderIntent;
 
 use crate::app::App;
 use crate::theme;
@@ -17,6 +18,32 @@ pub struct PrintPreviewState {
     pub zoom: bool,
     /// The calibration dialog is open, with the physical pixels per millimeter being tried.
     pub calibrating: Option<f32>,
+    /// The running print job.
+    pub job: Option<u64>,
+    /// Strg+P: the print bar in the image, before the system's dialog.
+    pub bar: bool,
+    /// The print preview was on before the print bar turned it on.
+    pub was_on: bool,
+    /// What the job wants said when it is done (the printer took other paper).
+    pub note: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+}
+
+/// Photo sizes for the image on the paper (as in a lab).
+pub const PHOTO_SIZES: [(&str, PrintFormat); 6] = [
+    ("9 × 13 cm", PrintFormat::new(89.0, 127.0)),
+    ("10 × 15 cm", PrintFormat::new(102.0, 152.0)),
+    ("13 × 18 cm", PrintFormat::new(127.0, 178.0)),
+    ("15 × 20 cm", PrintFormat::new(152.0, 203.0)),
+    ("20 × 30 cm", PrintFormat::new(203.0, 305.0)),
+    ("A5", PrintFormat::new(148.0, 210.0)),
+];
+
+/// "Ganzes Blatt" or the image size ("10 × 15 cm").
+pub fn image_size_label(f: Option<PrintFormat>) -> String {
+    match f {
+        None => "Ganzes Blatt".into(),
+        Some(f) => PHOTO_SIZES.iter().find(|(_, p)| *p == f).map_or_else(|| f.label(), |(n, _)| n.to_string()),
+    }
 }
 
 /// A credit card (ISO/IEC 7810 ID-1): something everyone has at hand to measure the screen.
@@ -31,7 +58,11 @@ const CAL_PAD: f32 = 12.0;
 pub struct PaperFrame {
     /// Paper size relative to the image's size on screen, per axis (below 1 where filling cuts).
     pub rel: Vec2,
+    /// The printed part of the image, relative to its size (1: all of it).
+    pub window: Vec2,
     pub color: Color32,
+    /// The print layout (with the print preview), for border, crop marks and caption.
+    pub layout: Option<Layout>,
 }
 
 impl App {
@@ -76,8 +107,7 @@ impl App {
             return None;
         }
         let w = self.full_output_width()?;
-        let s = &self.print.settings;
-        Some(sk_core::print::layout(w, w * size.y / size.x.max(1.0), s.format, s.fit))
+        Some(sk_core::print::layout(w, w * size.y / size.x.max(1.0), &self.print.settings))
     }
 
     /// The paper around the image (`size`: the image on screen at scale 1): the print format
@@ -87,24 +117,21 @@ impl App {
             return None;
         }
         let soft = self.softproof.transform.as_ref().filter(|_| self.softproof.on);
-        let color = self.print_background().unwrap_or_else(|| soft.map_or(Color32::WHITE, |t| Color32::from_rgb(t.paper[0], t.paper[1], t.paper[2])));
+        // White, or the paper's tone when the soft proof simulates it.
+        let color = soft.map_or(Color32::WHITE, |t| Color32::from_rgb(t.paper[0], t.paper[1], t.paper[2]));
         if let Some(l) = self.print_layout(size) {
-            return Some(PaperFrame { rel: vec2(l.paper[0] / l.image[0], l.paper[1] / l.image[1]), color });
+            return Some(PaperFrame {
+                rel: vec2(l.paper[0] / l.image[0], l.paper[1] / l.image[1]),
+                window: vec2(l.window[0] / l.image[0], l.window[1] / l.image[1]),
+                color,
+                layout: Some(l),
+            });
         }
         if soft.is_some() && self.softproof.settings.paper_margin && !self.proof_view {
             let m = 0.06 * size.x.max(size.y);
-            return Some(PaperFrame { rel: (size + Vec2::splat(2.0 * m)) / size, color });
+            return Some(PaperFrame { rel: (size + Vec2::splat(2.0 * m)) / size, window: Vec2::splat(1.0), color, layout: None });
         }
         None
-    }
-
-    /// Background of the viewer in the print preview: the paper's color.
-    pub(crate) fn print_background(&self) -> Option<Color32> {
-        if !self.print.on || self.current.is_none() || self.crop_tool.is_some() || self.straighten_tool.is_some() {
-            return None;
-        }
-        let soft = self.softproof.transform.as_ref().filter(|_| self.softproof.on);
-        Some(soft.map_or(Color32::WHITE, |t| Color32::from_rgb(t.paper[0], t.paper[1], t.paper[2])))
     }
 
     /// Scale (points per image texture pixel) at which the image appears at its printed size.
@@ -151,8 +178,40 @@ impl App {
             hints.push(crate::commands::hint("Softproof aus: die Farben zeigen den Bildschirm, nicht das Papier", "softproof"));
             "  ·  Softproof aus"
         };
-        let text = format!("DRUCK  ·  {}  ·  {}  ·  {:.0} ppi{off}{zoom}{colors}", s.format.label(), s.fit.label(), l.ppi);
+        let size = s.image_size.map(|f| format!("  ·  Bild {}", f.label())).unwrap_or_default();
+        let text = format!("DRUCK  ·  {}{size}  ·  {}  ·  {:.0} ppi{off}{zoom}{colors}", s.format.label(), s.fit.label(), l.ppi);
         Some((text, color, (!hints.is_empty()).then(|| hints.join("\n"))))
+    }
+
+    /// Border, crop marks and caption of the print preview, around the image on screen
+    /// (`img_rect`: the whole image, as laid out).
+    pub(crate) fn draw_print_extras(&self, painter: &egui::Painter, img_rect: egui::Rect, l: &Layout) {
+        let s = &self.print.settings;
+        // Points per millimeter on screen.
+        let k = img_rect.width() / l.image[0].max(1e-3);
+        let paper = egui::Rect::from_center_size(img_rect.center(), vec2(l.paper[0], l.paper[1]) * k);
+        let at = |x: f32, y: f32| paper.min + vec2(x, y) * k;
+        let [x, y, w, h] = l.window_rect();
+        let window = egui::Rect::from_min_max(at(x, y), at(x + w, y + h));
+        let ink = Color32::from_gray(20);
+        if s.border_mm > 0.0 {
+            let b = (s.border_mm * k).max(1.0 / self.pixels_per_point);
+            painter.rect_stroke(window, 0.0, egui::Stroke::new(b, ink), egui::StrokeKind::Outside);
+        }
+        if s.crop_marks {
+            let line = egui::Stroke::new((sk_core::print::MARK_LINE_MM * k).max(1.0 / self.pixels_per_point), ink);
+            for (a, b) in l.crop_marks(s.border_mm) {
+                painter.line_segment([at(a[0], a[1]), at(b[0], b[1])], line);
+            }
+        }
+        if let Some(cur) = &self.current
+            && let Some(text) = s.caption.text(&cur.meta.path, &cur.meta.info)
+        {
+            let size = sk_core::print::CAPTION_MM * k;
+            if size >= 3.0 {
+                painter.text(egui::pos2(paper.center().x, at(0.0, l.caption_top()).y), egui::Align2::CENTER_TOP, text, egui::FontId::proportional(size), Color32::from_gray(77));
+            }
+        }
     }
 
     fn change_print_settings(&mut self, f: impl FnOnce(&mut PrintSettings)) {
@@ -187,6 +246,33 @@ impl App {
                     s.format = PrintFormat::new(w * 10.0, h * 10.0);
                 }
             });
+            widgets::combo_field(ui, "Bildgröße", image_size_label(s.image_size), |ui| {
+                ui.selectable_value(&mut s.image_size, None, image_size_label(None)).on_hover_text("So groß, wie Papier und Rand erlauben");
+                for (name, f) in PHOTO_SIZES {
+                    ui.selectable_value(&mut s.image_size, Some(f), name);
+                }
+            });
+            if let Some(f) = s.image_size {
+                widgets::field(ui, "Eigene (cm)", |ui| {
+                    let (mut w, mut h) = (f.w_mm.min(f.h_mm) / 10.0, f.w_mm.max(f.h_mm) / 10.0);
+                    let a = ui.add(egui::DragValue::new(&mut w).range(2.0..=200.0).speed(0.1).max_decimals(1));
+                    ui.label("×");
+                    let b = ui.add(egui::DragValue::new(&mut h).range(2.0..=200.0).speed(0.1).max_decimals(1));
+                    if a.changed() || b.changed() {
+                        s.image_size = Some(PrintFormat::new(w * 10.0, h * 10.0));
+                    }
+                });
+            }
+            let turn = |p: Option<bool>| match p {
+                None => "Wie das Bild",
+                Some(true) => "Hochformat",
+                Some(false) => "Querformat",
+            };
+            widgets::combo_field(ui, "Ausrichtung", turn(s.portrait), |ui| {
+                for p in [None, Some(true), Some(false)] {
+                    ui.selectable_value(&mut s.portrait, p, turn(p));
+                }
+            });
             widgets::combo_field(ui, "Anpassung", s.fit.label(), |ui| {
                 ui.selectable_value(&mut s.fit, Fit::Contain, Fit::Contain.label()).on_hover_text("Ganzes Bild, Rand wo die Seitenverhältnisse abweichen");
                 ui.selectable_value(&mut s.fit, Fit::Fill, Fit::Fill.label()).on_hover_text("Randlos wie im Fotolabor, das Bild wird beschnitten");
@@ -207,6 +293,8 @@ impl App {
             );
         });
         self.change_print_settings(|old| *old = s);
+        self.print_page_section(ui);
+        self.print_job_section(ui);
         if toggle {
             self.toggle_print_preview();
         }
@@ -215,6 +303,115 @@ impl App {
         }
         if calibrate {
             self.print.calibrating = Some(self.screen_px_per_mm(ui.ctx()).0);
+        }
+    }
+
+    /// Margins, border, crop marks and caption: what is on the page besides the image.
+    fn print_page_section(&mut self, ui: &mut Ui) {
+        let mut s = self.print.settings.clone();
+        section(ui, "Druckseite", None, |ui| {
+            let mm = widgets::SliderOpts { suffix: " mm", ..Default::default() };
+            // With a fixed image size the margin is what is left around it.
+            ui.add_enabled_ui(s.image_size.is_none(), |ui| {
+                widgets::slider_row_with(ui, "Rand", &mut s.margin_mm, 0.0..=50.0, 0.0, 0, mm);
+            })
+            .response
+            .on_disabled_hover_text("Mit fester Bildgröße ergibt sich der Rand von selbst");
+            widgets::slider_row_with(ui, "Rahmen", &mut s.border_mm, 0.0..=5.0, 0.0, 1, widgets::SliderOpts { suffix: " mm", ..Default::default() });
+            crate::widgets::checkbox(ui, &mut s.crop_marks, "Schnittmarken")
+                .on_hover_text("Linien an den Ecken, außerhalb des Bildes: zum Zuschneiden, wenn das Papier größer ist als das Bild. Brauchen einen Rand.");
+            widgets::combo_field(ui, "Beschriftung", s.caption.label(), |ui| {
+                for c in Caption::ALL {
+                    ui.selectable_value(&mut s.caption, c, c.label());
+                }
+            });
+        });
+        self.change_print_settings(|old| *old = s);
+    }
+
+    /// Print adjustment, sharpening, colors and the buttons.
+    fn print_job_section(&mut self, ui: &mut Ui) {
+        if self.softproof.found.is_none() {
+            self.softproof.found = Some(sk_core::softproof::find_profiles());
+        }
+        let mut s = self.print.settings.clone();
+        let (mut print, mut to_file, mut pick) = (false, false, false);
+        section(ui, "Drucken", None, |ui| {
+            ui.label(RichText::new("Druckanpassung").small().color(theme::TEXT_DIM))
+                .on_hover_text("Drucke wirken oft dunkler und flacher als der Bildschirm: gilt nur für den Druck, nicht für die Vorschau.");
+            widgets::slider_row(ui, "Helligkeit", &mut s.brightness, -50.0..=50.0, 0.0, 0);
+            widgets::slider_row(ui, "Kontrast", &mut s.contrast, -50.0..=50.0, 0.0, 0);
+            widgets::combo_field(ui, "Schärfung", s.sharpening.label(), |ui| {
+                for v in PrintSharpening::ALL {
+                    ui.selectable_value(&mut s.sharpening, v, v.label());
+                }
+            });
+            ui.add_enabled_ui(s.sharpening != PrintSharpening::Off, |ui| {
+                widgets::combo_field(ui, "Papier", s.paper.label(), |ui| {
+                    for p in [Paper::Glossy, Paper::Matte] {
+                        ui.selectable_value(&mut s.paper, p, p.label());
+                    }
+                });
+            });
+            let colors = s.profile.as_ref().map_or_else(|| "Drucker steuert".to_string(), |p| sk_core::softproof::profile_name(p));
+            widgets::combo_field(ui, "Farben", colors, |ui| {
+                ui.selectable_value(&mut s.profile, None, "Drucker steuert").on_hover_text("Der Drucker bekommt sRGB und rechnet die Farben selbst um");
+                let known = &self.softproof.settings.profiles;
+                let mut files: Vec<(std::path::PathBuf, String)> = known.iter().map(|p| (p.clone(), sk_core::softproof::profile_name(p))).collect();
+                files.extend(self.softproof.found.iter().flatten().filter(|(p, _)| !known.contains(p)).cloned());
+                if !files.is_empty() {
+                    ui.separator();
+                }
+                for (p, n) in files {
+                    ui.selectable_value(&mut s.profile, Some(p.clone()), n).on_hover_text(p.display().to_string());
+                }
+                ui.separator();
+                if ui.button(format!("{}  ICC-Profil laden …", theme::icon::FOLDER_OPEN)).clicked() {
+                    pick = true;
+                }
+            });
+            if s.profile.is_some() {
+                widgets::combo_field(ui, "Priorität", s.intent.label(), |ui| {
+                    for i in [RenderIntent::Perceptual, RenderIntent::RelativeColorimetric] {
+                        ui.selectable_value(&mut s.intent, i, i.label());
+                    }
+                });
+                ui.label(
+                    RichText::new("Silberkorn rechnet die Farben ins Profil um. Im Druckertreiber „Keine Farbkorrektur“ wählen, falls er es anbietet, sonst wird doppelt umgerechnet.")
+                        .small()
+                        .color(theme::TEXT_FAINT),
+                );
+            }
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                let label = format!("{}  Drucken …", theme::icon::PRINTER);
+                let r = ui.add_enabled(self.current.is_some(), crate::dialog::primary(label));
+                let r = r.on_hover_text(crate::commands::hint("Zeigt die Seite und öffnet dann den Druckdialog; die ausgewählten Bilder, eines je Seite", "print"));
+                if r.clicked() {
+                    print = true;
+                }
+                let blocked = self.print_blocked_reason(true);
+                let r = ui.add_enabled(blocked.is_none(), egui::Button::new(format!("{}  In Datei …", theme::icon::FILE_PDF)));
+                let r = match blocked {
+                    Some(why) => r.on_disabled_hover_text(why),
+                    None => r.on_hover_text("Die Seiten als PDF oder JPEG speichern, etwa für ein Fotolabor"),
+                };
+                if r.clicked() {
+                    to_file = true;
+                }
+            });
+        });
+        if pick
+            && let Some(p) = rfd::FileDialog::new().add_filter("ICC-Profil", &["icc", "icm"]).set_title("ICC-Profil des Druckers wählen").pick_file()
+        {
+            s.profile = Some(p);
+        }
+        self.change_print_settings(|old| *old = s);
+        if print {
+            self.print_command();
+        }
+        if to_file {
+            self.print_to_file_dialog();
         }
     }
 

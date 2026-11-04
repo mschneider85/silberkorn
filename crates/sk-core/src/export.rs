@@ -274,6 +274,21 @@ pub fn export_many_with(
         .collect()
 }
 
+/// Develops `image` at full resolution into `space` (encoded 0..1), for printing; `loaded` as
+/// in [`export_many_with`].
+pub fn develop(image: &Path, loaded: Option<(&raw::RawMeta, &crate::image::LinearImage)>, adj: &Adjustments, space: OutputSpace) -> Result<(CaptureInfo, crate::image::LinearImage)> {
+    let read;
+    let (meta, linear) = match loaded {
+        Some(l) => l,
+        None => {
+            read = raw::load_full(image)?;
+            (&read.0, &read.1)
+        }
+    };
+    ensure_products(image, meta, adj)?;
+    Ok((meta.info.clone(), Processor::new(meta, adj).process(linear, None, space)))
+}
+
 /// Never silently without the Raw-Details, denoising, lens blur, relight or atmosphere the
 /// image shows.
 fn ensure_products(image: &Path, meta: &raw::RawMeta, adj: &Adjustments) -> Result<()> {
@@ -340,7 +355,7 @@ fn resized<'a>(out: &'a crate::image::LinearImage, recipe: &ExportRecipe) -> Res
 
 /// Lanczos3 resampling like `image::imageops::resize`, but on all cores (that one runs on one
 /// and took seconds for a large image).
-fn resize_lanczos3(src: &ImageBuffer<Rgb<f32>, Vec<f32>>, nw: u32, nh: u32) -> ImageBuffer<Rgb<f32>, Vec<f32>> {
+pub(crate) fn resize_lanczos3(src: &ImageBuffer<Rgb<f32>, Vec<f32>>, nw: u32, nh: u32) -> ImageBuffer<Rgb<f32>, Vec<f32>> {
     let (w, h) = (src.width() as usize, src.height() as usize);
     let (nw, nh) = (nw as usize, nh as usize);
     // Per output position: first source index and normalized weights.
@@ -397,7 +412,7 @@ fn lanczos3(x: f32) -> f32 {
 }
 
 /// Unsharp mask on the luminance of output-encoded RGB (colors keep their place: no colored halos).
-fn sharpen(buf: &mut ImageBuffer<Rgb<f32>, Vec<f32>>, amount: f32, radius: f32) {
+pub(crate) fn sharpen(buf: &mut ImageBuffer<Rgb<f32>, Vec<f32>>, amount: f32, radius: f32) {
     let (w, h) = (buf.width() as usize, buf.height() as usize);
     let luma = |p: &[f32]| 0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2];
     let plane = crate::detail::Plane::new(w, h, buf.as_raw().par_chunks(3).map(luma).collect());

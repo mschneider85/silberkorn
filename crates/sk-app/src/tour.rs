@@ -297,7 +297,7 @@ impl App {
                 });
             }
             if self.current.is_none() && example_folder().is_none() {
-                dialog::note(ui, &format!("Ohne geöffnetes Bild laden die Touren ein Beispielbild herunter ({} MB).", EXAMPLE.size_mb()));
+                dialog::note(ui, format!("Ohne geöffnetes Bild laden die Touren ein Beispielbild herunter ({} MB).", EXAMPLE.size_mb()));
             }
             dialog::footer(ui, |ui| {
                 if ui.add(dialog::secondary("Schließen")).clicked() {

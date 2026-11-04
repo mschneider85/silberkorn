@@ -95,11 +95,9 @@ impl App {
         let painter = ui.painter_at(rect);
         // Several selected images and/or the reference side by side.
         let cells = self.compare_cells();
-        // The print preview judges the image against the paper, as it will be seen.
-        let bg = match self.print_background().filter(|_| cells.is_empty()) {
-            Some(c) => c,
-            None => self.viewer_background.color(self.fullscreen),
-        };
+        // Also around the sheet of the print preview: on gray the sheet stands out, and white all
+        // around would make the image look darker than on paper.
+        let bg = self.viewer_background.color(self.fullscreen);
         painter.rect_filled(rect, 0.0, bg);
         if !cells.is_empty() {
             self.compare_view(ui, rect, &cells);
@@ -154,7 +152,10 @@ impl App {
         let size = self.view_size.unwrap_or(tex.size_vec2());
         let tex_id = tex.id();
         let tools_active = self.crop_tool.is_some() || self.straighten_tool.is_some() || self.local_tool.is_some();
-        let margin = if self.crop_tool.is_some() {
+        // The print bar below the sheet needs room.
+        let margin = if self.print.bar {
+            120.0
+        } else if self.crop_tool.is_some() {
             40.0
         } else if self.fullscreen {
             0.0
@@ -256,13 +257,11 @@ impl App {
         let proof = self.proof.as_ref().filter(|p| self.proof_view && p.version == self.edit_version && Some(p.key) == self.proof_key());
         let shown = proof.map_or(tex_id, |p| p.texture.id());
         let paper_rect = paper.as_ref().map(|p| Rect::from_center_size(img_rect.center(), img_rect.size() * p.rel));
+        // The printed part of the image (filling cuts the rest).
+        let window_rect = paper.as_ref().map(|p| Rect::from_center_size(img_rect.center(), img_rect.size() * p.window));
         if let (Some(p), Some(r)) = (&paper, paper_rect) {
-            // On a background in the paper's color, a soft shadow shows the sheet (filling, the
-            // printed part of the image is the sheet).
-            if p.color == bg {
-                let sheet = if r.contains_rect(img_rect) { r } else { r.intersect(img_rect) };
-                painter.add(SHEET_SHADOW.as_shape(sheet, 0));
-            }
+            // A soft shadow under the sheet.
+            painter.add(SHEET_SHADOW.as_shape(r, 0));
             painter.rect_filled(r, 0.0, p.color);
         }
         painter.image(shown, img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
@@ -382,8 +381,8 @@ impl App {
         // Filling the paper: the image as printed, cut to the paper; with Shift held, what the print
         // cuts off is dimmed instead.
         let mut printed_rect = img_rect;
-        if let Some(sheet) = paper_rect.filter(|r| !r.contains_rect(img_rect)) {
-            let cut = sheet.intersect(img_rect);
+        if let Some(window) = window_rect.filter(|r| !r.contains_rect(img_rect)) {
+            let cut = window.intersect(img_rect);
             let show_cut = ui.input(|i| i.modifiers.shift);
             let dim = if show_cut { Color32::from_black_alpha(170) } else { bg };
             for r in [
@@ -395,8 +394,14 @@ impl App {
                 if r.is_positive() {
                     painter.rect_filled(r, 0.0, dim);
                     // The sheet's shadow, painted over here, only outside the sheet.
-                    if !show_cut && paper.as_ref().is_some_and(|p| p.color == bg) {
-                        painter.with_clip_rect(r.intersect(painter.clip_rect())).add(SHEET_SHADOW.as_shape(cut, 0));
+                    if !show_cut && let Some(p) = paper.as_ref() {
+                        let sheet = paper_rect.unwrap_or(cut);
+                        painter.with_clip_rect(r.intersect(painter.clip_rect())).add(SHEET_SHADOW.as_shape(sheet, 0));
+                        // Within the margins the sheet stays plain paper.
+                        let inside = r.intersect(sheet);
+                        if inside.is_positive() {
+                            painter.rect_filled(inside, 0.0, p.color);
+                        }
                     }
                 }
             }
@@ -405,6 +410,13 @@ impl App {
             } else {
                 printed_rect = cut;
             }
+        }
+
+        if let Some(l) = paper.as_ref().and_then(|p| p.layout.as_ref()) {
+            self.draw_print_extras(&painter, img_rect, l);
+        }
+        if self.print.bar {
+            self.print_bar(ui, pos2(rect.center().x, rect.bottom() - 12.0));
         }
 
         // Over the before image of the divider view as well.

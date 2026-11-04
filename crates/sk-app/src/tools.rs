@@ -63,7 +63,14 @@ impl App {
     }
 
     fn tool_tabs(&mut self, ui: &mut Ui) {
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        let mut area = egui::ScrollArea::vertical().auto_shrink([false, false]);
+        // Screenshots of sections further down (`SILBERKORN_SCROLL`: points).
+        if std::env::var_os("SILBERKORN_SCREENSHOT").is_some()
+            && let Some(y) = std::env::var("SILBERKORN_SCROLL").ok().and_then(|v| v.parse().ok())
+        {
+            area = area.vertical_scroll_offset(y);
+        }
+        area.show(ui, |ui| {
             self.tool_tab(ui);
         });
     }

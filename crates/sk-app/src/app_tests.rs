@@ -4995,3 +4995,60 @@ fn tour_goes_on_and_help_opens_at_the_heading() {
     assert_eq!(crate::help::section_help("Bewertung (3 Bilder)"), crate::help::section_help("Bewertung"));
     assert!(crate::help::section_help("Session-Favoriten") != crate::help::section_help("Session") || crate::help::section_help("Session").is_none());
 }
+
+/// Printing to a file: a PDF with one page per selected image, at the paper size of the layout.
+#[test]
+fn prints_into_a_pdf() {
+    let Some(mut f) = Fixture::new("print") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.print.settings.format = sk_core::print::PRESETS[1].1;
+    f.app.print.settings.margin_mm = 10.0;
+    f.app.print.settings.crop_marks = true;
+    f.app.print.settings.caption = sk_core::print::Caption::FileName;
+    let out = f.dir.join("druck.pdf");
+    f.app.print_to(crate::printing::PrintTo::File(out.clone()));
+    assert!(f.app.print.job.is_some(), "{}", f.app.status);
+    f.pump("Druck fertig", |a| a.print.job.is_none());
+    assert!(f.app.status.starts_with("Gespeichert"), "{}", f.app.status);
+    let pdf = std::fs::read(&out).unwrap();
+    let text = String::from_utf8_lossy(&pdf);
+    assert!(text.starts_with("%PDF") && text.contains("/Count 1"));
+    // 10 × 15 cm in points, turned like the image.
+    assert!(text.contains("/MediaBox [0 0 430.87 289.13]") || text.contains("/MediaBox [0 0 289.13 430.87]"), "{}", &text[..text.len().min(600)]);
+    // The same page as a JPEG at 300 ppi (`SILBERKORN_KEEP_PRINT`: a copy to look at).
+    let jpg = f.dir.join("druck.jpg");
+    f.app.print_to(crate::printing::PrintTo::File(jpg.clone()));
+    f.pump("JPEG fertig", |a| a.print.job.is_none());
+    let page = image::open(&jpg).unwrap();
+    assert_eq!(page.width().max(page.height()), (152.0f32 / 25.4 * 300.0).round() as u32);
+    if let Some(keep) = std::env::var_os("SILBERKORN_KEEP_PRINT") {
+        std::fs::copy(&jpg, keep).unwrap();
+    }
+}
+
+/// Strg+P shows the print bar over the print preview; the arrows turn the pages of the selection
+/// without changing it, Esc closes the bar and the preview goes back to off.
+#[test]
+fn print_bar_turns_pages_and_goes_back() {
+    let Some(mut f) = Fixture::new("print_bar") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let paths: Vec<PathBuf> = f.app.visible.iter().map(|&i| f.app.entries[i].path.clone()).collect();
+    if paths.len() < 2 {
+        return;
+    }
+    f.app.selection = paths.iter().cloned().collect();
+    f.app.make_primary(&paths[0]);
+    f.app.multi_view = true;
+    assert!(f.app.compare_cells().len() > 1, "mehrere ausgewählt: nebeneinander");
+    assert!(!f.app.print.on);
+    f.app.print_command();
+    assert!(f.app.print.bar && f.app.print.on);
+    // The page is shown alone (the bar is drawn in the single view only).
+    assert!(f.app.compare_cells().is_empty(), "Druckleiste: Einzelansicht");
+    assert_eq!(f.app.print_pages(), (0, paths.len()));
+    f.app.step(1, false);
+    assert_eq!(f.app.print_pages(), (1, paths.len()), "nächste Seite");
+    assert_eq!(f.app.selection.len(), paths.len(), "die Auswahl bleibt");
+    f.app.leave_print_bar();
+    assert!(!f.app.print.bar && !f.app.print.on);
+}

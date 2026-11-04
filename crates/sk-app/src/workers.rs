@@ -239,6 +239,19 @@ pub struct AutoItem {
 /// Long edge of the images loaded for the auto adjustment (the face detector takes 640).
 const AUTO_EDGE: usize = 1024;
 
+/// The settings an image is written or printed with: one never opened gets the camera's look it
+/// would show (see `camera_look`).
+pub fn output_adjustments(path: &std::path::Path, adj: &Adjustments) -> Adjustments {
+    let for_new = sk_core::camera_look::for_new();
+    match sk_core::camera_look::wanted(adj, for_new) {
+        true => raw::load_preview_and_keep(path, 1024)
+            .ok()
+            .and_then(|(meta, preview)| sk_core::camera_look::apply_if_wanted(&meta, &preview, adj, for_new))
+            .unwrap_or_else(|| adj.clone()),
+        false => adj.clone(),
+    }
+}
+
 pub struct ExportJob {
     pub items: Vec<(PathBuf, Adjustments)>,
     pub recipes: Vec<ExportRecipe>,
@@ -1196,15 +1209,7 @@ impl Workers {
                         }
                         // A bug on one image fails its outputs, not the whole export.
                         let results = crate::guard::catch(|| {
-                            // An image never opened gets the camera's look it would show (see `camera_look`).
-                            let for_new = sk_core::camera_look::for_new();
-                            let adj = match sk_core::camera_look::wanted(&adj, for_new) {
-                                true => raw::load_preview_and_keep(&path, 1024)
-                                    .ok()
-                                    .and_then(|(meta, preview)| sk_core::camera_look::apply_if_wanted(&meta, &preview, &adj, for_new))
-                                    .unwrap_or_else(|| adj.clone()),
-                                false => adj.clone(),
-                            };
+                            let adj = output_adjustments(&path, &adj);
                             let loaded = job.shown.as_ref().filter(|(meta, _)| meta.path == path).map(|(meta, full)| (&**meta, &**full));
                             export::export_many_with(&path, loaded, &adj, &job.recipes, i as u32 + 1, &job.session, &mut written)
                         });

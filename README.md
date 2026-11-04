@@ -834,6 +834,31 @@ auf einem Drucker herauskommt. Eingestellt wird im Tab **„Ausgabe“ → Softp
 Die Umrechnung übernimmt Little CMS (statisch eingebunden). Der Softproof betrifft nur die
 Anzeige, nicht den Export.
 
+### Drucken
+
+**Strg+P** (Datei → „Drucken …“) zeigt zuerst die Seite in der Druckvorschau (**Strg+Umschalt+P**)
+mit einer Leiste unten im Bild: Papierformat, Bildgröße (ganzes Blatt oder fest, etwa 10 × 15 mittig
+auf A4), Hoch-/Querformat, Anpassung und bei mehreren Bildern
+„Seite 2 von 5“ (Pfeile blättern, die Auswahl bleibt). **Drucken …** (Enter) öffnet dann den
+Druckdialog von Windows mit Papierformat und Ausrichtung; jedes ausgewählte Bild kommt auf eine
+eigene Seite. Der Dialog von Windows 11 zeigt für Win32-Programme keine Vorschau, deshalb kommt sie
+vorher. Im Tab **„Ausgabe“**:
+
+- **Druckseite:** Rand (mm), Rahmen (mm), Schnittmarken an den Ecken und Beschriftung (Dateiname,
+  Aufnahmedaten oder beides). Die Druckvorschau zeigt alles mit.
+- **Drucken:** Druckanpassung (Helligkeit, Kontrast nur für den Druck), Schärfung (Aus bis Stark,
+  für glänzendes oder mattes Papier) und Farben: „Drucker steuert“ (sRGB) oder ein ICC-Profil; dann
+  rechnet Silberkorn um und schaltet die Farbsteuerung des Treibers ab.
+- **In Datei …:** dieselben Seiten als PDF (alle Seiten) oder JPEG je Seite, mit 300 ppi.
+
+Die Seite entsteht als Bild in bis zu 360 ppi (`sk_core::print_page`) und geht über GDI an den
+Drucker (`printer.rs`), über das ganze Blatt; Ränder, die der Drucker nicht bedrucken kann, lässt
+er aus. Bietet der Treiber das Format nicht an, wird auf seinem Blatt neu aufgeteilt. Mit
+„Ausrichtung: Wie das Bild“ (in der Leiste „A“) geht eine Seite, die anders liegt als das Blatt des
+Auftrags, um 90° gedreht an den Drucker. Unter Linux
+gibt es nur „In Datei …“. Zum Testen ohne Papier: `SILBERKORN_PRINT_TEST="Microsoft Print to PDF|C:\…\druck.pdf"`
+zusammen mit `SILBERKORN_SCREENSHOT` druckt beim Start ohne Dialog in die Datei.
+
 ### Fisheye entzerren
 
 Der Regler **Fisheye** (Tab „Objektiv“, Objektivkorrektur) rechnet ein Fisheye-Bild in ein normales

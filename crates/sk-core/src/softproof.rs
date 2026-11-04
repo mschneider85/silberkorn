@@ -58,7 +58,7 @@ impl RenderIntent {
         }
     }
 
-    fn lcms(self) -> Intent {
+    pub(crate) fn lcms(self) -> Intent {
         match self {
             RenderIntent::Perceptual => Intent::Perceptual,
             RenderIntent::RelativeColorimetric => Intent::RelativeColorimetric,

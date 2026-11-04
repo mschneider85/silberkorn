@@ -860,7 +860,7 @@ pub struct App {
     /// Windows: maximize again once winit has left full screen (see `window_placement`).
     pending_maximize: Option<crate::window_placement::NormalRect>,
     /// Native handle of the app window (Windows), for `window_placement`.
-    native_window: Option<isize>,
+    pub(crate) native_window: Option<isize>,
     /// The window manager's animations are off for a full screen switch (back on afterwards).
     animations_off: bool,
     /// Switching full screen: the window passes through several sizes, so only black is shown
@@ -2096,6 +2096,10 @@ impl App {
         if self.visible.is_empty() {
             return;
         }
+        // In the print bar the arrows turn the pages of the print, the selection stays.
+        if self.print.bar && !extend && self.print_pages().1 > 1 {
+            return self.print_page_step(delta);
+        }
         let primary = self.primary_path();
         let pos = self.visible.iter().position(|&i| Some(&self.entries[i].path) == primary.as_ref()).unwrap_or(0);
         let next = (pos as isize + delta).clamp(0, self.visible.len() as isize - 1) as usize;
@@ -2393,17 +2397,11 @@ impl App {
         }
     }
 
-    pub fn export_selection(&mut self) {
-        // One export at a time: a second would take over the first's progress and cancel switch,
-        // and neither could be cancelled any more.
-        if self.export_progress.is_some() {
-            self.status = "Es läuft bereits ein Export – bitte warten oder abbrechen".into();
-            return;
-        }
+    /// The selected images with their settings as shown, for export and print (saved first).
+    pub(crate) fn selection_for_output(&mut self) -> Vec<(PathBuf, Adjustments)> {
         self.commit_and_save();
         let current = self.current.as_ref().map(|c| (c.meta.path.clone(), c.committed.clone()));
-        let items: Vec<(PathBuf, Adjustments)> = self
-            .selected_paths()
+        self.selected_paths()
             .into_iter()
             .map(|path| {
                 let adj = match &current {
@@ -2413,7 +2411,17 @@ impl App {
                 };
                 (path, adj)
             })
-            .collect();
+            .collect()
+    }
+
+    pub fn export_selection(&mut self) {
+        // One export at a time: a second would take over the first's progress and cancel switch,
+        // and neither could be cancelled any more.
+        if self.export_progress.is_some() {
+            self.status = "Es läuft bereits ein Export – bitte warten oder abbrechen".into();
+            return;
+        }
+        let items = self.selection_for_output();
         if items.is_empty() {
             return;
         }
@@ -3172,9 +3180,15 @@ impl App {
         // Everything else comes from the command list (see `commands`).
         self.command_shortcuts(ctx);
         let pressed = |k: Key, m: Modifiers| ctx.input_mut(|i| i.consume_key(m, k));
+        // The print bar: Enter prints.
+        if self.print.bar && pressed(Key::Enter, Modifiers::NONE) {
+            self.print_selection();
+        }
         if pressed(Key::Escape, Modifiers::NONE) {
             // Esc first ends a tool, then a view, then full screen.
-            if self.viewer_tool_active() {
+            if self.print.bar {
+                self.leave_print_bar();
+            } else if self.viewer_tool_active() {
                 self.cancel_viewer_tools();
             } else if !self.leave_view() && self.fullscreen {
                 self.toggle_fullscreen(ctx);
@@ -3324,6 +3338,9 @@ impl App {
         if (self.texture.is_some() || self.grid_view || empty) && shown_at.is_none() {
             *shown_at = Some(now);
             // Optional tool states for screenshots.
+            if std::env::var_os("SILBERKORN_PRINT_TEST").is_some() {
+                self.print_selection();
+            }
             if std::env::var_os("SILBERKORN_CROP").is_some() {
                 self.start_crop_tool();
             }
@@ -3382,7 +3399,21 @@ impl App {
                     self.toggle_print_preview();
                 }
                 self.print.settings.format = sk_core::print::PRESETS[2].1;
-                self.print.settings.fit = if fit == "fill" { sk_core::print::Fit::Fill } else { sk_core::print::Fit::Contain };
+                self.print.settings.fit = if fit.starts_with("fill") { sk_core::print::Fit::Fill } else { sk_core::print::Fit::Contain };
+                // `…,seite`: with margin, border, crop marks and caption.
+                if fit.contains(",seite") {
+                    let s = &mut self.print.settings;
+                    (s.margin_mm, s.border_mm, s.crop_marks, s.caption) = (12.0, 0.5, true, sk_core::print::Caption::Both);
+                }
+                // `…,foto`: a 10 × 15 on A4.
+                if fit.contains(",foto") {
+                    self.print.settings.format = sk_core::print::PRESETS[5].1;
+                    self.print.settings.image_size = Some(crate::print_preview::PHOTO_SIZES[1].1);
+                }
+                // `…,leiste`: the print bar (Strg+P).
+                if fit.contains(",leiste") {
+                    self.enter_print_bar();
+                }
             }
             // Brush rendering check: a curved remove stroke and a soft mask stroke.
             if std::env::var_os("SILBERKORN_BRUSHDEMO").is_some() {
@@ -3460,7 +3491,8 @@ impl App {
         }
         let Some((path, shown_at)) = &mut self.screenshot else { return };
         if let Some(t) = *shown_at {
-            if now - t > 2.5 && now - t < 100.0 {
+            // A print started for the test (`SILBERKORN_PRINT_TEST`) finishes first.
+            if now - t > 2.5 && now - t < 100.0 && self.print.job.is_none() {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
                 *shown_at = Some(t - 1000.0);
             }

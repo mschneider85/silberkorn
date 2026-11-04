@@ -2334,12 +2334,34 @@ pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, add_cont
 /// Some(portrait) when one is clicked. Disabled, neither is shown as chosen. `key` (switching
 /// between them) is named in the tooltips.
 pub fn orientation(ui: &mut Ui, enabled: bool, portrait: bool, key: &str) -> Option<bool> {
+    orientation_buttons(ui, enabled, Some(portrait).filter(|_| enabled), key)
+}
+
+/// [`orientation`] with "A" before it for "turned like the image" (`None`); returns the choice.
+pub fn orientation_or_auto(ui: &mut Ui, value: Option<bool>, auto_name: &str) -> Option<Option<bool>> {
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let r = ui.add(egui::Button::new("A").selected(value.is_none()).min_size(vec2(30.0, ui.spacing().interact_size.y)));
+        r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, value.is_none(), auto_name));
+        if r.on_hover_text(auto_name).clicked() {
+            chosen = Some(None);
+        }
+        if let Some(p) = orientation_buttons(ui, true, value, "") {
+            chosen = Some(Some(p));
+        }
+    });
+    chosen
+}
+
+/// Landscape and portrait buttons, the one of `on` highlighted (none for `None`).
+fn orientation_buttons(ui: &mut Ui, enabled: bool, on: Option<bool>, key: &str) -> Option<bool> {
     let mut clicked = None;
     ui.add_enabled_ui(enabled, |ui| {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (p, name, shape) in [(false, "Querformat", vec2(15.0, 10.0)), (true, "Hochformat", vec2(10.0, 15.0))] {
-                let on = enabled && portrait == p;
+                let on = on == Some(p);
                 let r = ui.add(egui::Button::new("").selected(on).min_size(vec2(30.0, ui.spacing().interact_size.y)));
                 let color = if on { ui.visuals().selection.stroke.color } else { ui.visuals().widgets.style(&r).fg_stroke.color };
                 ui.painter().rect_stroke(Rect::from_center_size(r.rect.center(), shape), 2.0, Stroke::new(1.5, color), StrokeKind::Inside);

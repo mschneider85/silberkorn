@@ -43,6 +43,8 @@ mod look_worker;
 mod merge;
 mod palette;
 mod print_preview;
+mod printer;
+mod printing;
 mod remove;
 mod rename;
 mod scopes;

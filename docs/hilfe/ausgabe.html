@@ -25,7 +25,7 @@
 </ul></nav>
 <main>
 <h1 id="ausgabe">Ausgabe</h1>
-<p>Der Tab <b>Ausgabe</b> legt fest, wie aus der Bearbeitung fertige Dateien werden: Format, Größe, Ordner, Wasserzeichen und Metadaten. Dazu kommen Softproof und Druckvorschau, die nur die Anzeige betreffen.</p>
+<p>Der Tab <b>Ausgabe</b> legt fest, wie aus der Bearbeitung fertige Dateien werden: Format, Größe, Ordner, Wasserzeichen und Metadaten. Dazu kommen Softproof und Druckvorschau, die nur die Anzeige betreffen, und das Drucken.</p>
 <h2 id="exportieren">Exportieren</h2>
 <ol>
 <li>Bilder auswählen.</li>
@@ -83,15 +83,40 @@
 </ul>
 <p>Der Softproof ändert nur die Anzeige, nicht den Export.</p>
 <h2 id="druckvorschau">Druckvorschau</h2>
-<p>Silberkorn druckt nicht selbst, hilft aber, einen Druck vorzubereiten. <b>Druckvorschau</b> (Strg+P) zeigt das Bild auf dem Papier, eingestellt im Abschnitt <b>Druckvorschau</b>:</p>
+<p><b>Druckvorschau</b> (Strg+Umschalt+P) zeigt das Bild auf dem Papier, so wie es gedruckt wird, mit Rand, Rahmen, Schnittmarken und Beschriftung. Eingestellt wird im Abschnitt <b>Druckvorschau</b>:</p>
 <ul>
 <li><b>Papierformat</b> aus der Liste oder <b>Eigenes (cm)</b>.</li>
-<li><b>Anpassung</b>: <b>Einpassen</b> (ganzes Bild, Rand, wo die Seitenverhältnisse abweichen) oder <b>Füllen</b> (randlos wie im Fotolabor, das Bild wird beschnitten).</li>
+<li><b>Bildgröße</b>: <b>Ganzes Blatt</b> (so groß, wie Papier und Rand erlauben) oder ein festes Format wie <b>10 × 15 cm</b>, auch eigene Maße. Das Bild sitzt dann mittig auf dem Papier, etwa ein 10 × 15 auf A4; mit <b>Schnittmarken</b> lässt es sich genau ausschneiden. Der Rand ergibt sich dabei von selbst.</li>
+<li><b>Ausrichtung</b>: <b>Wie das Bild</b> (Hochformat für hohe Bilder, sonst Querformat; in der Leiste <b>A</b>), <b>Hochformat</b> oder <b>Querformat</b>. Mit <b>Wie das Bild</b> kommt jedes Bild so aufs Papier, wie die Vorschau es zeigt, auch wenn ein Druckauftrag Hoch- und Querformate mischt: Die Seite wird dafür gedreht an den Drucker geschickt.</li>
+<li><b>Anpassung</b>: <b>Einpassen</b> (ganzes Bild, Rand, wo die Seitenverhältnisse abweichen) oder <b>Füllen</b> (randlos wie im Fotolabor, das Bild wird beschnitten). Mit fester Bildgröße gilt sie für diese: <b>Füllen</b> ergibt genau 10 × 15.</li>
 </ul>
 <p>Oben im Bild steht die Auflösung auf dem Papier. Unter 200 ppi wird sie gelb, unter 150 ppi rot: Dort werden Details im Druck weich. Für die richtigen Farben den Softproof mit dem Profil des Druckers dazuschalten.</p>
 <p><b>Druckgröße</b> (Umschalt+Z) zeigt das Bild auf dem Bildschirm genau so groß, wie es gedruckt wird.</p>
 <h3 id="bildschirm-kalibrieren">Bildschirm kalibrieren</h3>
 <p>Damit die Druckgröße stimmt, muss Silberkorn die echte Größe des Bildschirms kennen. <b>Bildschirm kalibrieren …</b> zeigt ein Rechteck: eine Scheckkarte an den Bildschirm halten und die Größe ändern, bis beide genau gleich groß sind, dann <b>Übernehmen</b>.</p>
+<h2 id="druckseite">Druckseite</h2>
+<p>Der Abschnitt <b>Druckseite</b> legt fest, was außer dem Bild auf dem Blatt steht. Die Druckvorschau zeigt es mit.</p>
+<ul>
+<li><b>Rand</b>: weißer Rand um das Bild auf allen Seiten, in mm (nur bei <b>Ganzes Blatt</b>). Bei <b>Füllen</b> füllt das Bild dann den Platz innerhalb des Randes.</li>
+<li><b>Rahmen</b>: eine dünne schwarze Linie um das Bild, in mm; 0 heißt kein Rahmen.</li>
+<li><b>Schnittmarken</b>: kurze Linien an den Ecken, außerhalb des Bildes, zum Zuschneiden, etwa wenn ein 13 × 18 auf A4 gedruckt wird. Sie brauchen einen Rand.</li>
+<li><b>Beschriftung</b> unter dem Bild: <b>Dateiname</b>, <b>Aufnahmedaten</b> (Kamera, Brennweite, Blende, Zeit, ISO, Datum) oder beides.</li>
+</ul>
+<p>Bild und Beschriftung stehen immer in der Mitte des Blattes.</p>
+<h2 id="drucken">Drucken</h2>
+<p><b>Drucken …</b> (Strg+P, auch im Menü <b>Datei</b> und unten im Abschnitt <b>Drucken</b>) zeigt zuerst die Seite: Die Druckvorschau geht an, und unten im Bild erscheint eine Leiste mit Papierformat, Bildgröße, Hoch- oder Querformat und Anpassung. Jedes ausgewählte Bild kommt auf eine eigene Seite; ist keines ausgewählt, das angezeigte. Bei mehreren Bildern blättern die Pfeile in der Leiste (oder die Pfeiltasten) durch die Seiten, die Auswahl bleibt.</p>
+<p><b>Drucken …</b> in der Leiste (Enter oder noch einmal Strg+P) öffnet den Druckdialog von Windows: Drucker, Anzahl der Kopien und über <b>Einstellungen</b> die Eigenschaften des Druckers wie Papiersorte und Qualität. Papierformat und Ausrichtung sind dort schon eingestellt. Der Dialog von Windows 11 zeigt für Programme wie Silberkorn keine Vorschau; die Seite sieht man vorher im Bild. <b>Abbrechen</b> (Esc) schließt die Leiste.</p>
+<p>Bietet der Drucker das Papierformat nicht an, druckt er auf sein eigenes, und die Seite wird dafür neu aufgeteilt. Die Statusleiste sagt das danach.</p>
+<p>Im Abschnitt <b>Drucken</b>:</p>
+<ul>
+<li><b>Druckanpassung</b>: <b>Helligkeit</b> und <b>Kontrast</b> nur für den Druck. Drucke wirken oft dunkler und flacher als der leuchtende Bildschirm; die Vorschau zeigt die Anpassung nicht.</li>
+<li><b>Schärfung</b>: <b>Aus</b>, <b>Wenig</b>, <b>Normal</b> oder <b>Stark</b>, für <b>Glänzend</b> oder <b>Matt</b> (mattes Papier saugt die Tinte auf und braucht mehr). Sie gleicht die Weichheit des Drucks aus und ist unabhängig vom Schärfen in der Entwicklung.</li>
+<li><b>Farben</b>: <b>Drucker steuert</b> (der Drucker bekommt sRGB und rechnet selbst um) oder ein ICC-Profil für Drucker und Papier. Mit Profil rechnet Silberkorn die Farben um, mit der gewählten <b>Priorität</b>, und schaltet die Farbsteuerung des Treibers ab.</li>
+</ul>
+<p class="note">Mit einem eigenen Profil im Druckertreiber „Keine Farbkorrektur“ wählen, falls er das anbietet; sonst werden die Farben doppelt umgerechnet. Den Softproof mit demselben Profil einschalten, um vorher zu sehen, wie der Druck aussieht.</p>
+<p>Gedruckt wird mit bis zu 360 ppi; den Rest erledigt der Druckertreiber. Drucken gibt es nur unter Windows.</p>
+<h3 id="in-datei-drucken">In Datei drucken</h3>
+<p><b>In Datei …</b> (oder <b>Datei → In Datei drucken …</b>) speichert die Seiten statt sie zu drucken: als PDF mit allen Seiten oder als JPEG je Seite, mit 300 ppi und in der Papiergröße, etwa für ein Fotolabor oder einen Copyshop. Mit Druckerprofil sind die Farben schon umgerechnet und das Profil ist eingebettet.</p>
 </main>
 </body>
 </html>
