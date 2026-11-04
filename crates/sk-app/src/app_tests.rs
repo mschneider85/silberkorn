@@ -5067,3 +5067,56 @@ fn print_bar_turns_pages_and_goes_back() {
     f.app.enter_print_bar();
     assert!(f.app.print.turned.is_empty(), "neu geöffnet: wie die Bilder");
 }
+
+/// The bar under the image while painting: the tools of the tab side by side, the brush's
+/// settings and "Fertig", which ends the tool (the strokes stay).
+#[test]
+fn local_tool_bar_switches_and_ends_tools() {
+    let Some(mut f) = Fixture::new("local-bar") else { return };
+    f.pump("Bild geladen", |a| a.texture.is_some());
+    let frame = |f: &mut Fixture, events: Vec<egui::Event>| -> Vec<(String, egui::Rect)> {
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 800.0))), events, ..Default::default() };
+        f.ctx.enable_accesskit();
+        let app = &mut f.app;
+        let mut out = f.ctx.run_ui(input, |ui| {
+            egui::CentralPanel::no_frame().show(ui, |ui| app.viewer(ui));
+        });
+        out.textures_delta.clear();
+        let update = out.platform_output.accesskit_update.expect("AccessKit-Baum");
+        update
+            .nodes
+            .iter()
+            .filter_map(|(_, n)| {
+                let b = n.bounds()?;
+                Some((n.label()?.to_string(), egui::Rect::from_min_max(egui::pos2(b.x0 as f32, b.y0 as f32), egui::pos2(b.x1 as f32, b.y1 as f32))))
+            })
+            .collect()
+    };
+    let click = |f: &mut Fixture, nodes: &[(String, egui::Rect)], name: &str| {
+        let at = nodes.iter().find(|(n, _)| n.contains(name)).unwrap_or_else(|| panic!("„{name}“ fehlt: {:?}", nodes.iter().map(|n| &n.0).collect::<Vec<_>>())).1.center();
+        frame(f, vec![egui::Event::PointerMoved(at)]);
+        frame(f, vec![press(at, true)]);
+        frame(f, vec![press(at, false)]);
+    };
+    // Without a tool there is no bar.
+    let nodes = frame(&mut f, vec![]);
+    assert!(!nodes.iter().any(|(n, _)| n.contains("Fertig")));
+    f.app.set_local_tool(crate::layers::LocalTool::Brush);
+    frame(&mut f, vec![]);
+    let nodes = frame(&mut f, vec![]);
+    for name in ["Radierer", "Zauberpinsel", "Maske anzeigen", "Fertig"] {
+        assert!(nodes.iter().any(|(n, _)| n.contains(name)), "{name} fehlt");
+    }
+    // The mask tools only: retouching is in its own tab.
+    assert!(!nodes.iter().any(|(n, _)| n.contains("Reparieren")));
+    click(&mut f, &nodes, "Radierer");
+    assert_eq!(f.app.local_tool, Some(crate::layers::LocalTool::Eraser));
+    // Retouching: its three tools, no mask.
+    f.app.set_local_tool(crate::layers::LocalTool::Heal);
+    frame(&mut f, vec![]);
+    let nodes = frame(&mut f, vec![]);
+    assert!(nodes.iter().any(|(n, _)| n.contains("Klonen")));
+    assert!(!nodes.iter().any(|(n, _)| n.contains("Maske anzeigen")));
+    click(&mut f, &nodes, "Fertig");
+    assert_eq!(f.app.local_tool, None);
+}

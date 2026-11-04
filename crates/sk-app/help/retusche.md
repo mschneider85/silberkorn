@@ -17,6 +17,8 @@ Drei Werkzeuge, die jeweils über die Stelle gemalt werden; ein einfacher Klick 
 - **Deckkraft**: wie stark die Retusche wirkt.
 - Bei **Entfernen** zusätzlich **Fluss**, **Kanten beachten** und **Toleranz** wie beim Maskenpinsel, siehe [Pinsel einstellen](ebenen-masken#Pinsel einstellen).
 
+Größe, Härte und Deckkraft stehen auch in der Leiste unten im Bild, zusammen mit den drei Werkzeugen, **Löschen** für die gewählte Retusche und **Fertig** (Esc).
+
 Die Stelle großzügig, aber ganz übermalen, samt Schatten und Spiegelungen des Objekts.
 
 ## Quelle festlegen

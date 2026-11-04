@@ -208,6 +208,19 @@ pub(crate) fn image_bar(ui: &mut Ui, img_rect: Rect, settings: impl FnOnce(&mut 
 /// [`image_bar`] with its bottom middle at `at` and the confirming button's name and key
 /// (`enabled`: whether it can be pressed now).
 pub(crate) fn image_bar_at(ui: &mut Ui, at: Pos2, apply: (String, String), enabled: bool, settings: impl FnOnce(&mut Ui)) -> Option<bool> {
+    image_bar_with(ui, at, Some((apply, enabled)), "Abbrechen", settings)
+}
+
+/// The [`image_bar`] of a tool whose work is kept as it goes (brushes, gradients, retouching):
+/// its settings and "Fertig" (Esc), no confirming. True when "Fertig" was pressed.
+pub(crate) fn tool_bar(ui: &mut Ui, img_rect: Rect, settings: impl FnOnce(&mut Ui)) -> bool {
+    let at = pos2(img_rect.center().x, img_rect.bottom().min(ui.clip_rect().bottom()) - 16.0);
+    image_bar_with(ui, at, None, "Fertig", settings) == Some(false)
+}
+
+/// The bar itself: settings, then the confirming button (name, key, enabled) if there is one,
+/// then the closing one with Esc. Some(true) confirmed, Some(false) closed.
+fn image_bar_with(ui: &mut Ui, at: Pos2, apply: Option<((String, String), bool)>, close: &str, settings: impl FnOnce(&mut Ui)) -> Option<bool> {
     let mut done = None;
     egui::Area::new(egui::Id::new("image_bar")).order(egui::Order::Middle).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(at).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).corner_radius(8).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
@@ -220,10 +233,12 @@ pub(crate) fn image_bar_at(ui: &mut Ui, at: Pos2, apply: (String, String), enabl
                 // In one line each (the tick and "Übernehmen" wrapped and grew taller), with the
                 // key beside the name, as in the menus.
                 let button = |text: String, key: String| egui::Button::new(text).shortcut_text(key).wrap_mode(egui::TextWrapMode::Extend);
-                if ui.add_enabled(enabled, button(apply.0, apply.1)).clicked() {
+                if let Some(((name, key), enabled)) = apply
+                    && ui.add_enabled(enabled, button(name, key)).clicked()
+                {
                     done = Some(true);
                 }
-                if ui.add(button("Abbrechen".into(), "Esc".into())).clicked() {
+                if ui.add(button(close.into(), "Esc".into())).clicked() {
                     done = Some(false);
                 }
             });

@@ -36,6 +36,7 @@ mod jobs;
 mod layer_target;
 mod layers;
 mod licenses;
+mod local_bar;
 mod levels;
 mod library;
 mod look;

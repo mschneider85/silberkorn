@@ -418,6 +418,8 @@ impl App {
         if self.print.bar {
             self.print_bar(ui, pos2(rect.center().x, rect.bottom() - 12.0));
         }
+        // Outside the tool's overlay: it stays while the space bar pans or the divider is dragged.
+        self.local_bar(ui, img_rect);
 
         // Over the before image of the divider view as well.
         // The crop and straighten tools draw their own guides.
@@ -557,9 +559,10 @@ impl App {
                 crate::layers::LocalTool::Heal | crate::layers::LocalTool::Clone => "  ·  Alt-Klick: Quelle festlegen",
                 _ => "",
             };
+            // "Fertig" (Esc) is in the bar below.
             Some(match self.edit_layer_name() {
-                Some(layer) => format!("{name} auf Ebene „{layer}“ – Esc beendet{keys}"),
-                None => format!("{name} – Esc beendet{keys}"),
+                Some(layer) => format!("{name} auf Ebene „{layer}“{keys}"),
+                None => format!("{name}{keys}"),
             })
         } else if self.show_before {
             Some("Vorher".into())
