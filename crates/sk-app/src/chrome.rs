@@ -307,15 +307,9 @@ impl App {
     }
 
     fn view_menu(&mut self, ui: &mut Ui) {
-        if check(ui, self.grid_view, "Raster", &shortcut("grid")) {
-            self.grid_view = !self.grid_view;
-        }
-        if check(ui, self.show_filmstrip, "Filmstreifen", "") {
-            self.show_filmstrip = !self.show_filmstrip;
-        }
-        if check(ui, self.show_navigator, "Navigator beim Zoomen", "") {
-            self.show_navigator = !self.show_navigator;
-        }
+        self.command_check(ui, "grid", self.grid_view);
+        self.command_check(ui, "filmstrip", self.show_filmstrip);
+        self.command_check(ui, "navigator", self.show_navigator);
         self.command_item(ui, "info-overlay");
         crate::widgets::menu_button(ui, "Messanzeige", |ui| self.scope_menu(ui))
             .response
@@ -338,29 +332,15 @@ impl App {
             }
         }
         ui.separator();
-        if check(ui, self.zoom.is_none(), "Einpassen", "") {
-            self.zoom_fit();
-        }
-        self.command_item_labeled(ui, "zoom-100", "100 %");
+        self.command_check(ui, "zoom-fit", self.zoom.is_none());
+        self.command_item(ui, "zoom-100");
         ui.separator();
-        if check(ui, self.show_before, "Vorher / Nachher", &shortcut("before")) {
-            self.toggle_before();
-        }
-        if check(ui, self.split_view && !self.split_side, "Geteilter Vergleich", &shortcut("split")) {
-            self.toggle_split();
-        }
-        if check(ui, self.split_view && self.split_side, "Vorher | Nachher nebeneinander", &shortcut("side-by-side")) {
-            self.toggle_side_by_side();
-        }
-        if check(ui, self.multi_view, "Auswahl nebeneinander vergleichen", "") {
-            self.multi_view = !self.multi_view;
-        }
-        if check(ui, self.clip_warning, "Belichtungswarnung", &shortcut("clip-warning")) {
-            self.toggle_clip_warning();
-        }
-        if check(ui, self.focus_mask, "Schärfemaske", &shortcut("focus-mask")) {
-            self.toggle_focus_mask();
-        }
+        self.command_check(ui, "before", self.show_before);
+        self.command_check(ui, "split", self.split_view && !self.split_side);
+        self.command_check(ui, "side-by-side", self.split_view && self.split_side);
+        self.command_check(ui, "multi-view", self.multi_view);
+        self.command_check(ui, "clip-warning", self.clip_warning);
+        self.command_check(ui, "focus-mask", self.focus_mask);
         // The same slider as in the panels; without the mask it has no effect.
         ui.add_enabled_ui(self.focus_mask, |ui| {
             ui.set_min_width(260.0);
@@ -368,34 +348,28 @@ impl App {
         })
         .response
         .on_hover_text("Höher: auch weniger scharfe Bereiche markieren");
-        if check(ui, self.proof_view, "Ausgabevorschau", &shortcut("proof")) {
-            self.toggle_proof();
+        self.command_check(ui, "proof", self.proof_view);
+        if let Some(r) = self.command_check(ui, "softproof", self.softproof.on) {
+            r.on_hover_text("Profil und Optionen im Tab „Ausgabe“");
         }
-        if check(ui, self.softproof.on, "Softproof (Profil im Tab „Ausgabe“)", &shortcut("softproof")) {
-            self.toggle_softproof();
+        if let Some(r) = self.command_check(ui, "print-preview", self.print.on) {
+            r.on_hover_text("Drucker, Papier und Bildgröße im Tab „Ausgabe“");
         }
-        if check(ui, self.print.on, "Druckvorschau (Format im Tab „Ausgabe“)", &shortcut("print-preview")) {
-            self.toggle_print_preview();
-        }
-        if check(ui, self.print.zoom, "Druckgröße", &shortcut("print-zoom")) {
-            self.toggle_print_zoom();
-        }
+        self.command_check(ui, "print-zoom", self.print.zoom);
         ui.separator();
         crate::widgets::menu_button(ui, "Hilfslinien", |ui| {
             for g in crate::guides::Guides::ALL {
-                if check(ui, self.guides == g, g.label(), &if g == crate::guides::Guides::Off { shortcut("guides-next") } else { String::new() }) {
+                if check(ui, self.guides == g, g.label(), "") {
                     self.guides = g;
                     self.save_settings();
                 }
             }
-        });
+        })
+        .response
+        .on_hover_text(crate::commands::hint("Hilfslinien reihum wechseln", "guides-next"));
         ui.separator();
-        if check(ui, self.viewer_window.open, "Bild in eigenem Fenster", &shortcut("viewer-window")) {
-            self.toggle_viewer_window();
-        }
-        if check(ui, self.fullscreen, "Vollbild ohne Ablenkung", &shortcut("fullscreen")) {
-            self.toggle_fullscreen(&ui.ctx().clone());
-        }
+        self.command_check(ui, "viewer-window", self.viewer_window.open);
+        self.command_check(ui, "fullscreen", self.fullscreen);
     }
 
     fn help_menu(&mut self, ui: &mut Ui) {

@@ -289,7 +289,7 @@ impl App {
         let (mut toggle, mut zoom, mut calibrate) = (false, false, false);
         section(ui, "Druckvorschau", None, |ui| {
             let mut on = self.print.on;
-            let checkbox = crate::widgets::Check::new(&mut on, crate::commands::hint("Druckvorschau in Druckgröße", "print-preview"));
+            let checkbox = crate::widgets::Check::new(&mut on, crate::commands::hint("Druckvorschau anzeigen", "print-preview"));
             if ui.add_enabled(self.current.is_some() || self.print.on, checkbox).changed() {
                 toggle = true;
             }

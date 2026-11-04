@@ -164,12 +164,12 @@ pub const COMMANDS: &[Command] = &[
     cmd!("wb-picker", icon::EYEDROPPER, "Weißabgleich-Pipette", "Entwickeln", [NONE => Key::W], "white balance wb aufnehmen", image_tool, |a, _| a.toggle_wb_picker()),
     cmd!("rename", icon::PENCIL_SIMPLE, "Umbenennen …", "Foto", [CTRL_SHIFT => Key::R], "rename", has_selection, |a, _| a.open_rename()),
     cmd!("process-update", icon::ARROW_CIRCLE_UP, "Auf aktuelle Prozessversion heben", "Entwickeln", [], "prozessversion engine update", has_selection, |a, _| a.update_process_version()),
-    cmd!("rating-0", icon::STAR, "Bewertung entfernen", "Foto", [NONE => Key::Num0], "sterne rating", has_selection, |a, _| a.set_rating(0)),
-    cmd!("rating-1", icon::STAR, "Bewertung ★", "Foto", [NONE => Key::Num1], "sterne rating", has_selection, |a, _| a.set_rating(1)),
-    cmd!("rating-2", icon::STAR, "Bewertung ★★", "Foto", [NONE => Key::Num2], "sterne rating", has_selection, |a, _| a.set_rating(2)),
-    cmd!("rating-3", icon::STAR, "Bewertung ★★★", "Foto", [NONE => Key::Num3], "sterne rating", has_selection, |a, _| a.set_rating(3)),
-    cmd!("rating-4", icon::STAR, "Bewertung ★★★★", "Foto", [NONE => Key::Num4], "sterne rating", has_selection, |a, _| a.set_rating(4)),
-    cmd!("rating-5", icon::STAR, "Bewertung ★★★★★", "Foto", [NONE => Key::Num5], "sterne rating", has_selection, |a, _| a.set_rating(5)),
+    cmd!("rating-0", icon::STAR, "Bewertung: Keine", "Foto", [NONE => Key::Num0], "sterne rating", has_selection, |a, _| a.set_rating(0)),
+    cmd!("rating-1", icon::STAR, "Bewertung: ★", "Foto", [NONE => Key::Num1], "sterne rating", has_selection, |a, _| a.set_rating(1)),
+    cmd!("rating-2", icon::STAR, "Bewertung: ★★", "Foto", [NONE => Key::Num2], "sterne rating", has_selection, |a, _| a.set_rating(2)),
+    cmd!("rating-3", icon::STAR, "Bewertung: ★★★", "Foto", [NONE => Key::Num3], "sterne rating", has_selection, |a, _| a.set_rating(3)),
+    cmd!("rating-4", icon::STAR, "Bewertung: ★★★★", "Foto", [NONE => Key::Num4], "sterne rating", has_selection, |a, _| a.set_rating(4)),
+    cmd!("rating-5", icon::STAR, "Bewertung: ★★★★★", "Foto", [NONE => Key::Num5], "sterne rating", has_selection, |a, _| a.set_rating(5)),
     cmd!("label-red", icon::TAG, "Farb-Label: Rot", "Foto", [NONE => Key::Num6], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Red)),
     cmd!("label-yellow", icon::TAG, "Farb-Label: Gelb", "Foto", [NONE => Key::Num7], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Yellow)),
     cmd!("label-green", icon::TAG, "Farb-Label: Grün", "Foto", [NONE => Key::Num8], "farbe label", has_selection, |a, _| a.set_color_label(ColorLabel::Green)),
@@ -241,8 +241,8 @@ pub const COMMANDS: &[Command] = &[
         }
     }),
     // Ansicht
-    cmd!("grid", icon::SQUARES_FOUR, "Raster / Einzelbild umschalten", "Ansicht", [NONE => Key::G], "grid browser übersicht viewer", always, |a, _| a.grid_view = !a.grid_view),
-    cmd!("filmstrip", icon::FILM_STRIP, "Filmstreifen ein/aus", "Ansicht", [], "filmstrip", always, |a, _| a.show_filmstrip = !a.show_filmstrip),
+    cmd!("grid", icon::SQUARES_FOUR, "Raster", "Ansicht", [NONE => Key::G], "grid browser übersicht viewer einzelbild umschalten", always, |a, _| a.grid_view = !a.grid_view),
+    cmd!("filmstrip", icon::FILM_STRIP, "Filmstreifen", "Ansicht", [], "filmstrip ein aus", always, |a, _| a.show_filmstrip = !a.show_filmstrip),
     cmd!("info-overlay", icon::INFO, "Bildinfo: kurz / ausführlich / aus", "Ansicht", [NONE => Key::I], "info exif aufnahmedaten kamera objektiv einblendung overlay", has_image, |a, _| {
         use crate::app::InfoOverlay;
         a.info_overlay = match a.info_overlay {
@@ -268,7 +268,7 @@ pub const COMMANDS: &[Command] = &[
         a.save_settings();
     }),
     cmd!("zoom-fit", icon::CORNERS_OUT, "Einpassen", "Ansicht", [], "fit zoom", has_image, |a, _| a.zoom_fit()),
-    cmd!("zoom-100", icon::MAGNIFYING_GLASS_PLUS, "100 % / Einpassen", "Ansicht", [NONE => Key::Z], "zoom", has_image, |a, _| a.toggle_zoom_100()),
+    cmd!("zoom-100", icon::MAGNIFYING_GLASS_PLUS, "100 %", "Ansicht", [NONE => Key::Z], "zoom einpassen", has_image, |a, _| a.toggle_zoom_100()),
     cmd!("print-zoom", icon::RULER, "Druckgröße", "Ansicht", [SHIFT => Key::Z], "print zoom kalibrieren", has_image, |a, _| a.toggle_print_zoom()),
     cmd!("before", icon::CIRCLE_HALF, "Vorher / Nachher", "Ansicht", [NONE => Key::Y], "before after vergleich", has_image, |a, _| a.toggle_before()),
     cmd!("split", icon::SQUARE_SPLIT_HORIZONTAL, "Geteilter Vergleich", "Ansicht", [NONE => Key::U], "split vorher nachher", has_image, |a, _| a.toggle_split()),
@@ -278,13 +278,13 @@ pub const COMMANDS: &[Command] = &[
     cmd!("focus-mask", icon::CROSSHAIR, "Schärfemaske", "Ansicht", [NONE => Key::K], "fokusmaske fokus focus peaking", has_image, |a, _| a.toggle_focus_mask()),
     cmd!("proof", icon::FILE_MAGNIFYING_GLASS, "Ausgabevorschau", "Ansicht", [NONE => Key::P], "vorschau export proof rezept", has_image, |a, _| a.toggle_proof()),
     cmd!("softproof", icon::PRINTER, "Softproof", "Ansicht", [SHIFT => Key::P], "drucker profil gamut", has_image, |a, _| a.toggle_softproof()),
-    cmd!("print-preview", icon::PRINTER, "Druckvorschau", "Ansicht", [CTRL_SHIFT => Key::P], "drucken papier", has_image, |a, _| a.toggle_print_preview()),
+    cmd!("print-preview", icon::FILE_IMAGE, "Druckvorschau", "Ansicht", [CTRL_SHIFT => Key::P], "drucken papier", has_image, |a, _| a.toggle_print_preview()),
     cmd!("guides-next", icon::GRID_NINE, "Hilfslinien wechseln", "Ansicht", [NONE => Key::O], "guides raster drittel", always, |a, _| {
         a.guides = a.guides.next();
         a.save_settings();
     }),
     cmd!("viewer-window", icon::MONITOR, "Bild in eigenem Fenster", "Ansicht", [SHIFT => Key::F11], "zweitmonitor viewer", always, |a, _| a.toggle_viewer_window()),
-    cmd!("fullscreen", icon::ARROWS_OUT, "Vollbild ohne Ablenkung", "Ansicht", [NONE => Key::F11, CTRL_SHIFT => Key::F], "fullscreen", |a| a.fullscreen || has_image(a), |a, ctx| a.toggle_fullscreen(ctx)),
+    cmd!("fullscreen", icon::ARROWS_OUT, "Vollbild ohne Ablenkung", "Ansicht", [NONE => Key::F11], "fullscreen", |a| a.fullscreen || has_image(a), |a, ctx| a.toggle_fullscreen(ctx)),
     cmd!("find", icon::MAGNIFYING_GLASS, "Suchen (Bibliothek)", "Ansicht", [CTRL => Key::F], "filter suche", always, |a, _| a.tab = Tab::Library),
     // Hilfe
     cmd!("help", icon::QUESTION, "Hilfe", "Hilfe", [NONE => Key::F1], "hilfe handbuch anleitung help manual dokumentation", always, |a, _| a.toggle_help()),
@@ -583,6 +583,19 @@ impl App {
         {
             (c.run)(self, ui.ctx());
         }
+    }
+
+    /// A menu entry with a check mark for a command that switches something on and off (`on`:
+    /// its state); runs it when clicked.
+    pub(crate) fn command_check(&mut self, ui: &mut egui::Ui, id: &str, on: bool) -> Option<egui::Response> {
+        let c = get(id)?;
+        let mark = if on { icon::CHECK } else { "   " };
+        let button = egui::Button::new(format!("{mark}  {}", c.label)).shortcut_text(c.shortcut());
+        let response = ui.add_enabled((c.enabled)(self), button);
+        if response.clicked() {
+            (c.run)(self, ui.ctx());
+        }
+        Some(response)
     }
 
     /// The menu entry of a command without running it: true when clicked. For menus drawn
