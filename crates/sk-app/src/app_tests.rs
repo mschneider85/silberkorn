@@ -5046,9 +5046,20 @@ fn print_bar_turns_pages_and_goes_back() {
     // The page is shown alone (the bar is drawn in the single view only).
     assert!(f.app.compare_cells().is_empty(), "Druckleiste: Einzelansicht");
     assert_eq!(f.app.print_pages(), (0, paths.len()));
+    // The page lies like its image until turned by hand; turning it back forgets it.
+    let natural = f.app.page_portrait();
+    f.app.turn_page(!natural);
+    assert_eq!(f.app.page_portrait(), !natural, "von Hand umgestellt");
+    f.app.turn_page(natural);
+    assert!(f.app.print.turned.is_empty(), "wie das Bild: nichts gemerkt");
+    f.app.turn_page(!natural);
     f.app.step(1, false);
     assert_eq!(f.app.print_pages(), (1, paths.len()), "nächste Seite");
     assert_eq!(f.app.selection.len(), paths.len(), "die Auswahl bleibt");
     f.app.leave_print_bar();
     assert!(!f.app.print.bar && !f.app.print.on);
+    // Opened again: every page lies like its image.
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.enter_print_bar();
+    assert!(f.app.print.turned.is_empty(), "neu geöffnet: wie die Bilder");
 }

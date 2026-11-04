@@ -76,10 +76,11 @@ Der Softproof ändert nur die Anzeige, nicht den Export.
 
 **Druckvorschau** ({taste:print-preview}) zeigt das Bild auf dem Papier, so wie es gedruckt wird, mit Rand, Rahmen, Schnittmarken und Beschriftung. Eingestellt wird im Abschnitt **Druckvorschau**:
 
-- **Papierformat** aus der Liste oder **Eigenes (cm)**.
+- **Drucker** (nur unter Windows): voreingestellt der Standarddrucker von Windows.
+- **Papierformat**: die Papiere, die der gewählte Drucker anbietet (unter Linux die üblichen Formate), oder **Eigenes (cm)**. Ein Format, das der Drucker nicht führt, steht gelb da.
 - **Bildgröße**: **Ganzes Blatt** (so groß, wie Papier und Rand erlauben) oder ein festes Format wie **10 × 15 cm**, auch eigene Maße. Das Bild sitzt dann mittig auf dem Papier, etwa ein 10 × 15 auf A4; mit **Schnittmarken** lässt es sich genau ausschneiden. Der Rand ergibt sich dabei von selbst.
-- **Ausrichtung**: **Wie das Bild** (Hochformat für hohe Bilder, sonst Querformat; in der Leiste **A**), **Hochformat** oder **Querformat**. Mit **Wie das Bild** kommt jedes Bild so aufs Papier, wie die Vorschau es zeigt, auch wenn ein Druckauftrag Hoch- und Querformate mischt: Die Seite wird dafür gedreht an den Drucker geschickt.
-- **Anpassung**: **Einpassen** (ganzes Bild, Rand, wo die Seitenverhältnisse abweichen) oder **Füllen** (randlos wie im Fotolabor, das Bild wird beschnitten). Mit fester Bildgröße gilt sie für diese: **Füllen** ergibt genau 10 × 15.
+- **Ausrichtung**: **Hochformat** oder **Querformat**. Jede Seite beginnt so, wie ihr Bild liegt; die Knöpfe stellen nur die gezeigte Seite um, etwa ein Querformatbild auf ein hochkantes Blatt. Beim nächsten Öffnen der Druckleiste liegt wieder jede Seite wie ihr Bild. Mischt ein Druckauftrag Hoch- und Querformate, kommt jede Seite so aufs Papier, wie die Vorschau sie zeigt: Sie wird dafür gedreht an den Drucker geschickt.
+- **Anpassung**: **Einpassen** (ganzes Bild, weiße Streifen, wo die Seitenverhältnisse abweichen) oder **Füllen** (randlos wie im Fotolabor, das Bild wird beschnitten). Die Liste sagt für das angezeigte Bild, wie viel weiß bleibt oder abgeschnitten wird. Mit fester Bildgröße gilt sie für diese: Ein 3:2-Bild auf 9 × 13 hat mit **Einpassen** oben und unten je 2 mm weiß, mit **Füllen** fehlen links und rechts je 3 mm. Die Schnittmarken sitzen dann am Format.
 
 Oben im Bild steht die Auflösung auf dem Papier. Unter 200 ppi wird sie gelb, unter 150 ppi rot: Dort werden Details im Druck weich. Für die richtigen Farben den Softproof mit dem Profil des Druckers dazuschalten.
 
@@ -102,11 +103,11 @@ Bild und Beschriftung stehen immer in der Mitte des Blattes.
 
 ## Drucken
 
-**Drucken …** ({taste:print}, auch im Menü **Datei** und unten im Abschnitt **Drucken**) zeigt zuerst die Seite: Die Druckvorschau geht an, und unten im Bild erscheint eine Leiste mit Papierformat, Bildgröße, Hoch- oder Querformat und Anpassung. Jedes ausgewählte Bild kommt auf eine eigene Seite; ist keines ausgewählt, das angezeigte. Bei mehreren Bildern blättern die Pfeile in der Leiste (oder die Pfeiltasten) durch die Seiten, die Auswahl bleibt.
+**Drucken …** ({taste:print}, auch im Menü **Datei** und unten im Abschnitt **Drucken**) zeigt zuerst die Seite: Die Druckvorschau geht an, und unten im Bild erscheint eine Leiste mit Drucker, Papierformat, Bildgröße, Hoch- oder Querformat, Anpassung und **Einstellungen …**. Jedes ausgewählte Bild kommt auf eine eigene Seite; ist keines ausgewählt, das angezeigte. Bei mehreren Bildern blättern die Pfeile in der Leiste (oder die Pfeiltasten) durch die Seiten, die Auswahl bleibt.
 
-**Drucken …** in der Leiste (Enter oder noch einmal {taste:print}) öffnet den Druckdialog von Windows: Drucker, Anzahl der Kopien und über **Einstellungen** die Eigenschaften des Druckers wie Papiersorte und Qualität. Papierformat und Ausrichtung sind dort schon eingestellt. Der Dialog von Windows 11 zeigt für Programme wie Silberkorn keine Vorschau; die Seite sieht man vorher im Bild. **Abbrechen** (Esc) schließt die Leiste.
+**Einstellungen …** in der Leiste öffnet die Einstellungen des Druckers, etwa Papiersorte, Qualität und Farbe; sie gelten, bis Silberkorn beendet wird. Papierformat und Ausrichtung kommen immer aus der Leiste. **Drucken** (Enter oder noch einmal {taste:print}) schickt die Seiten an den Drucker. **Abbrechen** (Esc) schließt die Leiste.
 
-Bietet der Drucker das Papierformat nicht an, druckt er auf sein eigenes, und die Seite wird dafür neu aufgeteilt. Die Statusleiste sagt das danach.
+Führt der Drucker das Papierformat nicht, steht es in der Leiste gelb. Nimmt er es auch als eigenes Format nicht an, druckt er auf sein Standardpapier, und die Seite wird dafür neu aufgeteilt. Die Statusleiste sagt das danach.
 
 Im Abschnitt **Drucken**:
 

@@ -2,7 +2,7 @@
 //! resolution on paper and, on a calibrated screen, the image at its printed size.
 
 use egui::{Color32, RichText, Ui, Vec2, vec2};
-use sk_core::print::{Caption, Fit, Layout, PPI_LOW, PPI_POOR, PRESETS, Paper, PrintFormat, PrintSettings, PrintSharpening};
+use sk_core::print::{Caption, Fit, Layout, PPI_LOW, PPI_POOR, Paper, PrintFormat, PrintSettings, PrintSharpening};
 use sk_core::softproof::RenderIntent;
 
 use crate::app::App;
@@ -26,6 +26,13 @@ pub struct PrintPreviewState {
     pub was_on: bool,
     /// What the job wants said when it is done (the printer took other paper).
     pub note: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    /// The installed printers and their papers, once asked for (in the background).
+    pub printers: std::sync::Arc<std::sync::Mutex<Option<std::sync::Arc<crate::printer::Printers>>>>,
+    pub printers_asked: bool,
+    /// Pages turned by hand (upright or not) against their image, until the print bar opens again.
+    pub turned: std::collections::HashMap<std::path::PathBuf, bool>,
+    /// The driver's settings from "Einstellungen …" (paper type, quality), for this session.
+    pub driver: Option<crate::printer::Choice>,
 }
 
 /// Photo sizes for the image on the paper (as in a lab).
@@ -37,6 +44,34 @@ pub const PHOTO_SIZES: [(&str, PrintFormat); 6] = [
     ("20 × 30 cm", PrintFormat::new(203.0, 305.0)),
     ("A5", PrintFormat::new(148.0, 210.0)),
 ];
+
+/// What fitting does to an image of `size` (pixels) with these settings: "ganzes Bild, oben und
+/// unten je 2 mm weiß", "links und rechts je 3 mm abgeschnitten".
+pub fn fit_effect(s: &PrintSettings, fit: Fit, size: Option<(f32, f32)>) -> String {
+    let Some((w, h)) = size else {
+        return match fit {
+            Fit::Contain => "ganzes Bild".into(),
+            Fit::Fill => "füllt das Format, das Bild wird beschnitten".into(),
+        };
+    };
+    let l = sk_core::print::layout(w, h, &PrintSettings { fit, ..s.clone() });
+    let [across, updown] = l.trim();
+    let (sides, mm) = if across >= updown { ("links und rechts", across) } else { ("oben und unten", updown) };
+    match fit {
+        Fit::Contain if mm < 0.5 => "ganzes Bild, füllt das Format".into(),
+        Fit::Contain => format!("ganzes Bild, {sides} je {mm:.0} mm weiß"),
+        Fit::Fill if mm < 0.5 => "füllt das Format, nichts abgeschnitten".into(),
+        Fit::Fill => format!("füllt das Format, {sides} je {mm:.0} mm abgeschnitten"),
+    }
+}
+
+/// The two ways of fitting, each with what it does to the image shown.
+pub fn fit_entries(ui: &mut Ui, s: &mut PrintSettings, size: Option<(f32, f32)>) {
+    for fit in [Fit::Contain, Fit::Fill] {
+        let text = format!("{} – {}", fit.label(), fit_effect(s, fit, size));
+        ui.selectable_value(&mut s.fit, fit, text);
+    }
+}
 
 /// "Ganzes Blatt" or the image size ("10 × 15 cm").
 pub fn image_size_label(f: Option<PrintFormat>) -> String {
@@ -107,7 +142,30 @@ impl App {
             return None;
         }
         let w = self.full_output_width()?;
-        Some(sk_core::print::layout(w, w * size.y / size.x.max(1.0), &self.print.settings))
+        Some(sk_core::print::layout(w, w * size.y / size.x.max(1.0), &self.page_settings()))
+    }
+
+    /// The print settings for the page shown: turned as chosen for it, else like its image.
+    pub(crate) fn page_settings(&self) -> PrintSettings {
+        let path = self.current.as_ref().map(|c| &c.meta.path);
+        PrintSettings { portrait: path.and_then(|p| self.print.turned.get(p).copied()), ..self.print.settings.clone() }
+    }
+
+    /// Whether the page shown is upright: as chosen, else like its image.
+    pub(crate) fn page_portrait(&self) -> bool {
+        let (w, h) = self.full_output_size().unwrap_or((3.0, 2.0));
+        self.page_settings().portrait.unwrap_or(h > w)
+    }
+
+    /// Hochformat/Querformat for the page shown; back to "like the image" when it matches.
+    pub(crate) fn turn_page(&mut self, portrait: bool) {
+        let Some(path) = self.current.as_ref().map(|c| c.meta.path.clone()) else { return };
+        let natural = self.full_output_size().is_some_and(|(w, h)| h > w);
+        if portrait == natural {
+            self.print.turned.remove(&path);
+        } else {
+            self.print.turned.insert(path, portrait);
+        }
     }
 
     /// The paper around the image (`size`: the image on screen at scale 1): the print format
@@ -224,7 +282,10 @@ impl App {
 
     /// Controls in the output tab.
     pub fn print_section(&mut self, ui: &mut Ui) {
+        let printers = self.printers(ui.ctx());
         let mut s = self.print.settings.clone();
+        let portrait = self.page_portrait();
+        let mut turn = None;
         let (mut toggle, mut zoom, mut calibrate) = (false, false, false);
         section(ui, "Druckvorschau", None, |ui| {
             let mut on = self.print.on;
@@ -232,11 +293,18 @@ impl App {
             if ui.add_enabled(self.current.is_some() || self.print.on, checkbox).changed() {
                 toggle = true;
             }
-            widgets::combo_field(ui, "Papierformat", s.format.label(), |ui| {
-                for (name, f) in PRESETS {
-                    ui.selectable_value(&mut s.format, f, name);
-                }
+            if crate::printing::CAN_PRINT {
+                widgets::combo_field(ui, "Drucker", crate::printing::printer_text(&s, printers.as_deref()), |ui| {
+                    crate::printing::printer_entries(ui, &mut s, printers.as_deref());
+                });
+            }
+            let (text, hint) = crate::printing::paper_text(&s, printers.as_deref());
+            widgets::combo_field(ui, "Papierformat", text, |ui| {
+                crate::printing::paper_entries(ui, &mut s, printers.as_deref());
             });
+            if let Some(hint) = hint {
+                ui.label(RichText::new(hint).small().color(theme::GUIDE));
+            }
             widgets::field(ui, "Eigenes (cm)", |ui| {
                 let (mut w, mut h) = (s.format.w_mm.min(s.format.h_mm) / 10.0, s.format.w_mm.max(s.format.h_mm) / 10.0);
                 let a = ui.add(egui::DragValue::new(&mut w).range(2.0..=200.0).speed(0.1).max_decimals(1));
@@ -263,20 +331,15 @@ impl App {
                     }
                 });
             }
-            let turn = |p: Option<bool>| match p {
-                None => "Wie das Bild",
-                Some(true) => "Hochformat",
-                Some(false) => "Querformat",
-            };
-            widgets::combo_field(ui, "Ausrichtung", turn(s.portrait), |ui| {
-                for p in [None, Some(true), Some(false)] {
-                    ui.selectable_value(&mut s.portrait, p, turn(p));
+            widgets::field(ui, "Ausrichtung", |ui| {
+                if let Some(p) = widgets::orientation(ui, self.current.is_some(), portrait, "") {
+                    turn = Some(p);
                 }
             });
-            widgets::combo_field(ui, "Anpassung", s.fit.label(), |ui| {
-                ui.selectable_value(&mut s.fit, Fit::Contain, Fit::Contain.label()).on_hover_text("Ganzes Bild, Rand wo die Seitenverhältnisse abweichen");
-                ui.selectable_value(&mut s.fit, Fit::Fill, Fit::Fill.label()).on_hover_text("Randlos wie im Fotolabor, das Bild wird beschnitten");
-            });
+            let size = self.full_output_size();
+            s.portrait = Some(portrait);
+            widgets::combo_field(ui, "Anpassung", s.fit.label(), |ui| fit_entries(ui, &mut s, size));
+            s.portrait = None;
             // Wraps instead of widening the panel (the label carries the shortcut).
             ui.horizontal_wrapped(|ui| {
                 if ui.selectable_label(self.print.zoom, crate::commands::hint("Druckgröße", "print-zoom")).clicked() {
@@ -293,6 +356,9 @@ impl App {
             );
         });
         self.change_print_settings(|old| *old = s);
+        if let Some(p) = turn {
+            self.turn_page(p);
+        }
         self.print_page_section(ui);
         self.print_job_section(ui);
         if toggle {
@@ -386,7 +452,7 @@ impl App {
             ui.horizontal_wrapped(|ui| {
                 let label = format!("{}  Drucken …", theme::icon::PRINTER);
                 let r = ui.add_enabled(self.current.is_some(), crate::dialog::primary(label));
-                let r = r.on_hover_text(crate::commands::hint("Zeigt die Seite und öffnet dann den Druckdialog; die ausgewählten Bilder, eines je Seite", "print"));
+                let r = r.on_hover_text(crate::commands::hint("Zeigt die Seite mit Drucker und Papier, dann wird gedruckt; die ausgewählten Bilder, eines je Seite", "print"));
                 if r.clicked() {
                     print = true;
                 }

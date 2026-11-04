@@ -13,7 +13,7 @@ use sk_core::print_page::{self, FILE_DPI, PROFILE_SOURCE, PrinterProfile};
 use sk_core::raw::{CaptureInfo, RawMeta};
 
 use crate::app::App;
-use crate::printer::{Choice, Printer, Request};
+use crate::printer::{Choice, PaperSize, Printer, Printers, Request};
 
 /// Where the pages go.
 #[derive(Clone, Debug, PartialEq)]
@@ -31,7 +31,7 @@ pub const CAN_PRINT: bool = cfg!(windows);
 
 impl App {
     /// Strg+P: first the print bar with the page in the print preview; from there (Strg+P again
-    /// or Enter) the system's print dialog.
+    /// or Enter) to the printer.
     pub fn print_command(&mut self) {
         if self.print.bar {
             self.print_selection();
@@ -57,6 +57,29 @@ impl App {
         self.zoom = None;
         self.pan = egui::Vec2::ZERO;
         self.print.bar = true;
+        // Printers come and go: asked for again each time. Each page starts turned like its image.
+        self.print.printers_asked = false;
+        self.print.turned.clear();
+    }
+
+    /// The installed printers with their papers (Windows): asked for in the background the first
+    /// time, `None` until known.
+    pub(crate) fn printers(&mut self, ctx: &egui::Context) -> Option<Arc<Printers>> {
+        if !CAN_PRINT {
+            return None;
+        }
+        if !self.print.printers_asked {
+            self.print.printers_asked = true;
+            let slot = self.print.printers.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let found = crate::printer::printers();
+                log::info!("Drucker: {:?}", found.list.iter().map(|(n, p)| format!("{n} ({} Papiere)", p.len())).collect::<Vec<_>>());
+                *slot.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(found));
+                ctx.request_repaint();
+            });
+        }
+        self.print.printers.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Esc: the print bar closes, the print preview goes back to how it was.
@@ -67,7 +90,7 @@ impl App {
         }
     }
 
-    /// The system's print dialog, then the selected images.
+    /// The selected images to the printer chosen in the print bar.
     pub fn print_selection(&mut self) {
         if self.print.bar {
             self.leave_print_bar();
@@ -93,14 +116,21 @@ impl App {
         }
     }
 
-    /// The print bar at the bottom of the viewer: pages, paper, orientation and fit, then
-    /// "Drucken …" (the system's dialog) and "Abbrechen".
+    /// The print bar at the bottom of the viewer: pages, printer, paper, orientation, fit,
+    /// the driver's settings, then "Drucken" and "Abbrechen".
     pub(crate) fn print_bar(&mut self, ui: &mut egui::Ui, at: egui::Pos2) {
+        let printers = self.printers(ui.ctx());
         let mut s = self.print.settings.clone();
         let (page, pages) = self.print_pages();
         let mut step = 0;
         let blocked = self.print_blocked_reason(false);
-        let apply = (format!("{}  Drucken …", crate::theme::icon::PRINTER), "Enter".to_string());
+        let mut driver = false;
+        let size = self.full_output_size();
+        let portrait = self.page_portrait();
+        let mut turn = None;
+        // The fit's effect is shown for the page as turned.
+        s.portrait = Some(portrait);
+        let apply = (format!("{}  Drucken", crate::theme::icon::PRINTER), "Enter".to_string());
         let done = crate::crop::image_bar_at(ui, at, apply, blocked.is_none(), |ui| {
             if pages > 1 {
                 if ui.add_enabled(page > 0, egui::Button::new(crate::theme::icon::CARET_LEFT)).on_hover_text("Vorherige Seite").clicked() {
@@ -112,12 +142,17 @@ impl App {
                 }
                 ui.separator();
             }
-            let combo = egui::ComboBox::from_id_salt("print_bar_paper").selected_text(s.format.label()).width(110.0).show_ui(ui, |ui| {
-                for (name, f) in sk_core::print::PRESETS {
-                    ui.selectable_value(&mut s.format, f, name);
-                }
+            if CAN_PRINT {
+                let combo = egui::ComboBox::from_id_salt("print_bar_printer").selected_text(printer_text(&s, printers.as_deref())).width(150.0).truncate().show_ui(ui, |ui| {
+                    printer_entries(ui, &mut s, printers.as_deref());
+                });
+                combo.response.on_hover_text("Drucker");
+            }
+            let (text, hint) = paper_text(&s, printers.as_deref());
+            let combo = egui::ComboBox::from_id_salt("print_bar_paper").selected_text(text).width(110.0).truncate().show_ui(ui, |ui| {
+                paper_entries(ui, &mut s, printers.as_deref());
             });
-            combo.response.on_hover_text("Papierformat");
+            combo.response.on_hover_text(hint.unwrap_or_else(|| "Papierformat".into()));
             let combo = egui::ComboBox::from_id_salt("print_bar_size").selected_text(crate::print_preview::image_size_label(s.image_size)).width(110.0).show_ui(ui, |ui| {
                 ui.selectable_value(&mut s.image_size, None, crate::print_preview::image_size_label(None));
                 for (name, f) in crate::print_preview::PHOTO_SIZES {
@@ -125,18 +160,27 @@ impl App {
                 }
             });
             combo.response.on_hover_text("Bildgröße auf dem Papier");
-            if let Some(turn) = crate::widgets::orientation_or_auto(ui, s.portrait, "Wie das Bild") {
-                s.portrait = turn;
+            if let Some(p) = crate::widgets::orientation(ui, true, portrait, "") {
+                turn = Some(p);
             }
-            let combo = egui::ComboBox::from_id_salt("print_bar_fit").selected_text(s.fit.label()).width(90.0).show_ui(ui, |ui| {
-                ui.selectable_value(&mut s.fit, sk_core::print::Fit::Contain, sk_core::print::Fit::Contain.label()).on_hover_text("Ganzes Bild, Rand wo die Seitenverhältnisse abweichen");
-                ui.selectable_value(&mut s.fit, sk_core::print::Fit::Fill, sk_core::print::Fit::Fill.label()).on_hover_text("Randlos wie im Fotolabor, das Bild wird beschnitten");
-            });
-            combo.response.on_hover_text("Anpassung");
-            if !CAN_PRINT {
+            let combo = egui::ComboBox::from_id_salt("print_bar_fit").selected_text(s.fit.label()).width(90.0).show_ui(ui, |ui| crate::print_preview::fit_entries(ui, &mut s, size));
+            combo.response.on_hover_text(format!("Anpassung: {}", crate::print_preview::fit_effect(&s, s.fit, size)));
+            if CAN_PRINT {
+                ui.separator();
+                if ui.button("Einstellungen …").on_hover_text("Einstellungen des Druckers: Papiersorte, Qualität, Farbe").clicked() {
+                    driver = true;
+                }
+            } else {
                 ui.label(egui::RichText::new("Drucken nur unter Windows").small().color(crate::theme::TEXT_DIM));
             }
         });
+        if driver {
+            self.printer_properties();
+        }
+        s.portrait = None;
+        if let Some(p) = turn {
+            self.turn_page(p);
+        }
         if s != self.print.settings {
             self.print.settings = s;
             self.save_settings();
@@ -196,20 +240,17 @@ impl App {
             PrintTo::File(f) => format!("in {}", f.display()),
         });
         let settings = self.print.settings.clone();
-        // The dialog shows the paper turned like the image on screen.
+        let turned = self.print.turned.clone();
+        // The printer is set up for the page on screen, turned as it is.
         let paper = match self.full_output_size() {
-            Some((w, h)) => sk_core::print::layout(w, h, &settings).paper,
+            Some((w, h)) => sk_core::print::layout(w, h, &self.page_settings()).paper,
             None => [settings.format.w_mm.min(settings.format.h_mm), settings.format.w_mm.max(settings.format.h_mm)],
         };
-        // The printer is chosen here, on the UI thread that owns the window; the job opens it.
+        // The printer is put together here, on the UI thread; the job opens it.
         let printer = match &to {
             PrintTo::File(_) => None,
-            PrintTo::Printer => match self.choose_printer(paper, settings.profile.is_some()) {
-                Ok(Some(chosen)) => Some(chosen),
-                Ok(None) => {
-                    self.status = "Drucken abgebrochen".into();
-                    return;
-                }
+            PrintTo::Printer => match self.printer_for_job(paper, &settings) {
+                Ok(chosen) => Some(chosen),
                 Err(e) => {
                     self.report_error(format!("Drucken fehlgeschlagen: {e:#}"));
                     return;
@@ -220,19 +261,42 @@ impl App {
         self.save_settings();
         let note = self.print.note.clone();
         *note.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        self.start_job(LABEL, Box::new(move |progress| run(items, settings, shown, to, paper, printer, &note, progress)));
+        self.start_job(LABEL, Box::new(move |progress| run(items, settings, turned, shown, to, paper, printer, &note, progress)));
         self.print.job = self.jobs.last().map(|j| j.id);
     }
 
-    /// The system's print dialog for `paper` (turned like the page); `None` if cancelled.
-    /// `SILBERKORN_PRINT_TEST="Drucker|Datei"`: that printer without the dialog, writing to the
-    /// file (tests with "Microsoft Print to PDF").
-    fn choose_printer(&self, paper: [f32; 2], own_colors: bool) -> Result<Option<(Choice, Option<PathBuf>)>> {
-        let req = Request { paper_mm: paper, own_colors };
+    /// What the printer is asked for: the paper (turned like the page) and colors.
+    fn printer_request(&self, paper: [f32; 2], s: &PrintSettings) -> Request {
+        Request { printer: s.printer.clone(), paper_mm: paper, own_colors: s.profile.is_some() }
+    }
+
+    /// The printer chosen in the print bar, with the driver's settings from "Einstellungen …".
+    /// `SILBERKORN_PRINT_TEST="Drucker|Datei"`: that printer, writing to the file (tests with
+    /// "Microsoft Print to PDF").
+    fn printer_for_job(&self, paper: [f32; 2], s: &PrintSettings) -> Result<(Choice, Option<PathBuf>)> {
+        let mut req = self.printer_request(paper, s);
         if let Some((name, out)) = std::env::var("SILBERKORN_PRINT_TEST").ok().and_then(|v| v.split_once('|').map(|(a, b)| (a.to_string(), PathBuf::from(b)))) {
-            return Ok(Some((crate::printer::named(&name, &req)?, Some(out))));
+            req.printer = Some(name);
+            return Ok((crate::printer::prepared(&req, None)?, Some(out)));
         }
-        Ok(crate::printer::choose(self.native_window.unwrap_or(0), &req)?.map(|c| (c, None)))
+        Ok((crate::printer::prepared(&req, self.print.driver.as_ref())?, None))
+    }
+
+    /// "Einstellungen …": the driver's own dialog for the chosen printer; what is set there
+    /// holds for this session (paper and orientation still come from the print bar).
+    pub(crate) fn printer_properties(&mut self) {
+        let s = self.page_settings();
+        let paper = match self.full_output_size() {
+            Some((w, h)) => sk_core::print::layout(w, h, &s).paper,
+            None => [s.format.w_mm.min(s.format.h_mm), s.format.w_mm.max(s.format.h_mm)],
+        };
+        let req = self.printer_request(paper, &s);
+        let result = crate::printer::prepared(&req, self.print.driver.as_ref()).and_then(|mut c| Ok(crate::printer::properties(self.native_window.unwrap_or(0), &mut c)?.then_some(c)));
+        match result {
+            Ok(Some(c)) => self.print.driver = Some(c),
+            Ok(None) => {}
+            Err(e) => self.report_error(format!("Druckereinstellungen: {e:#}")),
+        }
     }
 
     /// The print job ended: what came out.
@@ -258,10 +322,75 @@ impl App {
     }
 }
 
+/// The printer a setting means, for its field: by name, else the default one.
+pub(crate) fn printer_text(s: &PrintSettings, printers: Option<&Printers>) -> String {
+    match (&s.printer, printers.and_then(|p| p.default.as_ref())) {
+        (Some(name), _) if printers.is_some_and(|p| p.papers(Some(name)).is_none()) => format!("{name} (nicht gefunden)"),
+        (Some(name), _) => name.clone(),
+        (None, Some(default)) => default.clone(),
+        (None, None) if printers.is_none() => "Drucker werden gesucht …".into(),
+        (None, None) => "Kein Drucker".into(),
+    }
+}
+
+/// The installed printers to choose from; the default one marked.
+pub(crate) fn printer_entries(ui: &mut egui::Ui, s: &mut PrintSettings, printers: Option<&Printers>) {
+    let Some(printers) = printers else {
+        ui.label("Drucker werden gesucht …");
+        return;
+    };
+    if printers.list.is_empty() {
+        ui.label("Kein Drucker installiert");
+    }
+    let shown = s.printer.clone().or_else(|| printers.default.clone());
+    for (name, _) in &printers.list {
+        let default = printers.default.as_ref() == Some(name);
+        let r = ui.selectable_label(shown.as_ref() == Some(name), name);
+        let r = if default { r.on_hover_text("Standarddrucker von Windows") } else { r };
+        if r.clicked() {
+            // The default printer is followed when Windows' default changes.
+            s.printer = (!default).then(|| name.clone());
+        }
+    }
+}
+
+/// The paper field: the printer's name for it, and a warning if the printer doesn't offer it.
+pub(crate) fn paper_text(s: &PrintSettings, printers: Option<&Printers>) -> (egui::RichText, Option<String>) {
+    let papers = printers.and_then(|p| p.papers(s.printer.as_deref())).filter(|p| !p.is_empty());
+    match papers.map(|p| crate::printer::paper_of(p, s.format)) {
+        Some(Some(paper)) => (egui::RichText::new(&paper.name), None),
+        Some(None) => (
+            egui::RichText::new(s.format.label()).color(crate::theme::GUIDE),
+            Some(format!("{} führt {} nicht als Papier. Nimmt er kein eigenes Format an, druckt er auf sein Standardpapier.", printer_text(s, printers), s.format.label())),
+        ),
+        None => (egui::RichText::new(s.format.label()), None),
+    }
+}
+
+/// The papers to choose from: the printer's, else the usual sizes.
+pub(crate) fn paper_entries(ui: &mut egui::Ui, s: &mut PrintSettings, printers: Option<&Printers>) {
+    let papers: &[PaperSize] = printers.and_then(|p| p.papers(s.printer.as_deref())).unwrap_or(&[]);
+    if papers.is_empty() {
+        for (name, f) in sk_core::print::PRESETS {
+            ui.selectable_value(&mut s.format, f, name);
+        }
+        return;
+    }
+    let chosen = crate::printer::paper_of(papers, s.format).map(|p| p.name.clone());
+    let cm = |mm: f32| if (mm / 10.0).fract().abs() < 0.05 { format!("{:.0}", mm / 10.0) } else { format!("{:.1}", mm / 10.0) };
+    for p in papers {
+        let label = format!("{}  ({} × {} cm)", p.name, cm(p.mm[0]), cm(p.mm[1]));
+        if ui.selectable_label(chosen.as_ref() == Some(&p.name), label).clicked() {
+            s.format = p.format();
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run(
     items: Vec<(PathBuf, Adjustments)>,
     s: PrintSettings,
+    turned: std::collections::HashMap<PathBuf, bool>,
     shown: Option<(Arc<RawMeta>, Arc<LinearImage>)>,
     to: PrintTo,
     paper: [f32; 2],
@@ -299,19 +428,17 @@ fn run(
             for (i, (path, adj)) in items.iter().enumerate() {
                 let (info, img) = develop(path, adj)?;
                 progress((i as f32 + 0.6) / n);
-                // "Wie das Bild": the page is turned like the image even where the printer's sheet
-                // lies the other way for the whole job; then it goes to the printer turned.
+                // Each page lies like its image, or as turned by hand, even where the printer's
+                // sheet lies the other way for the whole job; then it goes to the printer turned.
                 let sheet = printer.paper_mm();
-                let across = |a: f32, b: f32| (a - b).abs() > 1.0 && a > b;
-                let turn = s.portrait.is_none() && across(img.width as f32, img.height as f32) != across(sheet[0], sheet[1]) && img.width != img.height;
+                let upright = turned.get(path).copied().unwrap_or(img.height > img.width);
+                let turn = (sheet[0] - sheet[1]).abs() > 1.0 && upright != (sheet[1] > sheet[0]);
                 let paper = if turn { [sheet[1], sheet[0]] } else { sheet };
                 let layout = sk_core::print::layout_on(img.width as f32, img.height as f32, paper, &s);
                 let page = print_page::render(&img, &layout, dpi, &s, s.caption.text(path, &info).as_deref(), profile.as_ref())?;
                 drop(img);
                 let page = if turn { page.turned() } else { page };
-                for _ in 0..printer.copies() {
-                    printer.page(&page)?;
-                }
+                printer.page(&page)?;
                 progress((i + 1) as f32 / n);
             }
             printer.finish()?;
@@ -325,7 +452,8 @@ fn run(
             for (i, (path, adj)) in items.iter().enumerate() {
                 let (info, img) = develop(path, adj)?;
                 progress((i as f32 + 0.6) / n);
-                let layout = sk_core::print::layout(img.width as f32, img.height as f32, &s);
+                let page = PrintSettings { portrait: turned.get(path).copied(), ..s.clone() };
+                let layout = sk_core::print::layout(img.width as f32, img.height as f32, &page);
                 let page = print_page::render(&img, &layout, FILE_DPI, &s, s.caption.text(path, &info).as_deref(), profile.as_ref())?;
                 drop(img);
                 let jpeg = print_page::jpeg(&page, &icc)?;

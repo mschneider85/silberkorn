@@ -837,12 +837,12 @@ Anzeige, nicht den Export.
 ### Drucken
 
 **Strg+P** (Datei → „Drucken …“) zeigt zuerst die Seite in der Druckvorschau (**Strg+Umschalt+P**)
-mit einer Leiste unten im Bild: Papierformat, Bildgröße (ganzes Blatt oder fest, etwa 10 × 15 mittig
-auf A4), Hoch-/Querformat, Anpassung und bei mehreren Bildern
-„Seite 2 von 5“ (Pfeile blättern, die Auswahl bleibt). **Drucken …** (Enter) öffnet dann den
-Druckdialog von Windows mit Papierformat und Ausrichtung; jedes ausgewählte Bild kommt auf eine
-eigene Seite. Der Dialog von Windows 11 zeigt für Win32-Programme keine Vorschau, deshalb kommt sie
-vorher. Im Tab **„Ausgabe“**:
+mit einer Leiste unten im Bild: Drucker, Papierformat (die Papiere des Druckers), Bildgröße (ganzes Blatt oder fest, etwa 10 × 15 mittig
+auf A4), Hoch-/Querformat, Anpassung (die Liste nennt, wie viel weiß bleibt oder abgeschnitten wird), „Einstellungen …“ (der Einstellungsdialog des
+Treibers, `DocumentPropertiesW`, gilt für die Sitzung) und bei mehreren Bildern „Seite 2 von 5“
+(Pfeile blättern, die Auswahl bleibt). **Drucken** (Enter) druckt dann direkt; jedes ausgewählte
+Bild kommt auf eine eigene Seite. Den Druckdialog von Windows gibt es nicht: Der von Windows 11 zeigt
+für Win32-Programme keine Vorschau und übergeht den vorgegebenen Drucker. Im Tab **„Ausgabe“**:
 
 - **Druckseite:** Rand (mm), Rahmen (mm), Schnittmarken an den Ecken und Beschriftung (Dateiname,
   Aufnahmedaten oder beides). Die Druckvorschau zeigt alles mit.
@@ -853,9 +853,11 @@ vorher. Im Tab **„Ausgabe“**:
 
 Die Seite entsteht als Bild in bis zu 360 ppi (`sk_core::print_page`) und geht über GDI an den
 Drucker (`printer.rs`), über das ganze Blatt; Ränder, die der Drucker nicht bedrucken kann, lässt
-er aus. Bietet der Treiber das Format nicht an, wird auf seinem Blatt neu aufgeteilt. Mit
-„Ausrichtung: Wie das Bild“ (in der Leiste „A“) geht eine Seite, die anders liegt als das Blatt des
-Auftrags, um 90° gedreht an den Drucker. Unter Linux
+er aus. Drucker und Papiere fragt ein Hintergrund-Thread ab (`EnumPrintersW`, `DeviceCapabilitiesW`);
+gedruckt wird mit der Papiernummer des Treibers. Bietet der Treiber das Format nicht an, wird auf seinem Blatt neu aufgeteilt. Jede
+Seite liegt wie ihr Bild, solange sie nicht von Hand umgestellt ist (gilt je Seite, bis die
+Druckleiste wieder geöffnet wird); eine Seite, die anders liegt als das Blatt des Auftrags, geht um
+90° gedreht an den Drucker. Unter Linux
 gibt es nur „In Datei …“. Zum Testen ohne Papier: `SILBERKORN_PRINT_TEST="Microsoft Print to PDF|C:\…\druck.pdf"`
 zusammen mit `SILBERKORN_SCREENSHOT` druckt beim Start ohne Dialog in die Datei.
 

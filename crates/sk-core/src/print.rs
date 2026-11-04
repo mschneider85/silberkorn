@@ -202,11 +202,15 @@ pub struct PrintSettings {
     /// driver's color management is switched off. `None`: the printer gets sRGB and manages.
     pub profile: Option<std::path::PathBuf>,
     pub intent: crate::softproof::RenderIntent,
-    /// The paper upright (`Some(true)`) or across; `None`: turned like the image.
+    /// The paper upright (`Some(true)`) or across; `None`: turned like the image. Chosen per
+    /// page and not kept: each print starts turned like its images.
+    #[serde(skip)]
     pub portrait: Option<bool>,
     /// The image's size on the paper (turned like the image), e.g. 10 × 15 on A4, in the middle;
     /// `None`: as large as the paper and its margin allow.
     pub image_size: Option<PrintFormat>,
+    /// The printer by name (Windows); `None`: the system's default printer.
+    pub printer: Option<String>,
 }
 
 impl Default for PrintSettings {
@@ -227,6 +231,7 @@ impl Default for PrintSettings {
             intent: crate::softproof::RenderIntent::Perceptual,
             portrait: None,
             image_size: None,
+            printer: None,
         }
     }
 }
@@ -237,7 +242,8 @@ pub const CAPTION_GAP_MM: f32 = 2.5;
 /// Crop marks: distance from the image's corner, length and line width (mm).
 pub const MARK_GAP_MM: f32 = 2.0;
 pub const MARK_LEN_MM: f32 = 6.0;
-pub const MARK_LINE_MM: f32 = 0.2;
+/// 0.1 mm (0.28 pt): about the usual 0.25 pt of print shops and layout programs.
+pub const MARK_LINE_MM: f32 = 0.1;
 
 /// Resolutions below these are worth a warning (pixels per inch on paper).
 pub const PPI_LOW: f32 = 200.0;
@@ -253,6 +259,9 @@ pub struct Layout {
     /// The part of the image that is printed (mm): the image when containing, the room inside
     /// the margins when filling.
     pub window: [f32; 2],
+    /// What the print is cut to (mm), where the crop marks go: the fixed image size (with white
+    /// strips where the image is contained), else the printed image.
+    pub cut: [f32; 2],
     /// Pixels per inch on paper.
     pub ppi: f32,
     /// Share of the image area that is cut off (filling) or of the paper left blank (containing).
@@ -298,7 +307,8 @@ pub fn layout_on(px_w: f32, px_h: f32, paper: [f32; 2], s: &PrintSettings) -> La
         Fit::Contain => 1.0 - ia / pa,
         Fit::Fill => 1.0 - wa / ia,
     };
-    Layout { paper, image, window, ppi: 25.4 / mm, off: off.max(0.0) }
+    let cut = if s.image_size.is_some() { inner } else { window };
+    Layout { paper, image, window, cut, ppi: 25.4 / mm, off: off.max(0.0) }
 }
 
 impl Layout {
@@ -313,17 +323,28 @@ impl Layout {
         [(1.0 - w) / 2.0, (1.0 - h) / 2.0, w, h]
     }
 
-    /// Where the caption's letters sit (mm from the paper's top): its top.
+    /// What the print is cut to on the paper (mm from the paper's top left): x, y, w, h.
+    pub fn cut_rect(&self) -> [f32; 4] {
+        [(self.paper[0] - self.cut[0]) / 2.0, (self.paper[1] - self.cut[1]) / 2.0, self.cut[0], self.cut[1]]
+    }
+
+    /// White strips (containing) or what is cut off the image (filling), per side (mm):
+    /// across and up-down.
+    pub fn trim(&self) -> [f32; 2] {
+        [(self.cut[0] - self.image[0]).abs() / 2.0, (self.cut[1] - self.image[1]).abs() / 2.0]
+    }
+
+    /// Where the caption's letters sit (mm from the paper's top): its top, below the cut.
     pub fn caption_top(&self) -> f32 {
-        let [_, y, _, h] = self.window_rect();
+        let [_, y, _, h] = self.cut_rect();
         y + h + CAPTION_GAP_MM
     }
 
-    /// The crop marks as lines (mm on the paper): ((x0, y0), (x1, y1)), around the image and its
-    /// border.
+    /// The crop marks as lines (mm on the paper): ((x0, y0), (x1, y1)), around the cut (and the
+    /// border, where it lies on the cut).
     pub fn crop_marks(&self, border_mm: f32) -> Vec<([f32; 2], [f32; 2])> {
-        let [x, y, w, h] = self.window_rect();
-        let b = border_mm.max(0.0);
+        let [x, y, w, h] = self.cut_rect();
+        let b = if self.cut == self.window { border_mm.max(0.0) } else { 0.0 };
         let (gap, len) = (MARK_GAP_MM + b, MARK_LEN_MM);
         let mut lines = Vec::new();
         for (cx, sx) in [(x, -1.0), (x + w, 1.0)] {
@@ -424,6 +445,14 @@ mod tests {
         // A portrait image gets a portrait 10 × 15.
         let p = layout(4000.0, 6000.0, &s);
         assert!((p.window[0] - 100.0).abs() < 1e-3 && (p.window[1] - 150.0).abs() < 1e-3);
+        // Contained in 9 × 13: the whole 3:2 image, white strips above and below, cut to 9 × 13.
+        let nine = layout(6000.0, 4000.0, &PrintSettings { image_size: Some(PrintFormat::new(89.0, 127.0)), fit: Fit::Contain, ..s.clone() });
+        assert_eq!(nine.cut, [127.0, 89.0]);
+        assert!((nine.window[1] - 127.0 / 1.5).abs() < 1e-3);
+        let trim = nine.trim();
+        assert!(trim[0] < 1e-3 && (trim[1] - (89.0 - 127.0 / 1.5) / 2.0).abs() < 1e-3, "{trim:?}");
+        let [x, ..] = nine.cut_rect();
+        assert!(nine.crop_marks(0.0).iter().any(|(a, _)| (a[0] - x).abs() < 1e-3));
         // Never larger than the paper.
         let big = layout(6000.0, 4000.0, &PrintSettings { image_size: Some(PrintFormat::new(400.0, 600.0)), ..s });
         assert!(big.window[0] <= 297.0 + 1e-3 && big.window[1] <= 210.0 + 1e-3);

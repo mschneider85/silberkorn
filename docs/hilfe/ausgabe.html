@@ -85,10 +85,11 @@
 <h2 id="druckvorschau">Druckvorschau</h2>
 <p><b>Druckvorschau</b> (Strg+Umschalt+P) zeigt das Bild auf dem Papier, so wie es gedruckt wird, mit Rand, Rahmen, Schnittmarken und Beschriftung. Eingestellt wird im Abschnitt <b>Druckvorschau</b>:</p>
 <ul>
-<li><b>Papierformat</b> aus der Liste oder <b>Eigenes (cm)</b>.</li>
+<li><b>Drucker</b> (nur unter Windows): voreingestellt der Standarddrucker von Windows.</li>
+<li><b>Papierformat</b>: die Papiere, die der gewählte Drucker anbietet (unter Linux die üblichen Formate), oder <b>Eigenes (cm)</b>. Ein Format, das der Drucker nicht führt, steht gelb da.</li>
 <li><b>Bildgröße</b>: <b>Ganzes Blatt</b> (so groß, wie Papier und Rand erlauben) oder ein festes Format wie <b>10 × 15 cm</b>, auch eigene Maße. Das Bild sitzt dann mittig auf dem Papier, etwa ein 10 × 15 auf A4; mit <b>Schnittmarken</b> lässt es sich genau ausschneiden. Der Rand ergibt sich dabei von selbst.</li>
-<li><b>Ausrichtung</b>: <b>Wie das Bild</b> (Hochformat für hohe Bilder, sonst Querformat; in der Leiste <b>A</b>), <b>Hochformat</b> oder <b>Querformat</b>. Mit <b>Wie das Bild</b> kommt jedes Bild so aufs Papier, wie die Vorschau es zeigt, auch wenn ein Druckauftrag Hoch- und Querformate mischt: Die Seite wird dafür gedreht an den Drucker geschickt.</li>
-<li><b>Anpassung</b>: <b>Einpassen</b> (ganzes Bild, Rand, wo die Seitenverhältnisse abweichen) oder <b>Füllen</b> (randlos wie im Fotolabor, das Bild wird beschnitten). Mit fester Bildgröße gilt sie für diese: <b>Füllen</b> ergibt genau 10 × 15.</li>
+<li><b>Ausrichtung</b>: <b>Hochformat</b> oder <b>Querformat</b>. Jede Seite beginnt so, wie ihr Bild liegt; die Knöpfe stellen nur die gezeigte Seite um, etwa ein Querformatbild auf ein hochkantes Blatt. Beim nächsten Öffnen der Druckleiste liegt wieder jede Seite wie ihr Bild. Mischt ein Druckauftrag Hoch- und Querformate, kommt jede Seite so aufs Papier, wie die Vorschau sie zeigt: Sie wird dafür gedreht an den Drucker geschickt.</li>
+<li><b>Anpassung</b>: <b>Einpassen</b> (ganzes Bild, weiße Streifen, wo die Seitenverhältnisse abweichen) oder <b>Füllen</b> (randlos wie im Fotolabor, das Bild wird beschnitten). Die Liste sagt für das angezeigte Bild, wie viel weiß bleibt oder abgeschnitten wird. Mit fester Bildgröße gilt sie für diese: Ein 3:2-Bild auf 9 × 13 hat mit <b>Einpassen</b> oben und unten je 2 mm weiß, mit <b>Füllen</b> fehlen links und rechts je 3 mm. Die Schnittmarken sitzen dann am Format.</li>
 </ul>
 <p>Oben im Bild steht die Auflösung auf dem Papier. Unter 200 ppi wird sie gelb, unter 150 ppi rot: Dort werden Details im Druck weich. Für die richtigen Farben den Softproof mit dem Profil des Druckers dazuschalten.</p>
 <p><b>Druckgröße</b> (Umschalt+Z) zeigt das Bild auf dem Bildschirm genau so groß, wie es gedruckt wird.</p>
@@ -104,9 +105,9 @@
 </ul>
 <p>Bild und Beschriftung stehen immer in der Mitte des Blattes.</p>
 <h2 id="drucken">Drucken</h2>
-<p><b>Drucken …</b> (Strg+P, auch im Menü <b>Datei</b> und unten im Abschnitt <b>Drucken</b>) zeigt zuerst die Seite: Die Druckvorschau geht an, und unten im Bild erscheint eine Leiste mit Papierformat, Bildgröße, Hoch- oder Querformat und Anpassung. Jedes ausgewählte Bild kommt auf eine eigene Seite; ist keines ausgewählt, das angezeigte. Bei mehreren Bildern blättern die Pfeile in der Leiste (oder die Pfeiltasten) durch die Seiten, die Auswahl bleibt.</p>
-<p><b>Drucken …</b> in der Leiste (Enter oder noch einmal Strg+P) öffnet den Druckdialog von Windows: Drucker, Anzahl der Kopien und über <b>Einstellungen</b> die Eigenschaften des Druckers wie Papiersorte und Qualität. Papierformat und Ausrichtung sind dort schon eingestellt. Der Dialog von Windows 11 zeigt für Programme wie Silberkorn keine Vorschau; die Seite sieht man vorher im Bild. <b>Abbrechen</b> (Esc) schließt die Leiste.</p>
-<p>Bietet der Drucker das Papierformat nicht an, druckt er auf sein eigenes, und die Seite wird dafür neu aufgeteilt. Die Statusleiste sagt das danach.</p>
+<p><b>Drucken …</b> (Strg+P, auch im Menü <b>Datei</b> und unten im Abschnitt <b>Drucken</b>) zeigt zuerst die Seite: Die Druckvorschau geht an, und unten im Bild erscheint eine Leiste mit Drucker, Papierformat, Bildgröße, Hoch- oder Querformat, Anpassung und <b>Einstellungen …</b>. Jedes ausgewählte Bild kommt auf eine eigene Seite; ist keines ausgewählt, das angezeigte. Bei mehreren Bildern blättern die Pfeile in der Leiste (oder die Pfeiltasten) durch die Seiten, die Auswahl bleibt.</p>
+<p><b>Einstellungen …</b> in der Leiste öffnet die Einstellungen des Druckers, etwa Papiersorte, Qualität und Farbe; sie gelten, bis Silberkorn beendet wird. Papierformat und Ausrichtung kommen immer aus der Leiste. <b>Drucken</b> (Enter oder noch einmal Strg+P) schickt die Seiten an den Drucker. <b>Abbrechen</b> (Esc) schließt die Leiste.</p>
+<p>Führt der Drucker das Papierformat nicht, steht es in der Leiste gelb. Nimmt er es auch als eigenes Format nicht an, druckt er auf sein Standardpapier, und die Seite wird dafür neu aufgeteilt. Die Statusleiste sagt das danach.</p>
 <p>Im Abschnitt <b>Drucken</b>:</p>
 <ul>
 <li><b>Druckanpassung</b>: <b>Helligkeit</b> und <b>Kontrast</b> nur für den Druck. Drucke wirken oft dunkler und flacher als der leuchtende Bildschirm; die Vorschau zeigt die Anpassung nicht.</li>

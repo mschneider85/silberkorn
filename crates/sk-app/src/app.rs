@@ -3405,10 +3405,10 @@ impl App {
                     let s = &mut self.print.settings;
                     (s.margin_mm, s.border_mm, s.crop_marks, s.caption) = (12.0, 0.5, true, sk_core::print::Caption::Both);
                 }
-                // `…,foto`: a 10 × 15 on A4.
+                // `…,foto`: a 9 × 13 on A4.
                 if fit.contains(",foto") {
                     self.print.settings.format = sk_core::print::PRESETS[5].1;
-                    self.print.settings.image_size = Some(crate::print_preview::PHOTO_SIZES[1].1);
+                    self.print.settings.image_size = Some(crate::print_preview::PHOTO_SIZES[0].1);
                 }
                 // `…,leiste`: the print bar (Strg+P).
                 if fit.contains(",leiste") {

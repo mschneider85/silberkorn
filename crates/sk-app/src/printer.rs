@@ -1,32 +1,87 @@
-//! The printer (Windows): the system's print dialog, then the pages as bitmaps to the chosen
-//! printer through GDI. The pages come ready from `sk_core::print_page`; the printer gets them
-//! at the size of its sheet and scales them to its own resolution.
+//! The printer (Windows): the pages as bitmaps to the printer chosen in the print bar, through
+//! GDI. The pages come ready from `sk_core::print_page`; the printer gets them at the size of
+//! its sheet and scales them to its own resolution.
 //!
-//! The dialog runs on the UI thread (it belongs to the window, like the file dialogs) and only
-//! hands back the printer and its settings ([`Choice`]); the print job then opens the printer on
-//! its own thread, renders and sends the pages there.
+//! The printer and its settings ([`Choice`]) are put together on the UI thread, where the
+//! driver's own settings dialog belongs to the window; the print job then opens the printer on
+//! its own thread, renders and sends the pages there. (The system's print dialog isn't used:
+//! Windows 11's ignores the printer it is given to start with.)
 
 #[cfg(not(windows))]
 use anyhow::Result;
 
+/// A paper a printer offers, as its driver names it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaperSize {
+    pub name: String,
+    /// The driver's number for it (`DMPAPER_*` or its own).
+    pub code: i16,
+    /// Short and long side (mm).
+    pub mm: [f32; 2],
+}
+
+impl PaperSize {
+    pub fn format(&self) -> sk_core::print::PrintFormat {
+        sk_core::print::PrintFormat::new(self.mm[0], self.mm[1])
+    }
+}
+
+/// The installed printers with their papers.
+#[derive(Clone, Debug, Default)]
+pub struct Printers {
+    pub list: Vec<(String, Vec<PaperSize>)>,
+    pub default: Option<String>,
+}
+
+impl Printers {
+    /// The papers of the printer a setting means (by name; `None`: the default printer), or
+    /// `None` if it isn't installed.
+    pub fn papers(&self, name: Option<&str>) -> Option<&[PaperSize]> {
+        let name = name.or(self.default.as_deref())?;
+        self.list.iter().find(|(n, _)| n == name).map(|(_, p)| p.as_slice())
+    }
+}
+
+/// The paper of `format`'s size among a printer's (either way round, within 1.5 mm).
+pub fn paper_of(papers: &[PaperSize], format: sk_core::print::PrintFormat) -> Option<&PaperSize> {
+    let (short, long) = (format.w_mm.min(format.h_mm), format.w_mm.max(format.h_mm));
+    papers.iter().find(|p| (p.mm[0] - short).abs() < 1.5 && (p.mm[1] - long).abs() < 1.5)
+}
+
+/// The papers as the driver lists them (codes, names, sizes in 0.1 mm): without empty sizes
+/// and repeated names.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn paper_list(codes: &[u16], names: &[String], sizes: &[[i32; 2]]) -> Vec<PaperSize> {
+    let mut out: Vec<PaperSize> = Vec::new();
+    for ((&code, name), size) in codes.iter().zip(names).zip(sizes) {
+        if size[0] <= 0 || size[1] <= 0 || name.trim().is_empty() || out.iter().any(|p| p.name == *name) {
+            continue;
+        }
+        let (a, b) = (size[0] as f32 / 10.0, size[1] as f32 / 10.0);
+        out.push(PaperSize { name: name.trim().to_string(), code: code as i16, mm: [a.min(b), a.max(b)] });
+    }
+    out
+}
+
 /// What the job asks of the printer before its dialog shows.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub struct Request {
+    /// The printer; `None`: the default printer.
+    pub printer: Option<String>,
     /// The paper (mm), turned like the first page.
     pub paper_mm: [f32; 2],
     /// Silberkorn converts the colors with the printer's profile: the driver must not again.
     pub own_colors: bool,
 }
 
-/// The printer and its settings as chosen in the dialog: plain data, for the print job's thread.
+/// The printer and its settings: plain data, for the print job's thread.
+#[derive(Clone)]
 #[cfg_attr(not(windows), allow(dead_code))]
 pub struct Choice {
     /// The printer's name, NUL-terminated (UTF-16).
     device: Vec<u16>,
     /// Its settings (a DEVMODEW with the driver's part), aligned.
     devmode: Vec<u64>,
-    /// Copies the driver doesn't make itself: each page is sent this often.
-    copies: u32,
 }
 
 /// The resolution the pages are rendered at for a printer of `device_dpi`: a whole fraction of
@@ -59,19 +114,33 @@ fn bands(rows: usize, device_rows: i32) -> Vec<(usize, usize, i32, i32)> {
         .collect()
 }
 
+impl Choice {
+    /// The printer's name.
+    #[cfg_attr(not(windows), allow(dead_code))]
+    pub fn name(&self) -> String {
+        String::from_utf16_lossy(self.device.strip_suffix(&[0]).unwrap_or(&self.device))
+    }
+}
+
 #[cfg(windows)]
-pub use win::{Printer, choose, named};
+pub use win::{Printer, prepared, printers, properties};
 
 #[cfg(not(windows))]
 pub struct Printer;
 
+/// No printers outside Windows.
 #[cfg(not(windows))]
-pub fn choose(_owner: isize, _req: &Request) -> Result<Option<Choice>> {
+pub fn printers() -> Printers {
+    Printers::default()
+}
+
+#[cfg(not(windows))]
+pub fn prepared(_req: &Request, _base: Option<&Choice>) -> Result<Choice> {
     anyhow::bail!("Drucken gibt es nur unter Windows")
 }
 
 #[cfg(not(windows))]
-pub fn named(_name: &str, _req: &Request) -> Result<Choice> {
+pub fn properties(_owner: isize, _choice: &mut Choice) -> Result<bool> {
     anyhow::bail!("Drucken gibt es nur unter Windows")
 }
 
@@ -87,10 +156,6 @@ impl Printer {
 
     pub fn dpi(&self) -> f32 {
         0.0
-    }
-
-    pub fn copies(&self) -> u32 {
-        1
     }
 
     pub fn start(&mut self, _title: &str) -> Result<()> {
@@ -119,20 +184,19 @@ pub fn paper_code(short: f32, long: f32) -> Option<i16> {
 #[cfg(windows)]
 mod win {
     use anyhow::{Result, bail};
-    use windows_sys::Win32::Foundation::{GlobalFree, HGLOBAL, HWND};
+    use windows_sys::Win32::Foundation::{HWND, POINT};
     use windows_sys::Win32::Graphics::Gdi::{
-        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateDCW, DEVMODEW, DIB_RGB_COLORS, DM_ICMMETHOD, DM_ORIENTATION, DM_PAPERLENGTH, DM_PAPERSIZE, DM_PAPERWIDTH, DMICMMETHOD_NONE,
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateDCW, DEVMODEW, DIB_RGB_COLORS, DM_ICMMETHOD, DM_IN_PROMPT, DM_ORIENTATION, DM_PAPERLENGTH, DM_PAPERSIZE, DM_PAPERWIDTH, DMICMMETHOD_NONE,
         DMORIENT_LANDSCAPE, DeleteDC, GetDeviceCaps, HALFTONE, HDC, LOGPIXELSX, PHYSICALHEIGHT, PHYSICALOFFSETX, PHYSICALOFFSETY, PHYSICALWIDTH, SRCCOPY, SetBrushOrgEx,
         SetStretchBltMode, StretchDIBits,
     };
-    use windows_sys::Win32::Graphics::Printing::{ClosePrinter, DocumentPropertiesW, OpenPrinterW};
-    use windows_sys::Win32::Storage::Xps::{AbortDoc, DOCINFOW, EndDoc, EndPage, StartDocW, StartPage};
-    use windows_sys::Win32::System::Memory::{GlobalLock, GlobalSize, GlobalUnlock};
-    use windows_sys::Win32::UI::Controls::Dialogs::{
-        CommDlgExtendedError, DEVNAMES, PD_NOPAGENUMS, PD_NOSELECTION, PD_RETURNDEFAULT, PD_USEDEVMODECOPIESANDCOLLATE, PRINTDLGW, PrintDlgW,
+    use windows_sys::Win32::Graphics::Printing::{
+        ClosePrinter, DocumentPropertiesW, EnumPrintersW, GetDefaultPrinterW, OpenPrinterW, PRINTER_ENUM_CONNECTIONS, PRINTER_ENUM_LOCAL, PRINTER_INFO_4W,
     };
+    use windows_sys::Win32::Storage::Xps::{AbortDoc, DC_PAPERNAMES, DC_PAPERS, DC_PAPERSIZE, DOCINFOW, DeviceCapabilitiesW, EndDoc, EndPage, StartDocW, StartPage};
+    use windows_sys::Win32::UI::WindowsAndMessaging::IDOK;
 
-    use super::{BAND_ROWS, Choice, Request};
+    use super::{BAND_ROWS, Choice, PaperSize, Printers, Request};
 
     /// `DMPAPER_USER`: a size given in millimeters.
     const PAPER_USER: i16 = 256;
@@ -147,12 +211,15 @@ mod win {
     ///
     /// # Safety
     /// `dm` must point to a valid DEVMODEW.
-    unsafe fn prepare(dm: *mut DEVMODEW, req: &Request) {
+    unsafe fn prepare(dm: *mut DEVMODEW, req: &Request, papers: &[PaperSize]) {
         let dm = unsafe { &mut *dm };
         let (short, long) = (req.paper_mm[0].min(req.paper_mm[1]), req.paper_mm[0].max(req.paper_mm[1]));
         // SAFETY: the union's first variant is the printer one.
         let p = unsafe { &mut dm.Anonymous1.Anonymous1 };
-        match super::paper_code(short, long) {
+        // The driver's own number where it offers the size (a 10 × 15 isn't standard), else
+        // the standard one, else the size itself.
+        let own = super::paper_of(papers, sk_core::print::PrintFormat::new(short, long)).map(|p| p.code);
+        match own.or_else(|| super::paper_code(short, long)) {
             Some(code) => {
                 p.dmPaperSize = code;
                 dm.dmFields |= DM_PAPERSIZE;
@@ -172,101 +239,144 @@ mod win {
         }
     }
 
-    /// A copy of the global memory's bytes, aligned for a DEVMODEW.
-    ///
-    /// # Safety
-    /// `g` must be a valid global memory handle.
-    unsafe fn copy_global(g: HGLOBAL) -> Vec<u64> {
-        unsafe {
-            let size = GlobalSize(g);
-            let p = GlobalLock(g) as *const u8;
-            if p.is_null() || size == 0 {
-                return Vec::new();
-            }
-            let mut out = vec![0u64; size.div_ceil(8)];
-            std::ptr::copy_nonoverlapping(p, out.as_mut_ptr() as *mut u8, size);
-            GlobalUnlock(g);
-            out
-        }
+    /// The printer the request names (or the default one) with paper, orientation and colors
+    /// put in, starting from `base` if that is its settings (from the driver's dialog).
+    pub fn prepared(req: &Request, base: Option<&Choice>) -> Result<Choice> {
+        let Some(name) = req.printer.clone().or_else(default_printer) else { bail!("Kein Drucker installiert") };
+        let device = wide(&name);
+        let base = base.filter(|b| b.device == device).map(|b| b.devmode.as_slice());
+        let Some(devmode) = settings_of(&device, base, req) else { bail!("Drucker „{name}“ nicht gefunden") };
+        Ok(Choice { device, devmode })
     }
 
-    /// The system's print dialog (printer, copies, its settings), with paper and colors
-    /// preset; `None` if it was cancelled. On the UI thread, with the app window as `owner`.
-    pub fn choose(owner: isize, req: &Request) -> Result<Option<Choice>> {
-        // SAFETY: plain Win32 calls with properly sized, zeroed structs; the global memory the
-        // dialog hands back is copied and freed here.
-        unsafe {
-            let mut pd: PRINTDLGW = std::mem::zeroed();
-            pd.lStructSize = std::mem::size_of::<PRINTDLGW>() as u32;
-            pd.hwndOwner = owner as HWND;
-            // The default printer's settings first, to put paper and colors in.
-            pd.Flags = PD_RETURNDEFAULT;
-            if PrintDlgW(&mut pd) != 0 && !pd.hDevMode.is_null() {
-                let dm = GlobalLock(pd.hDevMode) as *mut DEVMODEW;
-                if !dm.is_null() {
-                    prepare(dm, req);
-                    GlobalUnlock(pd.hDevMode);
-                }
-            }
-            pd.Flags = PD_NOPAGENUMS | PD_NOSELECTION | PD_USEDEVMODECOPIESANDCOLLATE;
-            pd.nCopies = 1;
-            let ok = PrintDlgW(&mut pd) != 0;
-            let choice = if ok && !pd.hDevMode.is_null() && !pd.hDevNames.is_null() {
-                let devmode = copy_global(pd.hDevMode);
-                let names = GlobalLock(pd.hDevNames) as *const DEVNAMES;
-                let device = if names.is_null() {
-                    Vec::new()
-                } else {
-                    let start = (names as *const u16).add((*names).wDeviceOffset as usize);
-                    let len = (0..).take_while(|&i| *start.add(i) != 0).count();
-                    let device = std::slice::from_raw_parts(start, len + 1).to_vec();
-                    GlobalUnlock(pd.hDevNames);
-                    device
-                };
-                Some(Choice { device, devmode, copies: pd.nCopies.max(1) as u32 })
-            } else {
-                None
-            };
-            for g in [pd.hDevMode, pd.hDevNames] {
-                if !g.is_null() {
-                    GlobalFree(g);
-                }
-            }
-            if !ok {
-                return match CommDlgExtendedError() {
-                    0 => Ok(None),
-                    e => bail!("Druckdialog fehlgeschlagen (Fehler {e:#x})"),
-                };
-            }
-            match choice {
-                Some(c) if c.device.len() > 1 && !c.devmode.is_empty() => Ok(Some(c)),
-                _ => bail!("Der Druckdialog hat keinen Drucker geliefert"),
-            }
-        }
-    }
-
-    /// A printer by name with paper and colors set, without a dialog (for tests with
-    /// "Microsoft Print to PDF").
-    pub fn named(name: &str, req: &Request) -> Result<Choice> {
-        let device = wide(name);
+    /// The driver's own settings dialog for the printer (paper type, quality, …); whether it
+    /// was confirmed. On the UI thread, with the app window as `owner`.
+    pub fn properties(owner: isize, choice: &mut Choice) -> Result<bool> {
+        let name = choice.name();
         // SAFETY: plain Win32 calls; the settings buffer is as large as the driver asks.
         unsafe {
             let mut handle = 0;
-            if OpenPrinterW(device.as_ptr(), &mut handle, std::ptr::null()) == 0 {
+            if OpenPrinterW(choice.device.as_ptr(), &mut handle, std::ptr::null()) == 0 {
                 bail!("Drucker „{name}“ nicht gefunden");
             }
-            let size = DocumentPropertiesW(0, handle, device.as_ptr(), std::ptr::null_mut(), std::ptr::null(), 0);
+            let size = DocumentPropertiesW(0, handle, choice.device.as_ptr(), std::ptr::null_mut(), std::ptr::null(), 0);
             if size <= 0 {
                 ClosePrinter(handle);
                 bail!("Einstellungen von „{name}“ nicht lesbar");
             }
+            let mut out = vec![0u64; (size as usize).div_ceil(8)];
+            let r = DocumentPropertiesW(
+                owner as HWND,
+                handle,
+                choice.device.as_ptr(),
+                out.as_mut_ptr() as *mut DEVMODEW,
+                choice.devmode.as_ptr() as *const DEVMODEW,
+                DM_IN_BUFFER | DM_OUT_BUFFER | DM_IN_PROMPT,
+            );
+            ClosePrinter(handle);
+            match r {
+                IDOK => {
+                    choice.devmode = out;
+                    Ok(true)
+                }
+                r if r < 0 => bail!("Einstellungen von „{name}“ nicht geöffnet"),
+                _ => Ok(false),
+            }
+        }
+    }
+
+    /// A printer's settings (NUL-terminated name; from `base` if given) with paper and colors
+    /// put in, as the driver accepts them; `None` if there is no such printer.
+    fn settings_of(device: &[u16], base: Option<&[u64]>, req: &Request) -> Option<Vec<u64>> {
+        // SAFETY: plain Win32 calls; the settings buffer is as large as the driver asks.
+        unsafe {
+            let mut handle = 0;
+            if OpenPrinterW(device.as_ptr(), &mut handle, std::ptr::null()) == 0 {
+                return None;
+            }
+            let size = DocumentPropertiesW(0, handle, device.as_ptr(), std::ptr::null_mut(), std::ptr::null(), 0);
+            if size <= 0 {
+                ClosePrinter(handle);
+                return None;
+            }
             let mut devmode = vec![0u64; (size as usize).div_ceil(8)];
             let dm = devmode.as_mut_ptr() as *mut DEVMODEW;
-            DocumentPropertiesW(0, handle, device.as_ptr(), dm, std::ptr::null(), DM_OUT_BUFFER);
-            prepare(dm, req);
+            let from = base.map_or(std::ptr::null(), |b| b.as_ptr() as *const DEVMODEW);
+            DocumentPropertiesW(0, handle, device.as_ptr(), dm, from, DM_OUT_BUFFER | if base.is_some() { DM_IN_BUFFER } else { 0 });
+            prepare(dm, req, &papers(&String::from_utf16_lossy(device.strip_suffix(&[0]).unwrap_or(device))));
             DocumentPropertiesW(0, handle, device.as_ptr(), dm, dm, DM_IN_BUFFER | DM_OUT_BUFFER);
             ClosePrinter(handle);
-            Ok(Choice { device, devmode, copies: 1 })
+            Some(devmode)
+        }
+    }
+
+    /// A NUL-terminated wide string from Windows.
+    ///
+    /// # Safety
+    /// `p` is null or points to a NUL-terminated string.
+    unsafe fn from_wide(p: *const u16) -> String {
+        if p.is_null() {
+            return String::new();
+        }
+        unsafe {
+            let len = (0..).take_while(|&i| *p.add(i) != 0).count();
+            String::from_utf16_lossy(std::slice::from_raw_parts(p, len))
+        }
+    }
+
+    /// The installed printers (local and connected) with their papers, and the default one.
+    /// Slow with network printers: off the UI thread.
+    pub fn printers() -> Printers {
+        // SAFETY: plain Win32 calls with buffers as large as Windows asks.
+        unsafe {
+            let flags = PRINTER_ENUM_LOCAL | PRINTER_ENUM_CONNECTIONS;
+            let (mut needed, mut count) = (0u32, 0u32);
+            EnumPrintersW(flags, std::ptr::null(), 4, std::ptr::null_mut(), 0, &mut needed, &mut count);
+            let mut buf = vec![0u64; (needed as usize).div_ceil(8).max(1)];
+            if EnumPrintersW(flags, std::ptr::null(), 4, buf.as_mut_ptr() as *mut u8, needed, &mut needed, &mut count) == 0 {
+                count = 0;
+            }
+            let infos = std::slice::from_raw_parts(buf.as_ptr() as *const PRINTER_INFO_4W, count as usize);
+            let names: Vec<String> = infos.iter().map(|i| from_wide(i.pPrinterName)).filter(|n| !n.is_empty()).collect();
+            let list = names.into_iter().map(|n| (n.clone(), papers(&n))).collect();
+            Printers { list, default: default_printer() }
+        }
+    }
+
+    /// Windows' default printer.
+    fn default_printer() -> Option<String> {
+        // SAFETY: the buffer is as long as Windows asks.
+        unsafe {
+            let mut len = 0u32;
+            GetDefaultPrinterW(std::ptr::null_mut(), &mut len);
+            let mut name = vec![0u16; len as usize + 1];
+            (len > 0 && GetDefaultPrinterW(name.as_mut_ptr(), &mut len) != 0).then(|| from_wide(name.as_ptr()))
+        }
+    }
+
+    /// The papers a printer offers.
+    fn papers(name: &str) -> Vec<PaperSize> {
+        let device = wide(name);
+        // SAFETY: each buffer is as large as the driver says for its query (names: 64 characters each).
+        unsafe {
+            let ask = |what, out: *mut u16| DeviceCapabilitiesW(device.as_ptr(), std::ptr::null(), what, out, std::ptr::null());
+            let n = ask(DC_PAPERS, std::ptr::null_mut());
+            if n <= 0 {
+                return Vec::new();
+            }
+            let n = n as usize;
+            let mut codes = vec![0u16; n];
+            let mut names = vec![0u16; n * 64];
+            let mut sizes = vec![POINT { x: 0, y: 0 }; n];
+            if ask(DC_PAPERS, codes.as_mut_ptr()) <= 0 || ask(DC_PAPERNAMES, names.as_mut_ptr()) <= 0 || ask(DC_PAPERSIZE, sizes.as_mut_ptr() as *mut u16) <= 0 {
+                return Vec::new();
+            }
+            let names: Vec<String> = names
+                .chunks_exact(64)
+                .map(|c| String::from_utf16_lossy(&c[..c.iter().position(|&ch| ch == 0).unwrap_or(64)]))
+                .collect();
+            let sizes: Vec<[i32; 2]> = sizes.iter().map(|p| [p.x, p.y]).collect();
+            super::paper_list(&codes, &names, &sizes)
         }
     }
 
@@ -275,7 +385,6 @@ mod win {
         dc: HDC,
         /// A file the printer writes to (printing to a file, for the tests).
         output: Option<Vec<u16>>,
-        copies: u32,
         dpi: f32,
         physical: [i32; 2],
         offset: [i32; 2],
@@ -299,7 +408,6 @@ mod win {
             Ok(Self {
                 dc,
                 output: output.map(|o| wide(&o.to_string_lossy())),
-                copies: choice.copies,
                 dpi: cap(LOGPIXELSX).max(1) as f32,
                 physical: [cap(PHYSICALWIDTH), cap(PHYSICALHEIGHT)],
                 offset: [cap(PHYSICALOFFSETX), cap(PHYSICALOFFSETY)],
@@ -315,11 +423,6 @@ mod win {
 
         pub fn dpi(&self) -> f32 {
             self.dpi
-        }
-
-        /// Copies the driver doesn't make itself: each page is sent this often.
-        pub fn copies(&self) -> u32 {
-            self.copies
         }
 
         pub fn start(&mut self, title: &str) -> Result<()> {
@@ -427,6 +530,20 @@ mod win {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn papers_of_a_printer() {
+        let names: Vec<String> = ["A4", "10 x 15 cm", "Benutzerdefiniert", "A4"].iter().map(|s| s.to_string()).collect();
+        let papers = paper_list(&[9, 300, 256, 9], &names, &[[2100, 2970], [1520, 1020], [0, 0], [2100, 2970]]);
+        assert_eq!(papers.len(), 2);
+        assert_eq!(papers[1].mm, [102.0, 152.0]);
+        let ten = sk_core::print::PrintFormat::new(152.0, 101.6);
+        assert_eq!(paper_of(&papers, ten).map(|p| p.code), Some(300));
+        assert!(paper_of(&papers, sk_core::print::PrintFormat::new(130.0, 180.0)).is_none());
+        let printers = Printers { list: vec![("Foto".into(), papers.clone())], default: Some("Foto".into()) };
+        assert_eq!(printers.papers(None).map(|p| p.len()), Some(2));
+        assert!(printers.papers(Some("Weg")).is_none());
+    }
 
     #[test]
     fn standard_papers_go_by_number() {
