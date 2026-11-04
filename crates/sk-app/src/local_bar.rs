@@ -2,7 +2,7 @@
 //! tools of its group, the most used brush settings and "Fertig". The same settings stay in the
 //! panel under the same names; this is where one looks while painting.
 
-use egui::{Rect, RichText, Ui};
+use egui::{RichText, Ui};
 
 use crate::app::{App, Tab};
 use crate::layers::{Brushes, LocalTool};
@@ -17,10 +17,14 @@ const SLIDER: f32 = 72.0;
 
 /// A slider with its name before and its value after it; double-click resets. Whether it changed.
 fn bar_slider(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, default: f32, text: impl Fn(f32) -> String) -> bool {
-    ui.label(RichText::new(name).color(theme::TEXT_DIM));
-    let changed = crate::widgets::compact_slider(ui, name, value, range, default, SLIDER);
-    ui.add_sized([34.0, ui.spacing().interact_size.y], egui::Label::new(text(*value)));
-    changed
+    // In one row also when the bar runs downward (docked left or right).
+    ui.horizontal(|ui| {
+        ui.add_sized([58.0, ui.spacing().interact_size.y], egui::Label::new(RichText::new(name).color(theme::TEXT_DIM)));
+        let changed = crate::widgets::compact_slider(ui, name, value, range, default, SLIDER);
+        ui.add_sized([34.0, ui.spacing().interact_size.y], egui::Label::new(text(*value)));
+        changed
+    })
+    .inner
 }
 
 fn percent(v: f32) -> String {
@@ -28,7 +32,7 @@ fn percent(v: f32) -> String {
 }
 
 impl App {
-    pub(crate) fn local_bar(&mut self, ui: &mut Ui, img_rect: Rect) {
+    pub(crate) fn local_bar(&mut self, ui: &mut Ui) {
         let Some(tool) = self.local_tool else { return };
         // Picking a color for the range is a moment, not a tool to set up.
         if tool == LocalTool::ColorPick {
@@ -39,19 +43,22 @@ impl App {
         let selected = self.selected_spot.is_some() || self.selected_removal.is_some() || self.selected_gradient.is_some();
         let show_mask = self.show_mask;
         let (mut chosen, mut toggle_mask, mut delete, mut brushes_changed) = (None, false, false, false);
+        let (area, dock) = (self.bar_area(ui), self.bar_dock);
         let magic_tolerance = &mut self.magic_tolerance;
         let brushes = &mut self.brushes;
-        let done = crate::crop::tool_bar(ui, img_rect, |ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            for &t in tools {
-                let (ic, name, id) = t.tile();
-                let text = if crate::commands::is_ai(id) { crate::widgets::ai_text(ui, ic) } else { ic.into() };
-                let r = ui.add(egui::Button::new(text).selected(t == tool));
-                r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, t == tool, name));
-                if r.on_hover_text(crate::commands::hint(name, id)).clicked() && t != tool {
-                    chosen = Some(t);
+        let done = crate::crop::tool_bar(ui, area, &mut self.bar_dock, |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for &t in tools {
+                    let (ic, name, id) = t.tile();
+                    let text = if crate::commands::is_ai(id) { crate::widgets::ai_text(ui, ic) } else { ic.into() };
+                    let r = ui.add(egui::Button::new(text).selected(t == tool));
+                    r.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, t == tool, name));
+                    if r.on_hover_text(crate::commands::hint(name, id)).clicked() && t != tool {
+                        chosen = Some(t);
+                    }
                 }
-            }
+            });
             if tool.is_brush() {
                 ui.separator();
                 let d = Brushes::defaults_of(Some(tool));
@@ -76,6 +83,7 @@ impl App {
                 delete = true;
             }
         });
+        self.bar_dock_changed(dock);
         if brushes_changed {
             self.brushes_changed_at = Some(std::time::Instant::now());
         }

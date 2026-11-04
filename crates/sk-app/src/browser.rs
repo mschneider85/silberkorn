@@ -416,10 +416,10 @@ impl App {
             self.draw_print_extras(&painter, img_rect, l);
         }
         if self.print.bar {
-            self.print_bar(ui, pos2(rect.center().x, rect.bottom() - 12.0));
+            self.print_bar(ui);
         }
         // Outside the tool's overlay: it stays while the space bar pans or the divider is dragged.
-        self.local_bar(ui, img_rect);
+        self.local_bar(ui);
 
         // Over the before image of the divider view as well.
         // The crop and straighten tools draw their own guides.

@@ -57,7 +57,7 @@ Beim Ziehen:
 
 Die zwei Knöpfe wählen **Querformat** oder **Hochformat**; {taste:crop-portrait} wechselt zwischen beiden. Bei **Frei**, **Original** und **1:1** gibt es keine Ausrichtung, die Knöpfe sind dann ausgegraut.
 
-Seitenverhältnis und Ausrichtung stehen sowohl im Abschnitt als auch in der Leiste unten im Bild, dazu die Größe des Ausschnitts in Prozent des Bildes.
+Seitenverhältnis und Ausrichtung stehen sowohl im Abschnitt als auch in der Leiste unten im Bild, dazu die Größe des Ausschnitts in Prozent des Bildes. Am Anfasser links lässt sich die Leiste an einen anderen Rand ziehen, oben, links oder rechts; dort bleibt sie, auch für die anderen Werkzeuge.
 
 > ↺ im Kopf setzt den Zuschnitt samt Seitenverhältnis zurück.
 

@@ -349,6 +349,8 @@ struct Settings {
     /// Thumbnail size in the grid.
     grid_thumb: Option<f32>,
     side_column: crate::side_column::SideColumn,
+    /// The edge of the viewer with the bar under the tools.
+    bar_dock: crate::crop::BarDock,
     /// Shortcuts changed by the user, by command id (see `commands::saved_bindings`).
     #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     shortcuts: std::collections::BTreeMap<String, Vec<String>>,
@@ -831,6 +833,8 @@ pub struct App {
     /// The waveform or vectorscope drawn from this displayed image.
     pub(crate) scope_texture: Option<(Arc<egui::ColorImage>, crate::scopes::ScopeView, TextureHandle)>,
     pub side_column: crate::side_column::SideColumn,
+    /// The edge of the viewer with the bar under the tools (see `crop::image_bar`).
+    pub bar_dock: crate::crop::BarDock,
     /// The right column is shown this frame.
     pub side_column_shown: bool,
     /// Viewer area of the last frame (decides whether the right column fits).
@@ -1055,6 +1059,7 @@ impl App {
             scope_view: settings.scope_view,
             scope_texture: None,
             side_column: settings.side_column,
+            bar_dock: settings.bar_dock,
             side_column_shown: false,
             viewer_rect: None,
             view_geometry: None,
@@ -1388,6 +1393,7 @@ impl App {
             info_overlay: self.info_overlay,
             scope_view: self.scope_view,
             side_column: self.side_column,
+            bar_dock: self.bar_dock,
             focus_sensitivity: Some(self.focus_sensitivity),
             guides: self.guides,
             rename_template: self.rename_template.clone(),

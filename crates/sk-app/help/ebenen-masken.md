@@ -64,7 +64,7 @@ Pinsel und Radierer haben eigene, gespeicherte Einstellungen:
 
 Ziehen mit der rechten Maustaste ändert die Größe (nach links und rechts) und die Härte (nach oben und unten) direkt im Bild.
 
-Solange ein Werkzeug der Maske gewählt ist, steht unten im Bild eine Leiste: die Werkzeuge nebeneinander (etwa zum Wechsel zwischen Pinsel und Radierer), **Größe**, **Härte** und **Deckkraft** des Pinsels (beim Zauberpinsel **Größe** und **Toleranz**), **Maske anzeigen**, bei einem gewählten Verlauf **Löschen** und **Fertig** (Esc), das das Werkzeug beendet. Was gemalt ist, bleibt.
+Solange ein Werkzeug der Maske gewählt ist, steht unten im Bild eine Leiste: die Werkzeuge nebeneinander (etwa zum Wechsel zwischen Pinsel und Radierer), **Größe**, **Härte** und **Deckkraft** des Pinsels (beim Zauberpinsel **Größe** und **Toleranz**), **Maske anzeigen**, bei einem gewählten Verlauf **Löschen** und **Fertig** (Esc), das das Werkzeug beendet. Was gemalt ist, bleibt. Am Anfasser links lässt sich die Leiste an einen anderen Rand des Bildbereichs ziehen.
 
 ### Verläufe ändern
 

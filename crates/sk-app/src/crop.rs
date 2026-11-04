@@ -188,7 +188,10 @@ impl App {
             }
         }
 
-        match image_bar(ui, img_rect, |_| {}) {
+        let (area, dock) = (self.bar_area(ui), self.bar_dock);
+        let done = image_bar(ui, area, &mut self.bar_dock, |_| {});
+        self.bar_dock_changed(dock);
+        match done {
             Some(true) => self.apply_keystone_guides(),
             Some(false) => self.cancel_viewer_tools(),
             None => {}
@@ -196,54 +199,123 @@ impl App {
     }
 }
 
-/// The bar at the bottom of the image for the tools that are confirmed (crop, keystone lines):
-/// the tool's settings from `settings` (may be empty), then "Übernehmen" and "Abbrechen".
-/// Some(true) when applied, Some(false) when cancelled.
-pub(crate) fn image_bar(ui: &mut Ui, img_rect: Rect, settings: impl FnOnce(&mut Ui)) -> Option<bool> {
-    let at = pos2(img_rect.center().x, img_rect.bottom().min(ui.clip_rect().bottom()) - 16.0);
-    let apply = (format!("{}  Übernehmen", crate::theme::icon::CHECK), crate::commands::shortcut_of("finish-crop"));
-    image_bar_at(ui, at, apply, true, settings)
+/// Where the bar under the tools sits in the viewer: at an edge, in its middle. Moved with the
+/// grip at its start; it stays where it was put, for every tool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum BarDock {
+    #[default]
+    Bottom,
+    Top,
+    Left,
+    Right,
 }
 
-/// [`image_bar`] with its bottom middle at `at` and the confirming button's name and key
-/// (`enabled`: whether it can be pressed now).
-pub(crate) fn image_bar_at(ui: &mut Ui, at: Pos2, apply: (String, String), enabled: bool, settings: impl FnOnce(&mut Ui)) -> Option<bool> {
-    image_bar_with(ui, at, Some((apply, enabled)), "Abbrechen", settings)
+impl BarDock {
+    /// The bar's anchor in the viewer `area` (it doesn't move with the image).
+    fn anchor(self, area: Rect) -> (egui::Align2, Pos2) {
+        let c = area.center();
+        match self {
+            BarDock::Bottom => (egui::Align2::CENTER_BOTTOM, pos2(c.x, area.bottom() - 12.0)),
+            // Below the hints at the top of the image.
+            BarDock::Top => (egui::Align2::CENTER_TOP, pos2(c.x, area.top() + 52.0)),
+            BarDock::Left => (egui::Align2::LEFT_CENTER, pos2(area.left() + 12.0, c.y)),
+            BarDock::Right => (egui::Align2::RIGHT_CENTER, pos2(area.right() - 12.0, c.y)),
+        }
+    }
+
+    /// At the left and right edge the bar runs downward.
+    fn vertical(self) -> bool {
+        matches!(self, BarDock::Left | BarDock::Right)
+    }
+
+    /// The edge of `area` nearest to `p`.
+    pub fn nearest(area: Rect, p: Pos2) -> BarDock {
+        [
+            (BarDock::Bottom, area.bottom() - p.y),
+            (BarDock::Top, p.y - area.top()),
+            (BarDock::Left, p.x - area.left()),
+            (BarDock::Right, area.right() - p.x),
+        ]
+        .into_iter()
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map_or(BarDock::Bottom, |(d, _)| d)
+    }
+}
+
+/// The bar in the viewer `area` for the tools that are confirmed (crop, keystone lines): the
+/// tool's settings from `settings` (may be empty), then "Übernehmen" and "Abbrechen".
+/// Some(true) when applied, Some(false) when cancelled.
+pub(crate) fn image_bar(ui: &mut Ui, area: Rect, dock: &mut BarDock, settings: impl FnOnce(&mut Ui)) -> Option<bool> {
+    let apply = (format!("{}  Übernehmen", crate::theme::icon::CHECK), crate::commands::shortcut_of("finish-crop"));
+    image_bar_apply(ui, area, dock, apply, true, settings)
+}
+
+/// [`image_bar`] with the confirming button's name and key (`enabled`: whether it can be
+/// pressed now).
+pub(crate) fn image_bar_apply(ui: &mut Ui, area: Rect, dock: &mut BarDock, apply: (String, String), enabled: bool, settings: impl FnOnce(&mut Ui)) -> Option<bool> {
+    image_bar_with(ui, area, dock, Some((apply, enabled)), "Abbrechen", settings)
 }
 
 /// The [`image_bar`] of a tool whose work is kept as it goes (brushes, gradients, retouching):
 /// its settings and "Fertig" (Esc), no confirming. True when "Fertig" was pressed.
-pub(crate) fn tool_bar(ui: &mut Ui, img_rect: Rect, settings: impl FnOnce(&mut Ui)) -> bool {
-    let at = pos2(img_rect.center().x, img_rect.bottom().min(ui.clip_rect().bottom()) - 16.0);
-    image_bar_with(ui, at, None, "Fertig", settings) == Some(false)
+pub(crate) fn tool_bar(ui: &mut Ui, area: Rect, dock: &mut BarDock, settings: impl FnOnce(&mut Ui)) -> bool {
+    image_bar_with(ui, area, dock, None, "Fertig", settings) == Some(false)
 }
 
-/// The bar itself: settings, then the confirming button (name, key, enabled) if there is one,
-/// then the closing one with Esc. Some(true) confirmed, Some(false) closed.
-fn image_bar_with(ui: &mut Ui, at: Pos2, apply: Option<((String, String), bool)>, close: &str, settings: impl FnOnce(&mut Ui)) -> Option<bool> {
+/// The bar itself: the grip, the settings, then the confirming button (name, key, enabled) if
+/// there is one and the closing one with Esc. Some(true) confirmed, Some(false) closed.
+fn image_bar_with(ui: &mut Ui, area: Rect, dock: &mut BarDock, apply: Option<((String, String), bool)>, close: &str, settings: impl FnOnce(&mut Ui)) -> Option<bool> {
+    let id = egui::Id::new("image_bar");
+    let drag_id = id.with("drag");
+    // While the grip is dragged, the bar follows the mouse from where it was docked.
+    let offset: Vec2 = ui.ctx().data(|d| d.get_temp(drag_id)).unwrap_or_default();
+    let (pivot, at) = dock.anchor(area);
+    let vertical = dock.vertical();
     let mut done = None;
-    egui::Area::new(egui::Id::new("image_bar")).order(egui::Order::Middle).pivot(egui::Align2::CENTER_BOTTOM).fixed_pos(at).show(ui.ctx(), |ui| {
+    let mut docked = None;
+    egui::Area::new(id).order(egui::Order::Middle).pivot(pivot).fixed_pos(at + offset).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).corner_radius(8).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let before = ui.min_rect().width();
+            let layout = if vertical { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Center) };
+            ui.with_layout(layout, |ui| {
+                let grip = if vertical { crate::theme::icon::DOTS_SIX } else { crate::theme::icon::DOTS_SIX_VERTICAL };
+                let grip = ui.add(egui::Label::new(egui::RichText::new(grip).size(16.0).color(crate::theme::TEXT_FAINT)).selectable(false).sense(egui::Sense::drag()));
+                grip.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Leiste verschieben"));
+                if grip.dragged() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    let moved = offset + grip.drag_delta();
+                    ui.ctx().data_mut(|d| d.insert_temp(drag_id, moved));
+                } else if grip.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+                }
+                if grip.drag_stopped() {
+                    ui.ctx().data_mut(|d| d.remove::<Vec2>(drag_id));
+                    docked = ui.ctx().input(|i| i.pointer.latest_pos()).map(|p| BarDock::nearest(area, p));
+                }
+                grip.on_hover_text("Ziehen: Leiste oben, unten, links oder rechts anlegen");
+                let before = ui.min_rect().size();
                 settings(ui);
-                if ui.min_rect().width() > before {
+                if ui.min_rect().size() != before {
                     ui.separator();
                 }
                 // In one line each (the tick and "Übernehmen" wrapped and grew taller), with the
                 // key beside the name, as in the menus.
                 let button = |text: String, key: String| egui::Button::new(text).shortcut_text(key).wrap_mode(egui::TextWrapMode::Extend);
-                if let Some(((name, key), enabled)) = apply
-                    && ui.add_enabled(enabled, button(name, key)).clicked()
-                {
-                    done = Some(true);
-                }
-                if ui.add(button(close.into(), "Esc".into())).clicked() {
-                    done = Some(false);
-                }
+                ui.horizontal(|ui| {
+                    if let Some(((name, key), enabled)) = apply
+                        && ui.add_enabled(enabled, button(name, key)).clicked()
+                    {
+                        done = Some(true);
+                    }
+                    if ui.add(button(close.into(), "Esc".into())).clicked() {
+                        done = Some(false);
+                    }
+                });
             });
         });
     });
+    if let Some(d) = docked {
+        *dock = d;
+    }
     done
 }
 
@@ -336,6 +408,19 @@ impl App {
 
     /// Esc: like [`Self::end_viewer_tools`], but without keeping what the open tool changed: the
     /// crop goes back to how it was when the tool opened, keystone lines are dropped.
+    /// Where the bar under the tools is laid out: the viewer, not the image (it stays put while
+    /// the image is zoomed or moved).
+    pub(crate) fn bar_area(&self, ui: &Ui) -> Rect {
+        self.viewer_rect.unwrap_or_else(|| ui.clip_rect())
+    }
+
+    /// Saves the bar's edge after it was moved (`before`: the edge before).
+    pub(crate) fn bar_dock_changed(&mut self, before: BarDock) {
+        if self.bar_dock != before {
+            self.save_settings();
+        }
+    }
+
     pub fn cancel_viewer_tools(&mut self) {
         if self.keystone_guides_active() {
             self.straighten_tool = None;
@@ -633,15 +718,16 @@ impl App {
         for c in [r.left_top(), r.right_top(), r.left_bottom(), r.right_bottom()] {
             painter.rect_filled(Rect::from_center_size(c, Vec2::splat(9.0)), 1.0, Color32::WHITE);
         }
-        self.crop_bar(ui, img_rect);
+        self.crop_bar(ui);
     }
 
     /// The crop's settings in the [`image_bar`], where one looks while cropping: aspect ratio,
     /// orientation and size, the same as in the panel and under the same names.
-    fn crop_bar(&mut self, ui: &mut Ui, img_rect: Rect) {
+    fn crop_bar(&mut self, ui: &mut Ui) {
         let Some(g) = self.current.as_ref().map(|c| c.adjustments.geometry.clone()) else { return };
         let (mut chosen, mut turn) = (None, None);
-        let done = image_bar(ui, img_rect, |ui| {
+        let (area, dock) = (self.bar_area(ui), self.bar_dock);
+        let done = image_bar(ui, area, &mut self.bar_dock, |ui| {
             let combo = egui::ComboBox::from_id_salt("crop_bar_aspect").selected_text(g.aspect.label()).width(120.0).show_ui(ui, |ui| {
                 for a in AspectRatio::PRESETS {
                     if ui.selectable_label(g.aspect == a, a.label()).clicked() {
@@ -655,6 +741,7 @@ impl App {
             // In percent of the frame, as in the panel.
             ui.label(egui::RichText::new(format!("{:.0} % × {:.0} %", g.crop.w * 100.0, g.crop.h * 100.0)).color(Color32::from_gray(150)));
         });
+        self.bar_dock_changed(dock);
         if let Some(a) = chosen {
             self.choose_aspect(a);
         }

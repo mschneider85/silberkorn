@@ -204,7 +204,9 @@ drei Linien bzw. Ellipsen: volle Wirkung, Mitte (50 %) und Ende des Übergangs.
 
 Solange ein Masken- oder Retuschewerkzeug gewählt ist, steht unten im Bild eine Leiste (`local_bar.rs`):
 die Werkzeuge des Tabs nebeneinander, Größe, Härte und Deckkraft des Pinsels (Zauberpinsel: Größe und
-Toleranz), „Maske anzeigen“, „Löschen“ für den gewählten Verlauf bzw. die gewählte Retusche und „Fertig“ (Esc).
+Toleranz), „Maske anzeigen“, „Löschen“ für den gewählten Verlauf bzw. die gewählte Retusche und „Fertig“ (Esc). Diese Leiste und die von
+Zuschnitt und Drucken sitzen fest in der Mitte eines Randes der Ansicht (nicht am Bild); am Anfasser lassen sie
+sich nach oben, unten, links oder rechts ziehen (`crop::BarDock`, gespeichert).
 
 **Pinsel** (Pinsel, Radierer, Entfernen; Reparieren/Klonen ohne Fluss und „Kanten beachten“) haben jeweils
 eigene, gespeicherte Einstellungen: **Größe**, **Härte** (weiche bis harte Kante), **Deckkraft** (das

@@ -116,7 +116,7 @@ impl App {
 
     /// The print bar at the bottom of the viewer: pages, printer, paper, orientation, fit,
     /// the driver's settings, then "Drucken" and "Abbrechen".
-    pub(crate) fn print_bar(&mut self, ui: &mut egui::Ui, at: egui::Pos2) {
+    pub(crate) fn print_bar(&mut self, ui: &mut egui::Ui) {
         let printers = self.printers(ui.ctx());
         let mut s = self.print.settings.clone();
         let (page, pages) = self.print_pages();
@@ -129,15 +129,18 @@ impl App {
         // The fit's effect is shown for the page as turned.
         s.portrait = Some(portrait);
         let apply = (format!("{}  Drucken", crate::theme::icon::PRINTER), "Enter".to_string());
-        let done = crate::crop::image_bar_at(ui, at, apply, blocked.is_none(), |ui| {
+        let (area, dock) = (self.bar_area(ui), self.bar_dock);
+        let done = crate::crop::image_bar_apply(ui, area, &mut self.bar_dock, apply, blocked.is_none(), |ui| {
             if pages > 1 {
-                if ui.add_enabled(page > 0, egui::Button::new(crate::theme::icon::CARET_LEFT)).on_hover_text("Vorherige Seite").clicked() {
-                    step = -1;
-                }
-                ui.label(format!("Seite {} von {pages}", page + 1));
-                if ui.add_enabled(page + 1 < pages, egui::Button::new(crate::theme::icon::CARET_RIGHT)).on_hover_text("Nächste Seite").clicked() {
-                    step = 1;
-                }
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(page > 0, egui::Button::new(crate::theme::icon::CARET_LEFT)).on_hover_text("Vorherige Seite").clicked() {
+                        step = -1;
+                    }
+                    ui.label(format!("Seite {} von {pages}", page + 1));
+                    if ui.add_enabled(page + 1 < pages, egui::Button::new(crate::theme::icon::CARET_RIGHT)).on_hover_text("Nächste Seite").clicked() {
+                        step = 1;
+                    }
+                });
                 ui.separator();
             }
             if CAN_PRINT {
@@ -172,6 +175,7 @@ impl App {
                 ui.label(egui::RichText::new("Drucken nur unter Windows").small().color(crate::theme::TEXT_DIM));
             }
         });
+        self.bar_dock_changed(dock);
         if driver {
             self.printer_properties();
         }
