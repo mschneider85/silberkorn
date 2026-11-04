@@ -468,7 +468,7 @@ impl App {
         } else if self.straighten_tool.is_some() {
             self.straighten_overlay(ui, &response, img_rect);
         } else if self.picking_wb {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            crate::app::tool_cursor(ui, &response, egui::CursorIcon::Crosshair);
             if response.clicked()
                 && let Some(pos) = response.interact_pointer_pos()
                 && img_rect.contains(pos)
@@ -478,7 +478,7 @@ impl App {
                 self.white_balance_hover(ui, pos, img_rect, scale, shown);
             }
         } else if self.picking_skin {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            crate::app::tool_cursor(ui, &response, egui::CursorIcon::Crosshair);
             if response.clicked()
                 && let Some(pos) = response.interact_pointer_pos()
                 && img_rect.contains(pos)
@@ -486,7 +486,7 @@ impl App {
                 self.pick_skin_tone((pos - img_rect.min) / scale);
             }
         } else if self.picking_focus {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+            crate::app::tool_cursor(ui, &response, egui::CursorIcon::Crosshair);
             if response.clicked()
                 && let Some(pos) = response.interact_pointer_pos()
                 && img_rect.contains(pos)
@@ -494,7 +494,7 @@ impl App {
                 self.pick_focus((pos - img_rect.min) / scale);
             }
         } else if self.target_tool.is_some() {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+            crate::app::tool_cursor(ui, &response, egui::CursorIcon::ResizeVertical);
             if response.drag_started()
                 && let Some(pos) = ui.input(|i| i.pointer.press_origin())
                 && img_rect.contains(pos)

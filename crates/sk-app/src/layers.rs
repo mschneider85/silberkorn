@@ -634,7 +634,7 @@ impl App {
             LocalTool::Magic => self.magic_interaction(ui, response, img_rect, scale),
             LocalTool::Object => self.object_interaction(ui, response, img_rect, scale),
             LocalTool::ColorPick => {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+                crate::app::tool_cursor(ui, response, egui::CursorIcon::Crosshair);
                 if let Some(p) = pressed_on(ui, response)
                     && let Some(uv) = self.screen_to_uv(p, img_rect, scale)
                 {

@@ -168,12 +168,13 @@ impl App {
             guides.drag = None;
         }
         let active = guides.drag.map(|(i, e, _)| (i, e)).or(hover);
-        ui.ctx().set_cursor_icon(match active {
-            Some((_, 2)) if guides.drag.is_some() => egui::CursorIcon::Grabbing,
-            Some((_, 2)) => egui::CursorIcon::Grab,
-            Some(_) => egui::CursorIcon::Crosshair,
-            None => egui::CursorIcon::Default,
-        });
+        if let Some(active) = active {
+            ui.ctx().set_cursor_icon(match active {
+                (_, 2) if guides.drag.is_some() => egui::CursorIcon::Grabbing,
+                (_, 2) => egui::CursorIcon::Grab,
+                _ => egui::CursorIcon::Crosshair,
+            });
+        }
 
         let painter = ui.painter_at(img_rect);
         draw_fine_grid(&painter, img_rect);
@@ -792,7 +793,7 @@ impl App {
             return self.keystone_overlay(ui, response, img_rect);
         }
         let Some(tool) = &mut self.straighten_tool else { return };
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        crate::app::tool_cursor(ui, response, egui::CursorIcon::Crosshair);
         if response.drag_started()
             && let Some(p) = ui.input(|i| i.pointer.press_origin()).or(response.interact_pointer_pos())
         {

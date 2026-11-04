@@ -273,6 +273,7 @@ impl App {
             for f in faces {
                 let selected = self.library_ui.person_faces.selected.contains(&f.id);
                 let resp = face_tile(ui, self.library_ui.faces.get_face(f), selected);
+                click_cursor(ui, &resp);
                 // Dragging a chosen face takes all chosen ones, another one only itself.
                 let drag: Vec<i64> = if selected { self.library_ui.person_faces.selected.iter().copied().collect() } else { vec![f.id] };
                 resp.dnd_set_drag_payload(FacesDrag(drag.clone()));
@@ -476,6 +477,7 @@ impl App {
                         let naming = self.library_ui.naming.as_ref().is_some_and(|(id, _)| *id == p.id);
                         let face = self.library_ui.faces.get(p);
                         let resp = person_tile(ui, p, face, on || naming);
+                        click_cursor(ui, &resp);
                         // Dragged onto another person: the two are one.
                         resp.dnd_set_drag_payload(p.id);
                         if resp.dragged() {
@@ -577,6 +579,14 @@ fn face_tile(ui: &mut Ui, face: Option<&TextureHandle>, selected: bool) -> egui:
 
 fn person_name(p: &Person) -> String {
     p.name.clone().unwrap_or_else(|| "Unbenannt".into())
+}
+
+/// The hand over a tile that is clicked as well as dragged (the automatic hand leaves those
+/// out); while something is dragged, the dragged one keeps its cursor.
+fn click_cursor(ui: &Ui, resp: &egui::Response) {
+    if resp.hovered() && ui.ctx().dragged_id().is_none() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
 }
 
 /// The face of a person being dragged, at the pointer.

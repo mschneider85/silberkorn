@@ -2990,6 +2990,16 @@ fn cursors_match_what_can_be_done() {
         crate::widgets::compact_slider(ui, "x", &mut v, 0.0..=1.0, 0.0, 200.0);
     };
     assert_eq!(cursor_over(egui::pos2(100.0, 10.0), slider), egui::CursorIcon::ResizeHorizontal);
+    // A tool's cross on the image, but the hand over a button of the bar above it.
+    let image_with_bar = |ui: &mut egui::Ui| {
+        let response = ui.allocate_response(ui.available_size(), egui::Sense::click_and_drag());
+        crate::app::tool_cursor(ui, &response, egui::CursorIcon::Crosshair);
+        egui::Area::new(egui::Id::new("bar")).order(egui::Order::Middle).fixed_pos(egui::pos2(10.0, 10.0)).show(ui.ctx(), |ui| {
+            let _ = ui.button("Abbrechen");
+        });
+    };
+    assert_eq!(cursor_over(egui::pos2(200.0, 200.0), image_with_bar), egui::CursorIcon::Crosshair);
+    assert_eq!(cursor_over(egui::pos2(20.0, 18.0), image_with_bar), egui::CursorIcon::PointingHand);
 }
 
 #[test]

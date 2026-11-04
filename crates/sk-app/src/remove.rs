@@ -48,7 +48,7 @@ impl App {
         // The marked area in red, as it will be removed (soft edge, opacity, automatic masking).
         self.draw_remove_overlay(ui, &painter, img_rect, scale);
         if self.inpaint_busy {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Progress);
+            crate::app::tool_cursor(ui, response, egui::CursorIcon::Progress);
             return;
         }
         let b = self.brushes.remove.clone();

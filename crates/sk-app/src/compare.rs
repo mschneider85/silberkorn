@@ -347,6 +347,14 @@ impl App {
                         self.compare_zoom = zoom;
                     }
                 }
+                // Zoomed in, the cell is moved like the viewer; otherwise a click makes it the main image.
+                if resp.hovered() || resp.dragged() {
+                    ui.ctx().set_cursor_icon(match (self.compare_zoom > 1.0, resp.dragged()) {
+                        (true, true) => egui::CursorIcon::Grabbing,
+                        (true, false) => egui::CursorIcon::Grab,
+                        (false, _) => egui::CursorIcon::PointingHand,
+                    });
+                }
                 if resp.dragged() && self.compare_zoom > 1.0 {
                     self.compare_center = (self.compare_center - resp.drag_delta() / (size * scale)).clamp(Vec2::ZERO, Vec2::splat(1.0));
                 }

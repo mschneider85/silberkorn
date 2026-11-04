@@ -203,7 +203,6 @@ impl App {
         let hovered = response.hover_pos().and_then(|p| self.gradient_at(p, &map));
         let cursor = match (&self.local_drag, hovered) {
             (LocalDrag::EditGradient(_), _) => egui::CursorIcon::Grabbing,
-            (_, Some((_, Part::Move))) => egui::CursorIcon::Move,
             (_, Some(_)) => egui::CursorIcon::Grab,
             _ => egui::CursorIcon::Crosshair,
         };

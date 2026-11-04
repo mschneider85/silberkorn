@@ -3725,6 +3725,14 @@ impl eframe::App for App {
     }
 }
 
+/// The cursor of an image tool, but only while the pointer is on the image or drags there: over
+/// the buttons of the bar or the panels the hand or arrow comes back.
+pub(crate) fn tool_cursor(ui: &egui::Ui, response: &egui::Response, icon: egui::CursorIcon) {
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(icon);
+    }
+}
+
 /// Everything clickable shows the hand under the pointer (egui only does that for buttons, and
 /// only when asked), unless a widget chose its own cursor. Widgets that are dragged (sliders,
 /// the image, the curve) set theirs themselves.
