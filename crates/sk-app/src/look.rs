@@ -366,7 +366,7 @@ impl App {
                 (false, n) => format!("Look angleichen ({})", widgets::image_count(n)),
             };
             let enabled = self.can_match_look();
-            let button = egui::Button::new(RichText::new(format!("{}  {text}", icon::SWATCHES)).strong().color(Color32::WHITE))
+            let button = egui::Button::new(RichText::new(format!("{}  {text}", icon::SWAP)).strong().color(Color32::WHITE))
                 .fill(theme::ACCENT)
                 .corner_radius(CARD_RADIUS)
                 .min_size(Vec2::new(ui.available_width(), 30.0));

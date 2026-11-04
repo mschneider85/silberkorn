@@ -213,6 +213,7 @@ impl App {
         ui.separator();
         self.command_item(ui, "gpu");
         self.command_item(ui, "storage");
+        self.command_item(ui, "shortcuts");
     }
 
     /// Organizing: rating, labels, metadata, names, variants, stacks, where the files are.
@@ -378,7 +379,6 @@ impl App {
         if item(ui, icon::MAGNIFYING_GLASS, "Befehlssuche …", "Strg+K", true) {
             self.palette.show();
         }
-        self.command_item(ui, "shortcuts");
         ui.separator();
         self.command_item(ui, "update");
         self.command_item(ui, "licenses");
@@ -435,7 +435,7 @@ impl App {
             if labeled_tool(ui, wide, icon::CROP, "Zuschneiden", &image_hover(&crop_hover), self.crop_tool.is_some(), image).clicked() {
                 self.toggle_crop();
             }
-            if labeled_tool(ui, wide, icon::RULER, "Geraderichten", &image_hover("Geraderichten: eine Linie entlang des Horizonts ziehen"), self.straightening(), image).clicked() {
+            if labeled_tool(ui, wide, icon::LINE_SEGMENT, "Geraderichten", &image_hover("Geraderichten: eine Linie entlang des Horizonts ziehen"), self.straightening(), image).clicked() {
                 self.toggle_straighten();
             }
             let wb_hover = crate::commands::hint("Weißabgleich-Pipette: auf eine neutrale Stelle klicken", "wb-picker");

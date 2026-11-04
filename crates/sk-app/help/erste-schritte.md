@@ -71,7 +71,7 @@ Bilder auswählen und **Exportieren** ({taste:export}) drücken. Ohne weitere Ei
 
 - **Hilfe** ({taste:help}) öffnet dieses Handbuch.
 - **Tutorials …** im Menü **Hilfe** führt Schritt für Schritt durch typische Arbeiten.
-- **Tastenkürzel anpassen …** im Menü **Hilfe** zeigt alle Kürzel und lässt sie ändern; die Übersicht steht auch unter [Tastenkürzel](tastenkuerzel).
+- **Tastenkürzel anpassen …** im Menü **Bearbeiten** zeigt alle Kürzel und lässt sie ändern; die Übersicht steht auch unter [Tastenkürzel](tastenkuerzel).
 
 ## Wie geht es weiter
 

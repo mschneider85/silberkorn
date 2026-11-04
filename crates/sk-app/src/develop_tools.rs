@@ -411,7 +411,7 @@ impl App {
             changed |= moved;
             grid_moved |= moved;
             ui.horizontal_wrapped(|ui| {
-                let line = egui::Button::new(format!("{}  Linie ziehen", icon::RULER)).selected(straighten_active);
+                let line = egui::Button::new(format!("{}  Linie ziehen", icon::LINE_SEGMENT)).selected(straighten_active);
                 if ui.add(line).on_hover_text("Horizont oder Kante nachziehen").clicked() {
                     toggle_straighten = true;
                 }

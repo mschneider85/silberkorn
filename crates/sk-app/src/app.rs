@@ -128,7 +128,7 @@ impl Tab {
             Tab::Effects => icon::SHOOTING_STAR,
             Tab::Layers => icon::STACK,
             Tab::Retouch => icon::BANDAIDS,
-            Tab::Metadata => icon::INFO,
+            Tab::Metadata => icon::ARTICLE,
             Tab::Styles => icon::SWATCHES,
             Tab::History => icon::CLOCK_COUNTER_CLOCKWISE,
             Tab::Output => icon::EXPORT,

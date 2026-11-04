@@ -1125,7 +1125,7 @@ prüft alle Verweise, `every_section_has_help` die Kurzhilfen.
 
 ## Tastenkürzel
 
-Die Tabelle zeigt die Voreinstellung. Im Fenster **Hilfe → Tastenkürzel anpassen …** lässt sich jedem Befehl
+Die Tabelle zeigt die Voreinstellung. Im Fenster **Bearbeiten → Tastenkürzel anpassen …** lässt sich jedem Befehl
 ein anderes oder ein weiteres Kürzel geben: Klick auf ein Kürzel und die neue Taste drücken, „+“
 fügt eines hinzu, Rechtsklick entfernt es. Ist die Taste schon vergeben, wechselt sie zum neuen
 Befehl (das Fenster sagt, von welchem). Menüs, Befehlssuche und Tooltips zeigen die geänderten

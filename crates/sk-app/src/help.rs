@@ -28,8 +28,8 @@ pub const CHAPTERS: &[Chapter] = &[
     Chapter { id: "ebenen-masken", icon: icon::STACK, text: include_str!("../help/ebenen-masken.md") },
     Chapter { id: "retusche", icon: icon::BANDAIDS, text: include_str!("../help/retusche.md") },
     Chapter { id: "ki-werkzeuge", icon: icon::SPARKLE, text: include_str!("../help/ki-werkzeuge.md") },
-    Chapter { id: "zusammenfuegen", icon: icon::STACK_PLUS, text: include_str!("../help/zusammenfuegen.md") },
-    Chapter { id: "vergleichen", icon: icon::SWATCHES, text: include_str!("../help/vergleichen.md") },
+    Chapter { id: "zusammenfuegen", icon: icon::UNITE, text: include_str!("../help/zusammenfuegen.md") },
+    Chapter { id: "vergleichen", icon: icon::SQUARE_SPLIT_HORIZONTAL, text: include_str!("../help/vergleichen.md") },
     Chapter { id: "verlauf", icon: icon::CLOCK_COUNTER_CLOCKWISE, text: include_str!("../help/verlauf.md") },
     Chapter { id: "ausgabe", icon: icon::EXPORT, text: include_str!("../help/ausgabe.md") },
     Chapter { id: SHORTCUTS, icon: icon::KEYBOARD, text: "" },
@@ -80,7 +80,7 @@ pub(crate) fn fill_keys(text: &str) -> String {
 fn shortcuts_chapter() -> String {
     use std::fmt::Write;
     let mut s = String::from(
-        "# Tastenkürzel\n\nAlle Befehle mit ihren Tasten, nach Menüs. Jede Taste lässt sich ändern: **Tastenkürzel anpassen …** im Menü **Hilfe**. Befehle ohne Taste sind über die Befehlssuche erreichbar (Strg+K).\n",
+        "# Tastenkürzel\n\nAlle Befehle mit ihren Tasten, nach Menüs. Jede Taste lässt sich ändern: **Tastenkürzel anpassen …** im Menü **Bearbeiten**. Befehle ohne Taste sind über die Befehlssuche erreichbar (Strg+K).\n",
     );
     let mut groups: Vec<&str> = Vec::new();
     for c in crate::commands::COMMANDS {

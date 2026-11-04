@@ -82,10 +82,10 @@ impl LocalTool {
             LocalTool::Radial => (icon::CIRCLE_DASHED, "Radial", "tool-radial"),
             LocalTool::Heal => (icon::BANDAIDS, "Reparieren", "tool-heal"),
             LocalTool::Clone => (icon::STAMP, "Klonen", "tool-clone"),
-            LocalTool::Magic => (icon::MAGIC_WAND, "Zauberpinsel", "tool-magic"),
+            LocalTool::Magic => (icon::PAINT_BRUSH_BROAD, "Zauberpinsel", "tool-magic"),
             LocalTool::Object => (icon::CURSOR_CLICK, "Objekt", "tool-object"),
             LocalTool::ColorPick => (icon::EYEDROPPER, "Farbe", ""),
-            LocalTool::Remove => (icon::SPARKLE, "Entfernen", "tool-remove"),
+            LocalTool::Remove => (icon::SCRIBBLE_LOOP, "Entfernen", "tool-remove"),
         }
     }
 
@@ -1218,7 +1218,7 @@ impl App {
             let mut spot_placeholder = Spot { mode: SpotMode::Heal, target: [0.0; 2], source: [0.0; 2], path: Vec::new(), strokes: Vec::new(), radius: 0.0, feather: 0.4, opacity: 1.0 };
             let mut removal_placeholder = sk_core::params::Removal::default();
             let names: Vec<(Area, &str, &str, f32)> = (0..removals.len())
-                .map(|i| (Area::Removal(i), icon::SPARKLE, "Entfernen", removals[i].opacity))
+                .map(|i| (Area::Removal(i), icon::SCRIBBLE_LOOP, "Entfernen", removals[i].opacity))
                 .chain((0..spots.len()).map(|i| match spots[i].mode {
                     SpotMode::Heal => (Area::Spot(i), icon::BANDAIDS, "Reparieren", spots[i].opacity),
                     SpotMode::Clone => (Area::Spot(i), icon::STAMP, "Klonen", spots[i].opacity),

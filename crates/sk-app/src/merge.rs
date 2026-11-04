@@ -70,7 +70,7 @@ impl App {
     pub fn merge_menu(&mut self, ui: &mut Ui) {
         let n = self.merge_files().len();
         ui.add_enabled_ui(n >= 2, |ui| {
-            crate::widgets::menu_button(ui, format!("{}  Zusammenfügen", icon::STACK), |ui| {
+            crate::widgets::menu_button(ui, format!("{}  Zusammenfügen", icon::UNITE), |ui| {
                 if ui.button(format!("{}  HDR …", icon::SUN_HORIZON)).clicked() {
                     self.open_merge(MergeKind::Hdr);
                 }
