@@ -30,12 +30,10 @@ const LABEL: &str = "Drucken";
 pub const CAN_PRINT: bool = cfg!(windows);
 
 impl App {
-    /// Strg+P: first the print bar with the page in the print preview; from there (Strg+P again
-    /// or Enter) to the printer.
+    /// Strg+P: the print bar with the page in the print preview. Printing is up to the bar (Enter
+    /// or its button), so a second Strg+P doesn't print unseen pages.
     pub fn print_command(&mut self) {
-        if self.print.bar {
-            self.print_selection();
-        } else {
+        if !self.print.bar {
             self.enter_print_bar();
         }
     }

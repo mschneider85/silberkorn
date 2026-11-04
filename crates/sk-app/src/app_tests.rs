@@ -5043,6 +5043,10 @@ fn print_bar_turns_pages_and_goes_back() {
     assert!(!f.app.print.on);
     f.app.print_command();
     assert!(f.app.print.bar && f.app.print.on);
+    // Strg+P again does not print: only Enter or the bar's button do.
+    assert!(!f.app.command_available("print"));
+    f.app.print_command();
+    assert!(f.app.print.bar, "Leiste bleibt offen");
     // The page is shown alone (the bar is drawn in the single view only).
     assert!(f.app.compare_cells().is_empty(), "Druckleiste: Einzelansicht");
     assert_eq!(f.app.print_pages(), (0, paths.len()));

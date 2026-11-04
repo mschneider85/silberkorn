@@ -130,7 +130,7 @@ pub const COMMANDS: &[Command] = &[
     cmd!("open-session", icon::FOLDER_OPEN, "Session öffnen …", "Datei", [CTRL_SHIFT => Key::O], "session", always, |a, _| a.open_session_dialog()),
     cmd!("close-session", icon::SIGN_OUT, "Session schließen", "Datei", [CTRL => Key::W], "session katalog zurück verlassen", in_session, |a, _| a.close_session()),
     cmd!("export", icon::EXPORT, "Exportieren", "Datei", [CTRL => Key::D], "export ausgabe speichern verarbeiten", can_export, |a, _| a.export_selection()),
-    cmd!("print", icon::PRINTER, "Drucken …", "Datei", [CTRL => Key::P], "drucker papier print", has_image, |a, _| a.print_command()),
+    cmd!("print", icon::PRINTER, "Drucken …", "Datei", [CTRL => Key::P], "drucker papier print", |a| has_image(a) && !a.print.bar, |a, _| a.print_command()),
     cmd!("print-to-file", icon::FILE_PDF, "In Datei drucken …", "Datei", [], "pdf jpeg druck datei labor", can_print_to_file, |a, _| a.print_to_file_dialog()),
     // Bearbeiten
     cmd!("undo", icon::ARROW_U_UP_LEFT, "Rückgängig", "Bearbeiten", [CTRL => Key::Z], "undo", |a| a.can_undo(), |a, _| a.undo()),

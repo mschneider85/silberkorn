@@ -451,7 +451,7 @@ impl App {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 let label = format!("{}  Drucken …", theme::icon::PRINTER);
-                let r = ui.add_enabled(self.current.is_some(), crate::dialog::primary(label));
+                let r = ui.add_enabled(self.current.is_some() && !self.print.bar, crate::dialog::primary(label));
                 let r = r.on_hover_text(crate::commands::hint("Zeigt die Seite mit Drucker und Papier, dann wird gedruckt; die ausgewählten Bilder, eines je Seite", "print"));
                 if r.clicked() {
                     print = true;

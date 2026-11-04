@@ -105,7 +105,7 @@ Bild und Beschriftung stehen immer in der Mitte des Blattes.
 
 **Drucken …** ({taste:print}, auch im Menü **Datei** und unten im Abschnitt **Drucken**) zeigt zuerst die Seite: Die Druckvorschau geht an, und unten im Bild erscheint eine Leiste mit Drucker, Papierformat, Bildgröße, Hoch- oder Querformat, Anpassung und **Einstellungen …**. Jedes ausgewählte Bild kommt auf eine eigene Seite; ist keines ausgewählt, das angezeigte. Bei mehreren Bildern blättern die Pfeile in der Leiste (oder die Pfeiltasten) durch die Seiten, die Auswahl bleibt.
 
-**Einstellungen …** in der Leiste öffnet die Einstellungen des Druckers, etwa Papiersorte, Qualität und Farbe; sie gelten, bis Silberkorn beendet wird. Papierformat und Ausrichtung kommen immer aus der Leiste. **Drucken** (Enter oder noch einmal {taste:print}) schickt die Seiten an den Drucker. **Abbrechen** (Esc) schließt die Leiste.
+**Einstellungen …** in der Leiste öffnet die Einstellungen des Druckers, etwa Papiersorte, Qualität und Farbe; sie gelten, bis Silberkorn beendet wird. Papierformat und Ausrichtung kommen immer aus der Leiste. **Drucken** (Enter) schickt die Seiten an den Drucker. **Abbrechen** (Esc) schließt die Leiste.
 
 Führt der Drucker das Papierformat nicht, steht es in der Leiste gelb. Nimmt er es auch als eigenes Format nicht an, druckt er auf sein Standardpapier, und die Seite wird dafür neu aufgeteilt. Die Statusleiste sagt das danach.
 
