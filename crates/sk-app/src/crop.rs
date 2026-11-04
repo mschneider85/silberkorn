@@ -199,46 +199,57 @@ impl App {
     }
 }
 
-/// Where the bar under the tools sits in the viewer: at an edge, in its middle. Moved with the
-/// grip at its start; it stays where it was put, for every tool.
+/// Where the bar under the tools sits in the viewer: at the bottom or the top, on the left, in
+/// the middle or on the right. Moved with the grip at its start; it stays where it was put, for
+/// every tool.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum BarDock {
-    #[default]
-    Bottom,
+    BottomLeft,
+    BottomRight,
+    TopLeft,
     Top,
-    Left,
-    Right,
+    TopRight,
+    /// The bottom middle; also for places no longer offered (serde's `other` must be last).
+    #[default]
+    #[serde(other)]
+    Bottom,
 }
 
 impl BarDock {
     /// The bar's anchor in the viewer `area` (it doesn't move with the image).
     fn anchor(self, area: Rect) -> (egui::Align2, Pos2) {
-        let c = area.center();
-        match self {
-            BarDock::Bottom => (egui::Align2::CENTER_BOTTOM, pos2(c.x, area.bottom() - 12.0)),
-            // Below the hints at the top of the image.
-            BarDock::Top => (egui::Align2::CENTER_TOP, pos2(c.x, area.top() + 52.0)),
-            BarDock::Left => (egui::Align2::LEFT_CENTER, pos2(area.left() + 12.0, c.y)),
-            BarDock::Right => (egui::Align2::RIGHT_CENTER, pos2(area.right() - 12.0, c.y)),
-        }
+        use egui::Align;
+        let (top, h) = match self {
+            BarDock::BottomLeft => (false, Align::Min),
+            BarDock::Bottom => (false, Align::Center),
+            BarDock::BottomRight => (false, Align::Max),
+            BarDock::TopLeft => (true, Align::Min),
+            BarDock::Top => (true, Align::Center),
+            BarDock::TopRight => (true, Align::Max),
+        };
+        let x = match h {
+            Align::Min => area.left() + 12.0,
+            Align::Center => area.center().x,
+            Align::Max => area.right() - 12.0,
+        };
+        // At the top below the hints over the image.
+        let (v, y) = if top { (Align::Min, area.top() + 52.0) } else { (Align::Max, area.bottom() - 12.0) };
+        (egui::Align2([h, v]), pos2(x, y))
     }
 
-    /// At the left and right edge the bar runs downward.
-    fn vertical(self) -> bool {
-        matches!(self, BarDock::Left | BarDock::Right)
-    }
-
-    /// The edge of `area` nearest to `p`.
+    /// The place for a bar let go at `p`: the half of `area` (top or bottom) and its third (left,
+    /// middle, right).
     pub fn nearest(area: Rect, p: Pos2) -> BarDock {
-        [
-            (BarDock::Bottom, area.bottom() - p.y),
-            (BarDock::Top, p.y - area.top()),
-            (BarDock::Left, p.x - area.left()),
-            (BarDock::Right, area.right() - p.x),
-        ]
-        .into_iter()
-        .min_by(|a, b| a.1.total_cmp(&b.1))
-        .map_or(BarDock::Bottom, |(d, _)| d)
+        let third = ((p.x - area.left()) / area.width().max(1.0) * 3.0).floor().clamp(0.0, 2.0) as usize;
+        let top = p.y < area.center().y;
+        match (top, third) {
+            (false, 0) => BarDock::BottomLeft,
+            (false, 1) => BarDock::Bottom,
+            (false, _) => BarDock::BottomRight,
+            (true, 0) => BarDock::TopLeft,
+            (true, 1) => BarDock::Top,
+            (true, _) => BarDock::TopRight,
+        }
     }
 }
 
@@ -270,15 +281,12 @@ fn image_bar_with(ui: &mut Ui, area: Rect, dock: &mut BarDock, apply: Option<((S
     // While the grip is dragged, the bar follows the mouse from where it was docked.
     let offset: Vec2 = ui.ctx().data(|d| d.get_temp(drag_id)).unwrap_or_default();
     let (pivot, at) = dock.anchor(area);
-    let vertical = dock.vertical();
     let mut done = None;
     let mut docked = None;
     egui::Area::new(id).order(egui::Order::Middle).pivot(pivot).fixed_pos(at + offset).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).corner_radius(8).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
-            let layout = if vertical { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Center) };
-            ui.with_layout(layout, |ui| {
-                let grip = if vertical { crate::theme::icon::DOTS_SIX } else { crate::theme::icon::DOTS_SIX_VERTICAL };
-                let grip = ui.add(egui::Label::new(egui::RichText::new(grip).size(16.0).color(crate::theme::TEXT_FAINT)).selectable(false).sense(egui::Sense::drag()));
+            ui.horizontal(|ui| {
+                let grip = ui.add(egui::Label::new(egui::RichText::new(crate::theme::icon::DOTS_SIX_VERTICAL).size(16.0).color(crate::theme::TEXT_FAINT)).selectable(false).sense(egui::Sense::drag()));
                 grip.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Leiste verschieben"));
                 if grip.dragged() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -291,10 +299,10 @@ fn image_bar_with(ui: &mut Ui, area: Rect, dock: &mut BarDock, apply: Option<((S
                     ui.ctx().data_mut(|d| d.remove::<Vec2>(drag_id));
                     docked = ui.ctx().input(|i| i.pointer.latest_pos()).map(|p| BarDock::nearest(area, p));
                 }
-                grip.on_hover_text("Ziehen: Leiste oben, unten, links oder rechts anlegen");
-                let before = ui.min_rect().size();
+                grip.on_hover_text("Ziehen: Leiste oben oder unten anlegen, links, mittig oder rechts");
+                let before = ui.min_rect().width();
                 settings(ui);
-                if ui.min_rect().size() != before {
+                if ui.min_rect().width() > before {
                     ui.separator();
                 }
                 // In one line each (the tick and "Übernehmen" wrapped and grew taller), with the
@@ -800,6 +808,19 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bar_docks_at_the_third_of_the_half_it_is_let_go() {
+        let area = Rect::from_min_size(pos2(0.0, 0.0), vec2(900.0, 600.0));
+        assert_eq!(BarDock::nearest(area, pos2(100.0, 500.0)), BarDock::BottomLeft);
+        assert_eq!(BarDock::nearest(area, pos2(450.0, 400.0)), BarDock::Bottom);
+        assert_eq!(BarDock::nearest(area, pos2(899.0, 599.0)), BarDock::BottomRight);
+        assert_eq!(BarDock::nearest(area, pos2(-20.0, 10.0)), BarDock::TopLeft);
+        assert_eq!(BarDock::nearest(area, pos2(450.0, 100.0)), BarDock::Top);
+        assert_eq!(BarDock::nearest(area, pos2(800.0, 0.0)), BarDock::TopRight);
+        // From the first try with the side edges: those become the bottom middle.
+        assert_eq!(serde_json::from_str::<BarDock>("\"Left\"").unwrap(), BarDock::Bottom);
+    }
 
     #[test]
     fn straighten_delta_snaps_to_nearest_axis() {

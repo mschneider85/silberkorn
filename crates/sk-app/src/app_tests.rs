@@ -5117,19 +5117,19 @@ fn local_tool_bar_switches_and_ends_tools() {
     let nodes = frame(&mut f, vec![]);
     assert!(nodes.iter().any(|(n, _)| n.contains("Klonen")));
     assert!(!nodes.iter().any(|(n, _)| n.contains("Maske anzeigen")));
-    // The grip moves the bar to another edge; there it runs downward and still works.
+    // The grip moves the bar to another place: here the top left.
     let grip = nodes.iter().find(|(n, _)| n == "Leiste verschieben").expect("Anfasser").1.center();
     frame(&mut f, vec![egui::Event::PointerMoved(grip)]);
     frame(&mut f, vec![press(grip, true)]);
     for i in 1..=8 {
-        frame(&mut f, vec![egui::Event::PointerMoved(grip + (egui::pos2(8.0, 400.0) - grip) * (i as f32 / 8.0))]);
+        frame(&mut f, vec![egui::Event::PointerMoved(grip + (egui::pos2(60.0, 80.0) - grip) * (i as f32 / 8.0))]);
     }
-    frame(&mut f, vec![press(egui::pos2(8.0, 400.0), false)]);
-    assert_eq!(f.app.bar_dock, crate::crop::BarDock::Left);
+    frame(&mut f, vec![press(egui::pos2(60.0, 80.0), false)]);
+    assert_eq!(f.app.bar_dock, crate::crop::BarDock::TopLeft);
     frame(&mut f, vec![]);
     let nodes = frame(&mut f, vec![]);
     let fertig = nodes.iter().find(|(n, _)| n.contains("Fertig")).expect("Fertig").1;
-    assert!(fertig.left() < 300.0, "links angedockt: {fertig:?}");
+    assert!(fertig.top() < 200.0, "oben angedockt: {fertig:?}");
     click(&mut f, &nodes, "Fertig");
     assert_eq!(f.app.local_tool, None);
 }

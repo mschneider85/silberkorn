@@ -17,7 +17,6 @@ const SLIDER: f32 = 72.0;
 
 /// A slider with its name before and its value after it; double-click resets. Whether it changed.
 fn bar_slider(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, default: f32, text: impl Fn(f32) -> String) -> bool {
-    // In one row also when the bar runs downward (docked left or right).
     ui.horizontal(|ui| {
         ui.add_sized([58.0, ui.spacing().interact_size.y], egui::Label::new(RichText::new(name).color(theme::TEXT_DIM)));
         let changed = crate::widgets::compact_slider(ui, name, value, range, default, SLIDER);
