@@ -284,7 +284,7 @@ fn process_legacy() -> u32 {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct Adjustments {
     /// Process version (see [`PROCESS_LATEST`]); new and reset images get the latest one.
     #[serde(default = "process_legacy")]
@@ -304,8 +304,13 @@ pub struct Adjustments {
     pub saturation: f32,
     /// -100..100
     pub vibrance: f32,
-    /// HDR: positive recovers (darkens) highlights. -100..100
+    /// HDR: positive brightens the highlights, negative recovers them. -100..100
+    #[serde(rename = "highlights2")]
     pub highlights: f32,
+    /// Only read, see `take_old_highlights`.
+    #[doc(hidden)]
+    #[serde(rename = "highlights", skip_serializing)]
+    pub highlights_old: Option<f32>,
     /// HDR: positive lifts shadows. -100..100
     pub shadows: f32,
     /// HDR: affects the brightest tones. -100..100
@@ -368,17 +373,60 @@ impl Default for Removal {
     }
 }
 
+/// "Lichter" was saved up to 0.2.28 under the key `highlights` with the opposite sign (positive
+/// darkened, as in Capture One); now it brightens like "Tiefen" and "Weiß" and is saved as
+/// `highlights2`. An old value is turned around when read.
+fn take_old_highlights(new: &mut f32, old: &mut Option<f32>) {
+    if let Some(v) = old.take() {
+        *new = -v + 0.0;
+    }
+}
+
+impl Serialize for Adjustments {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        Adjustments::serialize(self, s)
+    }
+}
+
+impl<'de> Deserialize<'de> for Adjustments {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let mut a = Adjustments::deserialize(d)?;
+        take_old_highlights(&mut a.highlights, &mut a.highlights_old);
+        Ok(a)
+    }
+}
+
+impl Serialize for LayerAdjustments {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        LayerAdjustments::serialize(self, s)
+    }
+}
+
+impl<'de> Deserialize<'de> for LayerAdjustments {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let mut a = LayerAdjustments::deserialize(d)?;
+        take_old_highlights(&mut a.highlights, &mut a.highlights_old);
+        Ok(a)
+    }
+}
+
 /// Adjustments of a local layer, as deltas added to the background values; the curves act on
 /// the result of the background's (see `pipeline`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[serde(default, remote = "Self")]
 pub struct LayerAdjustments {
     /// EV
     pub exposure: f32,
     pub contrast: f32,
     pub brightness: f32,
     pub saturation: f32,
+    /// As [`Adjustments::highlights`].
+    #[serde(rename = "highlights2")]
     pub highlights: f32,
+    /// Only read, see `take_old_highlights`.
+    #[doc(hidden)]
+    #[serde(rename = "highlights", skip_serializing)]
+    pub highlights_old: Option<f32>,
     pub shadows: f32,
     pub clarity: f32,
     pub structure: f32,
@@ -1364,6 +1412,7 @@ impl Default for Adjustments {
             saturation: 0.0,
             vibrance: 0.0,
             highlights: 0.0,
+            highlights_old: None,
             shadows: 0.0,
             whites: 0.0,
             blacks: 0.0,
@@ -1567,6 +1616,20 @@ mod tests {
         // Only the red channel: 0.25 becomes 0.5 there, the others stay.
         assert!((lv.apply(0, 0.25) - 0.5).abs() < 1e-6);
         assert_eq!(lv.apply(1, 0.25), 0.25);
+    }
+
+    #[test]
+    fn highlights_of_old_files_turn_around() {
+        // Up to 0.2.28 positive darkened the highlights; now it brightens them.
+        let old: Adjustments = serde_json::from_str(r#"{"highlights":40.0,"shadows":20.0,"layers":[{"adjustments":{"highlights":-30.0}}]}"#).unwrap();
+        assert_eq!((old.highlights, old.shadows, old.layers[0].adjustments.highlights), (-40.0, 20.0, 30.0));
+        assert_eq!((old.highlights_old, old.layers[0].adjustments.highlights_old), (None, None));
+        // Saved under the new key only, and read back unchanged.
+        let json = serde_json::to_value(&old).unwrap();
+        assert_eq!((json.get("highlights2"), json.get("highlights")), (Some(&(-40.0).into()), None));
+        let layer = &json["layers"][0]["adjustments"];
+        assert_eq!((layer.get("highlights2"), layer.get("highlights")), (Some(&30.0.into()), None));
+        assert_eq!(serde_json::from_value::<Adjustments>(json).unwrap(), old);
     }
 
     #[test]

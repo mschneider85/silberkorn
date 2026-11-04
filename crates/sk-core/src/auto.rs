@@ -466,7 +466,7 @@ impl Knob {
     fn range(self) -> (f32, f32, f32) {
         match self {
             Knob::Exposure => (-3.0, 3.0, 0.4),
-            Knob::Highlights => (0.0, 90.0, 20.0),
+            Knob::Highlights => (-90.0, 0.0, 20.0),
             Knob::Shadows => (0.0, 80.0, 20.0),
             Knob::Whites => (-50.0, 50.0, 15.0),
             Knob::Blacks => (-50.0, 40.0, 15.0),
@@ -849,7 +849,7 @@ mod tests {
         assert!(out.exposure > 1.0, "{out:?}");
         assert_eq!(out.saturation, 20.0, "other settings stay");
         for v in [out.highlights, out.shadows, out.whites, out.blacks, out.contrast, out.vibrance] {
-            assert!((-50.0..=90.0).contains(&v) && v == v.round(), "{out:?}");
+            assert!((-90.0..=90.0).contains(&v) && v == v.round(), "{out:?}");
         }
         // Only the exposure: nothing else changes.
         let only = AutoOptions { exposure: true, ..AutoOptions::NONE };

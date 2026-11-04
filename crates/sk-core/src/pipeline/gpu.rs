@@ -1790,7 +1790,7 @@ mod tests {
         let Some(g) = Gpu::new_for_test() else { return };
         let (w, h) = (420, 300);
         let src = image(w, h);
-        let adj = Adjustments { highlights: -60.0, shadows: 40.0, detail: Detail { clarity: 30.0, ..Default::default() }, ..Default::default() };
+        let adj = Adjustments { highlights: 60.0, shadows: 40.0, detail: Detail { clarity: 30.0, ..Default::default() }, ..Default::default() };
         let p = Processor::new(&meta(w, h), &adj);
         let first = p.render_gpu(&g, &src, None, None).unwrap();
         assert!(g.pooled_bytes() > 0, "nichts im Pool");
@@ -1882,7 +1882,7 @@ mod tests {
             ("Standard", plain.clone(), Default::default(), None),
             (
                 "Ton",
-                Adjustments { exposure: 0.7, contrast: 35.0, highlights: 60.0, shadows: 50.0, whites: -20.0, blacks: 15.0, base_curve: BaseCurve::FilmHigh, ..plain.clone() },
+                Adjustments { exposure: 0.7, contrast: 35.0, highlights: -60.0, shadows: 50.0, whites: -20.0, blacks: 15.0, base_curve: BaseCurve::FilmHigh, ..plain.clone() },
                 Default::default(),
                 None,
             ),

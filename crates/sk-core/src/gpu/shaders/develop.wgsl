@@ -248,7 +248,7 @@ fn hdr_gain_ev(hdr: vec4<f32>, ev: f32, ev_px: f32) -> f32 {
     let w_sh = sigmoid(-(ev + 2.0) * 1.4);
     let w_wh = sigmoid((ev_px - 2.0) * 2.5);
     let w_bl = sigmoid(-(ev_px + 4.5) * 2.0);
-    return -hdr.x * 1.5 * w_hi + hdr.y * 1.8 * w_sh + hdr.z * 1.0 * w_wh + hdr.w * 1.5 * w_bl;
+    return hdr.x * 1.5 * w_hi + hdr.y * 1.8 * w_sh + hdr.z * 1.0 * w_wh + hdr.w * 1.5 * w_bl;
 }
 
 fn aces_fit(x: f32) -> f32 {

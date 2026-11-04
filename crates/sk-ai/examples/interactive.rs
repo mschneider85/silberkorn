@@ -29,7 +29,7 @@ fn row(name: &str, first: Duration, again: Option<Duration>) {
 
 /// A typical edit: tone, clarity, and a layer with a radial mask.
 fn edited() -> Adjustments {
-    let mut adj = Adjustments { shadows: 30.0, highlights: -20.0, vibrance: 15.0, ..Default::default() };
+    let mut adj = Adjustments { shadows: 30.0, highlights: 20.0, vibrance: 15.0, ..Default::default() };
     adj.detail.clarity = 20.0;
     adj.layers.push(Layer {
         adjustments: LayerAdjustments { exposure: 0.4, ..Default::default() },

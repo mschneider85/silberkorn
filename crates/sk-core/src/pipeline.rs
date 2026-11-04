@@ -1720,7 +1720,7 @@ fn hdr_gain_ev(hdr: [f32; 4], ev: f32, ev_px: f32) -> f32 {
     let w_sh = sigmoid(-(ev + 2.0) * 1.4);
     let w_wh = sigmoid((ev_px - 2.0) * 2.5);
     let w_bl = sigmoid(-(ev_px + 4.5) * 2.0);
-    -hi * 1.5 * w_hi + sh * 1.8 * w_sh + wh * 1.0 * w_wh + bl * 1.5 * w_bl
+    hi * 1.5 * w_hi + sh * 1.8 * w_sh + wh * 1.0 * w_wh + bl * 1.5 * w_bl
 }
 
 /// Contrast around mid grey, then the base curve.
@@ -2028,7 +2028,7 @@ mod tests {
     #[test]
     fn highlight_recovery_darkens_highlights() {
         let a = Processor::new(&meta(), &plain());
-        let b = Processor::new(&meta(), &Adjustments { highlights: 100.0, ..plain() });
+        let b = Processor::new(&meta(), &Adjustments { highlights: -100.0, ..plain() });
         assert!(px(&b, [0.9; 3])[0] < px(&a, [0.9; 3])[0]);
     }
 
@@ -2451,7 +2451,7 @@ mod tests {
         );
         let adj = Adjustments {
             shadows: 50.0,
-            highlights: -40.0,
+            highlights: 40.0,
             detail: Detail { clarity: 60.0, sharpen_amount: 150.0, sharpen_radius: 1.0, nr_luma: 40.0, nr_color: 40.0, ..Default::default() },
             ..Default::default()
         };

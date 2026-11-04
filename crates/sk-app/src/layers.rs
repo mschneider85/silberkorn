@@ -57,7 +57,7 @@ pub fn style_brushes() -> [(&'static str, LayerAdjustments); 12] {
         ("Entsättigen", LayerAdjustments { saturation: -70.0, ..Default::default() }),
         ("Details betonen", LayerAdjustments { clarity: 40.0, structure: 50.0, ..Default::default() }),
         ("Haut glätten", LayerAdjustments { clarity: -40.0, structure: -60.0, ..Default::default() }),
-        ("Lichter zurückholen", LayerAdjustments { highlights: 70.0, ..Default::default() }),
+        ("Lichter zurückholen", LayerAdjustments { highlights: -70.0, ..Default::default() }),
         ("Tiefen aufhellen", LayerAdjustments { shadows: 70.0, ..Default::default() }),
         ("Dunst entfernen", LayerAdjustments { dehaze: 60.0, ..Default::default() }),
         ("Augen aufhellen", LayerAdjustments { exposure: 0.4, clarity: 20.0, saturation: 10.0, ..Default::default() }),
