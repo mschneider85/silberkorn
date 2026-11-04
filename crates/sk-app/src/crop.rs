@@ -283,12 +283,14 @@ fn image_bar_with(ui: &mut Ui, area: Rect, dock: &mut BarDock, apply: Option<((S
     let (pivot, at) = dock.anchor(area);
     let mut done = None;
     let mut docked = None;
-    egui::Area::new(id).order(egui::Order::Middle).pivot(pivot).fixed_pos(at + offset).show(ui.ctx(), |ui| {
+    let mut dragging = false;
+    let bar = egui::Area::new(id).order(egui::Order::Middle).pivot(pivot).fixed_pos(at + offset).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).corner_radius(8).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 let grip = ui.add(egui::Label::new(egui::RichText::new(crate::theme::icon::DOTS_SIX_VERTICAL).size(16.0).color(crate::theme::TEXT_FAINT)).selectable(false).sense(egui::Sense::drag()));
                 grip.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, "Leiste verschieben"));
                 if grip.dragged() {
+                    dragging = true;
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                     let moved = offset + grip.drag_delta();
                     ui.ctx().data_mut(|d| d.insert_temp(drag_id, moved));
@@ -321,10 +323,31 @@ fn image_bar_with(ui: &mut Ui, area: Rect, dock: &mut BarDock, apply: Option<((S
             });
         });
     });
+    if dragging {
+        show_dock_places(ui.ctx(), area, bar.response.rect.size());
+    }
     if let Some(d) = docked {
         *dock = d;
     }
     done
+}
+
+/// While the bar is dragged: the places it can go as faint outlines of its size, the one it
+/// would take when let go now highlighted.
+fn show_dock_places(ctx: &egui::Context, area: Rect, size: Vec2) {
+    use BarDock::*;
+    let target = ctx.input(|i| i.pointer.latest_pos()).map(|p| BarDock::nearest(area, p));
+    // Over the image (its panel is drawn before), under the bar.
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::new("image_bar_places")));
+    for d in [BottomLeft, Bottom, BottomRight, TopLeft, Top, TopRight] {
+        let (pivot, at) = d.anchor(area);
+        let r = pivot.anchor_size(at, size);
+        if Some(d) == target {
+            painter.rect(r, 8.0, crate::theme::ACCENT.gamma_multiply(0.25), Stroke::new(2.0, crate::theme::ACCENT), StrokeKind::Inside);
+        } else {
+            painter.rect_stroke(r, 8.0, Stroke::new(1.0, Color32::from_white_alpha(70)), StrokeKind::Inside);
+        }
+    }
 }
 
 /// Shortest distance from `p` to the segment `a`–`b`.
