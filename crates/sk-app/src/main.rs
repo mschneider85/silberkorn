@@ -51,6 +51,7 @@ mod remove;
 mod rename;
 mod scopes;
 mod session;
+mod settings_window;
 mod shortcut_editor;
 mod side_column;
 mod single_instance;

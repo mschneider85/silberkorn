@@ -5,7 +5,7 @@ use egui::RichText;
 use sk_ai::runtime;
 
 use crate::app::App;
-use crate::dialog::{self, Dialog, Tone};
+use crate::dialog::{self, Tone};
 use crate::theme::{self, icon};
 
 impl App {
@@ -32,83 +32,73 @@ impl App {
         }));
     }
 
-    pub(crate) fn gpu_dialog(&mut self, ctx: &egui::Context) {
-        if !self.show_gpu_dialog {
-            return;
-        }
+    /// The page "Grafikkarte" of the settings.
+    pub(crate) fn gpu_page(&mut self, ui: &mut egui::Ui) {
+        let ctx = ui.ctx().clone();
         let installing = self.jobs.iter().find(|j| j.label == GPU_JOB).map(|j| j.progress);
-        let (mut close, mut install) = (false, false);
+        let mut install = false;
         let mut enabled = runtime::gpu_enabled();
         let mut develop = sk_core::gpu::enabled();
-        let title = DIALOG_TITLE.trim_end_matches(" …");
-        let modal = Dialog::new("gpu", icon::LIGHTNING, title).subtitle("Wo Silberkorn rechnet").width(460.0).show(ctx, |ui| {
-            let (tone, pill, detail) = match sk_core::gpu::status() {
-                _ if !develop => (Tone::Off, "Aus", "Alles rechnet auf dem Prozessor.".to_string()),
-                None => {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(200));
-                    (Tone::Accent, "Wird eingerichtet", "Bereite die Grafikkarte vor …".to_string())
-                }
-                Some(None) => (Tone::Warn, "Prozessor", "Keine geeignete Grafikkarte gefunden; es rechnet der Prozessor.".to_string()),
-                Some(Some(name)) => match sk_core::gpu::problem() {
-                    Some(why) => (Tone::Warn, "Prozessor", format!("{name}: {why}. Bis zum Neustart rechnet der Prozessor.")),
-                    None => (Tone::Good, "Aktiv", name),
-                },
-            };
-            dialog::card(ui, "Bildberechnung", Some((tone, pill)), |ui| {
-                dialog::note(ui, "Regler, Vorschau und Export rechnen auf der Grafikkarte, mit dem Prozessor als Rückfall.");
-                crate::widgets::checkbox(ui, &mut develop, "Grafikkarte verwenden");
-                ui.label(RichText::new(detail).size(12.0).color(theme::TEXT));
-            });
+        let (tone, pill, detail) = match sk_core::gpu::status() {
+            _ if !develop => (Tone::Off, "Aus", "Alles rechnet auf dem Prozessor.".to_string()),
+            None => {
+                ctx.request_repaint_after(std::time::Duration::from_millis(200));
+                (Tone::Accent, "Wird eingerichtet", "Bereite die Grafikkarte vor …".to_string())
+            }
+            Some(None) => (Tone::Warn, "Prozessor", "Keine geeignete Grafikkarte gefunden; es rechnet der Prozessor.".to_string()),
+            Some(Some(name)) => match sk_core::gpu::problem() {
+                Some(why) => (Tone::Warn, "Prozessor", format!("{name}: {why}. Bis zum Neustart rechnet der Prozessor.")),
+                None => (Tone::Good, "Aktiv", name),
+            },
+        };
+        dialog::card(ui, "Bildberechnung", Some((tone, pill)), |ui| {
+            dialog::note(ui, "Regler, Vorschau und Export rechnen auf der Grafikkarte, mit dem Prozessor als Rückfall.");
+            crate::widgets::checkbox(ui, &mut develop, "Grafikkarte verwenden");
+            ui.label(RichText::new(detail).size(12.0).color(theme::TEXT));
+        });
 
-            let ai = if !runtime::gpu_supported() {
-                (Tone::Off, "Nur Windows")
+        let ai = if !runtime::gpu_supported() {
+            (Tone::Off, "Nur Windows")
+        } else if !runtime::gpu_installed() {
+            (Tone::Off, "Nicht geladen")
+        } else if !enabled {
+            (Tone::Off, "Aus")
+        } else if runtime::gpu_problem().is_some() {
+            (Tone::Warn, "Prozessor")
+        } else {
+            (Tone::Good, "Bereit")
+        };
+        dialog::card(ui, "KI-Berechnung", Some(ai), |ui| {
+            dialog::note(ui, "KI-Werkzeuge rechnen auf der Grafikkarte (jede Karte mit DirectX 12) ein Vielfaches schneller als auf dem Prozessor.");
+            if !runtime::gpu_supported() {
+                ui.label(RichText::new("Hier rechnet alles auf dem Prozessor.").size(12.0).color(theme::TEXT));
             } else if !runtime::gpu_installed() {
-                (Tone::Off, "Nicht geladen")
-            } else if !enabled {
-                (Tone::Off, "Aus")
-            } else if runtime::gpu_problem().is_some() {
-                (Tone::Warn, "Prozessor")
-            } else {
-                (Tone::Good, "Bereit")
-            };
-            dialog::card(ui, "KI-Berechnung", Some(ai), |ui| {
-                dialog::note(ui, "KI-Werkzeuge rechnen auf der Grafikkarte (jede Karte mit DirectX 12) ein Vielfaches schneller als auf dem Prozessor.");
-                if !runtime::gpu_supported() {
-                    ui.label(RichText::new("Hier rechnet alles auf dem Prozessor.").size(12.0).color(theme::TEXT));
-                } else if !runtime::gpu_installed() {
-                    match installing {
-                        Some(p) => {
-                            ui.add(egui::ProgressBar::new(p).desired_height(8.0).text(format!("Lade … {:.0} %", p * 100.0)));
-                            ctx.request_repaint_after(std::time::Duration::from_millis(200));
-                        }
-                        None => {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new(format!("Einmalig etwa {} MB von Microsoft", runtime::GPU_DOWNLOAD_MB)).size(12.0).color(theme::TEXT));
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    if ui.add(dialog::secondary(format!("{}  Laden", icon::DOWNLOAD_SIMPLE))).clicked() {
-                                        install = true;
-                                    }
-                                });
-                            });
-                        }
+                match installing {
+                    Some(p) => {
+                        ui.add(egui::ProgressBar::new(p).desired_height(8.0).text(format!("Lade … {:.0} %", p * 100.0)));
+                        ctx.request_repaint_after(std::time::Duration::from_millis(200));
                     }
-                } else {
-                    crate::widgets::checkbox(ui, &mut enabled, "Grafikkarte verwenden");
-                    let detail = match (runtime::gpu_problem(), runtime::last_device()) {
-                        (_, _) if !enabled => "Alles rechnet auf dem Prozessor.".to_string(),
-                        (Some(p), _) => format!("Grafikkarte nicht verwendbar: {p}. Es wird auf dem Prozessor gerechnet."),
-                        (None, Some(d)) => format!("Zuletzt verwendet: {d}"),
-                        (None, None) => "Wird beim nächsten KI-Werkzeug verwendet.".to_string(),
-                    };
-                    ui.label(RichText::new(detail).size(12.0).color(theme::TEXT));
+                    None => {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(format!("Einmalig etwa {} MB von Microsoft", runtime::GPU_DOWNLOAD_MB)).size(12.0).color(theme::TEXT));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if ui.add(dialog::secondary(format!("{}  Laden", icon::DOWNLOAD_SIMPLE))).clicked() {
+                                    install = true;
+                                }
+                            });
+                        });
+                    }
                 }
-            });
-
-            dialog::footer(ui, |ui| {
-                if dialog::default_button(ui, true, dialog::primary("Schließen")) {
-                    close = true;
-                }
-            });
+            } else {
+                crate::widgets::checkbox(ui, &mut enabled, "Grafikkarte verwenden");
+                let detail = match (runtime::gpu_problem(), runtime::last_device()) {
+                    (_, _) if !enabled => "Alles rechnet auf dem Prozessor.".to_string(),
+                    (Some(p), _) => format!("Grafikkarte nicht verwendbar: {p}. Es wird auf dem Prozessor gerechnet."),
+                    (None, Some(d)) => format!("Zuletzt verwendet: {d}"),
+                    (None, None) => "Wird beim nächsten KI-Werkzeug verwendet.".to_string(),
+                };
+                ui.label(RichText::new(detail).size(12.0).color(theme::TEXT));
+            }
         });
         if enabled != runtime::gpu_enabled() {
             self.set_ai_gpu(enabled);
@@ -119,13 +109,7 @@ impl App {
         if install {
             self.install_gpu_job();
         }
-        if close || modal.should_close() {
-            self.show_gpu_dialog = false;
-        }
     }
 }
 
 pub(crate) const GPU_JOB: &str = "KI-Beschleunigung laden";
-
-/// Menu entry and title of the dialog.
-pub const DIALOG_TITLE: &str = "Grafikkarte …";

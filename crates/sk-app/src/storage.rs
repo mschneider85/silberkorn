@@ -1,14 +1,12 @@
-//! "Speicherplatz …": what Silberkorn keeps on disk to be faster (previews, depth maps, Raw-Details
+//! The settings page "Speicherplatz": what Silberkorn keeps on disk to be faster (previews, depth maps, Raw-Details
 //! and denoised data), how full each cache is, and emptying it.
 
 use egui::RichText;
 
 use crate::ai_products::AiProduct;
 use crate::app::App;
-use crate::dialog::{self, Dialog};
-use crate::theme::{self, icon};
-
-pub const DIALOG_TITLE: &str = "Speicherplatz …";
+use crate::dialog::{self, Tone};
+use crate::theme;
 
 /// The caches, in the order of the dialog.
 #[derive(Clone, Copy)]
@@ -62,57 +60,43 @@ fn amount(bytes: u64) -> String {
 }
 
 impl App {
-    pub(crate) fn storage_dialog(&mut self, ctx: &egui::Context) {
-        if !self.show_storage_dialog {
-            self.storage_sizes = None;
-            return;
-        }
-        // Measured once on opening and after emptying (reading the folders takes a moment).
+    /// The page "Speicherplatz" of the settings. The sizes are measured when the page opens
+    /// (reading the folders takes a moment) and after emptying; `settings_window` forgets them
+    /// when the page closes.
+    pub(crate) fn storage_page(&mut self, ui: &mut egui::Ui) {
         let sizes = *self.storage_sizes.get_or_insert_with(|| Cache::ALL.map(Cache::size));
         let total: u64 = sizes.iter().sum();
         let mut clear: Option<Cache> = None;
-        let mut close = false;
         let running = AiProduct::ALL.map(|k| self.product_running(k));
-        let title = DIALOG_TITLE.trim_end_matches(" …");
-        let subtitle = format!("Zwischenspeicher, um schneller zu sein · zusammen {}", amount(total));
-        let modal = Dialog::new("storage", icon::HARD_DRIVES, title).subtitle(&subtitle).width(460.0).show(ctx, |ui| {
-            dialog::card(ui, "Zwischenspeicher", None, |ui| {
-                dialog::note(ui, "Alles hier lässt sich jederzeit leeren: es wird bei Bedarf neu berechnet. Ist ein Speicher voll, fallen die ältesten Einträge heraus.");
-                for (cache, used) in Cache::ALL.into_iter().zip(sizes) {
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        // Room for the button on the right.
-                        let width = (ui.available_width() - 110.0).max(80.0);
-                        ui.vertical(|ui| {
-                            ui.set_width(width);
-                            ui.spacing_mut().item_spacing.y = 4.0;
-                            let limit = cache.limit();
-                            ui.label(RichText::new(format!("{} · {} von {}", cache.title(), amount(used), amount(limit))).size(12.0).color(theme::TEXT))
-                                .on_hover_text(cache.note());
-                            ui.add(egui::ProgressBar::new((used as f64 / limit.max(1) as f64).min(1.0) as f32).desired_width(width).desired_height(4.0));
-                        });
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let busy = matches!(cache, Cache::Product(k) if running[k as usize]);
-                            let button = ui.add_enabled(used > 0 && !busy, dialog::secondary("Leeren"));
-                            if button.on_disabled_hover_text(if busy { "Während der Berechnung nicht möglich" } else { "Leer" }).clicked() {
-                                clear = Some(cache);
-                            }
-                        });
+        let pill = format!("zusammen {}", amount(total));
+        dialog::card(ui, "Zwischenspeicher", Some((Tone::Accent, &pill)), |ui| {
+            dialog::note(ui, "Alles hier lässt sich jederzeit leeren: es wird bei Bedarf neu berechnet. Ist ein Speicher voll, fallen die ältesten Einträge heraus.");
+            for (cache, used) in Cache::ALL.into_iter().zip(sizes) {
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    // Room for the button on the right.
+                    let width = (ui.available_width() - 110.0).max(80.0);
+                    ui.vertical(|ui| {
+                        ui.set_width(width);
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        let limit = cache.limit();
+                        ui.label(RichText::new(format!("{} · {} von {}", cache.title(), amount(used), amount(limit))).size(12.0).color(theme::TEXT))
+                            .on_hover_text(cache.note());
+                        ui.add(egui::ProgressBar::new((used as f64 / limit.max(1) as f64).min(1.0) as f32).desired_width(width).desired_height(4.0));
                     });
-                }
-            });
-            dialog::footer(ui, |ui| {
-                if dialog::default_button(ui, true, dialog::primary("Schließen")) {
-                    close = true;
-                }
-            });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let busy = matches!(cache, Cache::Product(k) if running[k as usize]);
+                        let button = ui.add_enabled(used > 0 && !busy, dialog::secondary("Leeren"));
+                        if button.on_disabled_hover_text(if busy { "Während der Berechnung nicht möglich" } else { "Leer" }).clicked() {
+                            clear = Some(cache);
+                        }
+                    });
+                });
+            }
         });
         if let Some(cache) = clear {
             self.clear_cache(cache);
             self.storage_sizes = None;
-        }
-        if close || modal.should_close() {
-            self.show_storage_dialog = false;
         }
     }
 

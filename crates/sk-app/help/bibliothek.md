@@ -49,7 +49,7 @@ In einer Session werden die Bilder immer in den Ordner **Aufnahmen** kopiert.
 
 Steckt man eine Speicherkarte ein, öffnet sich der Importdialog von selbst mit ihrem Bilderordner. Von einer Karte wird immer kopiert, auch wenn **Nicht kopieren** gewählt war: Die Dateien verschwinden ja mit der Karte. Wird die Karte herausgezogen, schließt sich der Dialog.
 
-Das automatische Öffnen schaltet **Importdialog öffnen, wenn eine Speicherkarte erkannt wird** unten im Dialog ab.
+Das automatische Öffnen schaltet **Importdialog öffnen, wenn eine Speicherkarte erkannt wird** unten im Dialog ab, ebenso in den **Einstellungen …** auf der Seite **Bibliothek**.
 
 ## Bewerten und markieren
 
@@ -144,7 +144,7 @@ Die [Schärfemaske](ansicht#Schärfemaske) zeigt zusätzlich, welche Teile eines
 Bewertung, Farb-Label und Keywords lassen sich mit Lightroom, Bridge und Capture One über XMP-Dateien austauschen (Menü **Foto → XMP**):
 
 - **Metadaten in XMP schreiben** und **Metadaten aus XMP lesen** für die Auswahl.
-- **Änderungen automatisch in XMP schreiben** hält die XMP-Dateien laufend aktuell (standardmäßig aus).
+- **Änderungen automatisch in XMP schreiben** (in den **Einstellungen …**, Seite **Bibliothek**) hält die XMP-Dateien laufend aktuell (standardmäßig aus).
 
 Ändert ein anderes Programm eine XMP-Datei, übernimmt Silberkorn die Werte beim nächsten Laden. Entwicklungseinstellungen anderer Programme bleiben in der Datei unberührt.
 
@@ -158,6 +158,6 @@ In einer Session verschiebt **Nach „Selects“ verschieben** ({taste:to-select
 
 ## Ordner überwachen
 
-**Ordner überwachen** (im Abschnitt **Ordner**, in einer Session bei den Session-Ordnern, auch im Menü **Datei**) lässt neue Bilder im angezeigten Ordner von selbst erscheinen, etwa wenn die Kamerasoftware beim Fotografieren mit Kabel in den Ordner **Aufnahmen** schreibt. Mit **Neue Aufnahme gleich öffnen** wird jeweils die neueste groß gezeigt.
+**Ordner überwachen** (im Abschnitt **Ordner**, in einer Session bei den Session-Ordnern, auch im Menü **Datei** und in den **Einstellungen …** auf der Seite **Bibliothek**) lässt neue Bilder im angezeigten Ordner von selbst erscheinen, etwa wenn die Kamerasoftware beim Fotografieren mit Kabel in den Ordner **Aufnahmen** schreibt. Mit **Neue Aufnahme gleich öffnen** wird jeweils die neueste groß gezeigt.
 
 Die Überwachung wirkt, sobald ein Ordner ohne Unterordner angezeigt wird; die Statusleiste zeigt dann „Überwacht: …“ mit dem Ordnernamen.

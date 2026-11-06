@@ -644,8 +644,7 @@ pub struct App {
     pub(crate) remove_replaces: Option<u64>,
     pub inpaint_busy: bool,
     pub removal_progress: f32,
-    pub show_gpu_dialog: bool,
-    pub show_storage_dialog: bool,
+    pub settings: crate::settings_window::SettingsWindow,
     /// Sizes of the caches while "Speicherplatz" is open (see `storage.rs`).
     pub(crate) storage_sizes: Option<[u64; 4]>,
     pub ai_busy: bool,
@@ -880,7 +879,6 @@ pub struct App {
     /// without computing them anew.
     proof_cache: Vec<ProofView>,
     proof_key_cache: std::cell::RefCell<ProofKeyCache>,
-    pub show_shortcuts: bool,
     pub help: crate::help::HelpView,
     pub tour: crate::tour::TourState,
     pub show_licenses: bool,
@@ -1161,8 +1159,7 @@ impl App {
             remove_replaces: None,
             inpaint_busy: false,
             removal_progress: 0.0,
-            show_gpu_dialog: false,
-            show_storage_dialog: false,
+            settings: Default::default(),
             storage_sizes: None,
             ai_busy: false,
             subject_prepared: None,
@@ -1214,7 +1211,6 @@ impl App {
             proof_requested: None,
             proof_cache: Vec::new(),
             proof_key_cache: Default::default(),
-            show_shortcuts: false,
             help: Default::default(),
             tour: Default::default(),
             show_licenses: false,
@@ -1347,7 +1343,10 @@ impl App {
         // With the viewer on its own window, the main window starts with the grid.
         app.grid_view = std::env::var_os("SILBERKORN_GRID").is_some() || app.viewer_window.open;
         match std::env::var("SILBERKORN_DIALOG").as_deref() {
-            Ok("shortcuts") => app.show_shortcuts = true,
+            Ok("shortcuts") => app.open_settings(crate::settings_window::Page::Shortcuts),
+            Ok(d) if d.starts_with("settings") => {
+                app.open_settings(crate::settings_window::Page::find(d.trim_start_matches("settings").trim_start_matches(':')).unwrap_or_default());
+            }
             Ok("tutorials") => app.tour.dialog_open = true,
             Ok(d) if d.starts_with("hilfe") => app.open_help(d.strip_prefix("hilfe:").unwrap_or("erste-schritte")),
             Ok(d) if d.starts_with("tour:") => {
@@ -1359,8 +1358,8 @@ impl App {
             }
             Ok("licenses") => app.show_licenses = true,
             Ok("about") => app.splash = Some(crate::splash::Splash::about()),
-            Ok("gpu") => app.show_gpu_dialog = true,
-            Ok("storage") => app.show_storage_dialog = true,
+            Ok("gpu") => app.open_settings(crate::settings_window::Page::Gpu),
+            Ok("storage") => app.open_settings(crate::settings_window::Page::Storage),
             Ok("update") => app.update_dialog_open(),
             // `calibrate` or `calibrate:<dpi>`.
             Ok(d) if d.starts_with("calibrate") => {
@@ -3176,7 +3175,7 @@ impl App {
         // applications (Ctrl+Entf must not trash the selection behind the rename dialog).
         // A focused slider or button keeps only the keys it uses itself (arrows, space); only a
         // text field takes them all. The about card is no modal, but closes with Esc itself.
-        if dialog_open || self.palette.open || self.show_shortcuts || self.copy_dialog.tools.is_some() || ctx.text_edit_focused() || egui::Popup::is_any_open(ctx) {
+        if dialog_open || self.palette.open || self.settings.open || self.copy_dialog.tools.is_some() || ctx.text_edit_focused() || egui::Popup::is_any_open(ctx) {
             return;
         }
         // Ctrl+1 … Ctrl+0: the tool tabs in rail order.

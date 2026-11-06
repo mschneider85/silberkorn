@@ -85,7 +85,7 @@ Administratorrechte. Beim Deinstallieren fragt er, ob auch Einstellungen, Stile,
 und Vorschauen gelöscht werden sollen (Standard: behalten). Fotos und Sidecars bleiben immer erhalten.
 
 Die App fragt beim Start höchstens einmal am Tag `api.github.com` nach dem neuesten Release
-(nicht in Debug-Builds; abschaltbar unter Hilfe → „Nach Updates suchen …“). Ist eines neuer, erscheint
+(nicht in Debug-Builds; abschaltbar unter Hilfe → „Nach Updates suchen …“ und in den Einstellungen, Seite „Allgemein“). Ist eines neuer, erscheint
 unten rechts „Update x.y.z“. Unter Windows lädt „Jetzt aktualisieren“ den Installer und prüft die
 Prüfsumme; „Jetzt neu starten“ schließt die App, der Installer läuft still durch (nur ein
 Fortschrittsfenster) und startet die neue Version. Wer nicht neu startet, bekommt das Update beim
@@ -138,8 +138,8 @@ zurück. Der Prozessor-Pfad bleibt die Referenz: `pipeline::gpu`-Tests vergleich
 werden beim Resampling auf dem Prozessor angewendet, der Softproof (Little CMS) ebenfalls.
 Antwortet die Grafikkarte nicht (Zeitlimit 60 s), geht sie verloren oder liefert sie ein
 unvollständiges Bild, wird sie bis zum Neustart nicht mehr verwendet und der Prozessor übernimmt;
-der Dialog „Grafikkarte …“ nennt den Grund. Puffer werden zwischen Berechnungen wiederverwendet.
-Abschalten im Dialog „Grafikkarte …“ oder mit `SILBERKORN_GPU=0`; `SILBERKORN_GPU=software` erlaubt
+die Einstellungen (Seite „Grafikkarte“) nennen den Grund. Puffer werden zwischen Berechnungen wiederverwendet.
+Abschalten in den Einstellungen (Seite „Grafikkarte“) oder mit `SILBERKORN_GPU=0`; `SILBERKORN_GPU=software` erlaubt
 Software-Adapter (unter WSL zusätzlich `GALLIUM_DRIVER=llvmpipe`) für die App selbst; die
 Vergleichstests holen sich ohne Grafikkarte von sich aus einen Software-Adapter.
 `cargo run --release -p sk-core --example gpu_info` zeigt die gefundenen Adapter.
@@ -288,7 +288,7 @@ Werkzeugbereichen (Objektivunschärfe, Neu ausleuchten, Atmosphäre, Entfernen, 
 an Werkzeugen und Knöpfen (Raw-Details, Objekt, Motiv, Himmel, Tiefe, KI-Entrauschen), am Feld
 „Bildinhalt“ und an den Keyword-Vorschlägen, in den Menüs und in der Befehlspalette.
 
-**KI-Beschleunigung** (Bearbeiten → „Grafikkarte …“, Abschnitt „KI-Berechnung“, Windows): Die Netze rechnen dann über
+**KI-Beschleunigung** (Bearbeiten → „Einstellungen …“, Seite „Grafikkarte“, Abschnitt „KI-Berechnung“, Windows): Die Netze rechnen dann über
 ONNX Runtime mit DirectML auf der Grafikkarte (jede DirectX-12-Karte). ONNX Runtime wird nicht
 gelinkt, sondern zur Laufzeit geladen: Beim ersten Start lädt Silberkorn `onnxruntime.dll` (1.24.4) und
 `DirectML.dll` (1.15.4) aus Microsofts NuGet-Paketen nach `%LOCALAPPDATA%\silberkorn\gpu`, und zwar
@@ -1108,7 +1108,7 @@ beziehen sich aber nur auf die Bilder der Session.
   höchstens 4 GB (`SILBERKORN_CACHE_MB` ändert das); beim Start werden die am längsten nicht
   genutzten entfernt. Session-Caches sind davon ausgenommen. Sichtbare Vorschaubilder werden vor
   denen berechnet, an denen man schon vorbeigescrollt ist.
-- **Speicherplatz** (Bearbeiten → „Speicherplatz …“): zeigt die Zwischenspeicher auf der Festplatte
+- **Speicherplatz** (Bearbeiten → „Einstellungen …“, Seite „Speicherplatz“): zeigt die Zwischenspeicher auf der Festplatte
   mit Füllstand – Vorschauen und Miniaturen (4 GB), Tiefenkarten (2 GB), Raw-Details (10 GB), KI-Entrauschen (20 GB) –
   und leert sie einzeln. Alles darin wird bei Bedarf neu berechnet.
 
@@ -1138,7 +1138,7 @@ darktables `IMG_0001.ARW.xmp`).
   nächsten Laden. Gilt die eigene Änderung als neuer, bleibt sie. **Foto → XMP → „Metadaten aus
   XMP lesen“** übernimmt die XMP-Werte der Auswahl in jedem Fall.
 - **Schreiben:** **„Metadaten in XMP schreiben“** für die Auswahl, oder automatisch bei jeder
-  Änderung („Änderungen automatisch in XMP schreiben“, standardmäßig aus). Nur diese drei
+  Änderung („Änderungen automatisch in XMP schreiben“ in den Einstellungen, Seite „Bibliothek“, standardmäßig aus). Nur diese drei
   Eigenschaften werden ersetzt; Entwicklungseinstellungen anderer Programme und alles Übrige
   in der Datei bleiben erhalten. Label-Namen werden englisch geschrieben („Red“), deutsche
   Lightroom-Namen („Rot“) werden gelesen.
@@ -1171,7 +1171,7 @@ prüft alle Verweise, `every_section_has_help` die Kurzhilfen.
 
 ## Tastenkürzel
 
-Die Tabelle zeigt die Voreinstellung. Im Fenster **Bearbeiten → Tastenkürzel anpassen …** lässt sich jedem Befehl
+Die Tabelle zeigt die Voreinstellung. Unter **Bearbeiten → Einstellungen …**, Seite **Tastenkürzel**, lässt sich jedem Befehl
 ein anderes oder ein weiteres Kürzel geben: Klick auf ein Kürzel und die neue Taste drücken, „+“
 fügt eines hinzu, Rechtsklick entfernt es. Ist die Taste schon vergeben, wechselt sie zum neuen
 Befehl (das Fenster sagt, von welchem). Menüs, Befehlssuche und Tooltips zeigen die geänderten

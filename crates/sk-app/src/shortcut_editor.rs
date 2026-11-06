@@ -1,10 +1,10 @@
-//! The shortcut window (F1): every command with its shortcuts, which can be changed, and the
-//! keys that are fixed.
+//! The settings page "Tastenkürzel": every command with its shortcuts, which can be changed,
+//! and the keys that are fixed.
 
 use egui::{Key, RichText, vec2};
 
 use crate::app::App;
-use crate::dialog::{self, Dialog};
+use crate::dialog;
 use crate::browser::{SPEED_KEYS, SpeedParam};
 use crate::commands::{self, COMMANDS};
 use crate::theme::{self, icon};
@@ -56,11 +56,9 @@ fn fixed_keys() -> Vec<(String, String)> {
 }
 
 impl App {
-    pub(crate) fn shortcut_editor(&mut self, ctx: &egui::Context) {
-        if !self.show_shortcuts {
-            self.shortcut_editor.recording = None;
-            return;
-        }
+    /// Takes the key of a shortcut being recorded, before anything else sees it. Returns whether
+    /// it changed a shortcut.
+    pub(crate) fn record_shortcut(&mut self, ctx: &egui::Context) -> bool {
         let mut changed = false;
         if let Some((id, replace)) = self.shortcut_editor.recording
             && let Some(key) = commands::pressed_key(ctx)
@@ -85,13 +83,23 @@ impl App {
             ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { .. } | egui::Event::Text(_))));
         }
 
-        let (mut close, mut reset_all) = (false, false);
-        let dialog = Dialog::new("shortcuts", icon::KEYBOARD, "Tastenkürzel anpassen")
-            .subtitle("Klick auf ein Kürzel ändert es, + fügt eines hinzu, Rechtsklick entfernt es")
-            .width(600.0);
-        let modal = dialog.show(ctx, |ui| {
+        changed
+    }
+
+    /// The page "Tastenkürzel" of the settings: a search field and the list, which scrolls in
+    /// the height left.
+    pub(crate) fn shortcuts_page(&mut self, ui: &mut egui::Ui) {
+        let mut changed = false;
+        let mut reset_all = false;
+        {
             let ed = &mut self.shortcut_editor;
-            ui.add(egui::TextEdit::singleline(&mut ed.filter).hint_text(format!("{}  Befehl suchen", icon::MAGNIFYING_GLASS)).desired_width(f32::INFINITY));
+            let any = COMMANDS.iter().any(|c| commands::is_changed(c.id));
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    reset_all = ui.add_enabled(any, dialog::secondary("Alle zurücksetzen")).clicked();
+                    ui.add(egui::TextEdit::singleline(&mut ed.filter).hint_text(format!("{}  Befehl suchen", icon::MAGNIFYING_GLASS)).desired_width(f32::INFINITY));
+                });
+            });
             match &ed.message {
                 Some(m) => ui.label(RichText::new(m).color(theme::ACCENT)),
                 None => ui.label(RichText::new("Esc bricht eine Aufnahme ab.").size(12.0).color(theme::TEXT_DIM)),
@@ -111,8 +119,7 @@ impl App {
                 .iter()
                 .map(|c| width(format!("{}  {}", c.icon, c.label.trim_end_matches(" …"))))
                 .fold(270.0, f32::max);
-            let height = (ctx.content_rect().height() - 260.0).clamp(200.0, 640.0);
-            egui::ScrollArea::vertical().auto_shrink([true, false]).max_height(height).min_scrolled_height(height).show(ui, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 for group in groups {
                     let cmds: Vec<_> = COMMANDS
                         .iter()
@@ -181,12 +188,7 @@ impl App {
                     });
                 }
             });
-            let any = COMMANDS.iter().any(|c| commands::is_changed(c.id));
-            dialog::footer(ui, |ui| {
-                close = ui.add(dialog::primary("Fertig")).clicked();
-                reset_all = ui.add_enabled(any, dialog::secondary("Alle zurücksetzen")).clicked();
-            });
-        });
+        }
         if reset_all {
             commands::reset_all_bindings();
             self.shortcut_editor.message = Some("Alle Tastenkürzel zurückgesetzt".into());
@@ -194,13 +196,6 @@ impl App {
         }
         if changed {
             self.save_settings();
-        }
-        // Esc closes the window, unless it ended a recording.
-        let esc = self.shortcut_editor.recording.is_none() && modal.should_close();
-        if close || esc {
-            self.show_shortcuts = false;
-            self.shortcut_editor.recording = None;
-            self.shortcut_editor.message = None;
         }
     }
 }

@@ -13,7 +13,7 @@ Die meisten Netze werden nicht mit Silberkorn ausgeliefert, sondern beim Program
 
 ### Grafikkarte
 
-**Bearbeiten → Grafikkarte …** zeigt, wo Silberkorn rechnet:
+**Einstellungen …**, Seite **Grafikkarte**, zeigt, wo Silberkorn rechnet:
 
 - **Bildberechnung**: Regler, Vorschau und Export rechnen auf der Grafikkarte, mit dem Prozessor als Rückfall.
 - **KI-Berechnung** (Windows): Die KI-Werkzeuge rechnen auf der Grafikkarte (jede Karte mit DirectX 12) ein Vielfaches schneller als auf dem Prozessor. Dafür lädt **Laden** einmalig eine Erweiterung von Microsoft.

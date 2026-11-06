@@ -140,8 +140,9 @@ pub const COMMANDS: &[Command] = &[
     cmd!("paste-adjustments", icon::CLIPBOARD_TEXT, "Anpassungen einfügen", "Bearbeiten", [CTRL_SHIFT => Key::V], "paste anwenden auswahl", |a| a.clipboard.is_some() && !a.on_layer(), |a, _| a.paste_adjustments()),
     cmd!("reset", icon::ARROWS_COUNTER_CLOCKWISE, "Alle Anpassungen zurücksetzen", "Bearbeiten", [], "reset", image_tool, |a, _| a.reset_adjustments()),
     cmd!("select-all", icon::CHECK_SQUARE, "Alle auswählen", "Bearbeiten", [CTRL => Key::A], "select all", has_images, |a, _| a.select_all()),
-    cmd!("gpu", icon::LIGHTNING, "Grafikkarte …", "Bearbeiten", [], "gpu grafikkarte ki beschleunigung directml", always, |a, _| a.show_gpu_dialog = true),
-    cmd!("storage", icon::HARD_DRIVES, "Speicherplatz …", "Bearbeiten", [], "zwischenspeicher cache festplatte leeren vorschauen tiefenkarten entrauschen", always, |a, _| a.show_storage_dialog = true),
+    cmd!("settings", icon::GEAR_SIX, "Einstellungen …", "Bearbeiten", [CTRL => Key::Comma], "einstellungen optionen voreinstellungen preferences settings programm", always, |a, _| a.open_settings(a.settings.page)),
+    cmd!("gpu", icon::LIGHTNING, "Grafikkarte …", "Bearbeiten", [], "gpu grafikkarte ki beschleunigung directml", always, |a, _| a.open_settings(crate::settings_window::Page::Gpu)),
+    cmd!("storage", icon::HARD_DRIVES, "Speicherplatz …", "Bearbeiten", [], "zwischenspeicher cache festplatte leeren vorschauen tiefenkarten entrauschen", always, |a, _| a.open_settings(crate::settings_window::Page::Storage)),
     // Foto und Entwickeln
     cmd!("rotate-left", icon::ARROW_COUNTER_CLOCKWISE, "Links drehen", "Entwickeln", [CTRL => Key::OpenBracket], "rotate", image_tool, |a, _| a.rotate(3)),
     cmd!("rotate-right", icon::ARROW_CLOCKWISE, "Rechts drehen", "Entwickeln", [CTRL => Key::CloseBracket], "rotate", image_tool, |a, _| a.rotate(1)),
@@ -294,7 +295,7 @@ pub const COMMANDS: &[Command] = &[
     // Hilfe
     cmd!("help", icon::QUESTION, "Hilfe", "Hilfe", [NONE => Key::F1], "hilfe handbuch anleitung help manual dokumentation", always, |a, _| a.toggle_help()),
     cmd!("tutorials", icon::GRADUATION_CAP, "Tutorials …", "Hilfe", [], "tutorial tour einführung lernen anleitung schritt", always, |a, _| a.tour.dialog_open = true),
-    cmd!("shortcuts", icon::KEYBOARD, "Tastenkürzel anpassen …", "Bearbeiten", [], "shortcuts tasten tastenkürzel ändern belegen", always, |a, _| a.show_shortcuts = !a.show_shortcuts),
+    cmd!("shortcuts", icon::KEYBOARD, "Tastenkürzel anpassen …", "Bearbeiten", [], "shortcuts tasten tastenkürzel ändern belegen", always, |a, _| a.open_settings(crate::settings_window::Page::Shortcuts)),
     cmd!("update", icon::ARROW_CIRCLE_UP, "Nach Updates suchen …", "Hilfe", [], "update aktualisieren version release neu", always, |a, _| a.update_dialog_open()),
     cmd!("licenses", icon::SCALES, "Lizenzen …", "Hilfe", [], "lizenzen licenses modelle lensfun urheber", always, |a, _| a.show_licenses = true),
     cmd!("about", icon::INFO, "Über Silberkorn", "Hilfe", [], "about version", always, |a, _| a.splash = Some(crate::splash::Splash::about())),

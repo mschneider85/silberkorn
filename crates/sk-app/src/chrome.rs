@@ -211,9 +211,7 @@ impl App {
         ui.separator();
         self.command_item(ui, "select-all");
         ui.separator();
-        self.command_item(ui, "gpu");
-        self.command_item(ui, "storage");
-        self.command_item(ui, "shortcuts");
+        self.command_item(ui, "settings");
     }
 
     /// Organizing: rating, labels, metadata, names, variants, stacks, where the files are.
@@ -252,12 +250,6 @@ impl App {
                 }
                 if item(ui, icon::DOWNLOAD_SIMPLE, "Metadaten aus XMP lesen", "", true) {
                     self.read_xmp_selection();
-                }
-                ui.separator();
-                let auto = sk_core::xmp::write_enabled();
-                if check(ui, auto, "Änderungen automatisch in XMP schreiben", "") {
-                    sk_core::xmp::set_write_enabled(!auto);
-                    self.save_settings();
                 }
             })
             .response
@@ -703,12 +695,10 @@ impl App {
     pub fn dialogs(&mut self, ctx: &egui::Context) {
         self.rename_dialog(ctx);
         self.import_dialog(ctx);
-        self.gpu_dialog(ctx);
-        self.storage_dialog(ctx);
+        self.settings_window(ctx);
         self.licenses_dialog(ctx);
         self.update_dialog(ctx);
         self.copy_dialog(ctx);
-        self.shortcut_editor(ctx);
         self.deletion_dialog(ctx);
         self.help_window(ctx);
         self.tutorials_dialog(ctx);

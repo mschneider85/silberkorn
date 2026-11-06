@@ -80,7 +80,7 @@ pub(crate) fn fill_keys(text: &str) -> String {
 fn shortcuts_chapter() -> String {
     use std::fmt::Write;
     let mut s = String::from(
-        "# Tastenkürzel\n\nAlle Befehle mit ihren Tasten, nach Menüs. Jede Taste lässt sich ändern: **Tastenkürzel anpassen …** im Menü **Bearbeiten**. Befehle ohne Taste sind über die Befehlssuche erreichbar (Strg+K).\n",
+        "# Tastenkürzel\n\nAlle Befehle mit ihren Tasten, nach Menüs. Jede Taste lässt sich ändern: **Einstellungen …** im Menü **Bearbeiten**, Seite **Tastenkürzel**. Befehle ohne Taste sind über die Befehlssuche erreichbar (Strg+K).\n",
     );
     let mut groups: Vec<&str> = Vec::new();
     for c in crate::commands::COMMANDS {
@@ -421,7 +421,7 @@ impl App {
             self.open_help(&target);
         }
         if open_editor {
-            self.show_shortcuts = true;
+            self.open_settings(crate::settings_window::Page::Shortcuts);
         }
         self.help.open &= open;
     }

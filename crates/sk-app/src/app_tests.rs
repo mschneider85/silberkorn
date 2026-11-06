@@ -4869,16 +4869,16 @@ fn lens_correction_source_is_chosen_in_a_list() {
 }
 
 #[test]
-fn storage_dialog_measures_the_caches_once() {
+fn storage_page_measures_the_caches_once() {
     let Some(mut f) = Fixture::new("storage") else { return };
-    f.app.show_storage_dialog = true;
+    f.app.open_settings(crate::settings_window::Page::Storage);
     let app = &mut f.app;
-    f.ctx.run_ui(Default::default(), |ui| app.storage_dialog(ui.ctx())).textures_delta.clear();
+    f.ctx.run_ui(Default::default(), |ui| app.settings_window(ui.ctx())).textures_delta.clear();
     assert!(f.app.storage_sizes.is_some(), "beim Öffnen gemessen");
     // Closed: measured anew next time.
-    f.app.show_storage_dialog = false;
+    f.app.settings.open = false;
     let app = &mut f.app;
-    f.ctx.run_ui(Default::default(), |ui| app.storage_dialog(ui.ctx())).textures_delta.clear();
+    f.ctx.run_ui(Default::default(), |ui| app.settings_window(ui.ctx())).textures_delta.clear();
     assert!(f.app.storage_sizes.is_none());
 }
 
