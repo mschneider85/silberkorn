@@ -143,7 +143,7 @@ impl Keywords {
         let scored = self
             .words
             .iter()
-            .zip(self.vectors.chunks_exact(DIM))
+            .zip(self.vectors.as_chunks::<DIM>().0)
             .filter(|(w, _)| !has.iter().any(|h| h.to_lowercase() == w.to_lowercase()))
             .map(|(w, v)| (*w, similarity(image, v)))
             .collect();
@@ -231,6 +231,8 @@ pub struct Tokenizer {
     merges: HashMap<(i64, i64), (u32, i64)>,
     eos: i64,
     pad: i64,
+    /// Characters of the longest token.
+    longest: usize,
 }
 
 #[derive(serde::Deserialize)]
@@ -259,12 +261,15 @@ impl Tokenizer {
             }
         }
         ensure!(!merges.is_empty(), "{}: keine Wortteile", path.display());
-        Ok(Self { vocab, merges, eos, pad })
+        let longest = vocab.keys().map(|t| t.chars().count()).max().unwrap_or(1);
+        Ok(Self { vocab, merges, eos, pad, longest })
     }
 
     /// The token ids of `text`, always [`TOKENS`] of them.
     pub fn encode(&self, text: &str) -> Vec<i64> {
-        let text = text.to_lowercase().replace(' ', "▁");
+        // Only the first tokens count, and merging takes quadratic time: a long text is cut
+        // well behind what they can cover (a token changes only through its neighbours).
+        let text: String = text.to_lowercase().chars().take(2 * TOKENS * self.longest).map(|c| if c == ' ' { '▁' } else { c }).collect();
         let mut ids: Vec<i64> = Vec::with_capacity(text.len());
         let mut buf = [0u8; 4];
         for c in text.chars() {
@@ -339,6 +344,10 @@ mod tests {
         // Too long: cut so that `<eos>` still ends it.
         let long = t.encode(&"a ".repeat(100));
         assert_eq!((long.len(), long[TOKENS - 1]), (TOKENS, 1));
+        // A pasted text of any length: as fast as a short one (merging is quadratic), the same tokens.
+        let start = std::time::Instant::now();
+        assert_eq!(t.encode(&"b ".repeat(200_000)), t.encode(&"b ".repeat(TOKENS)));
+        assert!(start.elapsed() < std::time::Duration::from_secs(1), "{:?}", start.elapsed());
         std::fs::remove_dir_all(dir).ok();
     }
 

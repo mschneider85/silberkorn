@@ -38,6 +38,9 @@ pub struct ContentSearch {
     encoding: Option<(Query, Receiver<anyhow::Result<Vec<f32>>>)>,
     /// A text waiting for its model.
     waiting: Option<Query>,
+    /// A text whose model could not be loaded: not tried again before the user types or
+    /// presses Enter (the download reported its error already).
+    gave_up: Option<Query>,
     /// When the text last changed.
     typed_at: Option<Instant>,
     /// Embeddings of the raw files shown (by file, not variant).
@@ -49,7 +52,7 @@ pub struct ContentSearch {
     /// The analysis was cancelled: not started again before the next search.
     cancelled: bool,
     /// Embeddings the running analysis computed since the last frame.
-    incoming: Arc<Mutex<Vec<(PathBuf, Vec<f32>)>>>,
+    incoming: Incoming,
     /// The analysis running: job id and the files it computes.
     job: Option<(u64, HashSet<PathBuf>)>,
     /// The text half of the model, loaded with the first search and kept.
@@ -61,6 +64,8 @@ pub struct ContentSearch {
 }
 
 type SharedImageEncoder = Arc<Mutex<Option<Arc<ImageEncoder>>>>;
+/// Embeddings computed in the background, by raw file, until the next frame takes them.
+type Incoming = Arc<Mutex<Vec<(PathBuf, Vec<f32>)>>>;
 
 /// The image encoder of `slot`, loaded (and downloaded) on first use.
 fn image_encoder(slot: &SharedImageEncoder) -> anyhow::Result<Arc<ImageEncoder>> {
@@ -101,12 +106,14 @@ impl ContentSearch {
     pub fn typed(&mut self) {
         self.typed_at = Some(Instant::now());
         self.cancelled = false;
+        self.gave_up = None;
     }
 
     /// Enter in the text field: searched at once.
     pub fn submit(&mut self) {
         self.typed_at = Some(Instant::now() - TYPING_PAUSE);
         self.cancelled = false;
+        self.gave_up = None;
     }
 
     pub fn clear(&mut self) {
@@ -166,6 +173,10 @@ impl App {
                 ctx.request_repaint_after(TYPING_PAUSE - at.elapsed());
             }
         }
+        // The model download failed or was cancelled: what waited for it was dropped.
+        if self.content.waiting.is_some() && self.ai_download_progress(AiFeature::Content).is_none() {
+            self.content.gave_up = self.content.waiting.take();
+        }
         if changed {
             self.update_content_search();
         }
@@ -193,9 +204,13 @@ impl App {
             Some(q @ Query::Text(_)) => {
                 let current = self.content.target.as_ref().is_some_and(|(t, _)| *t == q);
                 let underway = self.content.encoding.as_ref().is_some_and(|(t, _)| *t == q) || self.content.waiting.as_ref() == Some(&q);
-                if !current && !underway && self.content.typed_at.is_none() {
+                if !current && !underway && self.content.typed_at.is_none() && self.content.gave_up.as_ref() != Some(&q) {
                     self.content.waiting = Some(q);
                     self.with_ai(AiFeature::Content, |app| app.encode_query());
+                    // The download failed a moment ago (`with_ai` reported it).
+                    if self.content.waiting.is_some() && self.ai_download_progress(AiFeature::Content).is_none() {
+                        self.content.gave_up = self.content.waiting.take();
+                    }
                 }
             }
             None => {}
@@ -281,7 +296,10 @@ impl App {
                 for (path, result) in chunk.iter().zip(results) {
                     match result {
                         Ok(v) => {
-                            db.store_content(path, &tag, &v)?;
+                            // Not kept for the next session then, but the search has it.
+                            if let Err(e) = db.store_content(path, &tag, &v) {
+                                log::warn!("Bildinhalt {} nicht gespeichert: {e:#}", path.display());
+                            }
                             found.push((path.clone(), v));
                         }
                         Err(e) => log::warn!("Bildinhalt {}: {e:#}", path.display()),
