@@ -54,6 +54,9 @@ impl Cache {
     }
 }
 
+/// The choices for the preview cache.
+const CACHE_LIMITS_GB: [u64; 5] = [2, 4, 8, 16, 32];
+
 /// Gigabytes with one decimal (megabytes below 0.1 GB).
 fn amount(bytes: u64) -> String {
     if bytes < 100 << 20 { format!("{} MB", bytes >> 20) } else { format!("{:.1} GB", bytes as f64 / (1u64 << 30) as f64) }
@@ -94,8 +97,47 @@ impl App {
                 });
             }
         });
+        self.cache_limit_card(ui);
         if let Some(cache) = clear {
             self.clear_cache(cache);
+            self.storage_sizes = None;
+        }
+    }
+
+    /// How much the previews may take; `SILBERKORN_CACHE_MB` wins.
+    fn cache_limit_card(&mut self, ui: &mut egui::Ui) {
+        let from_env = sk_core::cache::user_cache_limit_from_env().is_some();
+        let current = sk_core::cache::user_cache_limit();
+        let mut chosen = None;
+        dialog::card(ui, "Platz für Vorschauen", None, |ui| {
+            dialog::note(ui, "Wie viel Vorschauen und Miniaturen der Bibliothek höchstens belegen. Mehr Platz: seltener neu berechnen, wenn man in alten Ordnern blättert.");
+            ui.add_enabled_ui(!from_env, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    for gb in CACHE_LIMITS_GB {
+                        let on = current == gb << 30;
+                        let text = RichText::new(format!("{gb} GB")).size(12.5).color(if on { egui::Color32::WHITE } else { theme::TEXT });
+                        let button = egui::Button::new(text).selected(on).corner_radius(8).min_size(egui::vec2(64.0, 28.0));
+                        if ui.add(button).clicked() && !on {
+                            chosen = Some(gb);
+                        }
+                    }
+                });
+            })
+            .response
+            .on_disabled_hover_text("Festgelegt durch SILBERKORN_CACHE_MB");
+        });
+        if let Some(gb) = chosen {
+            self.cache_limit_gb = Some(gb);
+            sk_core::cache::set_user_cache_limit(gb << 30);
+            self.save_settings();
+            if gb << 30 < current {
+                // Down to the new limit at once, the oldest first.
+                std::thread::spawn(move || {
+                    let removed = sk_core::cache::trim_user_cache(gb << 30);
+                    log::info!("Vorschau-Cache: {} MB alter Vorschauen entfernt", removed >> 20);
+                });
+            }
             self.storage_sizes = None;
         }
     }

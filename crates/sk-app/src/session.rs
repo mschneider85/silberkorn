@@ -78,7 +78,7 @@ fn dir_name(dir: &Path) -> String {
 }
 
 /// Shows a folder in the system file manager.
-fn reveal(dir: &Path) -> Result<(), String> {
+pub(crate) fn reveal(dir: &Path) -> Result<(), String> {
     let cmd = if cfg!(windows) {
         "explorer"
     } else if cfg!(target_os = "macos") {

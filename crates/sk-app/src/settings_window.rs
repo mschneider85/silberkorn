@@ -1,6 +1,9 @@
 //! "Einstellungen …" (Strg+,): everything that sets up the program, in one window. On the left
 //! the pages, on the right the chosen page in cards, as in the other dialogs.
 
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
 use egui::{Color32, CornerRadius, Rect, RichText, Sense, Stroke, Ui, UiBuilder, pos2, vec2};
 
 use crate::app::App;
@@ -16,6 +19,9 @@ const SIDE_FILL: Color32 = Color32::from_rgb(30, 30, 33);
 const NAV_HEIGHT: f32 = 36.0;
 /// Hairline above the buttons, button row and their margin.
 const FOOTER: f32 = 62.0;
+/// Backups of the catalog: one every this many days, the newest this many kept.
+pub const BACKUP_EVERY: u64 = 7;
+pub const BACKUP_KEEP: usize = 5;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Page {
@@ -67,10 +73,15 @@ impl Page {
     }
 }
 
+/// Where the thread of "Jetzt sichern" leaves the new backup or the error.
+type BackupSlot = Arc<Mutex<Option<Result<PathBuf, String>>>>;
+
 #[derive(Default)]
 pub struct SettingsWindow {
     pub open: bool,
     pub page: Page,
+    /// A backup started with "Jetzt sichern": its result, once there.
+    backup: Option<BackupSlot>,
 }
 
 impl SettingsWindow {
@@ -86,6 +97,14 @@ impl App {
     }
 
     pub(crate) fn settings_window(&mut self, ctx: &egui::Context) {
+        let backup = self.settings.backup.as_ref().and_then(|slot| slot.lock().ok()?.take());
+        if let Some(result) = backup {
+            self.settings.backup = None;
+            match result {
+                Ok(p) => self.status = format!("Katalog gesichert: {}", p.file_name().unwrap_or_default().to_string_lossy()),
+                Err(e) => self.report_error(format!("Katalog nicht gesichert: {e}")),
+            }
+        }
         // Forget what only an open page needs: measured anew when it opens again.
         if !self.settings.shows(Page::Storage) {
             self.storage_sizes = None;
@@ -177,6 +196,7 @@ impl App {
     }
 
     fn general_page(&mut self, ui: &mut Ui) {
+        self.catalog_card(ui);
         let mut check = false;
         let status = self.updates.available.as_ref().map(|r| format!("{} verfügbar", r.version));
         dialog::card(ui, "Updates", status.as_deref().map(|s| (Tone::Accent, s)), |ui| {
@@ -197,6 +217,67 @@ impl App {
             // The update dialog takes over.
             self.settings.open = false;
             self.update_dialog_open();
+        }
+        let mut show = None;
+        dialog::card(ui, "Programmdateien", None, |ui| {
+            dialog::note(ui, "Protokolle für Fehlermeldungen (silberkorn.log, panic.log), geladene KI-Modelle und Objektivprofile; daneben Einstellungen und Stile.");
+            show = show.take().or(path_row(ui, "Daten", &sk_core::paths::data_dir()));
+            show = show.take().or(path_row(ui, "Einstellungen", &sk_core::paths::config_dir()));
+        });
+        if let Some(dir) = show {
+            self.reveal_folder(&dir);
+        }
+    }
+
+    /// Where the catalog is, its backups and "Jetzt sichern".
+    fn catalog_card(&mut self, ui: &mut Ui) {
+        let catalog = self.global_catalog.clone();
+        let dir = sk_core::catalog::backup_dir(&catalog);
+        // A handful of files: read anew while the page is shown, so that a new one appears.
+        let backups = sk_core::catalog::backups(&dir);
+        let last = backups.last().and_then(|b| sk_core::catalog::backup_date(b)).map(str::to_string);
+        let busy = self.settings.backup.is_some();
+        let pill = match &last {
+            Some(d) => (Tone::Good, format!("Gesichert {d}")),
+            None => (Tone::Warn, "Keine Sicherung".to_string()),
+        };
+        let (mut show, mut now) = (None, false);
+        dialog::card(ui, "Katalog", Some((pill.0, &pill.1)), |ui| {
+            dialog::note(ui, format!("Bewertungen, Keywords, Alben und die Einstellungen der Bilder. Jede Woche entsteht beim Start eine Sicherung; die letzten {BACKUP_KEEP} bleiben."));
+            show = show.take().or(path_row(ui, "Ordner", catalog.parent().unwrap_or(&catalog)));
+            let label = format!("Sicherungen ({})", backups.len());
+            show = show.take().or(path_row(ui, &label, &dir));
+            ui.horizontal(|ui| {
+                if self.session.is_some() {
+                    dialog::note(ui, "Die geöffnete Session hat ihre eigene Datenbank.");
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let text = if busy { "Sichere …".to_string() } else { format!("{}  Jetzt sichern", icon::DATABASE) };
+                    now = ui.add_enabled(!busy, dialog::secondary(text)).clicked();
+                });
+            });
+        });
+        if let Some(dir) = show {
+            self.reveal_folder(&dir);
+        }
+        if now {
+            let slot = Arc::new(Mutex::new(None));
+            self.settings.backup = Some(slot.clone());
+            let ctx = ui.ctx().clone();
+            std::thread::spawn(move || {
+                // Due at once (every 0 days); a backup of today is replaced.
+                let result = sk_core::catalog::Catalog::open(&catalog).and_then(|c| c.backup(&dir, 0, BACKUP_KEEP)).map_err(|e| format!("{e:#}"));
+                if let Ok(mut s) = slot.lock() {
+                    *s = Some(result.map(|p| p.unwrap_or_default()));
+                }
+                ctx.request_repaint();
+            });
+        }
+    }
+
+    fn reveal_folder(&mut self, dir: &Path) {
+        if let Err(e) = crate::session::reveal(dir) {
+            self.report_error(format!("Ordner nicht geöffnet: {e}"));
         }
     }
 
@@ -224,6 +305,28 @@ impl App {
             self.save_settings();
         }
     }
+}
+
+/// A folder: its name, the path (shortened in front) and "Zeigen". Returns the folder when the
+/// button was pressed.
+fn path_row(ui: &mut Ui, name: &str, dir: &Path) -> Option<PathBuf> {
+    let mut show = None;
+    ui.horizontal(|ui| {
+        let (rect, _) = ui.allocate_exact_size(vec2(118.0, 22.0), Sense::hover());
+        ui.painter().text(rect.left_center(), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(12.5), theme::TEXT);
+        let width = (ui.available_width() - 96.0).max(60.0);
+        let text = dir.display().to_string();
+        let shown = crate::widgets::elide_start(ui, &text, width);
+        let label = ui.add_sized([width, 22.0], egui::Label::new(RichText::new(shown).size(12.0).color(theme::TEXT_DIM)).truncate());
+        label.on_hover_text(&text);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let exists = dir.is_dir();
+            if ui.add_enabled(exists, egui::Button::new(format!("{}  Zeigen", icon::FOLDER_OPEN)).corner_radius(8)).on_disabled_hover_text("Noch nicht angelegt").clicked() {
+                show = Some(dir.to_path_buf());
+            }
+        });
+    });
+    show
 }
 
 /// One page in the list: icon and name; the chosen one on an accent tint with a bar on the left.

@@ -236,6 +236,23 @@ pub struct Catalog {
     base: Option<PathBuf>,
 }
 
+/// Where the backups of the catalog `catalog` go: `Sicherungen` beside it.
+pub fn backup_dir(catalog: &Path) -> PathBuf {
+    catalog.parent().map_or_else(|| PathBuf::from("Sicherungen"), |d| d.join("Sicherungen"))
+}
+
+/// The backups in `dir`, oldest first (the names sort by date).
+pub fn backups(dir: &Path) -> Vec<PathBuf> {
+    let mut backups: Vec<PathBuf> = std::fs::read_dir(dir).map(|r| r.flatten().map(|e| e.path()).filter(|p| is_backup(p)).collect()).unwrap_or_default();
+    backups.sort();
+    backups
+}
+
+/// The date of a backup (`2026-10-18`), from its name.
+pub fn backup_date(backup: &Path) -> Option<&str> {
+    backup.file_stem()?.to_str()?.strip_prefix("catalog-")
+}
+
 pub fn default_catalog_path() -> PathBuf {
     crate::paths::data_dir().join("catalog.sqlite")
 }
@@ -761,11 +778,7 @@ impl Catalog {
     /// catalog is in use) unless the newest one there is younger than `every` days; keeps the
     /// `keep` newest. Returns the new backup, if one was made.
     pub fn backup(&self, dir: &Path, every: u64, keep: usize) -> Result<Option<PathBuf>> {
-        let mut backups: Vec<PathBuf> = std::fs::read_dir(dir)
-            .map(|r| r.flatten().map(|e| e.path()).filter(|p| is_backup(p)).collect())
-            .unwrap_or_default();
-        // The names sort by date.
-        backups.sort();
+        let mut backups = backups(dir);
         let today = date_of(now());
         let due = backups.last().and_then(|b| b.file_stem()).and_then(|s| s.to_str()).and_then(|s| s.strip_prefix("catalog-")).and_then(days_of).is_none_or(|last| {
             days_of(&today).is_some_and(|t| t >= last + every as i64)
@@ -1603,6 +1616,12 @@ mod tests {
         let left: Vec<_> = std::fs::read_dir(&backups).unwrap().flatten().map(|e| e.file_name()).collect();
         assert_eq!(left.len(), 2, "{left:?}");
         assert!(backups.join("catalog-2020-03-01.sqlite").exists());
+        // "Jetzt sichern": due at once, today's is replaced, not doubled.
+        assert_eq!(c.backup(&backups, 0, 2).unwrap(), Some(made.clone()));
+        assert_eq!(super::backups(&backups).len(), 2);
+        assert_eq!(super::backups(&backups).last(), Some(&made));
+        assert_eq!(backup_date(&made).map(str::len), Some(10));
+        assert_eq!(backup_dir(&dir.join("catalog.sqlite")), backups);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -366,6 +366,8 @@ struct Settings {
     watch_folder: bool,
     /// While watching, new pictures are not opened.
     watch_no_open: bool,
+    /// Size limit of the preview cache in GB (`None`: the default).
+    cache_limit_gb: Option<u64>,
     /// Choices of the catalog import.
     import: crate::import::ImportOptions,
     viewer_background: ViewerBackground,
@@ -645,6 +647,8 @@ pub struct App {
     pub inpaint_busy: bool,
     pub removal_progress: f32,
     pub settings: crate::settings_window::SettingsWindow,
+    /// Size limit of the preview cache chosen in the settings, in GB.
+    pub(crate) cache_limit_gb: Option<u64>,
     /// Sizes of the caches while "Speicherplatz" is open (see `storage.rs`).
     pub(crate) storage_sizes: Option<[u64; 4]>,
     pub ai_busy: bool,
@@ -980,6 +984,7 @@ impl App {
         sk_core::gpu::set_enabled(settings.develop_gpu.unwrap_or(true));
         // Sets up the graphics card and compiles the shaders while the window opens.
         std::thread::spawn(sk_core::pipeline::prepare_gpu);
+        sk_core::cache::set_user_cache_limit(settings.cache_limit_gb.map_or(0, |gb| gb << 30));
         // Keeps the per-user preview cache within its size limit (not in tests: it is the user's cache).
         if opts.persist_settings {
             std::thread::spawn(|| {
@@ -1019,8 +1024,8 @@ impl App {
         if opts.persist_settings {
             let path = catalog_path.clone();
             std::thread::spawn(move || {
-                let dir = path.parent().map(|d| d.join("Sicherungen")).unwrap_or_else(|| PathBuf::from("Sicherungen"));
-                match Catalog::open(&path).and_then(|c| c.backup(&dir, 7, 5)) {
+                let dir = sk_core::catalog::backup_dir(&path);
+                match Catalog::open(&path).and_then(|c| c.backup(&dir, crate::settings_window::BACKUP_EVERY, crate::settings_window::BACKUP_KEEP)) {
                     Ok(Some(b)) => log::info!("Katalog gesichert: {}", b.display()),
                     Ok(None) => {}
                     Err(e) => log::warn!("Katalog-Sicherung fehlgeschlagen: {e:#}"),
@@ -1160,6 +1165,7 @@ impl App {
             inpaint_busy: false,
             removal_progress: 0.0,
             settings: Default::default(),
+            cache_limit_gb: settings.cache_limit_gb,
             storage_sizes: None,
             ai_busy: false,
             subject_prepared: None,
@@ -1421,6 +1427,7 @@ impl App {
             update_skipped: self.updates.skipped.clone(),
             watch_folder: self.hot_folder.on,
             watch_no_open: !self.hot_folder.open_new,
+            cache_limit_gb: self.cache_limit_gb,
             import: self.import_options.clone(),
         };
         if let Some(dir) = path.parent() {

@@ -1077,7 +1077,9 @@ beziehen sich aber nur auf die Bilder der Session.
 - **Ordner** werden wie eine Session direkt durchsucht und im Hintergrund indexiert.
 - **Katalog** (SQLite, `~/.local/share/silberkorn/catalog.sqlite`, überschreibbar mit
   `SILBERKORN_CATALOG`): „Ordner importieren“ nimmt einen Ordnerbaum auf; danach stehen
-  „Alle Bilder“, „Letzter Import“, Katalogordner und Alben zur Verfügung.
+  „Alle Bilder“, „Letzter Import“, Katalogordner und Alben zur Verfügung. Beim Start entsteht jede
+  Woche eine Sicherung im Ordner `Sicherungen` daneben, die letzten fünf bleiben; Einstellungen →
+  „Allgemein“ zeigt die letzte und sichert auf Knopfdruck.
 - **Alben** (manuell) und **Filteralben** (gespeicherter Filter), Rechtsklick für Umbenennen/Löschen.
 - **Filter & Suche:** Freitext (Name, Kamera, Objektiv, Keyword), Mindestbewertung, Farb-Label,
   Keyword; Sortierung nach Name, Aufnahmedatum oder Bewertung.
@@ -1110,7 +1112,8 @@ beziehen sich aber nur auf die Bilder der Session.
   denen berechnet, an denen man schon vorbeigescrollt ist.
 - **Speicherplatz** (Bearbeiten → „Einstellungen …“, Seite „Speicherplatz“): zeigt die Zwischenspeicher auf der Festplatte
   mit Füllstand – Vorschauen und Miniaturen (4 GB), Tiefenkarten (2 GB), Raw-Details (10 GB), KI-Entrauschen (20 GB) –
-  und leert sie einzeln. Alles darin wird bei Bedarf neu berechnet.
+  und leert sie einzeln. Alles darin wird bei Bedarf neu berechnet. Wie viel Platz Vorschauen
+  und Miniaturen höchstens belegen (2–32 GB), lässt sich dort wählen; `SILBERKORN_CACHE_MB` geht vor.
 
 Sidecars bleiben die maßgebliche Quelle; der Katalog ist ein Index und kann jederzeit neu aufgebaut werden.
 

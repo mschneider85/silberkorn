@@ -71,7 +71,7 @@ Bilder auswählen und **Exportieren** ({taste:export}) drücken. Ohne weitere Ei
 
 - **Hilfe** ({taste:help}) öffnet dieses Handbuch.
 - **Tutorials …** im Menü **Hilfe** führt Schritt für Schritt durch typische Arbeiten.
-- **Einstellungen …** ({taste:settings}, im Menü **Bearbeiten**) fasst zusammen, was das Programm einrichtet: **Allgemein** (Updates), **Bibliothek** (Ordner überwachen, Speicherkarten, XMP-Dateien), **Grafikkarte**, **Speicherplatz** und **Tastenkürzel**. Unter **Tastenkürzel** stehen alle Kürzel und lassen sich ändern; die Übersicht steht auch unter [Tastenkürzel](tastenkuerzel).
+- **Einstellungen …** ({taste:settings}, im Menü **Bearbeiten**) fasst zusammen, was das Programm einrichtet: **Allgemein** (Katalog und seine Sicherungen, Updates, wo Protokolle und Einstellungen liegen), **Bibliothek** (Ordner überwachen, Speicherkarten, XMP-Dateien), **Grafikkarte**, **Speicherplatz** und **Tastenkürzel**. Unter **Tastenkürzel** stehen alle Kürzel und lassen sich ändern; die Übersicht steht auch unter [Tastenkürzel](tastenkuerzel).
 
 ## Wie geht es weiter
 

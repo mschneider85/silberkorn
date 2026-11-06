@@ -137,8 +137,24 @@ fn load_kind(path: &Path, adj: &Adjustments, session: Option<&Path>, kind: Kind)
 /// `SILBERKORN_CACHE_MB` overrides it.
 pub const USER_CACHE_LIMIT: u64 = 4 << 30;
 
+/// The limit chosen in the settings (0: the default).
+static USER_LIMIT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// `SILBERKORN_CACHE_MB`, which wins over the settings.
+pub fn user_cache_limit_from_env() -> Option<u64> {
+    std::env::var("SILBERKORN_CACHE_MB").ok().and_then(|v| v.parse::<u64>().ok()).map(|mb| mb << 20)
+}
+
 pub fn user_cache_limit() -> u64 {
-    std::env::var("SILBERKORN_CACHE_MB").ok().and_then(|v| v.parse::<u64>().ok()).map_or(USER_CACHE_LIMIT, |mb| mb << 20)
+    user_cache_limit_from_env().unwrap_or_else(|| match USER_LIMIT.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => USER_CACHE_LIMIT,
+        n => n,
+    })
+}
+
+/// Sets the limit (in bytes; 0: the default).
+pub fn set_user_cache_limit(bytes: u64) {
+    USER_LIMIT.store(bytes, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Size of the per-user cache (thumbnails and previews of images outside sessions), in bytes.
