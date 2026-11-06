@@ -91,6 +91,8 @@ Das Feld **Bildinhalt** findet Bilder nach dem, was sie zeigen, auch ohne Keywor
 
 Dafür erfasst eine KI jedes Bild einmal (auf dem Vorschaubild der Kamera, je nach Rechner 0,2 bis 1,5 Sekunden). Das geschieht bei der ersten Suche für alle Bilder der Ansicht im Hintergrund; die Statusleiste zeigt den Fortschritt, und die Treffer erscheinen nach und nach. Danach ist jede Suche sofort da. Das Ergebnis liegt im Katalog bzw. in der Session.
 
+Bilder, deren Inhalt nicht erfasst ist, stehen nicht unter den Treffern; ihre Zahl steht unter dem Feld. Wurde das Erfassen abgebrochen, setzt **Erfassen** daneben es fort.
+
 Ein Filteralbum speichert die Suche nach dem Bildinhalt nicht mit.
 
 ## Alben

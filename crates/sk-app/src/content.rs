@@ -51,6 +51,8 @@ pub struct ContentSearch {
     failed: HashSet<PathBuf>,
     /// The analysis was cancelled: not started again before the next search.
     cancelled: bool,
+    /// Shown files without an embedding (analysis cancelled, or unreadable): not among the hits.
+    missing: usize,
     /// Embeddings the running analysis computed since the last frame.
     incoming: Incoming,
     /// The analysis running: job id and the files it computes.
@@ -67,14 +69,14 @@ type SharedImageEncoder = Arc<Mutex<Option<Arc<ImageEncoder>>>>;
 /// Embeddings computed in the background, by raw file, until the next frame takes them.
 type Incoming = Arc<Mutex<Vec<(PathBuf, Vec<f32>)>>>;
 
-/// The image encoder of `slot`, loaded (and downloaded) on first use.
-fn image_encoder(slot: &SharedImageEncoder) -> anyhow::Result<Arc<ImageEncoder>> {
+/// The image encoder of `slot`, loaded (and downloaded, with `progress`) on first use.
+fn image_encoder(slot: &SharedImageEncoder, progress: &dyn Fn(f32)) -> anyhow::Result<Arc<ImageEncoder>> {
     let mut slot = slot.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(e) = &*slot {
         return Ok(e.clone());
     }
     if !ImageEncoder::available() {
-        sk_ai::models::download(&sk_ai::models::CONTENT_IMAGE, &|_| {})?;
+        sk_ai::models::download(&sk_ai::models::CONTENT_IMAGE, progress)?;
     }
     Ok(slot.insert(Arc::new(ImageEncoder::load()?)).clone())
 }
@@ -124,6 +126,8 @@ impl ContentSearch {
 
 /// Images analysed per round of the job (read in parallel; the view updates after each).
 const CHUNK: usize = 8;
+/// Part of the analysis's progress that loading its missing model takes.
+const MODEL_SHARE: f32 = 0.5;
 
 impl App {
     /// "Ähnliche finden": shows the images like `path`, most similar first.
@@ -199,6 +203,10 @@ impl App {
                 let known = self.content.vectors.get(&file).cloned();
                 if let Some(v) = known {
                     self.content.target = Some((Query::Similar(path), v));
+                } else if self.content.failed.contains(&file) {
+                    self.report_error(format!("Ähnliche finden: {} ließ sich nicht lesen", sk_core::variant::display_name(&path)));
+                    self.clear_content_search();
+                    return;
                 }
             }
             Some(q @ Query::Text(_)) => {
@@ -239,10 +247,17 @@ impl App {
         self.content.encoding = Some((query, rx));
     }
 
-    /// Looks up the embeddings of the shown files not looked up yet, and starts analysing those
-    /// without one (unless an analysis runs; the next one follows when it is done).
+    /// Looks up the embeddings of the shown files (and of the image searched for) not looked up
+    /// yet, and starts analysing those without one (unless an analysis runs; the next one
+    /// follows when it is done).
     fn ensure_content_vectors(&mut self) {
-        let files: Vec<PathBuf> = sk_core::variant::files_of(&self.entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>());
+        let mut files: Vec<PathBuf> = sk_core::variant::files_of(&self.entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>());
+        // Searched for first: the search can start with it (it may be of another folder).
+        if let Some(Query::Similar(p)) = self.content.query() {
+            let file = sk_core::variant::file_of(&p);
+            files.retain(|f| *f != file);
+            files.insert(0, file);
+        }
         let new: Vec<PathBuf> = files.iter().filter(|f| !self.content.looked_up.contains(*f)).cloned().collect();
         if !new.is_empty() {
             if let Some(c) = &self.catalog {
@@ -253,22 +268,14 @@ impl App {
             }
             self.content.looked_up.extend(new);
         }
+        self.content.missing = files.iter().filter(|f| !self.content.vectors.contains_key(*f)).count();
         if self.content.job.is_some() || self.content.cancelled {
             return;
         }
-        let mut todo: Vec<PathBuf> = files.into_iter().filter(|f| !self.content.vectors.contains_key(f) && !self.content.failed.contains(f)).collect();
-        if todo.is_empty() {
-            return;
+        let todo: Vec<PathBuf> = files.into_iter().filter(|f| !self.content.vectors.contains_key(f) && !self.content.failed.contains(f)).collect();
+        if !todo.is_empty() {
+            self.start_content_analysis(todo);
         }
-        // The image searched for first: the search can start with it.
-        if let Some(Query::Similar(p)) = self.content.query() {
-            let file = sk_core::variant::file_of(&p);
-            if let Some(i) = todo.iter().position(|f| *f == file) {
-                let f = todo.remove(i);
-                todo.insert(0, f);
-            }
-        }
-        self.start_content_analysis(todo);
     }
 
     fn start_content_analysis(&mut self, todo: Vec<PathBuf>) {
@@ -278,7 +285,9 @@ impl App {
         let label = format!("Bildinhalt erfassen ({})", crate::widgets::image_count(todo.len()));
         let files: HashSet<PathBuf> = todo.iter().cloned().collect();
         self.start_job(&label, Box::new(move |progress| {
-            let encoder = image_encoder(&slot)?;
+            // A missing model takes the first part of the progress (and can be cancelled).
+            let share = if ImageEncoder::available() { 0.0 } else { MODEL_SHARE };
+            let encoder = image_encoder(&slot, &|p| progress(p * share))?;
             let db = Catalog::open(&catalog)?;
             let tag = sk_ai::content::tag();
             use rayon::prelude::*;
@@ -307,7 +316,7 @@ impl App {
                 }
                 incoming.lock().unwrap_or_else(|e| e.into_inner()).extend(found);
                 done += chunk.len();
-                progress(done as f32 / todo.len() as f32);
+                progress(share + (1.0 - share) * done as f32 / todo.len() as f32);
             }
             Ok(Vec::new())
         }));
@@ -336,7 +345,7 @@ impl App {
         std::thread::spawn(move || {
             let result = (|| {
                 let img = crate::culling::analysis_image(&file)?.to_rgb8();
-                let v = image_encoder(&slot)?.embed(&img)?;
+                let v = image_encoder(&slot, &|_| {})?.embed(&img)?;
                 let db = Catalog::open(&catalog)?;
                 if db.needs_index(&file).unwrap_or(true) {
                     db.index_file(&file, 0)?;
@@ -438,7 +447,22 @@ impl App {
             crate::widgets::hint(ui, "Suche wird vorbereitet …");
         }
         if let Some(n) = self.content.analysing().filter(|&n| n > 0) {
-            crate::widgets::hint(ui, format!("Bildinhalt wird erfasst, noch {} …", crate::widgets::image_count(n)));
+            let text = if ImageEncoder::available() {
+                format!("Bildinhalt wird erfasst, noch {} …", crate::widgets::image_count(n))
+            } else {
+                format!("Lade KI-Modell ({} MB, einmalig) …", sk_ai::models::CONTENT_IMAGE.bytes.div_ceil(1_000_000))
+            };
+            crate::widgets::hint(ui, text);
+        } else if self.content.is_active() && self.content.missing > 0 {
+            let mut resume = false;
+            ui.horizontal_wrapped(|ui| {
+                crate::widgets::hint(ui, format!("{} ohne erfassten Bildinhalt, nicht unter den Treffern", crate::widgets::image_count(self.content.missing)));
+                resume = self.content.cancelled && ui.small_button("Erfassen").on_hover_text("Den Bildinhalt der übrigen Bilder erfassen").clicked();
+            });
+            if resume {
+                self.content.cancelled = false;
+                self.update_content_search();
+            }
         }
     }
 

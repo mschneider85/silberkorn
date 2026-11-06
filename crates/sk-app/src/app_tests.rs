@@ -2544,7 +2544,7 @@ fn find_similar_filters_and_orders_the_view() {
     }
     let shown = |app: &App| app.visible.iter().map(|&i| app.entries[i].path.clone()).collect::<Vec<_>>();
     f.app.find_similar(b.clone());
-    assert_eq!(shown(&f.app), [b.clone()]);
+    assert_eq!(shown(&f.app), std::slice::from_ref(&b));
     assert!(f.app.jobs.is_empty());
     f.app.clear_content_search();
     assert_eq!(f.app.visible.len(), 2);
@@ -2567,6 +2567,25 @@ fn content_search_analyses_the_view() {
     let paths: Vec<PathBuf> = f.app.entries.iter().map(|e| e.path.clone()).collect();
     assert_eq!(f.app.catalog.as_ref().unwrap().contents(&paths, &sk_ai::content::tag()).unwrap().len(), 2);
     assert_eq!(f.app.visible.first().map(|&i| f.app.entries[i].path.clone()), Some(a));
+}
+
+/// "Ähnliche finden" on an image that cannot be read: reported, and the search ends instead of
+/// showing all images under "Ähnlich wie …".
+#[test]
+fn find_similar_reports_an_unreadable_image() {
+    if !sk_ai::content::ImageEncoder::available() {
+        return;
+    }
+    let Some(mut f) = Fixture::new("content-unreadable") else { return };
+    std::fs::write(f.dir.join("photos/kaputt.dng"), b"kein Bild").unwrap();
+    f.open_folder(f.dir.join("photos"));
+    let broken = f.photo("kaputt.dng");
+    assert!(f.app.index_of(&broken).is_some(), "aufgelistet");
+    f.app.find_similar(broken);
+    f.pump("Analysiert", |a| a.jobs.is_empty());
+    assert!(f.app.content.similar.is_none());
+    assert!(f.app.status.contains("kaputt.dng ließ sich nicht lesen"), "{}", f.app.status);
+    assert_eq!(f.app.visible.len(), 3);
 }
 
 /// Wraps a JPEG into a DNG (the JPEG as its preview), so that the app treats it as a raw file.

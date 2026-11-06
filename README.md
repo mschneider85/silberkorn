@@ -460,8 +460,11 @@ tract rechnet den Bild-Encoder in f32 (in f16 dreimal langsamer), den Text-Encod
   einer Sammlung meist über 0,9), das gewählte zuerst.
 - **Erfassen:** Jedes Bild wird einmal analysiert (Kamera-Vorschaubild wie bei den Gesichtern, auf 224 × 224
   gestaucht), und zwar erst, wenn eine Suche die Bilder der Ansicht braucht: ein Auftrag „Bildinhalt
-  erfassen“ in der Statusleiste (mit ✕ abzubrechen; dann erst bei der nächsten Suche wieder), die Treffer
-  erscheinen nach je 8 Bildern. Etwa 0,3 s je Bild mit ONNX Runtime auf 12 Kernen, 1,3 s mit tract.
+  erfassen“ in der Statusleiste (mit ✕ abzubrechen; dann erst bei der nächsten Suche wieder oder mit
+  „Erfassen“ unter dem Feld), die Treffer erscheinen nach je 8 Bildern. Fehlt das Bildmodell noch, lädt
+  der Auftrag es zuerst (erste Hälfte seines Fortschritts). Bilder ohne Vektor (abgebrochen oder
+  unlesbar) zählt ein Hinweis unter dem Feld; ist das Bild von „Ähnliche finden“ unlesbar, endet die Suche
+  mit einer Meldung. Etwa 0,3 s je Bild mit ONNX Runtime auf 12 Kernen, 1,3 s mit tract.
   Die Vektoren liegen in Katalog bzw. Session (Tabelle `contents`, je RAW-Datei, Varianten nutzen die
   ihrer Datei, mit dem Modell als Kennung); ein anderes Modell rechnet neu.
 - **Keyword-Vorschläge** (Tab „Metadaten“ → Keywords): bis zu acht Wörter aus einer festen Liste
