@@ -16,10 +16,11 @@ pub enum AiFeature {
     Inpaint,
     Depth,
     Faces,
+    Content,
 }
 
 impl AiFeature {
-    pub const ALL: [AiFeature; 6] = [Self::Denoise, Self::Subject, Self::Object, Self::Inpaint, Self::Depth, Self::Faces];
+    pub const ALL: [AiFeature; 7] = [Self::Denoise, Self::Subject, Self::Object, Self::Inpaint, Self::Depth, Self::Faces, Self::Content];
 
     /// What the user uses it for.
     pub fn label(self) -> &'static str {
@@ -30,6 +31,7 @@ impl AiFeature {
             Self::Inpaint => "Entfernen",
             Self::Depth => "Tiefenkarte",
             Self::Faces => "Gesichter und Augen",
+            Self::Content => "Inhaltssuche",
         }
     }
 
@@ -38,6 +40,7 @@ impl AiFeature {
             Self::Inpaint => &[&models::INPAINT],
             Self::Depth => &[&models::DEPTH],
             Self::Faces => &sk_ai::faces::NEEDED,
+            Self::Content => &sk_ai::content::NEEDED,
             Self::Denoise | Self::Subject | Self::Object => &[],
         }
     }

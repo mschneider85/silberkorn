@@ -449,7 +449,15 @@ impl Catalog {
              CREATE INDEX IF NOT EXISTS faces_image ON faces(image_id);
              CREATE INDEX IF NOT EXISTS faces_person ON faces(person_id);
              -- Deleting an image looks up its album entries (the key starts with the album).
-             CREATE INDEX IF NOT EXISTS album_images_image ON album_images(image_id);",
+             CREATE INDEX IF NOT EXISTS album_images_image ON album_images(image_id);
+             -- What an image shows, for the content search: the embedding of an image model
+             -- (named by `model`; those of another model are computed again). One per raw file,
+             -- its variants show the same.
+             CREATE TABLE IF NOT EXISTS contents (
+                 image_id INTEGER PRIMARY KEY REFERENCES images(id) ON DELETE CASCADE,
+                 model TEXT NOT NULL,
+                 embedding BLOB NOT NULL
+             );",
         )?;
         for (name, def) in [
             ("stack", "TEXT"),
@@ -910,6 +918,28 @@ impl Catalog {
         self.conn.execute("DELETE FROM persons WHERE id NOT IN (SELECT DISTINCT person_id FROM faces WHERE person_id IS NOT NULL)", [])?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// Stores what the raw file `path` shows (the embedding of the image model `model`).
+    pub fn store_content(&self, path: &Path, model: &str, embedding: &[f32]) -> Result<()> {
+        let Some(id) = self.image_id(&crate::variant::file_of(path))? else { return Ok(()) };
+        self.conn
+            .prepare_cached("INSERT OR REPLACE INTO contents(image_id, model, embedding) VALUES (?1, ?2, ?3)")?
+            .execute(params![id, model, embedding_to_blob(embedding)])?;
+        Ok(())
+    }
+
+    /// The stored embeddings of the model `model` for the raw files of `paths` (variants give
+    /// their file's), by path as given; those not analysed yet are missing.
+    pub fn contents(&self, paths: &[PathBuf], model: &str) -> Result<HashMap<PathBuf, Vec<f32>>> {
+        let mut stmt = self.conn.prepare_cached("SELECT c.embedding FROM contents c JOIN images i ON i.id = c.image_id WHERE i.path = ?1 AND c.model = ?2")?;
+        let mut found = HashMap::new();
+        for p in paths {
+            if let Some(blob) = stmt.query_row(params![self.key(&crate::variant::file_of(p)), model], |r| r.get::<_, Vec<u8>>(0)).optional()? {
+                found.insert(p.clone(), embedding_from_blob(&blob));
+            }
+        }
+        Ok(found)
     }
 
     /// Recognized people: named ones and those seen in at least `min_count` images.
@@ -2002,6 +2032,25 @@ mod tests {
         let persons = c.persons(1).unwrap();
         assert_eq!(persons.len(), 1);
         assert_eq!(c.person_name(persons[0].id).as_deref(), Some("Anna"));
+    }
+
+    /// One embedding per raw file (its variants give the file's), only of the model asked for,
+    /// replaced when the file is analysed again.
+    #[test]
+    fn stores_contents_per_file_and_model() {
+        let c = Catalog::open_in_memory().unwrap();
+        c.upsert(&meta("/f/a.ARW", "2024:01:01 10:00:00", "L"), &Sidecar::default(), 0).unwrap();
+        let (a, b) = (PathBuf::from("/f/a.ARW"), PathBuf::from("/f/b.ARW"));
+        let variant = crate::variant::path_for(&a, 2);
+        c.store_content(&variant, "m1", &[1.0, 0.0]).unwrap();
+        // Not in the catalog: nothing stored, no error.
+        c.store_content(&b, "m1", &[0.0, 1.0]).unwrap();
+        let found = c.contents(&[a.clone(), variant.clone(), b.clone()], "m1").unwrap();
+        assert_eq!((found.get(&a), found.get(&variant), found.get(&b)), (Some(&vec![1.0, 0.0]), Some(&vec![1.0, 0.0]), None));
+        assert!(c.contents(std::slice::from_ref(&a), "m2").unwrap().is_empty());
+        c.store_content(&a, "m2", &[0.5, 0.5]).unwrap();
+        assert!(c.contents(std::slice::from_ref(&a), "m1").unwrap().is_empty());
+        assert_eq!(c.contents(std::slice::from_ref(&a), "m2").unwrap()[&a], vec![0.5, 0.5]);
     }
 
     #[test]

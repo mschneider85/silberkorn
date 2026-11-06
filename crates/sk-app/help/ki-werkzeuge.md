@@ -84,3 +84,7 @@ Abschnitt im Tab **Effekte**. Legt Dunst über das Bild, der mit der Entfernung 
 Im Tab **Ebenen** erzeugen die Knöpfe unter **Maske → Automatisch auswählen** eine Maske aus dem Bildinhalt: **Motiv**, **Himmel** und **Tiefe**. Dazu kommt das Werkzeug **Objekt** ({taste:tool-object}), das per Klick ein Objekt auswählt. Die Bedienung steht unter [Ebenen & Masken](ebenen-masken#Automatisch auswählen).
 
 Die genaue Motivmaske braucht einige Sekunden. Zeigt der Tab Ebenen ein Bild, wird sie schon vorab im Hintergrund berechnet; kommt der Klick früher, erscheint sofort eine grobe Maske, die die genaue ersetzt, sobald sie fertig ist.
+
+## Inhaltssuche
+
+Die KI beschreibt jedes Bild einmal als Zahlenreihe, mit der sich Bilder und Texte vergleichen lassen. Damit arbeiten das Feld **Bildinhalt** unter [Filter & Suche](bibliothek#Suche nach dem Bildinhalt), **Ähnliche finden** im Menü **Foto** und die [Keyword-Vorschläge](bibliothek#Keywords) im Tab Metadaten. Erfasst werden die Bilder erst, wenn eine Suche oder die Vorschläge sie brauchen.

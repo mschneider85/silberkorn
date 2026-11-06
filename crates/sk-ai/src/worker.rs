@@ -294,6 +294,7 @@ fn encode_tensors(m: &mut Vec<u8>, data: &[Tensor]) {
         let (kind, shape) = match t {
             Tensor::F32(s, _) => (0u8, s),
             Tensor::U8(s, _) => (1u8, s),
+            Tensor::I64(s, _) => (2u8, s),
         };
         m.push(kind);
         m.extend((shape.len() as u32).to_le_bytes());
@@ -308,6 +309,10 @@ fn encode_tensors(m: &mut Vec<u8>, data: &[Tensor]) {
             Tensor::U8(_, v) => {
                 m.extend((v.len() as u64).to_le_bytes());
                 m.extend(v);
+            }
+            Tensor::I64(_, v) => {
+                m.extend((v.len() as u64).to_le_bytes());
+                m.extend_from_slice(bytemuck::cast_slice(v));
             }
         }
     }
@@ -324,6 +329,7 @@ fn decode_tensors(r: &mut Reader) -> Result<Vec<Tensor>> {
             Ok(match kind {
                 0 => Tensor::F32(shape, bytemuck::pod_collect_to_vec(r.take(len.checked_mul(4).context("Anfrage unlesbar")?)?)),
                 1 => Tensor::U8(shape, r.take(len)?.to_vec()),
+                2 => Tensor::I64(shape, bytemuck::pod_collect_to_vec(r.take(len.checked_mul(8).context("Anfrage unlesbar")?)?)),
                 k => bail!("Unbekannter Datentyp {k}"),
             })
         })
@@ -453,7 +459,7 @@ mod tests {
 
     #[test]
     fn tensors_arrive_as_sent() {
-        let sent = vec![Tensor::F32(vec![1, 3], vec![0.5, -1.25, f32::MAX]), Tensor::U8(vec![2], vec![7, 255])];
+        let sent = vec![Tensor::F32(vec![1, 3], vec![0.5, -1.25, f32::MAX]), Tensor::U8(vec![2], vec![7, 255]), Tensor::I64(vec![1, 2], vec![1, i64::MAX])];
         let mut m = Vec::new();
         encode_tensors(&mut m, &sent);
         let back = decode_tensors(&mut Reader(&m)).unwrap();

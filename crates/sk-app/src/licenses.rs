@@ -30,6 +30,7 @@ fn sections() -> [(&'static str, Vec<Entry>); 3] {
                 ("YuNet (OpenCV Zoo)", "Gesichtserkennung", models::FACE_DETECT.license),
                 ("SFace (OpenCV Zoo)", "Gesichtsvergleich", models::FACE_EMBED.license),
                 ("open-closed-eye-0001 (Intel OpenVINO)", "Augen offen/geschlossen", models::EYE_STATE.license),
+                ("SigLIP 2 (Google), ONNX: onnx-community", "Inhaltssuche, Ähnliche finden, Keyword-Vorschläge", models::CONTENT_IMAGE.license),
             ],
         ),
         (

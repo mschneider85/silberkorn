@@ -67,6 +67,8 @@ Alle drei wirken auf die ganze Auswahl und lassen sich mit {taste:undo} zurückn
 
 Im Tab **Metadaten** unter **Keywords** ein Wort eingeben und Enter drücken; Vorschläge kommen aus den vorhandenen Keywords. ✕ an einem Keyword entfernt es.
 
+Darunter stehen unter **Vorschläge** bis zu acht Keywords, die zu dem passen, was auf dem Bild zu sehen ist (etwa *Strand*, *Hund*, *Sonnenuntergang*); ein Klick fügt eines hinzu. Sie kommen von derselben KI wie die Suche nach dem Bildinhalt und erscheinen, sobald das Bild einmal erfasst ist (beim ersten Öffnen etwa eine Sekunde).
+
 ### Aufnahme
 
 Im Tab **Metadaten** zeigt **Aufnahme** Datei, Ordner, Kamera, Objektiv, Brennweite, Blende, Belichtungszeit, ISO und Datum des gewählten Bildes. Lange Einträge stehen beim Überfahren ganz da.
@@ -76,11 +78,20 @@ Im Tab **Metadaten** zeigt **Aufnahme** Datei, Ordner, Kamera, Objektiv, Brennwe
 Der Abschnitt **Filter & Suche** grenzt die Ansicht ein:
 
 - Suchfeld: Dateiname, Kamera, Objektiv oder Keyword.
+- **Bildinhalt**: was auf den Bildern zu sehen ist, in eigenen Worten und jeder Sprache, etwa *Kinder im Schnee* (siehe unten).
 - **Mindestens**: Mindestbewertung in Sternen.
 - **Farb-Label** und **Keyword**.
 - Sortierung nach **Dateiname**, **Aufnahmedatum** oder **Bewertung**, daneben die Sortierrichtung.
 
 **✕ Filter** hebt alle Filter auf. {taste:find} springt von überall in die Bibliothek.
+
+### Suche nach dem Bildinhalt
+
+Das Feld **Bildinhalt** findet Bilder nach dem, was sie zeigen, auch ohne Keywords. Die Treffer stehen nach Relevanz geordnet, die besten zuerst; die übrigen Filter gelten weiter. **Ähnliche finden** (Rechtsklick auf ein Vorschaubild oder Menü **Foto**) zeigt die Bilder, die dem gewählten ähneln, etwa die übrigen Aufnahmen einer Szene; ✕ neben „Ähnlich wie …“ beendet das.
+
+Dafür erfasst eine KI jedes Bild einmal (auf dem Vorschaubild der Kamera, je nach Rechner 0,2 bis 1,5 Sekunden). Das geschieht bei der ersten Suche für alle Bilder der Ansicht im Hintergrund; die Statusleiste zeigt den Fortschritt, und die Treffer erscheinen nach und nach. Danach ist jede Suche sofort da. Das Ergebnis liegt im Katalog bzw. in der Session.
+
+Ein Filteralbum speichert die Suche nach dem Bildinhalt nicht mit.
 
 ## Alben
 

@@ -1193,6 +1193,7 @@ impl App {
             self.command_item(ui, "paste-adjustments");
             self.command_item(ui, "rename");
             self.command_item(ui, "export");
+            self.command_item(ui, "find-similar");
             ui.separator();
             self.variant_menu(ui);
             self.stack_menu(ui);

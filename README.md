@@ -108,7 +108,7 @@ SK_ADJ='{"exposure":0.5,"shadows":40}' cargo run --release -p sk-core --example 
 | Crate | Inhalt |
 |---|---|
 | `sk-core` | RAW-Dekodierung (rawler), Farbmathematik, Entwicklungs-Pipeline, Sidecars, Export |
-| `sk-ai`   | Neuronale Netze (tract/ONNX Runtime): Masken aus Bildinhalt, Tiefenkarte, Entrauschen, Entfernen, Gesichter |
+| `sk-ai`   | Neuronale Netze (tract/ONNX Runtime): Masken aus Bildinhalt, Tiefenkarte, Entrauschen, Entfernen, Gesichter, Inhaltssuche |
 | `sk-app`  | egui/wgpu-Oberfläche, Hintergrund-Worker |
 
 Bereiche für Spezialfunktionen starten zugeklappt und bleiben offen, sobald man sie einmal öffnet:
@@ -275,7 +275,7 @@ Reparieren-Werkzeug alle Stellen zum Prüfen. Kommandozeile: `cargo run --releas
 
 Die neuronalen Netze (außer dem von Raw-Details) werden nicht mitgeliefert, sondern nach `~/.local/share/silberkorn/models/`
 geladen (`SILBERKORN_MODELS=<ordner>` überschreibt den Ort), und zwar still beim Programmstart, ohne
-Nachfrage (zusammen etwa 710 MB, unter Windows samt KI-Beschleunigung). Die Modelldateien von
+Nachfrage (zusammen etwa 1,5 GB, unter Windows samt KI-Beschleunigung). Die Modelldateien von
 „Verwacklung entfernen“ (nur in 0.2.6) und deren Zwischenspeicher löscht der Start wieder. Der Startbildschirm zeigt den
 Fortschritt, danach läuft der Download in der Statusleiste weiter; man kann sofort arbeiten. Wird eine
 Funktion benutzt, bevor ihr Modell da ist (oder fehlte beim Start das Internet), sieht man den Fortschritt
@@ -285,8 +285,8 @@ festgelegt); ein abgebrochener Download wird beim nächsten Versuch fortgesetzt.
 
 **Kennzeichnung:** KI-Funktionen tragen ein gelbes Funken-Symbol hinter ihrem Namen, in den
 Werkzeugbereichen (Objektivunschärfe, Neu ausleuchten, Atmosphäre, Entfernen, Gesichter & Sichtung),
-an Werkzeugen und Knöpfen (Raw-Details, Objekt, Motiv, Himmel, Tiefe, KI-Entrauschen), in den Menüs
-und in der Befehlspalette.
+an Werkzeugen und Knöpfen (Raw-Details, Objekt, Motiv, Himmel, Tiefe, KI-Entrauschen), am Feld
+„Bildinhalt“ und an den Keyword-Vorschlägen, in den Menüs und in der Befehlspalette.
 
 **KI-Beschleunigung** (Bearbeiten → „Grafikkarte …“, Abschnitt „KI-Berechnung“, Windows): Die Netze rechnen dann über
 ONNX Runtime mit DirectML auf der Grafikkarte (jede DirectX-12-Karte). ONNX Runtime wird nicht
@@ -435,6 +435,43 @@ im Katalog bzw. in der Session:
 
 Die drei Modelle (zusammen etwa 40 MB) werden beim ersten Analysieren geladen.
 Kommandozeile: `cargo run --release -p sk-ai --example faces -- <bild>...`
+
+### Inhaltssuche, Ähnliche finden, Keyword-Vorschläge
+
+SigLIP 2 base/16 in 224 px (Google, Apache-2.0; ONNX-Export von onnx-community, auf einen festen Stand
+festgelegt) bildet Bilder und Texte auf je 768 Zahlen ab, sodass ein Bild und ein Text, der es beschreibt, nah
+beieinander liegen (`sk-ai/src/content.rs`). Geladen werden der Bild-Encoder (186 MB), der Text-Encoder
+(565 MB, davon das meiste die Tabelle seiner 256 000 Wortteile) und der Tokenizer (34 MB). Beide Netze
+sind die Halbfloat-Fassungen: gleiche Ergebnisse wie in voller Genauigkeit (Kosinus 1,0000, Top-5 zu 99 %
+gleich), halbe Größe; die 8-Bit-Fassungen verschoben die Treffer zu stark (Top-5 nur zu 20–40 % gleich).
+tract rechnet den Bild-Encoder in f32 (in f16 dreimal langsamer), den Text-Encoder in f16 (in f32 über
+2 GB Speicher); sein Gemm in f16 lehnt tract ab, Silberkorn schreibt es beim Laden als MatMul und Add um
+(`runtime::Half`).
+
+- **Bildinhalt** (Tab „Bibliothek“ → Filter & Suche): freier Text in jeder Sprache. Er wird wie beim
+  Training kleingeschrieben und mit dem BPE-Tokenizer von Gemma (eigene Umsetzung, gegen Hugging Faces
+  tokenizers geprüft) auf 64 Wortteile gebracht, 0,04–0,7 s nach einer Tipp-Pause von 0,4 s (Enter
+  sofort). Treffer sind Bilder mit Kosinus-Ähnlichkeit ab 0,085 (Trefferwahrscheinlichkeit des Modells
+  etwa 0,07 %), und höchstens 0,05 unter dem besten Treffer, damit ein Text, der einige Bilder gut
+  trifft, nicht auch alle halbwegs passenden zeigt. Sie stehen nach Ähnlichkeit geordnet; die übrigen
+  Filter gelten weiter. Ein Text ohne Vorlage („ein Foto von …“) traf in Messungen am besten.
+- **Ähnliche finden** (Rechtsklick auf ein Vorschaubild, Menü „Foto“, Befehlssuche): Bilder mit
+  Ähnlichkeit ab 0,8 zum gewählten (die Hälfte aller Bildpaare liegt unter 0,5, das nächste andere Bild
+  einer Sammlung meist über 0,9), das gewählte zuerst.
+- **Erfassen:** Jedes Bild wird einmal analysiert (Kamera-Vorschaubild wie bei den Gesichtern, auf 224 × 224
+  gestaucht), und zwar erst, wenn eine Suche die Bilder der Ansicht braucht: ein Auftrag „Bildinhalt
+  erfassen“ in der Statusleiste (mit ✕ abzubrechen; dann erst bei der nächsten Suche wieder), die Treffer
+  erscheinen nach je 8 Bildern. Etwa 0,3 s je Bild mit ONNX Runtime auf 12 Kernen, 1,3 s mit tract.
+  Die Vektoren liegen in Katalog bzw. Session (Tabelle `contents`, je RAW-Datei, Varianten nutzen die
+  ihrer Datei, mit dem Modell als Kennung); ein anderes Modell rechnet neu.
+- **Keyword-Vorschläge** (Tab „Metadaten“ → Keywords): bis zu acht Wörter aus einer festen Liste
+  (`sk-ai/models/keywords.txt`, gut 200 Motive), nach derselben Regel wie die Suche. Ihre Textvektoren
+  sind mitgeliefert (`keywords.bin`, f16, 318 KB); nach einer Änderung der Liste neu erzeugen mit
+  `cargo run --release -p sk-ai --example keyword_vectors` (ein Test prüft, dass sie zur Liste passen).
+  Ein noch nicht erfasstes Bild wird beim Öffnen des Tabs einzeln analysiert.
+
+Ein Filteralbum speichert die Inhaltssuche nicht mit. Kommandozeile (Treffer für einen Text, dazu die
+Keyword-Vorschläge je Bild): `cargo run --release -p sk-ai --example content -- "<Suchtext>" <bild>...`
 
 ### Anpassungen kopieren und übertragen
 
@@ -1236,3 +1273,4 @@ Original im US-Nationalarchiv); für den Startbildschirm beschnitten und verklei
 - **Phase 12 (fertig):** Anpassungen werkzeugweise kopieren und übertragen, Stile mit Werkzeugauswahl (übereinander anwendbar), eigene Tastenkürzel, eigene Farbbereiche im Farbeditor, Luma-Kurve
 - **Phase 13 (fertig):** Neu ausleuchten und Atmosphäre über die Tiefenkarte, Leuchten (Orton), Stile als Vorschau-Raster, Focus Stacking
 - **Phase 14 (fertig):** Motiv auswählen mit BiRefNet (genaue Kanten)
+- **Phase 15 (fertig):** Inhaltssuche nach Text, Ähnliche finden, Keyword-Vorschläge (SigLIP 2)

@@ -11,7 +11,7 @@ pub const SECTION_HELP: &[(&str, &str, &str)] = &[
     ),
     ("Alben", "Sammlungen von Bildern unabhängig vom Ordner, auch als Filteralben, die sich selbst füllen.", "bibliothek#Alben"),
     ("Ordner", "Die Ordner des Katalogs; ein Klick zeigt ihre Bilder.", "bibliothek#Ordner"),
-    ("Filter & Suche", "Zeigt nur Bilder mit bestimmter Bewertung, Farb-Label oder passendem Suchbegriff und legt die Sortierung fest.", "bibliothek#Filter & Suche"),
+    ("Filter & Suche", "Zeigt nur Bilder mit bestimmter Bewertung, Farb-Label, passendem Suchbegriff oder Bildinhalt und legt die Sortierung fest.", "bibliothek#Filter & Suche"),
     // Title shown as "Session „Name“".
     ("Session", "Die geöffnete Session: ihre Ordner und der Weg zurück zum Katalog.", "bibliothek#Sessions"),
     ("Session-Favoriten", "Häufig gebrauchte Ordner der Session für den schnellen Zugriff.", "bibliothek#Sessions"),

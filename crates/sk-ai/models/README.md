@@ -25,6 +25,14 @@ torch.onnx.export(d.model.eval(), torch.rand(1, 3, 512, 512), "span_x2.onnx",
                   input_names=["input"], output_names=["output"], opset_version=17, dynamo=False)
 ```
 
+`keywords.bin`: die Textvektoren der Wörter in `keywords.txt` für die Keyword-Vorschläge, berechnet mit
+dem Text-Encoder von SigLIP 2 (Google, Apache-2.0; siehe `models::CONTENT_TEXT`), als f16. Nach einer
+Änderung der Liste neu erzeugen:
+
+```
+cargo run --release -p sk-ai --example keyword_vectors
+```
+
 # Selbst bereitgestellte Modelle
 
 `lama_dml.onnx` (Release `lama-dml-1`): LaMa (Roman Suvorov et al., Samsung AI Center,

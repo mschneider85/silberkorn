@@ -7,8 +7,9 @@
 //!
 //! all refined at edges with a guided filter against the image luminance.
 
-pub mod denoise;
 pub mod auto;
+pub mod content;
+pub mod denoise;
 pub mod demosaic;
 pub mod depth;
 pub mod faces;

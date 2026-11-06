@@ -2528,6 +2528,47 @@ fn culling_analysis_filters_and_sharpest_on_top() {
     assert!(f.app.jobs.is_empty());
 }
 
+/// "Ähnliche finden" with embeddings in the catalog: only images like the one searched for, it
+/// first; ending the search shows all again. Nothing is analysed when all are known.
+#[test]
+fn find_similar_filters_and_orders_the_view() {
+    let Some(mut f) = Fixture::new("content-similar") else { return };
+    f.index_photos();
+    f.pump("Indexiert", |a| a.lists.total == 2);
+    let (a, b) = (f.photo("_DSC0009.dng"), f.photo("_DSC0010.dng"));
+    let axis = |k: usize| (0..sk_ai::content::DIM).map(|i| if i == k { 1.0 } else { 0.0 }).collect::<Vec<f32>>();
+    {
+        let c = f.app.catalog.as_ref().unwrap();
+        c.store_content(&a, &sk_ai::content::tag(), &axis(0)).unwrap();
+        c.store_content(&b, &sk_ai::content::tag(), &axis(1)).unwrap();
+    }
+    let shown = |app: &App| app.visible.iter().map(|&i| app.entries[i].path.clone()).collect::<Vec<_>>();
+    f.app.find_similar(b.clone());
+    assert_eq!(shown(&f.app), [b.clone()]);
+    assert!(f.app.jobs.is_empty());
+    f.app.clear_content_search();
+    assert_eq!(f.app.visible.len(), 2);
+}
+
+/// The analysis behind a content search: the images of the view get their embeddings (in the
+/// catalog), and the image searched for is the first hit.
+#[test]
+fn content_search_analyses_the_view() {
+    if !sk_ai::content::ImageEncoder::available() {
+        return;
+    }
+    let Some(mut f) = Fixture::new("content-analysis") else { return };
+    f.index_photos();
+    f.pump("Indexiert", |a| a.lists.total == 2);
+    let a = f.photo("_DSC0009.dng");
+    f.app.find_similar(a.clone());
+    assert_eq!(f.app.jobs.len(), 1, "Analyse gestartet");
+    f.pump("Analysiert", |a| a.jobs.is_empty());
+    let paths: Vec<PathBuf> = f.app.entries.iter().map(|e| e.path.clone()).collect();
+    assert_eq!(f.app.catalog.as_ref().unwrap().contents(&paths, &sk_ai::content::tag()).unwrap().len(), 2);
+    assert_eq!(f.app.visible.first().map(|&i| f.app.entries[i].path.clone()), Some(a));
+}
+
 /// Wraps a JPEG into a DNG (the JPEG as its preview), so that the app treats it as a raw file.
 fn dng_from_jpeg(jpeg: &Path, out: &Path, mirror: bool) {
     let mut img = image::open(jpeg).unwrap().to_rgb8();

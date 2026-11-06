@@ -936,6 +936,8 @@ pub struct App {
     pub ai_products: [crate::ai_products::ProductQueue; 2],
     /// Depth maps being computed (lens blur, depth masks).
     pub depth: crate::depth::DepthQueue,
+    /// Content search of the library ("Bildinhalt", "Ähnliche finden").
+    pub content: crate::content::ContentSearch,
 }
 
 /// Startup options (separate from `eframe` so that tests can construct the app).
@@ -1322,6 +1324,7 @@ impl App {
             quiet_jobs: Vec::new(),
             ai_products: Default::default(),
             depth: Default::default(),
+            content: Default::default(),
         };
         app.reload_styles();
         if opts.persist_settings {
@@ -2643,6 +2646,7 @@ impl App {
         self.pump_card_watch(ctx);
         self.pump_depth();
         self.poll_spot_search();
+        self.pump_content(ctx);
         self.poll_cancelled();
         // The rendered preview must fit into a single GPU texture.
         let max_side = ctx.input(|i| i.max_texture_side).max(512);

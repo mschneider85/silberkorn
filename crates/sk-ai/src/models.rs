@@ -162,6 +162,41 @@ pub const SUBJECT_EDGES: ModelInfo = ModelInfo {
     entry: None,
 };
 
+/// Content search: the image encoder of SigLIP 2 base/16 at 224 px (Google, Apache-2.0), as
+/// exported to ONNX by onnx-community (half precision inside, f32 in and out: the same results
+/// as full precision, at half the size; the 8-bit export changes them too much).
+pub const CONTENT_IMAGE: ModelInfo = ModelInfo {
+    label: "Inhaltssuche (SigLIP 2, Bild)",
+    file: "siglip2_vision_fp16.onnx",
+    url: "https://huggingface.co/onnx-community/siglip2-base-patch16-224-ONNX/resolve/ba1f3b0843f24bc5417d38e19c37b287d719b2f4/onnx/vision_model_fp16.onnx",
+    bytes: 186_039_516,
+    sha256: "a1959f7bd3993a607e48839f6d01e25b876fe76afda301b028b78eef68aabd95",
+    license: "Apache-2.0",
+    entry: None,
+};
+
+/// The text encoder of the same model (most of it is the table of its 256 000 tokens).
+pub const CONTENT_TEXT: ModelInfo = ModelInfo {
+    label: "Inhaltssuche (SigLIP 2, Text)",
+    file: "siglip2_text_fp16.onnx",
+    url: "https://huggingface.co/onnx-community/siglip2-base-patch16-224-ONNX/resolve/ba1f3b0843f24bc5417d38e19c37b287d719b2f4/onnx/text_model_fp16.onnx",
+    bytes: 564_862_230,
+    sha256: "711da56ada0a4aa11c7dd3320df741081a3cae4f0ae1b5e5c6d5b294738d0eb0",
+    license: "Apache-2.0",
+    entry: None,
+};
+
+/// Its tokenizer (Gemma's, a BPE vocabulary for many languages).
+pub const CONTENT_TOKENIZER: ModelInfo = ModelInfo {
+    label: "Inhaltssuche (SigLIP 2, Wörter)",
+    file: "siglip2_tokenizer.json",
+    url: "https://huggingface.co/onnx-community/siglip2-base-patch16-224-ONNX/resolve/ba1f3b0843f24bc5417d38e19c37b287d719b2f4/tokenizer.json",
+    bytes: 34_363_039,
+    sha256: "cb9140fae3ac5122c972d37adf83e1248471a38147ad76f8215c8872c6fd8322",
+    license: "Apache-2.0",
+    entry: None,
+};
+
 /// Files of models that Silberkorn no longer uses (removed at startup): NAFNet of
 /// "Verwacklung entfernen", which came with 0.2.6 only, MI-GAN, which "Entfernen" used before
 /// LaMa (up to 0.2.14), and Carve's LaMa as it is (up to 0.2.18).
@@ -388,7 +423,22 @@ mod tests {
 
     #[test]
     fn every_model_is_pinned() {
-        for m in [DENOISE_BAYER, DENOISE_LINEAR, OBJECT_ENCODER, OBJECT_DECODER, INPAINT, FACE_DETECT, FACE_EMBED, EYE_STATE, SUBJECT, DEPTH] {
+        for m in [
+            DENOISE_BAYER,
+            DENOISE_LINEAR,
+            OBJECT_ENCODER,
+            OBJECT_DECODER,
+            INPAINT,
+            FACE_DETECT,
+            FACE_EMBED,
+            EYE_STATE,
+            SUBJECT,
+            DEPTH,
+            SUBJECT_EDGES,
+            CONTENT_IMAGE,
+            CONTENT_TEXT,
+            CONTENT_TOKENIZER,
+        ] {
             assert!(m.bytes > 0 && m.sha256.len() == 64 && m.sha256.bytes().all(|b| b.is_ascii_hexdigit()), "{}", m.label);
             assert!(!m.url.contains("/resolve/main/"), "{}: nicht auf einen Stand festgelegt", m.label);
         }

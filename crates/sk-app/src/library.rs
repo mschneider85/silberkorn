@@ -249,7 +249,7 @@ impl App {
         self.forget_unlisted_thumbs();
         let listed: std::collections::HashSet<&PathBuf> = self.entries.iter().map(|e| &e.path).collect();
         self.selection.retain(|p| listed.contains(p));
-        self.refilter();
+        self.refilter_with_content();
         self.refresh_catalog_lists();
         self.request_proxies();
     }
@@ -261,7 +261,7 @@ impl App {
         let new: Vec<PathBuf> = paths.iter().filter(|p| !listed.contains(p)).cloned().collect();
         self.entries.extend(sidecar::load_all(&new).into_iter().map(|(p, sc)| record_from_sidecar(p, sc)));
         sort_records(&mut self.entries, self.sort, self.sort_desc);
-        self.refilter();
+        self.refilter_with_content();
         self.request_proxies();
     }
 
@@ -271,8 +271,17 @@ impl App {
     }
 
     pub fn refilter(&mut self) {
-        let matching = self.entries.iter().enumerate().filter(|(_, r)| self.filter.matches(r)).map(|(i, _)| i).collect();
+        let mut matching: Vec<usize> = self.entries.iter().enumerate().filter(|(_, r)| self.filter.matches(r)).map(|(i, _)| i).collect();
+        if let Some(ranked) = self.content_order(&matching) {
+            matching = ranked;
+        }
         self.visible = self.arrange_stacks(matching);
+    }
+
+    /// [`Self::refilter`] after the entries changed: a content search also needs the new ones
+    /// analysed.
+    fn refilter_with_content(&mut self) {
+        if self.content.is_active() { self.update_content_search() } else { self.refilter() }
     }
 
     pub fn index_of(&self, path: &Path) -> Option<usize> {
@@ -593,10 +602,12 @@ impl App {
         // Filtering is used most, so it comes right after the catalog.
         let mut refilter = false;
         let mut resort = false;
+        let mut clear_content = false;
         section(ui, "Filter & Suche", None, |ui| {
             refilter |= ui
                 .add(egui::TextEdit::singleline(&mut self.filter.text).hint_text(format!("{}  Name, Kamera, Objektiv, Keyword", crate::theme::icon::MAGNIFYING_GLASS)))
                 .changed();
+            self.content_search_ui(ui);
             widgets::field(ui, "Mindestens", |ui| refilter |= widgets::stars(ui, &mut self.filter.min_rating, 16.0));
             widgets::combo_field(ui, "Farb-Label", self.filter.color_label.map_or("Alle", |l| l.label()), |ui| {
                     refilter |= ui.selectable_value(&mut self.filter.color_label, None, "Alle").changed();
@@ -620,14 +631,17 @@ impl App {
                     self.sort_desc = !self.sort_desc;
                     resort = true;
                 }
-                if !self.filter.is_empty() && ui.button(format!("{}  Filter", crate::theme::icon::X)).clicked() {
+                if (!self.filter.is_empty() || self.content.is_active()) && ui.button(format!("{}  Filter", crate::theme::icon::X)).clicked() {
                     self.filter = Filter::default();
-                    refilter = true;
+                    clear_content = true;
                 }
             });
             ui.label(RichText::new(format!("{} von {} Bildern", self.visible.len(), self.entries.len())).color(Color32::from_gray(150)));
         });
-        if resort {
+        if clear_content {
+            // Refilters as well.
+            self.clear_content_search();
+        } else if resort {
             self.resort();
         } else if refilter {
             self.refilter();

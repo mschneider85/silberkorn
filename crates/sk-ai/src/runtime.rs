@@ -281,12 +281,15 @@ pub enum Input {
     U8([usize; 4]),
     /// f32 of any rank.
     F32Shape(&'static [usize]),
+    /// Token ids.
+    I64([usize; 2]),
 }
 
 /// Input data for a run (in the order of the network's inputs).
 pub enum Data<'a> {
     F32(&'a [f32]),
     U8(&'a [u8]),
+    I64(&'a [i64]),
 }
 
 /// A network output, converted to f32.
@@ -300,6 +303,7 @@ pub struct Output {
 pub(crate) enum Tensor {
     F32(Vec<usize>, Vec<f32>),
     U8(Vec<usize>, Vec<u8>),
+    I64(Vec<usize>, Vec<i64>),
 }
 
 enum Backend {
@@ -312,12 +316,25 @@ enum Backend {
     Remote { session: crate::worker::Session, gpu: bool, fallback: Mutex<Option<Arc<TypedRunnableModel>>> },
 }
 
+/// How tract should treat a network exported in half precision (f16 weights, f32 in and out).
+/// ONNX Runtime takes such files as they are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Half {
+    /// Not a half-precision export.
+    No,
+    /// Computed in f16 (half the memory; for networks with a large table of weights).
+    Keep,
+    /// Computed in f32: on the processor several times faster than tract's f16.
+    ToF32,
+}
+
 /// A loaded network, on the graphics card or the processor.
 pub struct Net {
     backend: Backend,
     inputs: Vec<Input>,
     path: PathBuf,
     keep: Option<Vec<usize>>,
+    half: Half,
 }
 
 /// An ONNX Runtime session: with DirectML on the graphics card (Windows), else on the processor.
@@ -358,6 +375,7 @@ pub(crate) fn ort_run(session: &mut ort::session::Session, data: Vec<Tensor>) ->
         let v: ort::value::DynValue = match t {
             Tensor::F32(s, v) => ort::value::Tensor::from_array((s, v)).map_err(|e| anyhow!("{e}"))?.into_dyn(),
             Tensor::U8(s, v) => ort::value::Tensor::from_array((s, v)).map_err(|e| anyhow!("{e}"))?.into_dyn(),
+            Tensor::I64(s, v) => ort::value::Tensor::from_array((s, v)).map_err(|e| anyhow!("{e}"))?.into_dyn(),
         };
         ins.push((name, v));
     }
@@ -384,6 +402,7 @@ fn tract_run(plan: &Arc<TypedRunnableModel>, inputs: &[Input], data: &[Data]) ->
             (Input::F32(s), Data::F32(v)) => tract_onnx::prelude::Tensor::from_shape(s, v)?,
             (Input::U8(s), Data::U8(v)) => tract_onnx::prelude::Tensor::from_shape(s, v)?,
             (Input::F32Shape(s), Data::F32(v)) => tract_onnx::prelude::Tensor::from_shape(s, v)?,
+            (Input::I64(s), Data::I64(v)) => tract_onnx::prelude::Tensor::from_shape(s, v)?,
             _ => bail!("Falscher Eingabetyp"),
         };
         ins.push(t.into());
@@ -407,27 +426,68 @@ fn tensors(inputs: &[Input], data: &[Data]) -> Result<Vec<Tensor>> {
             (Input::F32(s), Data::F32(v)) => Ok(Tensor::F32(s.to_vec(), v.to_vec())),
             (Input::U8(s), Data::U8(v)) => Ok(Tensor::U8(s.to_vec(), v.to_vec())),
             (Input::F32Shape(s), Data::F32(v)) => Ok(Tensor::F32(s.to_vec(), v.to_vec())),
+            (Input::I64(s), Data::I64(v)) => Ok(Tensor::I64(s.to_vec(), v.to_vec())),
             _ => bail!("Falscher Eingabetyp"),
         })
         .collect()
 }
 
 /// A network for tract with fixed input shapes (`plain`: without the shape hints of the file).
-fn tract_plan(path: &Path, inputs: &[Input], keep: Option<&[usize]>, plain: bool) -> Result<Arc<TypedRunnableModel>> {
+fn tract_plan(path: &Path, inputs: &[Input], keep: Option<&[usize]>, half: Half, plain: bool) -> Result<Arc<TypedRunnableModel>> {
     let onnx = tract_onnx::onnx().with_ignore_output_shapes(plain).with_ignore_value_info(plain);
-    let mut model = onnx.model_for_path(path).with_context(|| format!("Modell {} nicht lesbar", path.display()))?;
+    let mut model = if half == Half::No {
+        onnx.model_for_path(path)
+    } else {
+        onnx.proto_model_for_path(path).and_then(|mut proto| {
+            gemm_as_matmul(&mut proto);
+            onnx.model_for_proto_model(&proto)
+        })
+    }
+    .with_context(|| format!("Modell {} nicht lesbar", path.display()))?;
     for (i, inp) in inputs.iter().enumerate() {
         model = match inp {
             Input::F32(s) => model.with_input_fact(i, f32::fact(*s).into())?,
             Input::U8(s) => model.with_input_fact(i, u8::fact(*s).into())?,
             Input::F32Shape(s) => model.with_input_fact(i, f32::fact(*s).into())?,
+            Input::I64(s) => model.with_input_fact(i, i64::fact(*s).into())?,
         };
     }
     if let Some(keep) = keep {
         let outlets: Vec<OutletId> = keep.iter().filter_map(|&i| model.outputs.get(i).copied()).collect();
         model.select_output_outlets(&outlets)?;
     }
-    model.into_optimized()?.into_runnable()
+    let mut typed = model.into_typed()?;
+    if half == Half::ToF32 {
+        use tract_onnx::tract_core::transform::ModelTransform;
+        tract_onnx::tract_core::floats::FloatPrecisionTranslator::new(DatumType::F16, DatumType::F32).transform(&mut typed)?;
+    }
+    typed.into_optimized()?.into_runnable()
+}
+
+/// tract gives a Gemm of f16 values an f32 result and then rejects its own model; the same as
+/// MatMul and Add (as the half-precision exports use it: alpha and beta 1, A not transposed).
+fn gemm_as_matmul(proto: &mut tract_onnx::pb::ModelProto) {
+    use tract_onnx::pb::{AttributeProto, NodeProto, attribute_proto::AttributeType};
+    let Some(graph) = proto.graph.as_mut() else { return };
+    let mut nodes = Vec::with_capacity(graph.node.len());
+    for n in std::mem::take(&mut graph.node) {
+        let attr = |name: &str| n.attribute.iter().find(|a| a.name == name);
+        let plain = attr("alpha").is_none_or(|a| a.f == 1.0) && attr("beta").is_none_or(|a| a.f == 1.0) && attr("transA").is_none_or(|a| a.i == 0);
+        if n.op_type != "Gemm" || n.input.len() != 3 || !plain {
+            nodes.push(n);
+            continue;
+        }
+        let (mut b, product) = (n.input[1].clone(), format!("{}_matmul", n.name));
+        if attr("transB").is_some_and(|a| a.i == 1) {
+            let bt = format!("{}_bt", n.name);
+            let perm = AttributeProto { name: "perm".into(), r#type: AttributeType::Ints as i32, ints: vec![1, 0], ..Default::default() };
+            nodes.push(NodeProto { name: bt.clone(), op_type: "Transpose".into(), input: vec![b], output: vec![bt.clone()], attribute: vec![perm], ..Default::default() });
+            b = bt;
+        }
+        nodes.push(NodeProto { name: product.clone(), op_type: "MatMul".into(), input: vec![n.input[0].clone(), b], output: vec![product.clone()], ..Default::default() });
+        nodes.push(NodeProto { name: n.name.clone(), op_type: "Add".into(), input: vec![product, n.input[2].clone()], output: n.output.clone(), ..Default::default() });
+    }
+    graph.node = nodes;
 }
 
 impl Net {
@@ -440,21 +500,26 @@ impl Net {
     /// [`Self::load`]; with tract only the outputs `keep` (by index) are computed, for networks
     /// whose other outputs tract cannot handle. ONNX Runtime returns all of them.
     pub fn load_outputs(path: &Path, inputs: &[Input], keep: Option<&[usize]>) -> Result<Net> {
-        Self::load_with(path, inputs, keep, true)
+        Self::load_with(path, inputs, keep, Half::No, true)
+    }
+
+    /// [`Self::load`] for a network exported in half precision.
+    pub fn load_half(path: &Path, inputs: &[Input], half: Half) -> Result<Net> {
+        Self::load_with(path, inputs, None, half, true)
     }
 
     /// [`Self::load`], but never on the graphics card: for networks too large for the graphics
     /// memory of smaller cards (Windows resets a card that takes too long for one command). Such
     /// a network takes many seconds per run, so it gets a worker process of its own.
     pub fn load_processor(path: &Path, inputs: &[Input]) -> Result<Net> {
-        Self::load_with(path, inputs, None, false)
+        Self::load_with(path, inputs, None, Half::No, false)
     }
 
     /// `gpu` false: on the processor, in the worker process for long runs.
-    fn load_with(path: &Path, inputs: &[Input], keep: Option<&[usize]>, gpu: bool) -> Result<Net> {
+    fn load_with(path: &Path, inputs: &[Input], keep: Option<&[usize]>, half: Half, gpu: bool) -> Result<Net> {
         let lane = if gpu { crate::worker::Lane::Quick } else { crate::worker::Lane::Long };
         let gpu = gpu && !GPU_RESET.load(Ordering::Relaxed);
-        let net = |backend| Net { backend, inputs: inputs.to_vec(), path: path.to_path_buf(), keep: keep.map(<[usize]>::to_vec) };
+        let net = |backend| Net { backend, inputs: inputs.to_vec(), path: path.to_path_buf(), keep: keep.map(<[usize]>::to_vec), half };
         // ONNX Runtime and DirectML in the separate process if there is one (a crash in them or
         // in the graphics driver then ends only that), else in this one.
         let ort = if !gpu_enabled() || !gpu_installed() {
@@ -482,7 +547,7 @@ impl Net {
             }
             None => {}
         }
-        let net = net(Backend::Cpu(tract_plan_any(path, inputs, keep)?));
+        let net = net(Backend::Cpu(tract_plan_any(path, inputs, keep, half)?));
         *LAST_DEVICE.lock().unwrap_or_else(|e| e.into_inner()) = Some(net.device());
         Ok(net)
     }
@@ -535,7 +600,7 @@ impl Net {
                                 Some(plan) => plan.clone(),
                                 None => {
                                     log::warn!("{}: {e:#}, rechne mit tract weiter", self.path.display());
-                                    fallback.insert(tract_plan_any(&self.path, &self.inputs, self.keep.as_deref())?).clone()
+                                    fallback.insert(tract_plan_any(&self.path, &self.inputs, self.keep.as_deref(), self.half)?).clone()
                                 }
                             }
                         }
@@ -549,8 +614,8 @@ impl Net {
 
 /// [`tract_plan`]; shape hints inside some exports (symbolic batch sizes) contradict the fixed
 /// input shapes, such networks are loaded again without them.
-fn tract_plan_any(path: &Path, inputs: &[Input], keep: Option<&[usize]>) -> Result<Arc<TypedRunnableModel>> {
-    tract_plan(path, inputs, keep, false).or_else(|e| tract_plan(path, inputs, keep, true).map_err(|_| e))
+fn tract_plan_any(path: &Path, inputs: &[Input], keep: Option<&[usize]>, half: Half) -> Result<Arc<TypedRunnableModel>> {
+    tract_plan(path, inputs, keep, half, false).or_else(|e| tract_plan(path, inputs, keep, half, true).map_err(|_| e))
 }
 
 #[cfg(test)]

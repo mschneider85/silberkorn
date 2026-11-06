@@ -180,6 +180,11 @@ pub const COMMANDS: &[Command] = &[
     cmd!("stack-create", icon::STACK_PLUS, "Stapel bilden", "Foto", [CTRL => Key::G], "stack gruppieren", several_files, |a, _| a.run_stack_action(crate::stacks::StackAction::Create)),
     cmd!("stack-dissolve", icon::STACK_MINUS, "Stapel auflösen", "Foto", [CTRL_SHIFT => Key::G], "stack", |a| !a.selected_stack_ids().is_empty(), |a, _| a.run_stack_action(crate::stacks::StackAction::Dissolve)),
     cmd!("stack-toggle", icon::STACK_SIMPLE, "Stapel auf-/zuklappen", "Foto", [SHIFT => Key::G], "stack", has_selection, |a, _| a.run_stack_action(crate::stacks::StackAction::Toggle)),
+    cmd!("find-similar", icon::IMAGES, "Ähnliche finden", "Foto", [], "ähnlich similar suche bildinhalt inhalt motiv ki", |a| a.primary_path().is_some(), |a, _| {
+        if let Some(p) = a.primary_path() {
+            a.find_similar(p);
+        }
+    }),
     cmd!("merge-hdr", icon::SUN_HORIZON, "HDR zusammenfügen …", "Entwickeln", [], "merge belichtungsreihe", merge_ready, |a, _| a.open_merge(crate::merge::MergeKind::Hdr)),
     cmd!("merge-pano", icon::PANORAMA, "Panorama zusammenfügen …", "Entwickeln", [], "merge stitch", merge_ready, |a, _| a.open_merge(crate::merge::MergeKind::Panorama)),
     cmd!("merge-focus", icon::APERTURE, "Focus Stacking …", "Entwickeln", [], "merge fokus schärfentiefe stack makro focus stacking", merge_ready, |a, _| a.open_merge(crate::merge::MergeKind::FocusStack)),
@@ -451,7 +456,7 @@ fn parse_bindings(saved: &BTreeMap<String, Vec<String>>) -> Bindings {
 /// `text` with the shortcut of command `id` in brackets, e.g. "Rückgängig (Strg+Z)".
 /// Commands of AI functions (marked with the yellow sparkle in menus and the palette).
 pub fn is_ai(id: &str) -> bool {
-    matches!(id, "enhance" | "super-resolution" | "tool-object" | "tool-remove")
+    matches!(id, "enhance" | "super-resolution" | "tool-object" | "tool-remove" | "find-similar")
 }
 
 pub fn hint(text: &str, id: &str) -> String {

@@ -13,6 +13,7 @@ mod chrome;
 mod clipboard;
 mod commands;
 mod compare;
+mod content;
 mod crop;
 mod culling;
 mod deletion;

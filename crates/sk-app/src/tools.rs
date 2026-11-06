@@ -458,7 +458,10 @@ impl App {
                 }
             });
         });
-        section(ui, "Keywords", None, |ui| self.keywords_ui(ui));
+        section(ui, "Keywords", None, |ui| {
+            self.keywords_ui(ui);
+            self.keyword_suggestions_ui(ui);
+        });
         if let Some(r) = new_rating {
             self.set_rating(r);
         }

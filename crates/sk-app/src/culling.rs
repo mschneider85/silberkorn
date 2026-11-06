@@ -14,7 +14,7 @@ use crate::widgets::section_help_ai;
 
 /// The picture faces are found in: the camera preview is enough (and fast); without one, a
 /// rendering. About 1600 px are plenty for faces and sharpness.
-fn analysis_image(path: &std::path::Path) -> anyhow::Result<::image::DynamicImage> {
+pub(crate) fn analysis_image(path: &std::path::Path) -> anyhow::Result<::image::DynamicImage> {
     let img = match sk_core::raw::embedded_preview(path) {
         Ok(img) if img.width().max(img.height()) >= 800 => img,
         _ => {
