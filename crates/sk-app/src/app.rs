@@ -3646,7 +3646,8 @@ impl App {
             return;
         }
         if self.fullscreen {
-            // Distraction-free: only the image.
+            // Distraction-free: only the image (Strg+F waits for no bar to take the keys later).
+            self.library_ui.focus_search = false;
             egui::CentralPanel::no_frame().show(ui, |ui| self.viewer(ui));
             self.dialogs(&ctx);
             self.palette_ui(&ctx);

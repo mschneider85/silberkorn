@@ -486,7 +486,7 @@ impl App {
         widgets::nav_header(ui, "Session-Favoriten", "Favoriten", |ui| {
             let can = !is_fav && !is_std;
             let hover = if can { format!("Aktuellen Ordner hinzufügen\n{}", self.folder.display()) } else { "Der aktuelle Ordner ist schon da".to_string() };
-            if ui.add_enabled_ui(can, |ui| widgets::nav_action(ui, icon::PLUS, &hover)).inner.clicked() {
+            if ui.add_enabled_ui(can, |ui| widgets::nav_action(ui, icon::PLUS, &hover).on_disabled_hover_text(&hover)).inner.clicked() {
                 toggle_fav = Some(self.folder.clone());
             }
         });

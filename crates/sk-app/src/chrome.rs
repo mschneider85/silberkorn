@@ -604,8 +604,9 @@ impl App {
             ui.label(RichText::new(self.tab.title()).size(15.0).strong().color(Color32::WHITE));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(4.0);
+                // In the library a magnifier here would look like the image search of the bar.
                 let b = Button::new(RichText::new(icon::MAGNIFYING_GLASS).size(14.0).color(theme::TEXT_DIM)).frame_when_inactive(false);
-                if ui.add(b).on_hover_text("Befehlssuche: Befehl, Werkzeug oder Einstellung suchen (Strg+K)").clicked() {
+                if self.tab != Tab::Library && ui.add(b).on_hover_text("Befehlssuche: Befehl, Werkzeug oder Einstellung suchen (Strg+K)").clicked() {
                     self.palette.show();
                 }
                 if self.tab == Tab::Library {

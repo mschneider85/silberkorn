@@ -1,6 +1,6 @@
 //! Viewer, filmstrip and grid browser.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use egui::{Color32, Modifiers, Pos2, Rect, Sense, Ui, Vec2, pos2, vec2};
 
@@ -1152,7 +1152,15 @@ impl App {
         }
         let entry = &self.entries[idx];
         let name_font = egui::FontId::proportional(11.5);
-        let mut job = egui::text::LayoutJob::simple_singleline(entry.name.clone(), name_font, if is_primary { Color32::WHITE } else { theme::TEXT_DIM });
+        // From a subfolder (they are included): its name in front, so that equal file names
+        // can be told apart.
+        let sub = self.subfolder_of(&entry.path);
+        let mut job = egui::text::LayoutJob::default();
+        if let Some(sub) = &sub {
+            let last = sub.file_name().map_or_else(String::new, |n| n.to_string_lossy().to_string());
+            job.append(&format!("{last} / "), 0.0, egui::TextFormat::simple(name_font.clone(), theme::TEXT_FAINT));
+        }
+        job.append(&entry.name, 0.0, egui::TextFormat::simple(name_font, if is_primary { Color32::WHITE } else { theme::TEXT_DIM }));
         job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 12.0);
         let name = painter.layout_job(job);
         painter.galley(pos2(rect.center().x - name.size().x / 2.0, rect.bottom() - 11.0 - name.size().y / 2.0), name, theme::TEXT_DIM);
@@ -1161,7 +1169,10 @@ impl App {
         self.culling_badges(ui, idx, img_area);
         let resp = if resp.hovered() {
             let tooltip = [
-                Some(entry.name.clone()),
+                Some(match &sub {
+                    Some(sub) => format!("{}\n{}", entry.name, sub.display()),
+                    None => entry.name.clone(),
+                }),
                 entry.capture_date.clone(),
                 entry.camera.clone(),
                 entry.lens.clone(),
@@ -1209,6 +1220,14 @@ impl App {
     }
 
     /// Culling marks (top right): closed eyes, blurry.
+    /// The subfolder an image of the folder shown lies in, relative to it (`None` when it lies
+    /// in the folder itself or another view is shown).
+    pub(crate) fn subfolder_of(&self, path: &Path) -> Option<PathBuf> {
+        let sk_core::catalog::Scope::Folder { path: shown, .. } = &self.scope else { return None };
+        let rel = path.parent()?.strip_prefix(shown).ok()?;
+        (!rel.as_os_str().is_empty()).then(|| rel.to_path_buf())
+    }
+
     fn culling_badges(&self, ui: &Ui, idx: usize, img_area: Rect) {
         let Some(c) = self.entries[idx].culling else { return };
         let mut marks: Vec<(&str, Color32)> = Vec::new();

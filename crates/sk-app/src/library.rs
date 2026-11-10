@@ -30,6 +30,9 @@ pub struct CatalogLists {
     pub persons: Vec<catalog::Person>,
 }
 
+/// (catalog folders, folders shown) and the tree built from them.
+pub type FolderTreeCache = ((Vec<(PathBuf, usize)>, Vec<PathBuf>), Vec<FolderNode>);
+
 /// Transient UI state of the library tab.
 #[derive(Default)]
 pub struct LibraryUi {
@@ -47,6 +50,11 @@ pub struct LibraryUi {
     /// Folders open in the folder tree, and the folder they were last opened for.
     pub expanded: std::collections::HashSet<PathBuf>,
     pub expanded_for: PathBuf,
+    /// The folder tree and what it was built from (built again when that changes).
+    pub tree: Option<FolderTreeCache>,
+    /// The subfolders read from disk for the tree below the folder shown, per folder (read
+    /// when a folder becomes visible in it; forgotten when another folder is opened).
+    pub listed: std::collections::HashMap<PathBuf, Vec<PathBuf>>,
     /// Two persons to be merged once confirmed: (into, from).
     pub merging: Option<(i64, i64)>,
     /// The faces of the chosen person and those chosen among them.
@@ -111,19 +119,9 @@ impl App {
             return;
         }
         self.folder_input = folder.display().to_string();
-        self.subdirs = std::fs::read_dir(&folder)
-            .into_iter()
-            .flatten()
-            .flatten()
-            // The type from the listing (no further look at each file, slow on network drives);
-            // links are followed.
-            .filter(|e| e.file_type().is_ok_and(|t| t.is_dir() || (t.is_symlink() && e.path().is_dir())))
-            .map(|e| e.path())
-            .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
-            // The session's own data folder (cache) is not for browsing.
-            .filter(|p| !self.session.as_ref().is_some_and(|s| *p == s.root.join(sk_core::session::APP_FOLDER)))
-            .collect();
-        self.subdirs.sort();
+        self.subdirs = subdirs_of(&folder, self.session.as_ref());
+        self.library_ui.listed.clear();
+        self.library_ui.listed.insert(folder.clone(), self.subdirs.clone());
         self.folder = folder.clone();
         if self.session.is_none() {
             self.catalog_folder = folder.clone();
@@ -133,7 +131,7 @@ impl App {
         // A session's own folders are its database: indexed silently, so that dates, cameras
         // and search work. The catalog only holds what was imported.
         let belongs = self.session.as_ref().is_some_and(|s| folder.starts_with(&s.root));
-        let paths = if belongs { catalog::scan_folder(&folder, self.include_subfolders) } else { Vec::new() };
+        let paths = if belongs { catalog::scan_folder(&folder, false) } else { Vec::new() };
         if !paths.is_empty() {
             self.workers.index(IndexJob { catalog: self.catalog_path(), paths, import: false, copy_to: None });
         }
@@ -222,8 +220,9 @@ impl App {
     }
 
     /// The folder and subfolder switch if the scope is read from the file system rather than
-    /// the catalog: a folder always (the file system is authoritative, with its subfolders
-    /// unless "Unterordner einbeziehen" is off).
+    /// the catalog: a folder always, as the file system is authoritative (a variant or a renamed
+    /// file is there before the catalog knows it). With its subfolders a large tree takes a
+    /// while; `open_scope` reads it in the background.
     fn scope_on_disk(&self) -> Option<(PathBuf, bool)> {
         match &self.scope {
             Scope::Folder { path, recursive } => Some((path.clone(), *recursive)),
@@ -608,9 +607,23 @@ impl App {
         let own = |p: &Path| standard.iter().any(|d| p.starts_with(d));
         let folders: Vec<(PathBuf, usize)> = self.lists.folders.iter().filter(|(p, _)| !own(p)).cloned().collect();
         let mut extra = vec![self.folder.clone()];
-        extra.extend(self.subdirs.iter().cloned());
+        // Below the folder shown, from disk: the subfolders of each folder visible in the tree,
+        // so that those with subfolders of their own can be opened.
+        let mut visible = vec![(self.folder.clone(), true)];
+        while let Some((dir, open)) = visible.pop() {
+            let session = self.session.as_ref();
+            let kids = self.library_ui.listed.entry(dir).or_insert_with_key(|d| subdirs_of(d, session));
+            extra.extend(kids.iter().cloned());
+            if open {
+                visible.extend(kids.iter().map(|k| (k.clone(), self.library_ui.expanded.contains(k))));
+            }
+        }
         extra.retain(|p| !own(p) && self.session.as_ref().is_none_or(|s| *p != s.root));
-        let tree = folder_tree(&folders, &extra);
+        let key = (self.lists.folders.clone(), extra.clone());
+        if self.library_ui.tree.as_ref().is_none_or(|(k, _)| *k != key) {
+            self.library_ui.tree = Some((key, folder_tree(&folders, &extra)));
+        }
+        let tree = std::mem::take(&mut self.library_ui.tree.as_mut().unwrap().1);
         if self.library_ui.expanded_for != self.folder {
             // The way to the folder shown is open.
             self.library_ui.expanded_for = self.folder.clone();
@@ -624,7 +637,11 @@ impl App {
         for node in &tree {
             folder_rows(ui, node, 0, &self.library_ui.expanded, shown.as_deref(), &mut open_folder, &mut toggle);
         }
-        if tree.is_empty() && self.session.is_some() {
+        if let Some((_, t)) = &mut self.library_ui.tree {
+            *t = tree;
+        }
+        let tree_empty = self.library_ui.tree.as_ref().is_none_or(|(_, t)| t.is_empty());
+        if tree_empty && self.session.is_some() {
             ui.horizontal(|ui| {
                 ui.add_space(10.0);
                 widgets::hint(ui, "Weitere Ordner: +");
@@ -773,7 +790,7 @@ impl App {
             Ok(id) => {
                 self.refresh_catalog_lists();
                 self.status = format!("Filteralbum „{name}“ angelegt");
-                let _ = id;
+                self.open_scope(Scope::Album(id));
             }
             Err(e) => self.report_error(format!("Filteralbum nicht angelegt: {e}")),
         }
@@ -981,6 +998,24 @@ pub struct FolderNode {
 /// The folder tree of the catalog's `folders` and the `extra` ones (the folder shown and its
 /// subfolders): the way from the drive to the first folder that holds images or branches is
 /// one root, below it every level.
+/// The subfolders of `folder` (not hidden ones, nor a session's own data folder), sorted.
+fn subdirs_of(folder: &Path, session: Option<&sk_core::session::Session>) -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(folder)
+        .into_iter()
+        .flatten()
+        .flatten()
+        // The type from the listing (no further look at each file, slow on network drives);
+        // links are followed.
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir() || (t.is_symlink() && e.path().is_dir())))
+        .map(|e| e.path())
+        .filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')))
+        // The session's own data folder (cache) is not for browsing.
+        .filter(|p| !session.is_some_and(|s| *p == s.root.join(sk_core::session::APP_FOLDER)))
+        .collect();
+    dirs.sort();
+    dirs
+}
+
 pub fn folder_tree(folders: &[(PathBuf, usize)], extra: &[PathBuf]) -> Vec<FolderNode> {
     #[derive(Default)]
     struct Trie {

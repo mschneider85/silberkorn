@@ -2509,12 +2509,12 @@ fn culling_analysis_filters_and_sharpest_on_top() {
         assert!(!c.blurry(), "{}: {}", e.name, c.sharpness);
     }
     // Filters.
-    f.app.filter.culling = Some(CullFilter::Blurry);
+    f.app.filter.culling = Some(CullFilter::Reject);
     f.app.refilter();
     assert!(f.app.visible.is_empty());
-    f.app.filter.culling = Some(CullFilter::NotAnalyzed);
+    f.app.filter.culling = Some(CullFilter::Keep);
     f.app.refilter();
-    assert!(f.app.visible.is_empty());
+    assert_eq!(f.app.visible.len(), 2);
     f.app.filter.culling = None;
     f.app.refilter();
     // The sharper of the two goes on top of their stack.
@@ -4447,7 +4447,7 @@ fn update_banner_once_per_version_and_quiet_offline() {
     let release = |v: &str| sk_core::update::Release { version: v.into(), notes: String::new(), page: String::new(), asset: None };
     let ctx = f.ctx.clone();
     let frame = |app: &mut App| {
-        let _ = ctx.run_ui(egui::RawInput::default(), |ui| app.update_banner(ui.ctx()));
+        ctx.run_ui(egui::RawInput::default(), |ui| app.update_banner(ui.ctx())).textures_delta.clear();
     };
 
     f.app.status.clear();
@@ -5243,4 +5243,35 @@ fn local_tool_bar_switches_and_ends_tools() {
     assert!(fertig.top() < 200.0, "oben angedockt: {fertig:?}");
     click(&mut f, &nodes, "Fertig");
     assert_eq!(f.app.local_tool, None);
+}
+
+/// The folder tree reaches into subfolders of subfolders (read when they become visible), and
+/// an image from a subfolder names it.
+#[test]
+fn folder_tree_reads_subfolders_when_visible() {
+    let Some(mut f) = Fixture::new("folder-tree-deep") else { return };
+    let photos = f.photo(".");
+    std::fs::create_dir_all(photos.join("Urlaub/Strand/Abend")).unwrap();
+    std::fs::copy(f.photo("_DSC0010.dng"), photos.join("Urlaub/Strand/_DSC0010.dng")).unwrap();
+    f.open_folder(photos.clone());
+    let ctx = f.ctx.clone();
+    let frame = |app: &mut App| {
+        ctx.run_ui(egui::RawInput::default(), |ui| app.library_tab(ui)).textures_delta.clear();
+    };
+    fn tree(app: &App) -> &[crate::library::FolderNode] {
+        &app.library_ui.tree.as_ref().unwrap().1
+    }
+    fn find<'a>(nodes: &'a [crate::library::FolderNode], p: &std::path::Path) -> Option<&'a crate::library::FolderNode> {
+        nodes.iter().find_map(|n| if n.path == p { Some(n) } else { find(&n.children, p) })
+    }
+    frame(&mut f.app);
+    // "Urlaub" can be opened: "Strand" is known below it.
+    let urlaub = photos.join("Urlaub");
+    assert!(!find(tree(&f.app), &urlaub).expect("Urlaub").children.is_empty());
+    f.app.library_ui.expanded.insert(urlaub.clone());
+    frame(&mut f.app);
+    assert!(!find(tree(&f.app), &urlaub.join("Strand")).expect("Strand").children.is_empty(), "Strand hat Abend");
+    // The image from the subfolder names it; the one beside it does not.
+    assert_eq!(f.app.subfolder_of(&photos.join("Urlaub/Strand/_DSC0010.dng")), Some(PathBuf::from("Urlaub/Strand")));
+    assert_eq!(f.app.subfolder_of(&photos.join("_DSC0010.dng")), None);
 }

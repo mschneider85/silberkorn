@@ -18,7 +18,6 @@ struct Changes {
     refilter: bool,
     resort: bool,
     reset: bool,
-    open: Option<Scope>,
     analyze: Option<bool>,
     filter_album: Option<String>,
 }
@@ -100,8 +99,6 @@ impl App {
             self.filter = Filter::default();
             // Refilters as well.
             self.clear_content_search();
-        } else if let Some(s) = ch.open {
-            self.open_scope(s);
         } else if ch.resort {
             self.resort();
         } else if ch.refilter {
@@ -115,7 +112,6 @@ impl App {
         // Rating.
         let r = self.filter.min_rating;
         let text = if r == 0 { "Bewertung".to_string() } else { rating_text(r) };
-        let counts: Vec<usize> = (1..=5).map(|n| self.entries.iter().filter(|e| e.rating >= n).count()).collect();
         let (resp, clear) = pill(ui, &text, r > 0, None, "Bewertungsfilter aufheben");
         if clear {
             self.filter.min_rating = 0;
@@ -126,8 +122,10 @@ impl App {
                 self.filter.min_rating = 0;
                 ch.refilter = true;
             }
+            let base = self.matching_without(|f| f.min_rating = 0);
             for n in 1..=5u8 {
-                if option(ui, r == n, &rating_text(n), None, &counts[n as usize - 1].to_string()) {
+                let count = base.iter().filter(|&&i| self.entries[i].rating >= n).count();
+                if option(ui, r == n, &rating_text(n), None, &count.to_string()) {
                     self.filter.min_rating = n;
                     ch.refilter = true;
                 }
@@ -147,8 +145,9 @@ impl App {
                 self.filter.color_label = None;
                 ch.refilter = true;
             }
+            let base = self.matching_without(|f| f.color_label = None);
             for c in ColorLabel::ALL {
-                let n = self.entries.iter().filter(|e| e.color_label == c).count();
+                let n = base.iter().filter(|&&i| self.entries[i].color_label == c).count();
                 if option(ui, l == Some(c), c.label(), Some(label_color(c).unwrap_or(theme::TEXT_FAINT)), &n.to_string()) {
                     self.filter.color_label = Some(c);
                     ch.refilter = true;
@@ -170,8 +169,9 @@ impl App {
                 self.filter.culling = None;
                 ch.refilter = true;
             }
-            for f in CullFilter::OFFERED {
-                let n = self.entries.iter().filter(|e| f.matches(e.culling.as_ref())).count();
+            let base = self.matching_without(|f| f.culling = None);
+            for f in CullFilter::ALL {
+                let n = base.iter().filter(|&&i| f.matches(self.entries[i].culling.as_ref())).count();
                 if option_detail(ui, c == Some(f), f.label(), f.detail(), &n.to_string()) {
                     self.filter.culling = Some(f);
                     ch.refilter = true;
@@ -196,6 +196,15 @@ impl App {
                 ui.close();
             }
         });
+    }
+
+    /// The images the other filters and the search leave, for the numbers in a filter's menu
+    /// (`clear` takes that filter out): choosing an entry gives exactly its number.
+    fn matching_without(&self, clear: impl FnOnce(&mut Filter)) -> Vec<usize> {
+        let mut f = self.filter.clone();
+        clear(&mut f);
+        let m: Vec<usize> = (0..self.entries.len()).filter(|&i| f.matches(&self.entries[i])).collect();
+        self.content_order(&m).unwrap_or(m)
     }
 
     /// "Als Filteralbum": asks for a name, then saves the filter as an album.

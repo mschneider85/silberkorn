@@ -155,6 +155,6 @@ In einer Session verschiebt **Nach „Selects“ verschieben** ({taste:to-select
 
 ## Ordner überwachen
 
-**Ordner überwachen** (im Abschnitt **Ordner**, in einer Session bei den Session-Ordnern, auch im Menü **Datei** und in den **Einstellungen …** auf der Seite **Bibliothek**) lässt neue Bilder im angezeigten Ordner von selbst erscheinen, etwa wenn die Kamerasoftware beim Fotografieren mit Kabel in den Ordner **Aufnahmen** schreibt. Mit **Neue Aufnahme gleich öffnen** wird jeweils die neueste groß gezeigt.
+**Ordner überwachen** (im Menü **Datei** und in den **Einstellungen …** auf der Seite **Bibliothek**) lässt neue Bilder im angezeigten Ordner von selbst erscheinen, etwa wenn die Kamerasoftware beim Fotografieren mit Kabel in den Ordner **Aufnahmen** schreibt. Mit **Neue Aufnahme gleich öffnen** wird jeweils die neueste groß gezeigt.
 
 Die Überwachung wirkt, sobald ein Ordner angezeigt wird (neue Bilder in ihm selbst, nicht in seinen Unterordnern); die Statusleiste zeigt dann „Überwacht: …“ mit dem Ordnernamen.

@@ -55,31 +55,22 @@ impl Culling {
     }
 }
 
-/// What the culling filter shows. Only [`CullFilter::OFFERED`] are offered; the others stay
-/// readable for filter albums saved with them.
+/// What the culling filter shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CullFilter {
     /// Analysed, sharp, no closed eyes.
     Keep,
     /// Analysed, with closed eyes or blurry.
     Reject,
-    EyesClosed,
-    Blurry,
-    WithFaces,
-    NotAnalyzed,
 }
 
 impl CullFilter {
-    pub const OFFERED: [CullFilter; 2] = [CullFilter::Keep, CullFilter::Reject];
+    pub const ALL: [CullFilter; 2] = [CullFilter::Keep, CullFilter::Reject];
 
     pub fn label(self) -> &'static str {
         match self {
             CullFilter::Keep => "Brauchbar",
             CullFilter::Reject => "Aussortieren",
-            CullFilter::EyesClosed => "Augen geschlossen",
-            CullFilter::Blurry => "Unscharf",
-            CullFilter::WithFaces => "Mit Gesichtern",
-            CullFilter::NotAnalyzed => "Nicht analysiert",
         }
     }
 
@@ -88,19 +79,14 @@ impl CullFilter {
         match self {
             CullFilter::Keep => "scharf, Augen offen",
             CullFilter::Reject => "Augen geschlossen oder unscharf",
-            _ => "",
         }
     }
 
     pub fn matches(self, c: Option<&Culling>) -> bool {
         match (self, c) {
-            (CullFilter::NotAnalyzed, c) => c.is_none(),
             (_, None) => false,
             (CullFilter::Keep, Some(c)) => c.eyes_closed == 0 && !c.blurry(),
             (CullFilter::Reject, Some(c)) => c.eyes_closed > 0 || c.blurry(),
-            (CullFilter::EyesClosed, Some(c)) => c.eyes_closed > 0,
-            (CullFilter::Blurry, Some(c)) => c.blurry(),
-            (CullFilter::WithFaces, Some(c)) => c.faces > 0,
         }
     }
 }
@@ -174,7 +160,6 @@ pub struct Filter {
     pub text: String,
     pub min_rating: u8,
     pub color_label: Option<ColorLabel>,
-    pub keyword: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub culling: Option<CullFilter>,
 }
@@ -190,11 +175,6 @@ impl Filter {
             return false;
         }
         if self.color_label.is_some_and(|l| l != r.color_label) {
-            return false;
-        }
-        if let Some(k) = &self.keyword
-            && !r.keywords.iter().any(|x| x.eq_ignore_ascii_case(k))
-        {
             return false;
         }
         if let Some(c) = self.culling
@@ -1330,10 +1310,6 @@ fn filter_sql(filter: &Filter, sql: &mut String, args: &mut Vec<Value>) {
     match filter.culling {
         Some(CullFilter::Keep) => *sql += &format!(" AND i.analyzed > 0 AND i.eyes_closed = 0 AND i.sharpness >= {BLURRY}"),
         Some(CullFilter::Reject) => *sql += &format!(" AND i.analyzed > 0 AND (i.eyes_closed > 0 OR i.sharpness < {BLURRY})"),
-        Some(CullFilter::EyesClosed) => *sql += " AND i.analyzed > 0 AND i.eyes_closed > 0",
-        Some(CullFilter::Blurry) => *sql += &format!(" AND i.analyzed > 0 AND i.sharpness < {BLURRY}"),
-        Some(CullFilter::WithFaces) => *sql += " AND i.analyzed > 0 AND i.face_count > 0",
-        Some(CullFilter::NotAnalyzed) => *sql += " AND i.analyzed = 0",
         None => {}
     }
     if filter.min_rating > 0 {
@@ -1343,10 +1319,6 @@ fn filter_sql(filter: &Filter, sql: &mut String, args: &mut Vec<Value>) {
     if let Some(l) = filter.color_label {
         *sql += " AND i.color_label = ?";
         args.push(Value::Text(label_to_str(l)));
-    }
-    if let Some(k) = &filter.keyword {
-        *sql += " AND EXISTS (SELECT 1 FROM keywords k WHERE k.image_id = i.id AND k.keyword = ?)";
-        args.push(Value::Text(k.clone()));
     }
     for term in filter.text.split_whitespace() {
         *sql += " AND (i.name LIKE ? ESCAPE '\\' OR i.camera LIKE ? ESCAPE '\\' OR i.lens LIKE ? ESCAPE '\\'
@@ -1852,7 +1824,7 @@ mod tests {
         assert_eq!(c.query(&Scope::All, &f, SortKey::Name, false).unwrap().len(), 2);
         let f = Filter { color_label: Some(ColorLabel::Red), ..Default::default() };
         assert_eq!(c.query(&Scope::All, &f, SortKey::Name, false).unwrap().len(), 2);
-        let f = Filter { keyword: Some("urlaub".into()), ..Default::default() };
+        let f = Filter { text: "urlaub".into(), ..Default::default() };
         assert_eq!(names(c.query(&Scope::All, &f, SortKey::Name, false).unwrap()), ["b.ARW"]);
         let f = Filter { text: "35mm strand".into(), ..Default::default() };
         let recs = c.query(&Scope::All, &f, SortKey::Name, false).unwrap();
@@ -1998,7 +1970,7 @@ mod tests {
         let c = catalog();
         let sc = Sidecar { rating: 1, keywords: vec!["Neu".into()], ..Default::default() };
         c.sync_sidecar(Path::new("/p/a/a.ARW"), &sc).unwrap();
-        let f = Filter { keyword: Some("Neu".into()), ..Default::default() };
+        let f = Filter { text: "Neu".into(), ..Default::default() };
         let r = c.query(&Scope::All, &f, SortKey::Name, false).unwrap();
         assert_eq!(r[0].rating, 1);
         assert_eq!(c.query(&Scope::LastImport, &Filter::default(), SortKey::Name, false).unwrap().len(), 3);
@@ -2036,15 +2008,10 @@ mod tests {
             c.query(&scope, &Filter { culling: cull, ..Default::default() }, SortKey::Name, false).unwrap().into_iter().map(|r| r.name).collect()
         };
         assert_eq!(q(Scope::Person(anna), None), vec!["a.ARW", "b.ARW"]);
-        assert_eq!(q(Scope::All, Some(CullFilter::EyesClosed)), vec!["a.ARW"]);
-        assert_eq!(q(Scope::All, Some(CullFilter::Blurry)), vec!["c.ARW"]);
-        assert_eq!(q(Scope::All, Some(CullFilter::WithFaces)), vec!["a.ARW", "b.ARW"]);
         assert_eq!(q(Scope::All, Some(CullFilter::Keep)), vec!["b.ARW"]);
         assert_eq!(q(Scope::All, Some(CullFilter::Reject)), vec!["a.ARW", "c.ARW"]);
         // The in-memory filter agrees with the query.
         let all = c.query(&Scope::All, &Filter::default(), SortKey::Name, false).unwrap();
-        let f = Filter { culling: Some(CullFilter::Blurry), ..Default::default() };
-        assert_eq!(all.iter().filter(|r| f.matches(r)).count(), 1);
         for (cull, n) in [(CullFilter::Keep, 1), (CullFilter::Reject, 2)] {
             let f = Filter { culling: Some(cull), ..Default::default() };
             assert_eq!(all.iter().filter(|r| f.matches(r)).count(), n, "{cull:?}");
