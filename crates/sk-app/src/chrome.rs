@@ -698,6 +698,7 @@ impl App {
         self.settings_window(ctx);
         self.licenses_dialog(ctx);
         self.update_dialog(ctx);
+        self.update_banner(ctx);
         self.copy_dialog(ctx);
         self.deletion_dialog(ctx);
         self.help_window(ctx);

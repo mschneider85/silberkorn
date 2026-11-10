@@ -84,9 +84,10 @@ Der Installer installiert nur für den angemeldeten Benutzer nach `%LOCALAPPDATA
 Administratorrechte. Beim Deinstallieren fragt er, ob auch Einstellungen, Stile, Katalog, KI-Modelle
 und Vorschauen gelöscht werden sollen (Standard: behalten). Fotos und Sidecars bleiben immer erhalten.
 
-Die App fragt beim Start höchstens einmal am Tag `api.github.com` nach dem neuesten Release
-(nicht in Debug-Builds; abschaltbar unter Hilfe → „Nach Updates suchen …“ und in den Einstellungen, Seite „Allgemein“). Ist eines neuer, erscheint
-unten rechts „Update x.y.z“. Unter Windows lädt „Jetzt aktualisieren“ den Installer und prüft die
+Die App fragt beim Start und danach stündlich `api.github.com` nach dem neuesten Release
+(nicht in Debug-Builds; abschaltbar unter Hilfe → „Nach Updates suchen …“ und in den Einstellungen, Seite „Allgemein“).
+Ohne Internetverbindung steht das nur im Protokoll. Ist ein Release neuer, erscheint einmalig ein
+Hinweis unten rechts und danach in der Statusleiste „Update x.y.z“. Unter Windows lädt „Jetzt aktualisieren“ den Installer und prüft die
 Prüfsumme; „Jetzt neu starten“ schließt die App, der Installer läuft still durch (nur ein
 Fortschrittsfenster) und startet die neue Version. Wer nicht neu startet, bekommt das Update beim
 Beenden. Auch eine einzeln gestartete `.exe` wird so zur installierten Version. Zum Testen:

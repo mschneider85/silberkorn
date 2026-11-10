@@ -362,6 +362,8 @@ struct Settings {
     update_last_check: Option<u64>,
     /// Version the user skipped.
     update_skipped: Option<String>,
+    /// Newest version the banner announced (it shows once per version).
+    update_announced: Option<String>,
     /// Watch the open folder for new pictures (see `hot_folder`).
     watch_folder: bool,
     /// While watching, new pictures are not opened.
@@ -1294,7 +1296,7 @@ impl App {
             quit_asked: false,
             quit_confirmed: false,
             export_log: Vec::new(),
-            updates: crate::update::Updates::new(settings.update_check_off, settings.update_last_check, settings.update_skipped.clone()),
+            updates: crate::update::Updates::new(settings.update_check_off, settings.update_last_check, settings.update_skipped.clone(), settings.update_announced.clone()),
             hot_folder: crate::hot_folder::HotFolder::new(settings.watch_folder, !settings.watch_no_open),
             // Not in tests and screenshots: a card in the reader would open the import there.
             card_watch: if opts.persist_settings && std::env::var_os("SILBERKORN_SCREENSHOT").is_none() {
@@ -1425,6 +1427,7 @@ impl App {
             update_check_off: self.updates.auto_off,
             update_last_check: self.updates.last_check,
             update_skipped: self.updates.skipped.clone(),
+            update_announced: self.updates.announced.clone(),
             watch_folder: self.hot_folder.on,
             watch_no_open: !self.hot_folder.open_new,
             cache_limit_gb: self.cache_limit_gb,

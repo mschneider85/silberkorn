@@ -4439,6 +4439,47 @@ fn batch_work_can_be_cancelled() {
     assert!(f.app.status.contains("abgebrochen (2 von 5 fertig)"), "{}", f.app.status);
 }
 
+/// A new version shows the banner once; a failed check (offline) shows nothing and keeps what
+/// an earlier check found.
+#[test]
+fn update_banner_once_per_version_and_quiet_offline() {
+    let Some(mut f) = Fixture::new("update-banner") else { return };
+    let release = |v: &str| sk_core::update::Release { version: v.into(), notes: String::new(), page: String::new(), asset: None };
+    let ctx = f.ctx.clone();
+    let frame = |app: &mut App| {
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| app.update_banner(ui.ctx()));
+    };
+
+    f.app.status.clear();
+    f.app.updates.fake_answer(Err("Verbindung fehlgeschlagen".into()));
+    frame(&mut f.app);
+    assert!(!f.app.updates.banner_shown());
+    assert!(f.app.status.is_empty() && f.app.last_error.is_none(), "offline: keine Meldung");
+
+    f.app.updates.fake_answer(Ok(release("99.0.0")));
+    frame(&mut f.app);
+    assert!(f.app.updates.banner_shown());
+    assert_eq!(f.app.updates.announced.as_deref(), Some("99.0.0"));
+
+    // Gone offline later: the found version stays.
+    f.app.updates.fake_answer(Err("Verbindung fehlgeschlagen".into()));
+    frame(&mut f.app);
+    assert_eq!(f.app.updates.available.as_ref().map(|r| r.version.as_str()), Some("99.0.0"));
+
+    // The same version again (next check, next start): no second banner, only the status line.
+    let mut fresh = crate::update::Updates::new(false, None, None, Some("99.0.0".into()));
+    fresh.fake_answer(Ok(release("99.0.0")));
+    f.app.updates = fresh;
+    frame(&mut f.app);
+    assert!(!f.app.updates.banner_shown());
+    assert_eq!(f.app.status, "Silberkorn 99.0.0 ist verfügbar");
+
+    // A newer one gets its own.
+    f.app.updates.fake_answer(Ok(release("99.1.0")));
+    frame(&mut f.app);
+    assert!(f.app.updates.banner_shown());
+}
+
 /// Errors are remembered for the status bar (red, and visible for a while after them).
 #[test]
 fn errors_are_reported_and_remembered() {

@@ -203,7 +203,7 @@ impl App {
             dialog::note(ui, format!("Installiert ist Version {}. Neue Versionen kommen von GitHub; installiert wird beim Beenden.", env!("CARGO_PKG_VERSION")));
             let mut auto = !self.updates.auto_off;
             ui.horizontal(|ui| {
-                crate::widgets::checkbox(ui, &mut auto, "Beim Start nach Updates suchen (höchstens einmal am Tag)");
+                crate::widgets::checkbox(ui, &mut auto, "Automatisch nach Updates suchen");
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     check = ui.add(dialog::secondary(format!("{}  Jetzt suchen", icon::ARROW_CIRCLE_UP))).clicked();
                 });

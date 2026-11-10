@@ -1,5 +1,6 @@
-//! New versions from GitHub: a quiet check at startup (at most once a day), a button in the
-//! status bar when one is out, and a dialog that downloads its installer (Windows) or opens its
+//! New versions from GitHub: a quiet check at startup and every few hours while the program runs
+//! (failures, e.g. offline, only go to the log), a banner once per new version, a button in the
+//! status bar while one is out, and a dialog that downloads its installer (Windows) or opens its
 //! page. The installer runs when the program closes: at once with "Jetzt neu starten", else when
 //! the user quits.
 
@@ -14,7 +15,7 @@ use crate::dialog::{self, Dialog, Tone};
 use crate::theme::{self, icon};
 
 /// Pause between automatic checks.
-const CHECK_EVERY_SECS: u64 = 24 * 60 * 60;
+const CHECK_EVERY_SECS: u64 = 60 * 60;
 const INSTALL_JOB: &str = "Update laden";
 
 #[derive(Default)]
@@ -25,6 +26,12 @@ pub struct Updates {
     pub last_check: Option<u64>,
     /// A version the user doesn't want to be reminded of.
     pub skipped: Option<String>,
+    /// Automatic checks run (not in tests, which don't save settings).
+    auto_checks: bool,
+    /// The newest version the banner announced; each version gets it once.
+    pub announced: Option<String>,
+    /// The banner is showing.
+    banner: bool,
     checking: Option<Receiver<Result<Release, String>>>,
     /// Newer than this program.
     pub available: Option<Release>,
@@ -38,8 +45,30 @@ pub struct Updates {
 }
 
 impl Updates {
-    pub fn new(auto_off: bool, last_check: Option<u64>, skipped: Option<String>) -> Self {
-        Self { auto_off, last_check, skipped, ..Default::default() }
+    pub fn new(auto_off: bool, last_check: Option<u64>, skipped: Option<String>, announced: Option<String>) -> Self {
+        Self { auto_off, last_check, skipped, announced, ..Default::default() }
+    }
+
+    /// Seconds until the next automatic check (0: due now); `None` when there are none.
+    /// Development builds don't remind of releases.
+    fn next_check_in(&self, now: u64) -> Option<u64> {
+        if self.auto_off || cfg!(debug_assertions) {
+            return None;
+        }
+        Some(self.last_check.map_or(0, |t| CHECK_EVERY_SECS.saturating_sub(now.saturating_sub(t))))
+    }
+
+    /// As if a check had just answered this.
+    #[cfg(test)]
+    pub(crate) fn fake_answer(&mut self, answer: Result<Release, String>) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(answer).unwrap();
+        self.checking = Some(rx);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn banner_shown(&self) -> bool {
+        self.banner
     }
 }
 
@@ -51,11 +80,22 @@ impl App {
     /// At startup: clean up after an update and check for a new version if it's time.
     pub(crate) fn start_update_check(&mut self) {
         update::remove_leftovers();
-        // Development builds don't remind of releases.
-        let due = self.updates.last_check.is_none_or(|t| now_secs().saturating_sub(t) >= CHECK_EVERY_SECS);
-        if !self.updates.auto_off && due && !cfg!(debug_assertions) {
-            self.updates.last_check = Some(now_secs());
+        self.updates.auto_checks = true;
+        self.auto_update_check(None);
+    }
+
+    /// Checks if it's time, and wakes the program up for the next one.
+    fn auto_update_check(&mut self, ctx: Option<&egui::Context>) {
+        if !self.updates.auto_checks {
+            return;
+        }
+        let now = now_secs();
+        let Some(wait) = self.updates.next_check_in(now) else { return };
+        if wait == 0 {
+            self.updates.last_check = Some(now);
             self.check_for_update();
+        } else if let Some(ctx) = ctx {
+            ctx.request_repaint_after(std::time::Duration::from_secs(wait));
         }
     }
 
@@ -94,7 +134,13 @@ impl App {
         match answer {
             Ok(r) if update::is_newer(&r.version, update::current_version()) => {
                 if !self.updates.dialog && self.updates.skipped.as_deref() != Some(&r.version) {
-                    self.status = format!("Silberkorn {} ist verfügbar", r.version);
+                    if self.updates.announced.as_deref() == Some(&r.version) {
+                        self.status = format!("Silberkorn {} ist verfügbar", r.version);
+                    } else {
+                        self.updates.banner = true;
+                        self.updates.announced = Some(r.version.clone());
+                        self.save_settings();
+                    }
                 }
                 self.updates.available = Some(r);
                 self.updates.result = Some(Ok(()));
@@ -103,6 +149,8 @@ impl App {
                 self.updates.available = None;
                 self.updates.result = Some(Ok(()));
             }
+            // Offline or GitHub unreachable: only the dialog tells, if it is open; the next
+            // automatic check tries again.
             Err(e) => {
                 log::info!("Update-Prüfung: {e}");
                 self.updates.result = Some(Err(e));
@@ -125,6 +173,54 @@ impl App {
         let b = Button::new(RichText::new(text).size(12.0).color(theme::ACCENT)).frame(false);
         if ui.add(b).on_hover_text("Was neu ist und installieren").clicked() {
             self.updates.dialog = true;
+        }
+    }
+
+    /// Once per new version, bottom right: what's out, and a way to the dialog.
+    pub(crate) fn update_banner(&mut self, ctx: &egui::Context) {
+        self.auto_update_check(Some(ctx));
+        self.poll_update_check();
+        if self.updates.dialog || self.updates.setup.is_some() {
+            self.updates.banner = false;
+        }
+        if !self.updates.banner {
+            return;
+        }
+        let Some(r) = &self.updates.available else {
+            self.updates.banner = false;
+            return;
+        };
+        let version = r.version.clone();
+        let (mut open, mut later) = (false, false);
+        let screen = ctx.content_rect();
+        egui::Area::new(egui::Id::new("update_banner"))
+            .order(egui::Order::Foreground)
+            .pivot(egui::Align2::RIGHT_BOTTOM)
+            .fixed_pos(screen.right_bottom() + egui::vec2(-16.0, -40.0))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).corner_radius(10).inner_margin(egui::Margin::same(14)).show(ui, |ui| {
+                    ui.set_width(300.0);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(icon::ARROW_CIRCLE_UP).size(18.0).color(theme::ACCENT));
+                        ui.label(RichText::new(format!("Silberkorn {version} ist verfügbar")).size(14.0).strong().color(egui::Color32::WHITE));
+                    });
+                    ui.label(RichText::new(format!("Installiert ist Version {}.", update::current_version())).size(12.0).color(theme::TEXT_DIM));
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.add(dialog::primary("Ansehen")).on_hover_text("Was neu ist und installieren").clicked() {
+                            open = true;
+                        }
+                        if ui.add(dialog::secondary("Später")).on_hover_text("Bleibt als Knopf in der Statusleiste").clicked() {
+                            later = true;
+                        }
+                    });
+                });
+            });
+        if open {
+            self.updates.dialog = true;
+        }
+        if open || later {
+            self.updates.banner = false;
         }
     }
 
@@ -223,7 +319,7 @@ impl App {
                 }
             }
             ui.add_space(4.0);
-            crate::widgets::checkbox(ui, &mut auto, "Beim Start nach Updates suchen (höchstens einmal am Tag)");
+            crate::widgets::checkbox(ui, &mut auto, "Automatisch nach Updates suchen");
             dialog::footer(ui, |ui| {
                 let release = self.updates.available.as_ref();
                 if self.updates.setup.is_some() {
@@ -282,5 +378,27 @@ impl App {
         if close || (modal.should_close() && installing.is_none()) {
             self.updates.dialog = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn checks_every_hour_unless_off() {
+        let now = 1_000_000;
+        let mut u = Updates::new(false, None, None, None);
+        if cfg!(debug_assertions) {
+            assert_eq!(u.next_check_in(now), None, "Entwicklungsversionen prüfen nicht");
+            return;
+        }
+        assert_eq!(u.next_check_in(now), Some(0), "noch nie geprüft");
+        u.last_check = Some(now - 20 * 60);
+        assert_eq!(u.next_check_in(now), Some(40 * 60));
+        u.last_check = Some(now - 2 * 60 * 60);
+        assert_eq!(u.next_check_in(now), Some(0));
+        u.auto_off = true;
+        assert_eq!(u.next_check_in(now), None);
     }
 }
