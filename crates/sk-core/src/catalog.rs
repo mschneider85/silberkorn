@@ -55,9 +55,14 @@ impl Culling {
     }
 }
 
-/// What the culling filter shows.
+/// What the culling filter shows. Only [`CullFilter::OFFERED`] are offered; the others stay
+/// readable for filter albums saved with them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CullFilter {
+    /// Analysed, sharp, no closed eyes.
+    Keep,
+    /// Analysed, with closed eyes or blurry.
+    Reject,
     EyesClosed,
     Blurry,
     WithFaces,
@@ -65,10 +70,12 @@ pub enum CullFilter {
 }
 
 impl CullFilter {
-    pub const ALL: [CullFilter; 4] = [CullFilter::EyesClosed, CullFilter::Blurry, CullFilter::WithFaces, CullFilter::NotAnalyzed];
+    pub const OFFERED: [CullFilter; 2] = [CullFilter::Keep, CullFilter::Reject];
 
     pub fn label(self) -> &'static str {
         match self {
+            CullFilter::Keep => "Brauchbar",
+            CullFilter::Reject => "Aussortieren",
             CullFilter::EyesClosed => "Augen geschlossen",
             CullFilter::Blurry => "Unscharf",
             CullFilter::WithFaces => "Mit Gesichtern",
@@ -76,10 +83,21 @@ impl CullFilter {
         }
     }
 
+    /// What the label means, below it in the menu.
+    pub fn detail(self) -> &'static str {
+        match self {
+            CullFilter::Keep => "scharf, Augen offen",
+            CullFilter::Reject => "Augen geschlossen oder unscharf",
+            _ => "",
+        }
+    }
+
     pub fn matches(self, c: Option<&Culling>) -> bool {
         match (self, c) {
             (CullFilter::NotAnalyzed, c) => c.is_none(),
             (_, None) => false,
+            (CullFilter::Keep, Some(c)) => c.eyes_closed == 0 && !c.blurry(),
+            (CullFilter::Reject, Some(c)) => c.eyes_closed > 0 || c.blurry(),
             (CullFilter::EyesClosed, Some(c)) => c.eyes_closed > 0,
             (CullFilter::Blurry, Some(c)) => c.blurry(),
             (CullFilter::WithFaces, Some(c)) => c.faces > 0,
@@ -1023,19 +1041,38 @@ impl Catalog {
     }
 
     /// All faces of a person, by image.
+    /// The faces of `person`, the least like the others first (where a wrong one is found).
     pub fn person_faces(&self, person: i64) -> Result<Vec<PersonFace>> {
         let mut stmt = self.conn.prepare(
-            "SELECT f.id, i.path, f.x, f.y, f.w, f.h FROM faces f JOIN images i ON i.id = f.image_id WHERE f.person_id = ?1 ORDER BY i.path, f.x",
+            "SELECT f.id, i.path, f.x, f.y, f.w, f.h, f.embedding FROM faces f JOIN images i ON i.id = f.image_id WHERE f.person_id = ?1 ORDER BY i.path, f.x",
         )?;
         let rows = stmt.query_map([person], |r| {
-            Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, [r.get::<_, f64>(2)?, r.get::<_, f64>(3)?, r.get::<_, f64>(4)?, r.get::<_, f64>(5)?]))
+            Ok((
+                r.get::<_, i64>(0)?,
+                r.get::<_, String>(1)?,
+                [r.get::<_, f64>(2)?, r.get::<_, f64>(3)?, r.get::<_, f64>(4)?, r.get::<_, f64>(5)?],
+                r.get::<_, Option<Vec<u8>>>(6)?.map(|b| embedding_from_blob(&b)).unwrap_or_default(),
+            ))
         })?;
-        let mut out = Vec::new();
+        let mut faces = Vec::new();
         for row in rows {
-            let (id, path, b) = row?;
-            out.push(PersonFace { id, path: self.resolve(&path), bbox: b.map(|v| v as f32) });
+            let (id, path, b, e) = row?;
+            faces.push((PersonFace { id, path: self.resolve(&path), bbox: b.map(|v| v as f32) }, e));
         }
-        Ok(out)
+        // Likeness to the person's mean (cosine); faces without features count as least alike.
+        let dim = faces.iter().map(|(_, e)| e.len()).max().unwrap_or(0);
+        let mut mean = vec![0.0f32; dim];
+        for (_, e) in faces.iter().filter(|(_, e)| e.len() == dim) {
+            for (m, v) in mean.iter_mut().zip(e) {
+                *m += v;
+            }
+        }
+        let norm = |v: &[f32]| v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-6);
+        let mn = norm(&mean);
+        let likeness = |e: &[f32]| if e.len() == dim && dim > 0 { e.iter().zip(&mean).map(|(a, b)| a * b).sum::<f32>() / (norm(e) * mn) } else { -1.0 };
+        let mut scored: Vec<(f32, PersonFace)> = faces.into_iter().map(|(f, e)| (likeness(&e), f)).collect();
+        scored.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Ok(scored.into_iter().map(|(_, f)| f).collect())
     }
 
     /// Gives faces to another person, or (`to` = `None`) to a new one: when one person turned
@@ -1214,6 +1251,12 @@ impl Catalog {
         Ok(self.conn.query_row("SELECT count(*) FROM images", [], |r| r.get::<_, i64>(0))? as usize)
     }
 
+    /// The images of the last import.
+    pub fn last_import_count(&self) -> Result<usize> {
+        let sql = "SELECT count(*) FROM images WHERE import_id = (SELECT CAST(value AS INTEGER) FROM meta WHERE key = 'last_import')";
+        Ok(self.conn.query_row(sql, [], |r| r.get::<_, i64>(0))? as usize)
+    }
+
     pub fn create_album(&self, name: &str, smart: Option<&Filter>) -> Result<i64> {
         let smart = smart.map(serde_json::to_string).transpose()?;
         self.conn.execute("INSERT INTO albums(name, smart) VALUES (?1, ?2)", params![name, smart])?;
@@ -1285,6 +1328,8 @@ impl Catalog {
 /// The conditions of `filter` on images `i`, appended to `sql` with their arguments.
 fn filter_sql(filter: &Filter, sql: &mut String, args: &mut Vec<Value>) {
     match filter.culling {
+        Some(CullFilter::Keep) => *sql += &format!(" AND i.analyzed > 0 AND i.eyes_closed = 0 AND i.sharpness >= {BLURRY}"),
+        Some(CullFilter::Reject) => *sql += &format!(" AND i.analyzed > 0 AND (i.eyes_closed > 0 OR i.sharpness < {BLURRY})"),
         Some(CullFilter::EyesClosed) => *sql += " AND i.analyzed > 0 AND i.eyes_closed > 0",
         Some(CullFilter::Blurry) => *sql += &format!(" AND i.analyzed > 0 AND i.sharpness < {BLURRY}"),
         Some(CullFilter::WithFaces) => *sql += " AND i.analyzed > 0 AND i.face_count > 0",
@@ -1957,6 +2002,7 @@ mod tests {
         let r = c.query(&Scope::All, &f, SortKey::Name, false).unwrap();
         assert_eq!(r[0].rating, 1);
         assert_eq!(c.query(&Scope::LastImport, &Filter::default(), SortKey::Name, false).unwrap().len(), 3);
+        assert_eq!(c.last_import_count().unwrap(), 3);
         // A variant made later belongs to the import of its file.
         let v = crate::variant::path_for(Path::new("/p/a/a.ARW"), 2);
         c.upsert(&meta(v.to_str().unwrap(), "2024:01:01 10:00:00", "50mm"), &Sidecar::default(), 0).unwrap();
@@ -1993,10 +2039,16 @@ mod tests {
         assert_eq!(q(Scope::All, Some(CullFilter::EyesClosed)), vec!["a.ARW"]);
         assert_eq!(q(Scope::All, Some(CullFilter::Blurry)), vec!["c.ARW"]);
         assert_eq!(q(Scope::All, Some(CullFilter::WithFaces)), vec!["a.ARW", "b.ARW"]);
+        assert_eq!(q(Scope::All, Some(CullFilter::Keep)), vec!["b.ARW"]);
+        assert_eq!(q(Scope::All, Some(CullFilter::Reject)), vec!["a.ARW", "c.ARW"]);
         // The in-memory filter agrees with the query.
         let all = c.query(&Scope::All, &Filter::default(), SortKey::Name, false).unwrap();
         let f = Filter { culling: Some(CullFilter::Blurry), ..Default::default() };
         assert_eq!(all.iter().filter(|r| f.matches(r)).count(), 1);
+        for (cull, n) in [(CullFilter::Keep, 1), (CullFilter::Reject, 2)] {
+            let f = Filter { culling: Some(cull), ..Default::default() };
+            assert_eq!(all.iter().filter(|r| f.matches(r)).count(), n, "{cull:?}");
+        }
         assert!(all.iter().find(|r| r.name == "b.ARW").unwrap().persons.contains(&anna));
         // Naming; a second person of the same name is merged into the first.
         assert_eq!(c.name_person(anna, "Anna").unwrap().len(), 2);
@@ -2020,7 +2072,12 @@ mod tests {
         assert_eq!(c.person_name(anna), None);
         // Split off by hand: Anna's face in c becomes a person of its own, shown with one image.
         let faces = c.person_faces(carl).unwrap();
-        assert_eq!(faces.iter().map(|f| f.path.file_name().unwrap().to_str().unwrap()).collect::<Vec<_>>(), ["a.ARW", "b.ARW", "b.ARW", "c.ARW"]);
+        // The least alike first: Ben (in b) and the face in c, then the two of Anna (a and b).
+        let names: Vec<&str> = faces.iter().map(|f| f.path.file_name().unwrap().to_str().unwrap()).collect();
+        let (mut odd, mut anna_faces) = (names[..2].to_vec(), names[2..].to_vec());
+        odd.sort();
+        anna_faces.sort();
+        assert_eq!((odd, anna_faces), (vec!["b.ARW", "c.ARW"], vec!["a.ARW", "b.ARW"]), "{names:?}");
         let in_c: Vec<i64> = faces.iter().filter(|f| f.path.ends_with("c.ARW")).map(|f| f.id).collect();
         let split = c.move_faces(&in_c, None).unwrap();
         assert_ne!(split, carl);

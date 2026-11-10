@@ -12,7 +12,7 @@ use sk_core::variant;
 use crate::app::App;
 use crate::dialog::{self, Dialog, Tone};
 use crate::theme::{self, icon};
-use crate::widgets::section;
+use crate::widgets;
 use crate::workers::IndexJob;
 
 const MAX_RECENT: usize = 8;
@@ -426,87 +426,95 @@ impl App {
         let mut toggle_fav: Option<PathBuf> = None;
         let mut empty_trash = false;
         let mut close = false;
-        section(ui, &format!("Session „{}“", s.name), None, |ui| {
-            for f in SessionFolder::ALL {
-                let dir = s.folder(f);
-                let count: usize = self.lists.folders.iter().filter(|(p, _)| p.starts_with(&dir)).map(|(_, n)| n).sum();
-                let text = match f {
-                    SessionFolder::Output => format!("{}  {}", folder_icon(f), f.label()),
-                    _ => format!("{}  {} ({count})", folder_icon(f), f.label()),
-                };
-                let selected = matches!(&self.scope, Scope::Folder { path, .. } if *path == dir);
-                let resp = ui.selectable_label(selected, text);
-                let resp = match f {
-                    SessionFolder::Output => resp.on_hover_text(format!("Ordner {}\nKlick: im Dateimanager zeigen", dir.display())),
-                    _ => resp.on_hover_text(format!("Ordner {}", dir.display())),
-                };
-                if resp.clicked() {
-                    if f == SessionFolder::Output {
-                        if let Err(e) = reveal(&dir) {
-                            self.status = format!("Dateimanager nicht verfügbar: {e}");
-                        }
-                    } else {
-                        open = Some(dir.clone());
-                    }
-                }
-                crate::widgets::context_menu(&resp, |ui| {
-                    if f == SessionFolder::Trash && ui.add_enabled(count > 0, Button::new("Papierkorb leeren …")).clicked() {
-                        empty_trash = true;
-                        ui.close();
-                    }
-                    if ui.button("Im Dateimanager zeigen").clicked() {
-                        if let Err(e) = reveal(&dir) {
-                            self.status = format!("Dateimanager nicht verfügbar: {e}");
-                        }
-                        ui.close();
-                    }
-                });
-            }
-            self.hot_folder_ui(ui);
-            ui.horizontal(|ui| {
+        let mut import = false;
+        widgets::nav_header(ui, "Session", &format!("Session · {}", s.name), |ui| {
+            let resp = widgets::nav_action(ui, icon::DOTS_THREE, "Weitere Aktionen");
+            widgets::menu_popup(&resp).show(|ui| {
                 if ui.button(format!("{}  Importieren …", icon::FOLDER_PLUS)).on_hover_text("Bilder in den Ordner „Aufnahmen“ kopieren").clicked() {
-                    self.import_folder_dialog();
+                    import = true;
+                    ui.close();
                 }
+                ui.separator();
                 if ui.button(format!("{}  Session schließen", icon::SIGN_OUT)).on_hover_text(crate::commands::hint("Zurück zum Katalog", "close-session")).clicked() {
                     close = true;
+                    ui.close();
                 }
             });
         });
+        for f in SessionFolder::ALL {
+            let dir = s.folder(f);
+            let count: usize = self.lists.folders.iter().filter(|(p, _)| p.starts_with(&dir)).map(|(_, n)| n).sum();
+            let selected = matches!(&self.scope, Scope::Folder { path, .. } if *path == dir);
+            let shown_count = (f != SessionFolder::Output).then_some(count);
+            let resp = widgets::nav_row(ui, folder_icon(f), f.label(), shown_count, selected, 0.0, false);
+            if f == SessionFolder::Output {
+                // Opens in the file manager, not here: marked like a link that leaves the app.
+                let c = if resp.hovered() { theme::TEXT } else { theme::TEXT_DIM };
+                ui.painter().text(resp.rect.right_center() - vec2(14.0, 0.0), egui::Align2::CENTER_CENTER, icon::ARROW_SQUARE_OUT, egui::FontId::proportional(13.0), c);
+            }
+            let resp = match f {
+                SessionFolder::Output => resp.on_hover_text(format!("Öffnet den Ordner im Explorer\n{}", dir.display())),
+                SessionFolder::Trash => resp.on_hover_text(format!("Ordner {}\nRechtsklick: Papierkorb leeren", dir.display())),
+                _ => resp.on_hover_text(format!("Ordner {}", dir.display())),
+            };
+            if resp.clicked() {
+                if f == SessionFolder::Output {
+                    if let Err(e) = reveal(&dir) {
+                        self.status = format!("Dateimanager nicht verfügbar: {e}");
+                    }
+                } else {
+                    open = Some(dir.clone());
+                }
+            }
+            widgets::context_menu(&resp, |ui| {
+                if f == SessionFolder::Trash && ui.add_enabled(count > 0, Button::new("Papierkorb leeren …")).clicked() {
+                    empty_trash = true;
+                    ui.close();
+                }
+                if ui.button("Im Dateimanager zeigen").clicked() {
+                    if let Err(e) = reveal(&dir) {
+                        self.status = format!("Dateimanager nicht verfügbar: {e}");
+                    }
+                    ui.close();
+                }
+            });
+        }
 
         let reachable = favorites_reachable(ui, &self.lists.favorites);
-        section(ui, "Session-Favoriten", None, |ui| {
-            for (fav, reachable) in self.lists.favorites.iter().zip(reachable) {
-                let selected = matches!(&self.scope, Scope::Folder { path, .. } if path == fav);
-                let mut text = RichText::new(format!("{}  {}", icon::STAR, dir_name(fav)));
-                if !reachable {
-                    text = text.color(theme::TEXT_DIM).strikethrough();
-                }
-                let resp = ui.selectable_label(selected, text).on_hover_text(fav.display().to_string());
-                // Checked again: the last check is up to 5 s old, or not done yet.
-                if resp.clicked() && reachable && fav.is_dir() {
-                    open = Some(fav.clone());
-                }
-                crate::widgets::context_menu(&resp, |ui| {
-                    if ui.button("Aus Favoriten entfernen").clicked() {
-                        toggle_fav = Some(fav.clone());
-                        ui.close();
-                    }
-                });
-            }
-            if self.lists.favorites.is_empty() {
-                crate::widgets::hint(ui, "Häufig genutzte Ordner hier ablegen.");
-            }
-            let is_fav = self.lists.favorites.contains(&self.folder);
-            let is_std = SessionFolder::ALL.iter().any(|f| s.folder(*f) == self.folder);
-            if ui
-                .add_enabled(!is_fav && !is_std, Button::new(format!("{}  Aktuellen Ordner hinzufügen", icon::STAR)))
-                .on_hover_text(self.folder.display().to_string())
-                .clicked()
-            {
+        let is_fav = self.lists.favorites.contains(&self.folder);
+        let is_std = SessionFolder::ALL.iter().any(|f| s.folder(*f) == self.folder);
+        widgets::nav_header(ui, "Session-Favoriten", "Favoriten", |ui| {
+            let can = !is_fav && !is_std;
+            let hover = if can { format!("Aktuellen Ordner hinzufügen\n{}", self.folder.display()) } else { "Der aktuelle Ordner ist schon da".to_string() };
+            if ui.add_enabled_ui(can, |ui| widgets::nav_action(ui, icon::PLUS, &hover)).inner.clicked() {
                 toggle_fav = Some(self.folder.clone());
             }
         });
+        for (fav, reachable) in self.lists.favorites.iter().zip(reachable) {
+            let selected = matches!(&self.scope, Scope::Folder { path, .. } if path == fav);
+            let hover = if reachable { fav.display().to_string() } else { format!("Nicht erreichbar: {}", fav.display()) };
+            let resp = widgets::nav_row(ui, icon::STAR, &dir_name(fav), None, selected, 0.0, !reachable).on_hover_text(hover);
+            // Checked again: the last check is up to 5 s old, or not done yet.
+            if resp.clicked() && reachable && fav.is_dir() {
+                open = Some(fav.clone());
+            }
+            widgets::context_menu(&resp, |ui| {
+                if ui.button("Aus Favoriten entfernen").clicked() {
+                    toggle_fav = Some(fav.clone());
+                    ui.close();
+                }
+            });
+        }
+        if self.lists.favorites.is_empty() {
+            ui.horizontal(|ui| {
+                ui.add_space(10.0);
+                widgets::hint(ui, "Häufig genutzte Ordner hier ablegen: +");
+            });
+        }
 
+        if import {
+            self.import_folder_dialog();
+        }
         if let Some(f) = toggle_fav {
             self.toggle_favorite(&f);
         }

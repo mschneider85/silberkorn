@@ -71,10 +71,10 @@ struct Command {
 
 /// Tool sections per tab with search terms; titles as passed to `widgets::section`.
 const SECTIONS: &[(Tab, &str, &str)] = &[
-    (Tab::Library, "Gesichter & Sichtung", "culling augen geschlossen unscharf personen faces"),
+    (Tab::Library, "Katalog", "catalog alle bilder letzter import bereinigen"),
+    (Tab::Library, "Ordner", "folder verzeichnis baum"),
     (Tab::Library, "Alben", "album smart filteralbum sammlung"),
-    (Tab::Library, "Ordner", "folder verzeichnis"),
-    (Tab::Library, "Filter & Suche", "suchen filter sterne bewertung sortieren sort"),
+    (Tab::Library, "Personen", "gesichter faces personen namen"),
     (Tab::Lens, "Zuschnitt", "crop beschneiden seitenverhältnis format"),
     (Tab::Lens, "Drehen & Spiegeln", "rotate flip geraderichten horizont straighten"),
     (Tab::Lens, "Trapezkorrektur", "perspektive stürzende linien upright keystone trapez"),
@@ -347,7 +347,7 @@ fn command_row(ui: &Ui, rect: Rect, c: &Command, selected: bool) {
 
 /// Sections of AI functions (marked in the palette as in the tool tabs).
 fn is_ai_section(title: &str) -> bool {
-    matches!(title, "Gesichter & Sichtung") || sk_core::tools::Tool::ALL.iter().any(|t| t.is_ai() && t.label() == title)
+    matches!(title, "Personen") || sk_core::tools::Tool::ALL.iter().any(|t| t.is_ai() && t.label() == title)
 }
 
 /// "Strg+1" … "Strg+0" for the tool tabs in rail order.

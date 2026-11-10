@@ -533,6 +533,7 @@ impl App {
             ui.add_space(6.0);
             let mut group = Tab::ALL[0].group();
             let on_layer = self.on_layer();
+            let filtered = self.filter_active();
             for tab in Tab::ALL {
                 // On a layer, the tabs that only change the whole image are disabled, those that
                 // work on it get a dot in the accent color.
@@ -573,12 +574,15 @@ impl App {
                 }
                 let symbol_rect = Rect::from_min_size(pos, symbol.size());
                 painter.galley(pos, symbol, color);
-                if on_layer && tab.on_layers() {
-                    painter.circle_filled(symbol_rect.right_top() + vec2(2.0, 1.0), 3.0, theme::ACCENT);
+                if (on_layer && tab.on_layers()) || (tab == Tab::Library && filtered) {
+                    painter.circle_filled(symbol_rect.right_top() + vec2(2.0, 1.0), 3.5, theme::ACCENT);
                 }
                 painter.text(rect.center_bottom() - vec2(0.0, 9.0), egui::Align2::CENTER_CENTER, tab.short_title(), egui::FontId::proportional(10.0), color);
                 let key = crate::palette::tab_shortcut(tab);
                 let mut hover = if key.is_empty() { tab.title().to_string() } else { format!("{}  ({key})", tab.title()) };
+                if tab == Tab::Library && filtered {
+                    hover = format!("{hover}\nEin Filter ist aktiv");
+                }
                 if !available {
                     hover = format!("{hover}\n{}", crate::widgets::ONLY_IMAGE);
                 } else if on_layer && tab.on_layers() {
@@ -603,6 +607,20 @@ impl App {
                 let b = Button::new(RichText::new(icon::MAGNIFYING_GLASS).size(14.0).color(theme::TEXT_DIM)).frame_when_inactive(false);
                 if ui.add(b).on_hover_text("Befehlssuche: Befehl, Werkzeug oder Einstellung suchen (Strg+K)").clicked() {
                     self.palette.show();
+                }
+                if self.tab == Tab::Library {
+                    let (hover, session) = match &self.session {
+                        Some(_) => ("Bilder in den Ordner „Aufnahmen“ kopieren", true),
+                        None => ("Bilder dieses Ordners und seiner Unterordner in den Katalog aufnehmen", false),
+                    };
+                    if ui.button(RichText::new(format!("{}  Importieren …", icon::DOWNLOAD_SIMPLE)).size(12.5)).on_hover_text(hover).clicked() {
+                        if session {
+                            self.import_folder_dialog();
+                        } else {
+                            let folder = self.folder.clone();
+                            self.open_import(folder, true);
+                        }
+                    }
                 }
             });
         });
@@ -676,8 +694,23 @@ impl App {
                 }
                 let n = self.selected_count();
                 let sel = if n > 1 { format!("  ·  {n} ausgewählt") } else { String::new() };
-                let count = image_count(self.visible.len());
-                ui.label(dim(format!("{}  ·  {count}{sel}", scope_label(&self.scope, &self.lists, self.session.as_ref()))));
+                let scope = scope_label(&self.scope, &self.lists, self.session.as_ref());
+                if self.filter_active() {
+                    // Laid out right to left: the scope comes before the chip.
+                    let text = format!("{} von {}  ·  gefiltert  {}", self.visible.len(), self.entries.len(), icon::X);
+                    let b = Button::new(RichText::new(text).size(12.0).color(theme::ACCENT_TEXT)).fill(theme::ACCENT_SOFT).corner_radius(10.0);
+                    if ui.add(b).on_hover_text("Filter aufheben").clicked() {
+                        self.filter = sk_core::catalog::Filter::default();
+                        self.clear_content_search();
+                    }
+                    ui.label(dim(scope));
+                    if !sel.is_empty() {
+                        ui.label(dim(sel.trim_start_matches([' ', '·']).to_string()));
+                    }
+                } else {
+                    let count = image_count(self.visible.len());
+                    ui.label(dim(format!("{scope}  ·  {count}{sel}")));
+                }
                 self.update_status(ui);
                 if !self.activities().is_empty() {
                     ui.separator();

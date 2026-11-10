@@ -36,11 +36,11 @@ impl HotFolder {
 }
 
 impl App {
-    /// The folder that is watched while watching is on: the one the browser shows (without its
-    /// subfolders).
+    /// The folder that is watched while watching is on: the one the browser shows (new
+    /// pictures arrive in it, not in its subfolders).
     pub(crate) fn watched_folder(&self) -> Option<PathBuf> {
         match &self.scope {
-            Scope::Folder { path, recursive: false } => Some(path.clone()),
+            Scope::Folder { path, .. } => Some(path.clone()),
             _ => None,
         }
     }
@@ -115,15 +115,16 @@ impl App {
 
     /// The switches in the library tab (and the file menu).
     pub(crate) fn hot_folder_ui(&mut self, ui: &mut egui::Ui) {
-        let (mut on, mut open_new) = (self.hot_folder.on, self.hot_folder.open_new);
-        crate::widgets::checkbox(ui, &mut on, "Ordner überwachen")
-            .on_hover_text("Neue Bilder, etwa aus der Kamerasoftware, erscheinen von selbst in der Übersicht");
-        ui.add_enabled_ui(on, |ui| {
-            ui.indent("hot_folder", |ui| crate::widgets::checkbox(ui, &mut open_new, "Neue Aufnahme gleich öffnen"));
-        });
-        if on && self.watched_folder().is_none() {
-            ui.label(egui::RichText::new("Wirkt, sobald ein Ordner (ohne Unterordner) angezeigt wird").small().color(crate::theme::TEXT_FAINT));
+        let mut hot = (self.hot_folder.on, self.hot_folder.open_new);
+        crate::library::hot_folder_items(ui, &mut hot);
+        if hot.0 && self.watched_folder().is_none() {
+            ui.label(egui::RichText::new("Wirkt, sobald ein Ordner angezeigt wird").small().color(crate::theme::TEXT_FAINT));
         }
+        self.set_hot_folder(hot);
+    }
+
+    /// Saves the "Ordner überwachen" settings if they changed.
+    pub(crate) fn set_hot_folder(&mut self, (on, open_new): (bool, bool)) {
         if (on, open_new) != (self.hot_folder.on, self.hot_folder.open_new) {
             self.hot_folder.on = on;
             self.hot_folder.open_new = open_new;

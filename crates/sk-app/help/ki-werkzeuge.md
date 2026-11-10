@@ -87,4 +87,4 @@ Die genaue Motivmaske braucht einige Sekunden. Zeigt der Tab Ebenen ein Bild, wi
 
 ## Inhaltssuche
 
-Die KI beschreibt jedes Bild einmal als Zahlenreihe, mit der sich Bilder und Texte vergleichen lassen. Damit arbeiten das Feld **Bildinhalt** unter [Filter & Suche](bibliothek#Suche nach dem Bildinhalt), **Ähnliche finden** im Menü **Foto** und die [Keyword-Vorschläge](bibliothek#Keywords) im Tab Metadaten. Erfasst werden die Bilder erst, wenn eine Suche oder die Vorschläge sie brauchen.
+Die KI beschreibt jedes Bild einmal als Zahlenreihe, mit der sich Bilder und Texte vergleichen lassen. Damit arbeiten das Feld **Bildinhalt** in der [Filterleiste](bibliothek#Suche nach dem Bildinhalt), **Ähnliche finden** im Menü **Foto** und die [Keyword-Vorschläge](bibliothek#Keywords) im Tab Metadaten. Erfasst werden die Bilder erst, wenn eine Suche oder die Vorschläge sie brauchen.

@@ -8,7 +8,7 @@ use sk_core::catalog::{self, Filter, ImageRecord, Scope, SortKey};
 use sk_core::params::Adjustments;
 use sk_core::sidecar::{self, ColorLabel, Sidecar};
 use sk_core::styles::{self, Style};
-use egui::{Color32, RichText, Ui};
+use egui::{Rect, RichText, Ui};
 
 use crate::app::App;
 use crate::undo::Meta;
@@ -22,6 +22,8 @@ pub struct CatalogLists {
     pub folders: Vec<(PathBuf, usize)>,
     pub keywords: Vec<(String, usize)>,
     pub total: usize,
+    /// Images of the last import.
+    pub last_import: usize,
     /// Session favorites (folders).
     pub favorites: Vec<PathBuf>,
     /// People recognized by face (named, or seen in several images).
@@ -40,6 +42,11 @@ pub struct LibraryUi {
     pub naming: Option<(i64, String)>,
     /// The faces shown for the persons.
     pub faces: crate::culling::FaceThumbs,
+    /// Strg+F: the search field of the bar takes the keyboard.
+    pub focus_search: bool,
+    /// Folders open in the folder tree, and the folder they were last opened for.
+    pub expanded: std::collections::HashSet<PathBuf>,
+    pub expanded_for: PathBuf,
     /// Two persons to be merged once confirmed: (into, from).
     pub merging: Option<(i64, i64)>,
     /// The faces of the chosen person and those chosen among them.
@@ -66,7 +73,7 @@ fn record_from_sidecar(path: PathBuf, sc: Sidecar) -> ImageRecord {
 
 pub fn scope_label(scope: &Scope, lists: &CatalogLists, session: Option<&sk_core::session::Session>) -> String {
     // Session folders are shown by their label ("Aufnahmen" rather than "Capture").
-    if let (Scope::Folder { path, recursive: false }, Some(s)) = (scope, session)
+    if let (Scope::Folder { path, .. }, Some(s)) = (scope, session)
         && let Some(f) = s.folder_of(path).filter(|f| s.folder(*f) == *path)
     {
         return f.label().into();
@@ -74,9 +81,8 @@ pub fn scope_label(scope: &Scope, lists: &CatalogLists, session: Option<&sk_core
     match scope {
         Scope::All => "Alle Bilder".into(),
         Scope::LastImport => "Letzter Import".into(),
-        Scope::Folder { path, recursive } => {
-            let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().to_string());
-            if *recursive { format!("{name} (mit Unterordnern)") } else { name }
+        Scope::Folder { path, .. } => {
+            path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().to_string())
         }
         Scope::Album(id) => lists.albums.iter().find(|a| a.id == *id).map_or("Album".into(), |a| a.name.clone()),
         Scope::Person(id) => lists.persons.iter().find(|p| p.id == *id).and_then(|p| p.name.clone()).unwrap_or_else(|| "Person".into()),
@@ -91,6 +97,7 @@ impl App {
             folders: c.folders().unwrap_or_default(),
             keywords: c.keywords().unwrap_or_default(),
             total: c.image_count().unwrap_or(0),
+            last_import: c.last_import_count().unwrap_or(0),
             favorites: c.favorites().unwrap_or_default(),
             persons: c.persons(2).unwrap_or_default(),
         };
@@ -122,11 +129,11 @@ impl App {
             self.catalog_folder = folder.clone();
         }
         self.save_settings();
-        self.open_scope(Scope::Folder { path: folder.clone(), recursive: false });
+        self.open_scope(Scope::Folder { path: folder.clone(), recursive: self.include_subfolders });
         // A session's own folders are its database: indexed silently, so that dates, cameras
         // and search work. The catalog only holds what was imported.
         let belongs = self.session.as_ref().is_some_and(|s| folder.starts_with(&s.root));
-        let paths = if belongs { catalog::scan_folder(&folder, false) } else { Vec::new() };
+        let paths = if belongs { catalog::scan_folder(&folder, self.include_subfolders) } else { Vec::new() };
         if !paths.is_empty() {
             self.workers.index(IndexJob { catalog: self.catalog_path(), paths, import: false, copy_to: None });
         }
@@ -215,17 +222,11 @@ impl App {
     }
 
     /// The folder and subfolder switch if the scope is read from the file system rather than
-    /// the catalog.
+    /// the catalog: a folder always (the file system is authoritative, with its subfolders
+    /// unless "Unterordner einbeziehen" is off).
     fn scope_on_disk(&self) -> Option<(PathBuf, bool)> {
         match &self.scope {
-            // In the catalog also a tree with subfolders that wasn't imported (read from the
-            // file system: slow for a large tree, so only then).
-            Scope::Folder { path, recursive }
-                if !*recursive
-                    || (self.session.is_none() && self.catalog.as_ref().is_some_and(|c| c.has_images_in(path, true).is_ok_and(|has| !has))) =>
-            {
-                Some((path.clone(), *recursive))
-            }
+            Scope::Folder { path, recursive } => Some((path.clone(), *recursive)),
             _ => None,
         }
     }
@@ -559,181 +560,166 @@ impl App {
     // ---------------------------------------------------------------- UI
 
     pub fn library_tab(&mut self, ui: &mut Ui) {
+        use crate::theme::icon;
         let mut open: Option<Scope> = None;
-        let (mut do_import, mut do_cleanup) = (false, false);
+        let mut open_folder: Option<PathBuf> = None;
+        let mut do_cleanup = false;
 
         self.session_sections(ui);
+
+        // Catalog.
         let title = if self.session.is_some() { "Session-Katalog" } else { "Katalog" };
-        // Images of a folder only browsed are not in the catalog (their records have no id):
-        // "Alle Bilder (0)" beside them would look like an error.
-        let browsed = if self.session.is_none() && matches!(self.scope, Scope::Folder { .. }) { self.entries.iter().filter(|e| e.id == 0).count() } else { 0 };
-        section(ui, title, None, |ui| {
-            let mut entry = |ui: &mut Ui, scope: Scope, text: String| {
-                if ui.selectable_label(self.scope == scope, text).clicked() {
-                    open = Some(scope);
-                }
-            };
-            entry(ui, Scope::All, format!("{}  Alle Bilder ({})", crate::theme::icon::STACK_SIMPLE, self.lists.total));
-            entry(ui, Scope::LastImport, format!("{}  Letzter Import", crate::theme::icon::CLOCK_COUNTER_CLOCKWISE));
-            if browsed > 0 {
-                let text = match browsed {
-                    n if n == self.entries.len() => "Die Bilder dieses Ordners sind nur durchsucht, nicht im Katalog. „Importieren …“ nimmt sie auf.".to_string(),
-                    1 => "1 Bild dieses Ordners ist nur durchsucht, nicht im Katalog. „Importieren …“ nimmt es auf.".to_string(),
-                    n => format!("{n} Bilder dieses Ordners sind nur durchsucht, nicht im Katalog. „Importieren …“ nimmt sie auf."),
-                };
-                widgets::hint(ui, text);
-            }
-            ui.horizontal(|ui| {
-                if self.session.is_none()
-                    && ui.button(format!("{}  Importieren …", crate::theme::icon::DOWNLOAD_SIMPLE)).on_hover_text("Bilder dieses Ordners und seiner Unterordner in den Katalog aufnehmen").clicked()
-                {
-                    do_import = true;
-                }
-                if ui.button(format!("{}  Bereinigen", crate::theme::icon::BROOM)).on_hover_text("Fehlende Dateien aus dem Katalog entfernen").clicked() {
+        widgets::nav_header(ui, "Katalog", title, |ui| {
+            let resp = widgets::nav_action(ui, icon::DOTS_THREE, "Weitere Aktionen");
+            widgets::menu_popup(&resp).show(|ui| {
+                if ui.button(format!("{}  Bereinigen", icon::BROOM)).on_hover_text("Fehlende Dateien aus dem Katalog entfernen").clicked() {
                     do_cleanup = true;
+                    ui.close();
                 }
             });
         });
-
-        if do_import {
-            let folder = self.folder.clone();
-            self.open_import(folder, true);
+        if widgets::nav_row(ui, icon::STACK_SIMPLE, "Alle Bilder", Some(self.lists.total), self.scope == Scope::All, 0.0, false).clicked() {
+            open = Some(Scope::All);
         }
-        // Filtering is used most, so it comes right after the catalog.
-        let mut refilter = false;
-        let mut resort = false;
-        let mut clear_content = false;
-        section(ui, "Filter & Suche", None, |ui| {
-            refilter |= ui
-                .add(egui::TextEdit::singleline(&mut self.filter.text).hint_text(format!("{}  Name, Kamera, Objektiv, Keyword", crate::theme::icon::MAGNIFYING_GLASS)))
-                .changed();
-            self.content_search_ui(ui);
-            widgets::field(ui, "Mindestens", |ui| refilter |= widgets::stars(ui, &mut self.filter.min_rating, 16.0));
-            widgets::combo_field(ui, "Farb-Label", self.filter.color_label.map_or("Alle", |l| l.label()), |ui| {
-                    refilter |= ui.selectable_value(&mut self.filter.color_label, None, "Alle").changed();
-                    for l in ColorLabel::ALL {
-                        refilter |= ui.selectable_value(&mut self.filter.color_label, Some(l), l.label()).changed();
-                    }
-                });
-            widgets::combo_field(ui, "Keyword", self.filter.keyword.clone().unwrap_or_else(|| "Alle".into()), |ui| {
-                    refilter |= ui.selectable_value(&mut self.filter.keyword, None, "Alle").changed();
-                    for (k, n) in &self.lists.keywords {
-                        refilter |= ui.selectable_value(&mut self.filter.keyword, Some(k.clone()), format!("{k} ({n})")).changed();
-                    }
-                });
+        if widgets::nav_row(ui, icon::CLOCK_COUNTER_CLOCKWISE, "Letzter Import", Some(self.lists.last_import), self.scope == Scope::LastImport, 0.0, false).clicked() {
+            open = Some(Scope::LastImport);
+        }
+
+        // Folders as a tree: those of the catalog, and the one shown with its subfolders.
+        let mut browse = false;
+        widgets::nav_header(ui, "Ordner", "Ordner", |ui| {
+            let resp = widgets::nav_action(ui, icon::PLUS, &crate::commands::hint("Ordner öffnen", "open-folder"));
+            widgets::menu_popup(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                ui.set_width(250.0);
+                ui.label(RichText::new("Ordner öffnen").small().color(crate::theme::TEXT_DIM));
+                let resp = ui.add(egui::TextEdit::singleline(&mut self.folder_input).hint_text("Pfad, Enter öffnet").desired_width(f32::INFINITY));
+                if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                    open_folder = Some(self.folder_input.clone().into());
+                    ui.close();
+                }
+                if ui.add_sized([ui.available_width(), 26.0], egui::Button::new(format!("{}  Durchsuchen …", icon::FOLDER_OPEN))).clicked() {
+                    browse = true;
+                    ui.close();
+                }
+            });
+        });
+        // In a session its own folders (Aufnahmen …) are above already.
+        let standard: Vec<PathBuf> = self.session.as_ref().map(|s| sk_core::session::SessionFolder::ALL.iter().map(|f| s.folder(*f)).collect()).unwrap_or_default();
+        let own = |p: &Path| standard.iter().any(|d| p.starts_with(d));
+        let folders: Vec<(PathBuf, usize)> = self.lists.folders.iter().filter(|(p, _)| !own(p)).cloned().collect();
+        let mut extra = vec![self.folder.clone()];
+        extra.extend(self.subdirs.iter().cloned());
+        extra.retain(|p| !own(p) && self.session.as_ref().is_none_or(|s| *p != s.root));
+        let tree = folder_tree(&folders, &extra);
+        if self.library_ui.expanded_for != self.folder {
+            // The way to the folder shown is open.
+            self.library_ui.expanded_for = self.folder.clone();
+            self.library_ui.expanded.extend(self.folder.ancestors().map(Path::to_path_buf));
+        }
+        let shown = match &self.scope {
+            Scope::Folder { path, .. } => Some(path.clone()),
+            _ => None,
+        };
+        let mut toggle: Option<PathBuf> = None;
+        for node in &tree {
+            folder_rows(ui, node, 0, &self.library_ui.expanded, shown.as_deref(), &mut open_folder, &mut toggle);
+        }
+        if tree.is_empty() && self.session.is_some() {
             ui.horizontal(|ui| {
-                egui::ComboBox::from_id_salt("sort").selected_text(self.sort.label()).show_ui(ui, |ui| {
-                    for s in SortKey::ALL {
-                        resort |= ui.selectable_value(&mut self.sort, s, s.label()).changed();
-                    }
-                });
-                if ui.button(if self.sort_desc { crate::theme::icon::SORT_DESCENDING } else { crate::theme::icon::SORT_ASCENDING }).on_hover_text("Sortierrichtung").clicked() {
-                    self.sort_desc = !self.sort_desc;
-                    resort = true;
-                }
-                if (!self.filter.is_empty() || self.content.is_active()) && ui.button(format!("{}  Filter", crate::theme::icon::X)).clicked() {
-                    self.filter = Filter::default();
-                    clear_content = true;
-                }
+                ui.add_space(10.0);
+                widgets::hint(ui, "Weitere Ordner: +");
             });
-            ui.label(RichText::new(format!("{} von {} Bildern", self.visible.len(), self.entries.len())).color(Color32::from_gray(150)));
-        });
-        if clear_content {
-            // Refilters as well.
-            self.clear_content_search();
-        } else if resort {
-            self.resort();
-        } else if refilter {
-            self.refilter();
+        }
+        if let Some(t) = toggle
+            && !self.library_ui.expanded.remove(&t)
+        {
+            self.library_ui.expanded.insert(t);
         }
 
-        self.culling_section(ui);
-        if do_cleanup && let Some(c) = &self.catalog {
-            let n = c.remove_missing().unwrap_or(0);
-            self.status = format!("{n} fehlende Einträge entfernt");
-            self.reload_entries();
-        }
-
+        // Albums.
         enum AlbumAction {
-            Create(String, bool),
+            Create(String),
             Rename(i64, String),
             Delete(i64, String),
             AddSelection(i64),
             RemoveSelection(i64),
         }
         let mut action: Option<AlbumAction> = None;
-        section(ui, "Alben", None, |ui| {
-            for album in &self.lists.albums {
-                let scope = Scope::Album(album.id);
-                if let Some((id, name)) = &mut self.library_ui.renaming
-                    && *id == album.id
-                {
-                    let resp = ui.text_edit_singleline(name);
-                    if resp.lost_focus() {
-                        // Esc keeps the old name (an empty one is ignored), as for layers.
-                        let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                        action = Some(AlbumAction::Rename(*id, if esc { String::new() } else { name.trim().to_string() }));
-                    } else {
-                        resp.request_focus();
-                    }
-                    continue;
+        let selected_n = self.selected_count();
+        widgets::nav_header(ui, "Alben", "Alben", |ui| {
+            let resp = widgets::nav_action(ui, icon::PLUS, "Neues Album mit der Auswahl");
+            widgets::menu_popup(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+                ui.set_width(250.0);
+                ui.label(RichText::new(format!("Neues Album mit der Auswahl ({})", widgets::image_count(selected_n))).small().color(crate::theme::TEXT_DIM));
+                let resp = ui.add(egui::TextEdit::singleline(&mut self.library_ui.new_album).hint_text("Name").desired_width(f32::INFINITY));
+                let name = self.library_ui.new_album.trim().to_string();
+                let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if (ui.add_enabled(!name.is_empty(), egui::Button::new("Album anlegen")).clicked() || enter) && !name.is_empty() {
+                    action = Some(AlbumAction::Create(name));
+                    ui.close();
                 }
-                let icon = if album.smart.is_some() { crate::theme::icon::GEAR_SIX } else { crate::theme::icon::FOLDER_SIMPLE };
-                let resp = ui.selectable_label(self.scope == scope, format!("{icon}  {} ({})", album.name, album.count)).on_hover_text("Doppelklick: umbenennen");
-                if resp.double_clicked() {
-                    self.library_ui.renaming = Some((album.id, album.name.clone()));
-                } else if resp.clicked() {
-                    open = Some(scope);
+            });
+        });
+        for album in &self.lists.albums {
+            let scope = Scope::Album(album.id);
+            if let Some((id, name)) = &mut self.library_ui.renaming
+                && *id == album.id
+            {
+                let resp = ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY));
+                if resp.lost_focus() {
+                    // Esc keeps the old name (an empty one is ignored), as for layers.
+                    let esc = ui.input(|i| i.key_pressed(egui::Key::Escape));
+                    action = Some(AlbumAction::Rename(*id, if esc { String::new() } else { name.trim().to_string() }));
+                } else {
+                    resp.request_focus();
                 }
-                crate::widgets::context_menu(&resp, |ui| {
-                    if album.smart.is_none() && ui.button("Auswahl hinzufügen").clicked() {
+                continue;
+            }
+            let ic = if album.smart.is_some() { icon::SLIDERS_HORIZONTAL } else { icon::IMAGES_SQUARE };
+            let hover = if album.smart.is_some() { "Filteralbum: zeigt immer die Bilder seines Filters\nDoppelklick: umbenennen" } else { "Doppelklick: umbenennen" };
+            let resp = widgets::nav_row(ui, ic, &album.name, Some(album.count), self.scope == scope, 0.0, false).on_hover_text(hover);
+            if resp.double_clicked() {
+                self.library_ui.renaming = Some((album.id, album.name.clone()));
+            } else if resp.clicked() {
+                open = Some(scope);
+            }
+            widgets::context_menu(&resp, |ui| {
+                if album.smart.is_none() {
+                    if ui.button("Auswahl hinzufügen").clicked() {
                         action = Some(AlbumAction::AddSelection(album.id));
                         ui.close();
                     }
-                    if ui.button("Umbenennen").clicked() {
-                        self.library_ui.renaming = Some((album.id, album.name.clone()));
+                    if ui.button("Auswahl aus Album entfernen").clicked() {
+                        action = Some(AlbumAction::RemoveSelection(album.id));
                         ui.close();
                     }
-                    if ui.button("Löschen …").clicked() {
-                        action = Some(AlbumAction::Delete(album.id, album.name.clone()));
-                        ui.close();
-                    }
-                });
-            }
-            if self.lists.albums.is_empty() {
-                crate::widgets::hint(ui, "Noch keine Alben.");
-            }
-            ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut self.library_ui.new_album).hint_text("Name").desired_width(110.0));
-                let name = self.library_ui.new_album.trim().to_string();
-                if ui.add_enabled(!name.is_empty(), egui::Button::new(format!("{}  Album", crate::theme::icon::PLUS))).on_hover_text("Neues Album mit der Auswahl").clicked() {
-                    action = Some(AlbumAction::Create(name.clone(), false));
                 }
-                if ui
-                    .add_enabled(!name.is_empty() && !self.filter.is_empty(), egui::Button::new(format!("{}  Filteralbum", crate::theme::icon::PLUS)))
-                    .on_hover_text("Album, das immer die Bilder des aktuellen Filters zeigt")
-                    .clicked()
-                {
-                    action = Some(AlbumAction::Create(name, true));
+                if ui.button("Umbenennen").clicked() {
+                    self.library_ui.renaming = Some((album.id, album.name.clone()));
+                    ui.close();
+                }
+                if ui.button("Löschen …").clicked() {
+                    action = Some(AlbumAction::Delete(album.id, album.name.clone()));
+                    ui.close();
                 }
             });
-            if let Scope::Album(id) = self.scope
-                && self.lists.albums.iter().any(|a| a.id == id && a.smart.is_none())
-                && ui.button("Auswahl aus Album entfernen").clicked()
-            {
-                action = Some(AlbumAction::RemoveSelection(id));
-            }
-        });
+        }
+        if self.lists.albums.is_empty() {
+            ui.horizontal(|ui| {
+                ui.add_space(10.0);
+                widgets::hint(ui, "Noch keine Alben. + legt eines mit der Auswahl an.");
+            });
+        }
         if let Some(action) = action {
             let selected = self.selected_paths();
+            let mut created = None;
             if let Some(c) = &self.catalog {
                 match action {
-                    AlbumAction::Create(name, smart) => {
-                        if smart {
-                            let _ = c.create_album(&name, Some(&self.filter));
-                        } else if let Ok(id) = c.create_album(&name, None) {
+                    AlbumAction::Create(name) => {
+                        if let Ok(id) = c.create_album(&name, None) {
                             index_missing(c, &selected);
                             let _ = c.add_to_album(id, &selected);
+                            created = Some(id);
                         }
                         self.library_ui.new_album.clear();
                     }
@@ -747,83 +733,49 @@ impl App {
                     AlbumAction::AddSelection(id) => {
                         index_missing(c, &selected);
                         let n = c.add_to_album(id, &selected).unwrap_or(0);
-                        self.status = format!("{} zum Album hinzugefügt", crate::widgets::image_count(n));
+                        self.status = format!("{} zum Album hinzugefügt", widgets::image_count(n));
                     }
                     AlbumAction::RemoveSelection(id) => {
                         let _ = c.remove_from_album(id, &selected);
                     }
                 }
             }
-            if open.is_none() && matches!(self.scope, Scope::Album(_)) {
+            if let Some(id) = created {
+                self.refresh_catalog_lists();
+                open = open.or(Some(Scope::Album(id)));
+            } else if open.is_none() && matches!(self.scope, Scope::Album(_)) {
                 self.reload_entries();
             } else {
                 self.refresh_catalog_lists();
             }
         }
 
-        let mut open_folder: Option<PathBuf> = None;
-        let mut browse = false;
-        section(ui, "Ordner", None, |ui| {
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(format!("{}  Durchsuchen …", crate::theme::icon::FOLDER_OPEN)).on_hover_text(crate::commands::hint("Ordner auswählen", "open-folder")).clicked() {
-                        browse = true;
-                    }
-                    let id = egui::Id::new("folder_input");
-                    let width = ui.available_width();
-                    if ui.memory(|m| m.has_focus(id)) {
-                        let resp = ui.add(egui::TextEdit::singleline(&mut self.folder_input).id(id).desired_width(width));
-                        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            open_folder = Some(self.folder_input.clone().into());
-                        }
-                    } else {
-                        // Not being edited, the end of the path (the folder's name) is what
-                        // matters: shortened in front. A click edits the whole path.
-                        let mut shown = widgets::elide_start(ui, &self.folder_input, width - 12.0);
-                        ui.add(egui::TextEdit::singleline(&mut shown).id(id).desired_width(width)).on_hover_text(&self.folder_input);
-                    }
-                });
-            });
-            ui.horizontal(|ui| {
-                if let Some(parent) = self.folder.parent()
-                    && ui.button(format!("{}  Übergeordnet", crate::theme::icon::ARROW_UP)).clicked()
-                {
-                    open_folder = Some(parent.to_path_buf());
-                }
-                let rec = Scope::Folder { path: self.folder.clone(), recursive: true };
-                if ui.selectable_label(self.scope == rec, "mit Unterordnern").clicked() {
-                    open = Some(rec);
-                }
-            });
-            if self.session.is_none() {
-                self.hot_folder_ui(ui);
-            }
-            egui::ScrollArea::vertical().id_salt("subdirs").max_height(180.0).show(ui, |ui| {
-                for dir in &self.subdirs {
-                    let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-                    if ui.selectable_label(false, format!("{}  {name}", crate::theme::icon::FOLDER)).clicked() {
-                        open_folder = Some(dir.clone());
-                    }
-                }
-            });
-            if !self.lists.folders.is_empty() {
-                ui.collapsing("Katalogordner", |ui| {
-                    for (dir, n) in &self.lists.folders {
-                        let scope = Scope::Folder { path: dir.clone(), recursive: false };
-                        if ui.selectable_label(self.scope == scope, format!("{} ({n})", dir.display())).clicked() {
-                            open_folder = Some(dir.clone());
-                        }
-                    }
-                });
-            }
-        });
+        self.persons_section(ui);
 
+        if do_cleanup && let Some(c) = &self.catalog {
+            let n = c.remove_missing().unwrap_or(0);
+            self.status = format!("{n} fehlende Einträge entfernt");
+            self.reload_entries();
+        }
         if browse {
             self.open_folder_dialog();
         } else if let Some(f) = open_folder {
             self.open_folder(f);
         } else if let Some(s) = open {
             self.open_scope(s);
+        }
+    }
+
+    /// Saves the current filter as a filter album named `name` and shows it.
+    pub(crate) fn create_filter_album(&mut self, name: &str) {
+        let Some(c) = &self.catalog else { return };
+        match c.create_album(name, Some(&self.filter)) {
+            Ok(id) => {
+                self.refresh_catalog_lists();
+                self.status = format!("Filteralbum „{name}“ angelegt");
+                let _ = id;
+            }
+            Err(e) => self.report_error(format!("Filteralbum nicht angelegt: {e}")),
         }
     }
 
@@ -1007,4 +959,125 @@ pub fn sort_records(records: &mut [ImageRecord], key: SortKey, desc: bool) {
 fn still_there(path: &Path) -> bool {
     let (file, n) = sk_core::variant::split(path);
     file.exists() && (n == 1 || sk_core::variant::of_file(&file).iter().any(|p| p == path))
+}
+
+/// "Ordner überwachen" and its option, as items of a menu.
+pub(crate) fn hot_folder_items(ui: &mut Ui, (on, open_new): &mut (bool, bool)) {
+    widgets::checkbox(ui, on, "Ordner überwachen").on_hover_text("Neue Bilder, etwa aus der Kamerasoftware, erscheinen von selbst in der Übersicht");
+    ui.add_enabled_ui(*on, |ui| {
+        ui.indent("hot_folder", |ui| widgets::checkbox(ui, open_new, "Neue Aufnahme gleich öffnen"));
+    });
+}
+
+/// A folder of the folder tree: its images (with those of its subfolders), `None` for a folder
+/// not in the catalog.
+#[derive(Debug, PartialEq)]
+pub struct FolderNode {
+    pub path: PathBuf,
+    pub count: Option<usize>,
+    pub children: Vec<FolderNode>,
+}
+
+/// The folder tree of the catalog's `folders` and the `extra` ones (the folder shown and its
+/// subfolders): the way from the drive to the first folder that holds images or branches is
+/// one root, below it every level.
+pub fn folder_tree(folders: &[(PathBuf, usize)], extra: &[PathBuf]) -> Vec<FolderNode> {
+    #[derive(Default)]
+    struct Trie {
+        own: Option<usize>,
+        known: bool,
+        children: std::collections::BTreeMap<std::ffi::OsString, Trie>,
+    }
+    let mut root = Trie::default();
+    let mut add = |path: &Path, n: Option<usize>| {
+        let mut t = &mut root;
+        for c in path.components() {
+            t = t.children.entry(c.as_os_str().to_os_string()).or_default();
+        }
+        t.known = true;
+        if let Some(n) = n {
+            *t.own.get_or_insert(0) += n;
+        }
+    };
+    for (p, n) in folders {
+        add(p, Some(*n));
+    }
+    for p in extra {
+        add(p, None);
+    }
+    fn build(t: &Trie, path: PathBuf) -> FolderNode {
+        let children: Vec<FolderNode> = t.children.iter().map(|(name, c)| build(c, path.join(name))).collect();
+        let below: usize = children.iter().filter_map(|c| c.count).sum();
+        let count = (t.own.is_some() || children.iter().any(|c| c.count.is_some())).then(|| t.own.unwrap_or(0) + below);
+        FolderNode { path, count, children }
+    }
+    // Down from the drive while a folder only leads on to one other; where it branches (not at
+    // the drive itself) is a root.
+    fn roots(mut t: &Trie, mut path: PathBuf) -> Vec<FolderNode> {
+        while !t.known && t.children.len() == 1 {
+            let (name, c) = t.children.iter().next().unwrap();
+            path.push(name);
+            t = c;
+        }
+        if !t.known && (path.as_os_str().is_empty() || path.parent().is_none()) {
+            return t.children.iter().flat_map(|(name, c)| roots(c, path.join(name))).collect();
+        }
+        vec![build(t, path)]
+    }
+    roots(&root, PathBuf::new())
+}
+
+/// The rows of `node` and, if it is open, of its subfolders.
+fn folder_rows(ui: &mut Ui, node: &FolderNode, depth: usize, expanded: &std::collections::HashSet<PathBuf>, shown: Option<&Path>, open: &mut Option<PathBuf>, toggle: &mut Option<PathBuf>) {
+    use crate::theme::icon;
+    let indent = depth as f32 * 14.0 + 12.0;
+    let is_open = expanded.contains(&node.path);
+    let selected = shown == Some(node.path.as_path());
+    let name = node.path.file_name().map_or_else(|| node.path.display().to_string(), |n| n.to_string_lossy().to_string());
+    let ic = if is_open && !node.children.is_empty() { icon::FOLDER_OPEN } else { icon::FOLDER };
+    let resp = widgets::nav_row(ui, ic, &name, node.count, selected, indent, false).on_hover_text(node.path.display().to_string());
+    if !node.children.is_empty() {
+        let r = Rect::from_center_size(egui::pos2(resp.rect.left() + indent - 2.0, resp.rect.center().y), egui::vec2(16.0, 22.0));
+        let caret = ui.interact(r, resp.id.with("caret"), egui::Sense::click());
+        let c = if caret.hovered() { crate::theme::TEXT } else { crate::theme::TEXT_FAINT };
+        ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, if is_open { icon::CARET_DOWN } else { icon::CARET_RIGHT }, egui::FontId::proportional(10.0), c);
+        if caret.clicked() {
+            *toggle = Some(node.path.clone());
+        } else if resp.clicked() {
+            *open = Some(node.path.clone());
+        }
+    } else if resp.clicked() {
+        *open = Some(node.path.clone());
+    }
+    if is_open {
+        for c in &node.children {
+            folder_rows(ui, c, depth + 1, expanded, shown, open, toggle);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_tree_starts_where_folders_branch() {
+        let p = |s: &str| PathBuf::from(s);
+        let folders = vec![(p("/home/m/Bilder/2026/Italien"), 5), (p("/home/m/Bilder/2026/Nürnberg"), 3), (p("/home/m/Bilder/Archiv"), 2)];
+        let tree = folder_tree(&folders, &[]);
+        // The way down to "Bilder" is one root; "2026" has no images of its own but counts its subfolders.
+        assert_eq!(tree.len(), 1);
+        assert_eq!(tree[0].path, p("/home/m/Bilder"));
+        assert_eq!(tree[0].count, Some(10));
+        let y2026 = &tree[0].children[0];
+        assert_eq!((y2026.path.clone(), y2026.count), (p("/home/m/Bilder/2026"), Some(8)));
+        assert_eq!(y2026.children.len(), 2);
+        // A folder only browsed comes in without a count, beside the catalog's.
+        let tree = folder_tree(&folders, &[p("/mnt/karte/DCIM")]);
+        assert_eq!(tree.len(), 2, "{tree:?}");
+        let card = tree.iter().find(|n| n.path.starts_with("/mnt")).unwrap();
+        assert_eq!(card.count, None);
+        // Nothing at all: no tree.
+        assert!(folder_tree(&[], &[]).is_empty());
+    }
 }

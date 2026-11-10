@@ -22,6 +22,10 @@ pub const BORDER: Color32 = Color32::from_rgb(50, 50, 55);
 pub const ACCENT: Color32 = Color32::from_rgb(78, 146, 230);
 /// Accent for pressed toggles and selected rows: the accent, darkened towards the panel.
 pub const ACCENT_SOFT: Color32 = Color32::from_rgb(45, 70, 102);
+/// Text on [`ACCENT_SOFT`].
+pub const ACCENT_TEXT: Color32 = Color32::from_rgb(207, 226, 250);
+/// Outline of controls that stand out a little more than [`BORDER`].
+pub const BORDER_STRONG: Color32 = Color32::from_rgb(66, 66, 72);
 pub const TEXT: Color32 = Color32::from_rgb(222, 222, 226);
 pub const TEXT_DIM: Color32 = Color32::from_rgb(150, 150, 158);
 pub const TEXT_FAINT: Color32 = Color32::from_rgb(108, 108, 116);

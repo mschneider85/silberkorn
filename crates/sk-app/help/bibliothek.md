@@ -1,6 +1,6 @@
 # Bibliothek
 
-Der Tab **Bibliothek** ordnet die Bilder: woher sie kommen, welche gezeigt werden und wie sie zusammengehören. Bewertung, Farb-Label und Keywords stehen zusätzlich im Tab **Metadaten**.
+Der Tab **Bibliothek** wählt, welche Bilder gezeigt werden: aus dem Katalog, einem Ordner, einem Album oder von einer Person. Die [Filterleiste](#Filterleiste) über den Bildern grenzt sie weiter ein. Bewertung, Farb-Label und Keywords stehen im Tab **Metadaten**.
 
 ## Ordner, Katalog und Sessions
 
@@ -8,15 +8,15 @@ Silberkorn kennt drei Arten, mit Bildern zu arbeiten. Sie schließen sich nicht 
 
 ### Ordner
 
-**Ordner öffnen …** ({taste:open-folder}) oder **Durchsuchen …** im Abschnitt **Ordner** zeigt die Bilder eines Ordners. Darunter stehen seine Unterordner; **Übergeordnet** geht eine Ebene höher, **mit Unterordnern** zeigt auch alle Bilder darunter.
+Unter **Ordner** stehen die Ordner des Katalogs und der gerade gezeigte als Baum; daneben die Zahl ihrer Bilder samt Unterordnern. Ein Klick zeigt die Bilder eines Ordners, der Pfeil davor klappt ihn auf und zu. **+** öffnet einen anderen Ordner: Pfad eintippen oder **Durchsuchen …**, auch **Ordner öffnen …** ({taste:open-folder}) im Menü **Datei**. Ein Ordner zeigt auch die Bilder seiner Unterordner; wer nur seine eigenen sehen will, schaltet **Unterordner einbeziehen** in den Einstellungen (Seite **Bibliothek**) aus.
 
-Ein nur durchsuchter Ordner wird nicht in den Katalog aufgenommen. Erst wenn man ein Bild bearbeitet, kommt es an seinem Ort in den Katalog. **Importieren …** im Abschnitt **Katalog** nimmt den ganzen Ordner samt Unterordnern auf.
+Ein nur durchsuchter Ordner wird nicht in den Katalog aufgenommen; ein Hinweis unter der Filterleiste sagt das. Erst wenn man ein Bild bearbeitet, kommt es an seinem Ort in den Katalog. **Importieren …** im Hinweis oder oben im Tab nimmt den ganzen Ordner samt Unterordnern auf.
 
 ### Katalog
 
-Der Katalog sammelt Bilder aus beliebigen Ordnern und Laufwerken. Er bietet **Alle Bilder**, **Letzter Import**, die **Katalogordner** sowie Alben, Filter und Suche über alles. Die Einstellungen der Bilder liegen im Katalog selbst, sodass auch Bilder auf schreibgeschützten Laufwerken bearbeitet werden können. Silberkorn sichert den Katalog jede Woche.
+Der Katalog sammelt Bilder aus beliebigen Ordnern und Laufwerken. Er bietet **Alle Bilder**, **Letzter Import**, seine Ordner sowie Alben, Filter und Suche über alles. Die Einstellungen der Bilder liegen im Katalog selbst, sodass auch Bilder auf schreibgeschützten Laufwerken bearbeitet werden können. Silberkorn sichert den Katalog jede Woche.
 
-**Bereinigen** entfernt Einträge, deren Dateien es nicht mehr gibt.
+**Bereinigen** im Menü mit den drei Punkten neben **Katalog** entfernt Einträge, deren Dateien es nicht mehr gibt.
 
 ### Sessions
 
@@ -29,7 +29,7 @@ Eine Session ist ein abgeschlossener Projektordner, etwa für ein Shooting oder 
 
 **Neue Session …** ({taste:new-session}) im Menü **Datei** fragt nach Name und Speicherort und legt den Ordner an. **Session öffnen …** ({taste:open-session}) öffnet eine `.sksession`-Datei, **Zuletzt verwendet** die letzten Sessions; die zuletzt offene öffnet sich beim Start wieder. **Session schließen** ({taste:close-session}) kehrt zum Katalog zurück.
 
-Im Tab **Bibliothek** stehen dann oben die Ordner der Session und **Session-Favoriten** für häufig genutzte Ordner (**Aktuellen Ordner hinzufügen**). Alben, Filter und Suche wirken nur auf die Bilder der Session. Die Einstellungen liegen als Datei neben jedem Bild; die ganze Session lässt sich verschieben, umbenennen oder auf einen anderen Rechner kopieren.
+Im Tab **Bibliothek** stehen dann oben die Ordner der Session, im Menü mit den drei Punkten daneben **Importieren …** und **Session schließen**. Rechtsklick auf **Papierkorb** leert ihn. Unter **Favoriten** liegen häufig genutzte Ordner; **+** fügt den aktuellen hinzu. Alben, Filter und Suche wirken nur auf die Bilder der Session. Die Einstellungen liegen als Datei neben jedem Bild; die ganze Session lässt sich verschieben, umbenennen oder auf einen anderen Rechner kopieren.
 
 > Faustregel: der Katalog für das Archiv, eine Session für ein einzelnes Projekt, das man als Ganzes abgeben oder archivieren will.
 
@@ -73,17 +73,15 @@ Darunter stehen unter **Vorschläge** bis zu acht Keywords, die zu dem passen, w
 
 Im Tab **Metadaten** zeigt **Aufnahme** Datei, Ordner, Kamera, Objektiv, Brennweite, Blende, Belichtungszeit, ISO und Datum des gewählten Bildes. Lange Einträge stehen beim Überfahren ganz da.
 
-## Filter & Suche
+## Filterleiste
 
-Der Abschnitt **Filter & Suche** grenzt die Ansicht ein:
+Die Leiste über den Bildern bleibt in jedem Tab sichtbar. Grenzt ein Filter die Bilder ein, steht in ihr etwa **7 von 12**, die Statusleiste zeigt **gefiltert** und das Symbol des Tabs **Bibliothek** einen blauen Punkt.
 
-- Suchfeld: Dateiname, Kamera, Objektiv oder Keyword.
+- Suchfeld: Dateiname, Kamera, Objektiv oder Keyword. {taste:find} setzt den Cursor hinein.
 - **Bildinhalt**: was auf den Bildern zu sehen ist, in eigenen Worten und jeder Sprache, etwa *Kinder im Schnee* (siehe unten).
-- **Mindestens**: Mindestbewertung in Sternen.
-- **Farb-Label** und **Keyword**.
-- Sortierung nach **Dateiname**, **Aufnahmedatum** oder **Bewertung**, daneben die Sortierrichtung.
-
-**✕ Filter** hebt alle Filter auf. {taste:find} springt von überall in die Bibliothek.
+- **Bewertung** (≥ 1 ★ bis = 5 ★), **Farb-Label** und [Sichtung](#Sichtung): je ein Knopf mit Menü. Ein aktiver Filter wird zum blauen Chip; × hebt ihn auf.
+- **Als Filteralbum** speichert den Filter als [Album](#Alben), **Zurücksetzen** hebt alle Filter auf.
+- Ganz rechts das Symbol der Sortierung: Sein Menü bietet **Dateiname**, **Aufnahmedatum** und **Bewertung**, darunter die Richtung (aufsteigend oder absteigend).
 
 ### Suche nach dem Bildinhalt
 
@@ -91,18 +89,15 @@ Das Feld **Bildinhalt** findet Bilder nach dem, was sie zeigen, auch ohne Keywor
 
 Dafür erfasst eine KI jedes Bild einmal (auf dem Vorschaubild der Kamera, je nach Rechner 0,2 bis 1,5 Sekunden). Das geschieht bei der ersten Suche für alle Bilder der Ansicht im Hintergrund; die Statusleiste zeigt den Fortschritt, und die Treffer erscheinen nach und nach. Danach ist jede Suche sofort da. Das Ergebnis liegt im Katalog bzw. in der Session.
 
-Bilder, deren Inhalt nicht erfasst ist, stehen nicht unter den Treffern; ihre Zahl steht unter dem Feld. Wurde das Erfassen abgebrochen, setzt **Erfassen** daneben es fort.
+Bilder, deren Inhalt nicht erfasst ist, stehen nicht unter den Treffern; ihre Zahl steht unter der Filterleiste. Wurde das Erfassen abgebrochen, setzt **Erfassen** daneben es fort.
 
 Ein Filteralbum speichert die Suche nach dem Bildinhalt nicht mit.
 
 ## Alben
 
-Ein Album sammelt Bilder unabhängig von ihrem Ordner. Namen eingeben, dann:
+Ein Album sammelt Bilder unabhängig von ihrem Ordner. **+** neben **Alben** legt eines mit der aktuellen Auswahl an. **Als Filteralbum** in der Filterleiste speichert den aktuellen Filter: Das Album zeigt immer alle Bilder, die gerade dazu passen.
 
-- **+ Album** legt ein Album mit der aktuellen Auswahl an.
-- **+ Filteralbum** speichert den aktuellen Filter: Das Album zeigt immer alle Bilder, die gerade dazu passen.
-
-Rechtsklick auf ein Album bietet **Auswahl hinzufügen**, **Umbenennen** und **Löschen …**; die Bilder selbst bleiben dabei erhalten. **Auswahl aus Album entfernen** steht unter der Liste, solange ein Album gezeigt wird.
+Doppelklick auf ein Album benennt es um. Rechtsklick bietet **Auswahl hinzufügen**, **Auswahl aus Album entfernen**, **Umbenennen** und **Löschen …**; die Bilder selbst bleiben dabei erhalten.
 
 ## Stapel
 
@@ -121,19 +116,21 @@ Eine Variante ist eine weitere Bearbeitung derselben RAW-Datei, etwa eine Farb- 
 
 Varianten erscheinen als eigene Bilder mit eigener Bewertung, eigenem Label und eigenen Keywords und lassen sich wie normale Bilder vergleichen, in Alben legen und exportieren. **Variante löschen …** im Menü **Foto** entfernt eine weitere Variante; die erste gehört zur Datei selbst.
 
-## Gesichter & Sichtung
+## Sichtung
 
-Der Abschnitt **Gesichter & Sichtung** hilft, aus vielen ähnlichen Bildern die guten zu finden. **Ansicht analysieren** untersucht alle noch nicht analysierten Bilder der Ansicht im Hintergrund, **Erneut** analysiert alle noch einmal. Beim ersten Mal werden etwa 40 MB geladen.
+Die Sichtung hilft, aus vielen ähnlichen Bildern die guten zu finden. Das Menü **Sichtung** in der Filterleiste zeigt **Brauchbar** (scharf, Augen offen) oder **Aussortieren** (Augen geschlossen oder unscharf). Darunter steht, wie viele Bilder der Ansicht analysiert sind; **Ansicht analysieren** untersucht die übrigen im Hintergrund, sind alle fertig, analysiert **Erneut analysieren** sie noch einmal. Beim ersten Mal werden etwa 40 MB geladen.
 
-Danach filtern die Knöpfe **Augen geschlossen**, **Unscharf**, **Mit Gesichtern** und **Nicht analysiert**. Im Raster markiert ein Augen-Symbol geschlossene Augen, ein Tropfen-Symbol ein unscharfes Bild. Auch die Filter lassen sich als Filteralbum speichern.
+Nicht analysierte Bilder zeigt keiner der beiden Filter. Im Raster markiert ein Augen-Symbol geschlossene Augen, ein Tropfen-Symbol ein unscharfes Bild. Auch die Sichtung lässt sich als Filteralbum speichern.
 
-Unter **Personen** stehen die erkannten Personen als Kacheln:
+Die [Schärfemaske](ansicht#Schärfemaske) zeigt zusätzlich, welche Teile eines Bildes scharf sind.
+
+## Personen
+
+Die Analyse der Sichtung erkennt auch Gesichter. Unter **Personen** stehen sie als Kacheln:
 
 - Klick zeigt ihre Bilder, ein zweiter wieder alle. Doppelklick gibt ihr einen Namen; er wird zum Keyword ihrer Bilder.
 - Wurde dieselbe Person doppelt erkannt, eine Kachel auf die andere ziehen.
-- Ist eine Person gewählt, stehen darunter ihre Gesichter einzeln. Falsch zugeordnete auf die richtige Person ziehen oder auf **Neue Person**, die beim Ziehen erscheint.
-
-Die [Schärfemaske](ansicht#Schärfemaske) zeigt zusätzlich, welche Teile eines Bildes scharf sind.
+- Ist eine Person gewählt, stehen darunter die Ausschnitte, auf denen sie erkannt wurde, die unsichersten zuerst; **Alle … zeigen** zeigt den Rest, × blendet sie aus. Falsch zugeordnete auf die richtige Person ziehen oder auf **Neue Person**, die beim Ziehen erscheint.
 
 ## Umbenennen
 
@@ -160,4 +157,4 @@ In einer Session verschiebt **Nach „Selects“ verschieben** ({taste:to-select
 
 **Ordner überwachen** (im Abschnitt **Ordner**, in einer Session bei den Session-Ordnern, auch im Menü **Datei** und in den **Einstellungen …** auf der Seite **Bibliothek**) lässt neue Bilder im angezeigten Ordner von selbst erscheinen, etwa wenn die Kamerasoftware beim Fotografieren mit Kabel in den Ordner **Aufnahmen** schreibt. Mit **Neue Aufnahme gleich öffnen** wird jeweils die neueste groß gezeigt.
 
-Die Überwachung wirkt, sobald ein Ordner ohne Unterordner angezeigt wird; die Statusleiste zeigt dann „Überwacht: …“ mit dem Ordnernamen.
+Die Überwachung wirkt, sobald ein Ordner angezeigt wird (neue Bilder in ihm selbst, nicht in seinen Unterordnern); die Statusleiste zeigt dann „Überwacht: …“ mit dem Ordnernamen.

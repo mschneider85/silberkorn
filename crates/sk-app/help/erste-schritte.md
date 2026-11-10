@@ -50,7 +50,7 @@ Ein Klick wählt ein Bild, Strg+Klick und Umschalt+Klick wählen mehrere. Dann:
 - {taste:label-red}, {taste:label-yellow}, {taste:label-green} und {taste:label-blue} setzen ein Farb-Label.
 - {taste:previous} und {taste:next} blättern zum vorherigen bzw. nächsten Bild.
 
-Bewertung und Farb-Label gelten für die ganze Auswahl. Mit **Filter & Suche** im Tab **Bibliothek** zeigt man danach etwa nur Bilder ab drei Sternen.
+Bewertung und Farb-Label gelten für die ganze Auswahl. Mit **Bewertung** in der Filterleiste über den Bildern zeigt man danach etwa nur Bilder ab drei Sternen.
 
 ## Ein Bild entwickeln
 

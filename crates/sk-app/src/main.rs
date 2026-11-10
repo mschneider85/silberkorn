@@ -40,6 +40,7 @@ mod licenses;
 mod local_bar;
 mod levels;
 mod library;
+mod library_bar;
 mod look;
 mod look_worker;
 mod merge;

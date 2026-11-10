@@ -26,11 +26,6 @@ pub fn section_help(ui: &mut Ui, title: &str, help: &str, reset: Option<&mut dyn
     section_full(ui, title, true, Some(help), reset, body);
 }
 
-/// [`section_help`] of an AI function: marked with the yellow sparkle after the title.
-pub fn section_help_ai(ui: &mut Ui, title: &str, help: &str, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
-    section_inner(ui, title, true, Some(help), None, true, None, reset, body);
-}
-
 /// Hover text of the AI mark.
 pub const AI_HINT: &str = "KI-Funktion: rechnet mit einem neuronalen Netz, das beim ersten Gebrauch einmalig geladen wird";
 
@@ -223,7 +218,6 @@ pub fn tool_section_help(ui: &mut Ui, tool: sk_core::tools::Tool, help: &str, re
 /// Sections of functions that not everyone uses: closed until opened (then they stay open).
 const SPECIALIZED: &[&str] = &[
     "Tonwerte",
-    "Gesichter & Sichtung",
     "Hauttöne",
     "Schwarzweiß",
     "Objektivunschärfe",
@@ -2357,4 +2351,92 @@ fn orientation_buttons(ui: &mut Ui, enabled: bool, on: Option<bool>, key: &str) 
         });
     });
     clicked
+}
+
+// ---------------------------------------------------------------- navigation list (Bibliothek)
+
+/// Header of a group in a navigation list: small capitals, the short help on hover, a click on
+/// the title opens the manual there; `actions` add small buttons on the right (right to left).
+/// The command palette and tutorials find it by `title` like a section.
+pub fn nav_header(ui: &mut Ui, title: &str, shown: &str, actions: impl FnOnce(&mut Ui)) {
+    ui.add_space(10.0);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+    crate::tour::target(ui.ctx(), format!("section:{title}"), rect);
+    let reveal = ui.data(|d| d.get_temp::<String>(reveal_id())).is_some_and(|t| t == title);
+    if reveal {
+        ui.data_mut(|d| d.remove::<String>(reveal_id()));
+        ui.scroll_to_rect(rect, Some(egui::Align::TOP));
+    }
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    child.add_space(8.0);
+    let text = RichText::new(shown.to_uppercase()).size(10.5).strong().extra_letter_spacing(0.8).color(theme::TEXT_DIM);
+    let resp = child.add(egui::Label::new(text).sense(Sense::click()).selectable(false));
+    if let Some((help, anchor)) = crate::help::section_help(title) {
+        let resp = resp.on_hover_text(format!("{help}\n\nKlick: mehr in der Hilfe"));
+        if resp.clicked() {
+            ui.data_mut(|d| d.insert_temp(crate::help::open_help_id(), anchor.to_string()));
+        }
+    }
+    child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        actions(ui);
+    });
+}
+
+/// A small icon button in a [`nav_header`].
+pub fn nav_action(ui: &mut Ui, ic: &str, hover: &str) -> Response {
+    let b = egui::Button::new(RichText::new(ic).size(14.0).color(theme::TEXT_DIM)).frame_when_inactive(false).min_size(vec2(24.0, 22.0));
+    ui.add(b).on_hover_text(hover)
+}
+
+/// One entry of a navigation list: icon, text, the count on the right; the chosen one with an
+/// accent bar. `indent` moves it right (folder tree), `dim` greys it (unreachable).
+pub fn nav_row(ui: &mut Ui, ic: &str, text: &str, count: Option<usize>, selected: bool, indent: f32, dim: bool) -> Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+    let p = ui.painter();
+    if selected {
+        p.rect_filled(rect, 5.0, theme::ACCENT_SOFT);
+        p.rect_filled(Rect::from_min_size(rect.left_top() + vec2(0.0, 6.0), vec2(3.0, rect.height() - 12.0)), 1.5, theme::ACCENT);
+    } else if resp.hovered() {
+        p.rect_filled(rect, 5.0, Color32::from_rgb(44, 44, 48));
+    }
+    let color = if dim {
+        theme::TEXT_FAINT
+    } else if selected {
+        Color32::WHITE
+    } else {
+        theme::TEXT
+    };
+    let x = rect.left() + 10.0 + indent;
+    p.text(pos2(x + 7.0, rect.center().y), egui::Align2::CENTER_CENTER, ic, egui::FontId::proportional(14.0), if selected { Color32::WHITE } else { theme::TEXT_DIM });
+    let mut right = rect.right() - 8.0;
+    if let Some(n) = count {
+        let g = p.layout_no_wrap(crate::widgets::thousands(n), egui::FontId::proportional(11.5), theme::TEXT_DIM);
+        right -= g.size().x;
+        p.galley(pos2(right, rect.center().y - g.size().y / 2.0), g, theme::TEXT_DIM);
+        right -= 8.0;
+    }
+    let left = x + 22.0;
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), egui::FontId::proportional(13.0), color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width((right - left).max(10.0));
+    let g = ui.fonts_mut(|f| f.layout_job(job));
+    if dim {
+        let y = rect.center().y;
+        p.hline(left..=left + g.size().x, y, Stroke::new(1.0, theme::TEXT_FAINT));
+    }
+    p.galley(pos2(left, rect.center().y - g.size().y / 2.0), g, color);
+    resp
+}
+
+/// `n` with thin spaces between thousands: "1 248".
+pub fn thousands(n: usize) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i).is_multiple_of(3) {
+            out.push('\u{202F}');
+        }
+        out.push(c);
+    }
+    out
 }

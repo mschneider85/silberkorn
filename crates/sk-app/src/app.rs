@@ -356,6 +356,8 @@ struct Settings {
     shortcuts: std::collections::BTreeMap<String, Vec<String>>,
     /// Styles as a list instead of the grid of previews.
     style_list: bool,
+    /// A folder shows only its own pictures, not those of its subfolders.
+    folder_only: bool,
     /// No check for a new version at startup.
     update_check_off: bool,
     /// Last automatic update check, in seconds since 1970.
@@ -496,6 +498,8 @@ pub struct App {
     pub(crate) snapshot_grid: crate::style_grid::SnapshotGrid,
     /// Styles as a list instead of the grid of previews.
     pub(crate) style_list: bool,
+    /// A folder shows the pictures of its subfolders too (setting "Unterordner einbeziehen").
+    pub(crate) include_subfolders: bool,
     /// Lensfun profiles, read in the background at startup.
     pub lens_db: Option<Arc<Vec<sk_core::lensfun::LensProfile>>>,
     pub lens_db_downloading: bool,
@@ -1053,6 +1057,7 @@ impl App {
             style_grid: Default::default(),
             snapshot_grid: Default::default(),
             style_list: settings.style_list,
+            include_subfolders: !settings.folder_only,
             lens_db: None,
             lens_db_downloading: false,
             lens_match: None,
@@ -1350,6 +1355,10 @@ impl App {
         }
         // With the viewer on its own window, the main window starts with the grid.
         app.grid_view = std::env::var_os("SILBERKORN_GRID").is_some() || app.viewer_window.open;
+        // Screenshots: a search in the filter bar.
+        if let Ok(t) = std::env::var("SILBERKORN_FILTER") {
+            app.filter.text = t;
+        }
         match std::env::var("SILBERKORN_DIALOG").as_deref() {
             Ok("shortcuts") => app.open_settings(crate::settings_window::Page::Shortcuts),
             Ok(d) if d.starts_with("settings") => {
@@ -1424,6 +1433,7 @@ impl App {
             grid_thumb: Some(self.grid_thumb),
             shortcuts: crate::commands::saved_bindings(),
             style_list: self.style_list,
+            folder_only: !self.include_subfolders,
             update_check_off: self.updates.auto_off,
             update_last_check: self.updates.last_check,
             update_skipped: self.updates.skipped.clone(),
@@ -3681,6 +3691,10 @@ impl App {
                 .exact_size(crate::side_column::WIDTH)
                 .show(ui, |ui| self.side_column(ui));
         }
+        egui::Panel::top("library_bar")
+            .frame(egui::Frame::new().fill(theme::BROWSER).inner_margin(egui::Margin::symmetric(12, 0)))
+            .show_separator_line(true)
+            .show(ui, |ui| self.library_bar(ui));
         let filmstrip = !grid && self.show_filmstrip && !self.entries.is_empty();
         // Coming from the grid (or with the strip switched on) the strip starts at the image.
         if filmstrip && !self.filmstrip_shown {

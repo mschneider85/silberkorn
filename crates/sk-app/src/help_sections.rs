@@ -4,16 +4,16 @@
 /// (section title as shown, short help, "kapitel#Überschrift" in the manual)
 pub const SECTION_HELP: &[(&str, &str, &str)] = &[
     // Bibliothek
-    (
-        "Gesichter & Sichtung",
-        "Erkennt Gesichter, geschlossene Augen und unscharfe Bilder und ordnet Gesichter Personen zu. Hilft beim Aussortieren großer Serien.",
-        "bibliothek#Gesichter & Sichtung",
-    ),
+    ("Katalog", "Alle Bilder des Katalogs und die zuletzt importierten; im Menü daneben das Bereinigen fehlender Dateien.", "bibliothek#Katalog"),
+    ("Ordner", "Die Ordner als Baum; ein Klick zeigt ihre Bilder, + öffnet einen anderen Ordner.", "bibliothek#Ordner"),
     ("Alben", "Sammlungen von Bildern unabhängig vom Ordner, auch als Filteralben, die sich selbst füllen.", "bibliothek#Alben"),
-    ("Ordner", "Die Ordner des Katalogs; ein Klick zeigt ihre Bilder.", "bibliothek#Ordner"),
-    ("Filter & Suche", "Zeigt nur Bilder mit bestimmter Bewertung, Farb-Label, passendem Suchbegriff oder Bildinhalt und legt die Sortierung fest.", "bibliothek#Filter & Suche"),
-    // Title shown as "Session „Name“".
-    ("Session", "Die geöffnete Session: ihre Ordner und der Weg zurück zum Katalog.", "bibliothek#Sessions"),
+    (
+        "Personen",
+        "Die auf den Bildern erkannten Personen: ein Klick zeigt nur ihre Bilder, Doppelklick benennt, Ziehen auf eine andere führt zusammen.",
+        "bibliothek#Personen",
+    ),
+    // Title shown as "Session · Name".
+    ("Session", "Die geöffnete Session: ihre Ordner, Importieren und der Weg zurück zum Katalog.", "bibliothek#Sessions"),
     ("Session-Favoriten", "Häufig gebrauchte Ordner der Session für den schnellen Zugriff.", "bibliothek#Sessions"),
     // Objektiv & Geometrie
     (

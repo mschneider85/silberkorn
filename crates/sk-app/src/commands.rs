@@ -291,7 +291,7 @@ pub const COMMANDS: &[Command] = &[
     }),
     cmd!("viewer-window", icon::MONITOR, "Bild in eigenem Fenster", "Ansicht", [SHIFT => Key::F11], "zweitmonitor viewer", always, |a, _| a.toggle_viewer_window()),
     cmd!("fullscreen", icon::ARROWS_OUT, "Vollbild ohne Ablenkung", "Ansicht", [NONE => Key::F11], "fullscreen", |a| a.fullscreen || has_image(a), |a, ctx| a.toggle_fullscreen(ctx)),
-    cmd!("find", icon::MAGNIFYING_GLASS, "Suchen (Bibliothek)", "Ansicht", [CTRL => Key::F], "filter suche", always, |a, _| a.tab = Tab::Library),
+    cmd!("find", icon::MAGNIFYING_GLASS, "Suchen (Bibliothek)", "Ansicht", [CTRL => Key::F], "filter suche", always, |a, _| a.library_ui.focus_search = true),
     // Hilfe
     cmd!("help", icon::QUESTION, "Hilfe", "Hilfe", [NONE => Key::F1], "hilfe handbuch anleitung help manual dokumentation", always, |a, _| a.toggle_help()),
     cmd!("tutorials", icon::GRADUATION_CAP, "Tutorials …", "Hilfe", [], "tutorial tour einführung lernen anleitung schritt", always, |a, _| a.tour.dialog_open = true),

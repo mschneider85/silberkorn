@@ -134,7 +134,6 @@ impl App {
     pub fn find_similar(&mut self, path: PathBuf) {
         self.content.similar = Some(path);
         self.content.cancelled = false;
-        self.tab = crate::app::Tab::Library;
         self.update_content_search();
     }
 
@@ -417,22 +416,17 @@ impl App {
         true
     }
 
-    /// The "Bildinhalt" field (or the image searched for) and what the search is doing.
-    pub(crate) fn content_search_ui(&mut self, ui: &mut egui::Ui) {
+    /// The "Bildinhalt" field, or the image searched for as a chip with ×.
+    pub(crate) fn content_field(&mut self, ui: &mut egui::Ui) {
         use crate::theme::icon;
         if let Some(p) = self.content.similar.clone() {
-            let mut clear = false;
-            ui.horizontal(|ui| {
-                let text = crate::widgets::ai_text(ui, &format!("Ähnlich wie {}", sk_core::variant::display_name(&p)));
-                ui.label(text).on_hover_text(crate::widgets::AI_HINT);
-                clear = ui.button(icon::X).on_hover_text("Ähnlichkeitssuche beenden").clicked();
-            });
-            if clear {
+            let text = format!("{}  Ähnlich wie {}", icon::SPARKLE, sk_core::variant::display_name(&p));
+            if crate::library_bar::active_chip(ui, &text, None, "Ähnlichkeitssuche beenden").1 {
                 self.clear_content_search();
             }
         } else {
-            let resp = ui
-                .add(egui::TextEdit::singleline(&mut self.content.text).hint_text(format!("{}  Bildinhalt", icon::SPARKLE)))
+            let active = !self.content.text.trim().is_empty();
+            let resp = crate::library_bar::search_field(ui, &mut self.content.text, icon::SPARKLE, crate::theme::AI, "Bildinhalt", 160.0, active)
                 .on_hover_text("Sucht nach dem, was auf den Bildern zu sehen ist (KI, in jeder Sprache). Die Treffer stehen nach Relevanz geordnet.");
             if resp.changed() {
                 self.content.typed();
@@ -441,10 +435,17 @@ impl App {
                 self.content.submit();
             }
         }
+    }
+
+    /// What the content search is doing, as a line below the filter bar (nothing if all is done).
+    pub(crate) fn content_status(&mut self, ui: &mut egui::Ui) -> bool {
         if let Some(p) = self.ai_download_shown(AiFeature::Content) {
             crate::ai_models::download_progress(ui, AiFeature::Content, p, None);
-        } else if self.content.preparing() {
+            return true;
+        }
+        if self.content.preparing() {
             crate::widgets::hint(ui, "Suche wird vorbereitet …");
+            return true;
         }
         if let Some(n) = self.content.analysing().filter(|&n| n > 0) {
             let text = if ImageEncoder::available() {
@@ -453,17 +454,21 @@ impl App {
                 format!("Lade KI-Modell ({} MB, einmalig) …", sk_ai::models::CONTENT_IMAGE.bytes.div_ceil(1_000_000))
             };
             crate::widgets::hint(ui, text);
-        } else if self.content.is_active() && self.content.missing > 0 {
+            return true;
+        }
+        if self.content.is_active() && self.content.missing > 0 {
             let mut resume = false;
             ui.horizontal_wrapped(|ui| {
-                crate::widgets::hint(ui, format!("{} ohne erfassten Bildinhalt, nicht unter den Treffern", crate::widgets::image_count(self.content.missing)));
+                ui.label(format!("{} ohne erfassten Bildinhalt, nicht unter den Treffern", crate::widgets::image_count(self.content.missing)));
                 resume = self.content.cancelled && ui.small_button("Erfassen").on_hover_text("Den Bildinhalt der übrigen Bilder erfassen").clicked();
             });
             if resume {
                 self.content.cancelled = false;
                 self.update_content_search();
             }
+            return true;
         }
+        false
     }
 
     /// The entries in the order of the content search (indices into `entries`, from those that

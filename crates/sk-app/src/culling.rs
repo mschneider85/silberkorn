@@ -6,11 +6,10 @@ use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
 use egui::{Color32, Rect, RichText, Sense, TextureHandle, Ui, Vec2};
-use sk_core::catalog::{Catalog, CullFilter, FaceRecord, Person, PersonFace, Scope};
+use sk_core::catalog::{Catalog, FaceRecord, Person, PersonFace, Scope};
 
 use crate::app::App;
 use crate::theme::icon;
-use crate::widgets::section_help_ai;
 
 /// The picture faces are found in: the camera preview is enough (and fast); without one, a
 /// rendering. About 1600 px are plenty for faces and sharpness.
@@ -149,7 +148,14 @@ pub struct PersonFaces {
     shown: Option<(i64, Vec<PersonFace>)>,
     /// Chosen faces (ids).
     selected: HashSet<i64>,
+    /// All faces shown, not only the first few (the least alike).
+    all: bool,
+    /// Put away with × until another person is chosen.
+    closed: bool,
 }
+
+/// Faces shown before "Alle … zeigen".
+const FEW_FACES: usize = 6;
 
 impl App {
     /// Analyses the images of the current view (those not analysed yet, or all if `again`).
@@ -261,12 +267,26 @@ impl App {
 
     /// The faces of the chosen person, to drag those that belong to someone else away.
     fn person_faces_ui(&mut self, ui: &mut Ui, person: &Person, faces: &[PersonFace]) {
-        ui.add_space(6.0);
+        ui.add_space(8.0);
+        let images = faces.iter().map(|f| &f.path).collect::<HashSet<_>>().len();
+        let mut close = false;
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("Gesichter von „{}“ ({})", person_name(person), faces.len())).strong());
-        })
-        .response
-        .on_hover_text("Falsch zugeordnete Gesichter auf die richtige Person ziehen, oder auf „Neue Person“ (erscheint beim Ziehen) · Strg+Klick wählt mehrere · Doppelklick öffnet das Bild");
+            ui.add_space(8.0);
+            ui.label(RichText::new(format!("{} · {}", person_name(person), crate::widgets::image_count(images))).strong()).on_hover_text(
+                "Die unsichersten Treffer zuerst: falsche auf die richtige Person ziehen, auf „Neue Person“ (erscheint beim Ziehen) wird ein Gesicht eine eigene Person · Strg+Klick wählt mehrere · Doppelklick öffnet das Bild",
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                close = crate::widgets::nav_action(ui, icon::X, "Ausblenden").clicked();
+            });
+        });
+        if close {
+            self.library_ui.person_faces.closed = true;
+            return;
+        }
+
+        let shown = if self.library_ui.person_faces.all { faces.len() } else { faces.len().min(FEW_FACES) };
+        let faces = &faces[..shown];
+        let total = self.library_ui.person_faces.shown.as_ref().map_or(0, |(_, f)| f.len());
         let mut open_image = None;
         ui.horizontal_wrapped(|ui| {
             ui.spacing_mut().item_spacing = Vec2::new(4.0, 4.0);
@@ -298,6 +318,9 @@ impl App {
                 }
             }
         });
+        if shown < total && ui.link(format!("Alle {total} zeigen")).clicked() {
+            self.library_ui.person_faces.all = true;
+        }
         if !self.library_ui.person_faces.selected.is_empty() && ui.button("Auswahl aufheben").clicked() {
             self.library_ui.person_faces.selected.clear();
         }
@@ -407,9 +430,8 @@ impl App {
     }
 
     /// Section of the library tab.
-    pub(crate) fn culling_section(&mut self, ui: &mut Ui) {
-        let mut analyze: Option<bool> = None;
-        let mut cull: Option<Option<CullFilter>> = None;
+    /// The persons recognized by face: a click shows only theirs, their faces below.
+    pub(crate) fn persons_section(&mut self, ui: &mut Ui) {
         let mut open: Option<Scope> = None;
         let mut rename: Option<(i64, Option<String>)> = None;
         // Faces of the chosen person to give to another person (or to a new one).
@@ -418,32 +440,19 @@ impl App {
             Scope::Person(id) => Some(id),
             _ => None,
         };
-        let shown = self.visible.len();
-        let analysed = self.visible.iter().filter(|&&i| self.entries[i].culling.is_some()).count();
-        let counts: Vec<usize> = CullFilter::ALL.iter().map(|f| self.entries.iter().filter(|r| f.matches(r.culling.as_ref())).count()).collect();
-        let count = |f: CullFilter| CullFilter::ALL.iter().position(|x| *x == f).map_or(0, |i| counts[i]);
-        let help = "Erkennt Gesichter, geschlossene Augen und unscharfe Bilder und ordnet Gesichter Personen zu.\n\nBeim ersten Mal werden etwa 40 MB geladen.";
-        section_help_ai(ui, "Gesichter & Sichtung", help, None, |ui| {
-            ui.horizontal(|ui| {
-                if ui.button(format!("{}  Ansicht analysieren", icon::SCAN)).on_hover_text("Noch nicht analysierte Bilder dieser Ansicht").clicked() {
-                    analyze = Some(false);
-                }
-                if analysed > 0 && ui.small_button("Erneut").on_hover_text("Alle Bilder dieser Ansicht neu analysieren").clicked() {
-                    analyze = Some(true);
-                }
-            });
-            ui.label(RichText::new(format!("{analysed} von {shown} analysiert")).small().color(Color32::from_gray(150)));
-            ui.horizontal_wrapped(|ui| {
-                for f in CullFilter::ALL {
-                    let on = self.filter.culling == Some(f);
-                    if ui.selectable_label(on, format!("{} ({})", f.label(), count(f))).clicked() {
-                        cull = Some(if on { None } else { Some(f) });
-                    }
-                }
-            });
+        crate::widgets::nav_header(ui, "Personen", "Personen", |ui| {
+            ui.label(RichText::new(icon::SPARKLE).size(12.0).color(crate::theme::AI)).on_hover_text(crate::widgets::AI_HINT);
+        });
+        {
+            let ui = &mut *ui;
+            if self.lists.persons.is_empty() {
+                ui.horizontal(|ui| {
+                    ui.add_space(10.0);
+                    crate::widgets::hint(ui, "Erscheinen nach der Analyse (Filter „Sichtung“ oben).");
+                });
+            }
             if !self.lists.persons.is_empty() {
-                ui.add_space(4.0);
-                ui.label(RichText::new("Personen").strong());
+                ui.add_space(2.0);
                 // The chosen person's faces (read again when another person is chosen).
                 let chosen = match self.scope {
                     Scope::Person(id) => Some(id),
@@ -453,6 +462,8 @@ impl App {
                     self.library_ui.person_faces = PersonFaces {
                         shown: chosen.and_then(|id| Some((id, self.catalog.as_ref()?.person_faces(id).ok()?))),
                         selected: HashSet::new(),
+                        all: false,
+                        closed: false,
                     };
                 }
                 let faces: Vec<PersonFace> = self.library_ui.person_faces.shown.as_ref().map(|(_, f)| f.clone()).unwrap_or_default();
@@ -506,7 +517,7 @@ impl App {
                             self.library_ui.naming = Some((p.id, p.name.clone().unwrap_or_default()));
                         } else if resp.clicked() {
                             // Clicked again: back to all images of the folder.
-                            open = Some(if on { Scope::Folder { path: self.folder.clone(), recursive: false } } else { scope });
+                            open = Some(if on { Scope::Folder { path: self.folder.clone(), recursive: self.include_subfolders } } else { scope });
                         }
                     }
                     // Faces being dragged: a tile to drop them on as a new person (not all of
@@ -522,11 +533,12 @@ impl App {
                 });
                 if let Some(person) = chosen.and_then(|id| self.lists.persons.iter().find(|p| p.id == id)).cloned()
                     && faces.len() > 1
+                    && !self.library_ui.person_faces.closed
                 {
                     self.person_faces_ui(ui, &person, &faces);
                 }
             }
-        });
+        }
         if let Some((id, name)) = rename {
             self.library_ui.naming = None;
             if let Some(name) = name {
@@ -537,13 +549,6 @@ impl App {
             && let Some(from) = chosen_person
         {
             self.move_faces(from, &faces, to);
-        }
-        if let Some(again) = analyze {
-            self.analyze_view(again);
-        }
-        if let Some(c) = cull {
-            self.filter.culling = c;
-            self.refilter();
         }
         if let Some(s) = open {
             self.open_scope(s);

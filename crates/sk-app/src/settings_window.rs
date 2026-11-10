@@ -282,6 +282,19 @@ impl App {
     }
 
     fn library_page(&mut self, ui: &mut Ui) {
+        let mut sub = self.include_subfolders;
+        dialog::card(ui, "Ordner", None, |ui| {
+            dialog::note(ui, "Ein Ordner zeigt auch die Bilder seiner Unterordner. Ausgeschaltet nur seine eigenen.");
+            crate::widgets::checkbox(ui, &mut sub, "Unterordner einbeziehen");
+        });
+        if sub != self.include_subfolders {
+            self.include_subfolders = sub;
+            self.save_settings();
+            if let sk_core::catalog::Scope::Folder { path, .. } = &self.scope {
+                let scope = sk_core::catalog::Scope::Folder { path: path.clone(), recursive: sub };
+                self.open_scope(scope);
+            }
+        }
         dialog::card(ui, "Neue Aufnahmen", None, |ui| {
             dialog::note(ui, "Bilder, die etwa die Kamerasoftware in den angezeigten Ordner legt, erscheinen von selbst. Auch im Menü Datei.");
             self.hot_folder_ui(ui);
