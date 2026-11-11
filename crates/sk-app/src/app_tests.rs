@@ -5275,3 +5275,20 @@ fn folder_tree_reads_subfolders_when_visible() {
     assert_eq!(f.app.subfolder_of(&photos.join("Urlaub/Strand/_DSC0010.dng")), Some(PathBuf::from("Urlaub/Strand")));
     assert_eq!(f.app.subfolder_of(&photos.join("_DSC0010.dng")), None);
 }
+
+/// Rarely needed lens settings start closed; the command palette opens them, the section around
+/// them included.
+#[test]
+fn palette_opens_a_closed_part_of_a_section() {
+    let Some(mut f) = Fixture::new("lens-parts") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.tab = crate::app::Tab::Lens;
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(widget(&nodes, "Farbfehler").is_some());
+    assert!(widget(&nodes, "Bildwinkel").is_none(), "Fisheye ist zu");
+    crate::widgets::reveal_section(&f.ctx, "Objektivkorrektur/Fisheye");
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(widget(&nodes, "Bildwinkel").is_some(), "Fisheye offen");
+    assert!(widget(&nodes, "Rot/Cyan").is_none(), "Farbfehler bleiben zu");
+    assert!(f.ctx.data(|d| d.get_temp::<String>(egui::Id::new("reveal_section"))).is_none(), "Anfrage erledigt");
+}

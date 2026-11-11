@@ -21,6 +21,8 @@ pub const SECTION_HELP: &[(&str, &str, &str)] = &[
         "Korrigiert Verzeichnung, Randabschattung, chromatische Aberration und Farbsäume, aus den Kameradaten oder einem Objektivprofil. Entzerrt auch Fisheye-Bilder.",
         "objektiv#Objektivkorrektur",
     ),
+    ("Farbfehler", "Chromatische Aberration und lila oder grüne Farbsäume an Kanten, im eingeklappten Bereich der Objektivkorrektur.", "objektiv#Chromatische Aberration"),
+    ("Fisheye", "Rechnet ein Fisheye-Bild in ein normales Weitwinkelbild um, im eingeklappten Bereich der Objektivkorrektur.", "objektiv#Fisheye"),
     ("Zuschnitt", "Legt den Bildausschnitt fest, frei oder in einem Seitenverhältnis, im Hoch- oder Querformat.", "objektiv#Zuschnitt"),
     ("Drehen & Spiegeln", "Richtet einen schiefen Horizont gerade, dreht um 90° oder spiegelt das Bild.", "objektiv#Drehen & Spiegeln"),
     (

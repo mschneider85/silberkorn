@@ -47,7 +47,7 @@ pub const GROUPS: &[(&str, &[Tool])] = &[
     ("Belichtung", &[Tool::Exposure, Tool::HighlightsShadows, Tool::Relight, Tool::Levels, Tool::Curves]),
     ("Details", &[Tool::Enhance, Tool::NoiseReduction, Tool::Sharpening, Tool::Clarity, Tool::Dehaze]),
     ("Effekte", &[Tool::LensBlur, Tool::Atmosphere, Tool::Glow, Tool::Vignette, Tool::Grain]),
-    ("Objektiv", &[Tool::LensCorrection, Tool::Crop, Tool::Rotation, Tool::Perspective]),
+    ("Objektiv", &[Tool::Crop, Tool::Rotation, Tool::LensCorrection, Tool::Perspective]),
     ("Ebenen und Retusche", &[Tool::Layers, Tool::Retouch]),
 ];
 

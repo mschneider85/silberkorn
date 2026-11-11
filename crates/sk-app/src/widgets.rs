@@ -5,13 +5,15 @@ use sk_core::pipeline::Histogram;
 use egui::{Color32, Pos2, Rect, Response, RichText, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
 use crate::theme;
+use crate::theme::icon;
 
 fn reveal_id() -> egui::Id {
     egui::Id::new("reveal_section")
 }
 
 /// Asks the tool section with this title to open, scroll into view and flash briefly the next
-/// time it is drawn (used by the command palette).
+/// time it is drawn (used by the command palette). "Section/Part" opens the section and then the
+/// [`subsection`] of that title in it, which scrolls into view instead.
 pub fn reveal_section(ctx: &egui::Context, title: &str) {
     ctx.data_mut(|d| d.insert_temp(reveal_id(), title.to_string()));
 }
@@ -253,19 +255,24 @@ fn section_inner(
     let special = SPECIALIZED.contains(&title);
     let id = if special || count.is_some() { ui.make_persistent_id((title, "eingeklappt")) } else { ui.make_persistent_id(title) };
     let mut open = ui.data_mut(|d| *d.get_persisted_mut_or(id, default_open && !special));
-    let reveal = ui.data(|d| d.get_temp::<String>(reveal_id())).is_some_and(|t| t == title);
+    let wanted = ui.data(|d| d.get_temp::<String>(reveal_id()));
+    // Asked for a part of this section: opened, the part takes the request (and the scrolling).
+    let for_part = wanted.as_deref().is_some_and(|t| t.strip_prefix(title).is_some_and(|rest| rest.starts_with('/')));
+    let reveal = wanted.as_deref() == Some(title) || for_part;
     let flash_id = id.with("flash");
     let now = ui.input(|i| i.time);
     if reveal {
         open = true;
         ui.data_mut(|d| {
             d.insert_persisted(id, true);
-            d.remove::<String>(reveal_id());
+            if !for_part {
+                d.remove::<String>(reveal_id());
+            }
             d.insert_temp(flash_id, now);
         });
     }
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
-    if reveal {
+    if reveal && !for_part {
         resp.scroll_to_me(Some(egui::Align::TOP));
     }
     // Tutorials point at sections by their title.
@@ -457,6 +464,203 @@ pub fn combo_field(ui: &mut Ui, label: &str, selected: impl Into<egui::WidgetTex
         // Named after the row (screen readers, tests), not after the chosen entry.
         r.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), label));
     });
+}
+
+/// One button of a [`button_bar`]: an icon and a short text (the text is left out where it
+/// doesn't fit), named for screen readers and tooltips by `name`.
+pub struct BarButton<'a> {
+    pub icon: &'a str,
+    pub text: &'a str,
+    pub name: &'a str,
+    pub hover: String,
+    pub selected: bool,
+    pub enabled: bool,
+    pub primary: bool,
+    pub weight: f32,
+}
+
+impl<'a> BarButton<'a> {
+    pub fn new(icon: &'a str, text: &'a str) -> Self {
+        Self { icon, text, name: text, hover: String::new(), selected: false, enabled: true, primary: false, weight: 1.0 }
+    }
+    pub fn name(mut self, name: &'a str) -> Self {
+        self.name = name;
+        self
+    }
+    pub fn hover(mut self, hover: impl Into<String>) -> Self {
+        self.hover = hover.into();
+        self
+    }
+    pub fn selected(mut self, on: bool) -> Self {
+        self.selected = on;
+        self
+    }
+    pub fn enabled(mut self, on: bool) -> Self {
+        self.enabled = on;
+        self
+    }
+    /// Filled in the accent color: the one thing to do next ("Übernehmen").
+    pub fn primary(mut self) -> Self {
+        self.primary = true;
+        self
+    }
+    pub fn weight(mut self, w: f32) -> Self {
+        self.weight = w;
+        self
+    }
+}
+
+/// Buttons side by side in one rounded frame, as wide as the panel, each as wide as its weight.
+/// Chosen ones are filled in the accent color, ones that don't apply here are dimmed. Returns the index of the clicked button.
+pub fn button_bar(ui: &mut Ui, salt: &str, buttons: &[BarButton]) -> Option<usize> {
+    let total: f32 = buttons.iter().map(|b| b.weight).sum::<f32>().max(0.01);
+    let (outer, _) = ui.allocate_exact_size(vec2((ui.available_width() - 8.0).max(60.0), 26.0), Sense::hover());
+    let painter = ui.painter_at(outer.expand(1.0));
+    painter.rect_filled(outer, 5.0, theme::CHROME);
+    painter.rect_stroke(outer, 5.0, Stroke::new(1.0, theme::BORDER), StrokeKind::Inside);
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let icon_font = egui::FontId::proportional(15.0);
+    let filled = |b: &BarButton| b.selected || b.primary;
+    let mut clicked = None;
+    let mut x = outer.left();
+    for (i, b) in buttons.iter().enumerate() {
+        let w = outer.width() * b.weight / total;
+        let rect = Rect::from_min_size(pos2(x, outer.top()), vec2(w, outer.height()));
+        x += w;
+        let sense = if b.enabled { Sense::click() } else { Sense::hover() };
+        let resp = ui.interact(rect, ui.id().with(salt).with(i), sense);
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, b.enabled, b.selected, b.name));
+        let hovered = b.enabled && resp.hovered();
+        let pill = rect.shrink(2.0);
+        if b.primary && b.enabled {
+            painter.rect_filled(pill, 4.0, if hovered { theme::GLOW } else { theme::ACCENT });
+        } else if b.selected {
+            painter.rect_filled(pill, 4.0, theme::ACCENT_SOFT);
+            painter.rect_stroke(pill, 4.0, Stroke::new(1.0, theme::ACCENT.gamma_multiply(0.7)), StrokeKind::Inside);
+        } else if hovered {
+            painter.rect_filled(pill, 4.0, theme::CONTROL);
+        }
+        // A hairline between two buttons that are both unfilled.
+        if i > 0 && !filled(b) && !filled(&buttons[i - 1]) {
+            painter.line_segment([pos2(rect.left(), rect.top() + 7.0), pos2(rect.left(), rect.bottom() - 7.0)], Stroke::new(1.0, theme::BORDER_STRONG));
+        }
+        let color = match (b.enabled, b.primary, b.selected) {
+            (false, ..) => theme::TEXT_FAINT.gamma_multiply(0.7),
+            (true, true, _) => Color32::WHITE,
+            (true, _, true) => theme::ACCENT_TEXT,
+            _ if hovered => theme::TEXT,
+            _ => theme::TEXT_DIM,
+        };
+        // Icon and text where both fit, else the icon alone (or the text, truncated).
+        let ic = (!b.icon.is_empty()).then(|| painter.layout_no_wrap(b.icon.to_string(), icon_font.clone(), color));
+        let text = (!b.text.is_empty()).then(|| painter.layout_no_wrap(b.text.to_string(), font.clone(), color));
+        let gap = 5.0;
+        let both = ic.as_ref().map_or(0.0, |g| g.size().x) + text.as_ref().map_or(0.0, |g| g.size().x) + if ic.is_some() && text.is_some() { gap } else { 0.0 };
+        match (ic, text) {
+            (Some(ic), Some(text)) if both <= w - 10.0 => {
+                let mut px = rect.center().x - both / 2.0;
+                painter.galley(pos2(px, rect.center().y - ic.size().y / 2.0), ic.clone(), color);
+                px += ic.size().x + gap;
+                painter.galley(pos2(px, rect.center().y - text.size().y / 2.0), text, color);
+            }
+            (Some(ic), _) => painter.galley(rect.center() - ic.size() / 2.0, ic, color),
+            (None, Some(_)) => {
+                let mut job = egui::text::LayoutJob::simple_singleline(b.text.to_string(), font.clone(), color);
+                job.wrap = egui::text::TextWrapping::truncate_at_width(w - 10.0);
+                let g = painter.layout_job(job);
+                painter.galley(rect.center() - g.size() / 2.0, g, color);
+            }
+            (None, None) => {}
+        }
+        let tip = if b.enabled { b.hover.clone() } else { String::new() };
+        // Icon-only buttons say on hover what they are.
+        let tip = match (tip.is_empty(), b.text.is_empty() || b.name != b.text) {
+            (true, true) => b.name.to_string(),
+            (true, false) => String::new(),
+            (false, true) if !tip.starts_with(b.name) => format!("{}\n{tip}", b.name),
+            _ => tip,
+        };
+        let resp = if tip.is_empty() { resp } else { resp.on_hover_text(tip) };
+        if resp.clicked() {
+            clicked = Some(i);
+        }
+    }
+    clicked
+}
+
+/// A part of a section that starts closed, for settings one rarely needs: a caret and the title,
+/// with a dot behind it while something in it is set (`active`).
+pub fn subsection(ui: &mut Ui, title: &str, active: bool, body: impl FnOnce(&mut Ui)) {
+    let id = ui.id().with(("subsection", title));
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+    // Asked for by the command palette as "Section/Part" (see `reveal_section`).
+    let reveal = ui.data(|d| d.get_temp::<String>(reveal_id())).is_some_and(|t| t.rsplit_once('/').is_some_and(|(_, part)| part == title));
+    if reveal {
+        state.set_open(true);
+        ui.data_mut(|d| d.remove::<String>(reveal_id()));
+    }
+    ui.add_space(6.0);
+    let (rect, resp) = ui.allocate_exact_size(vec2((ui.available_width() - 8.0).max(60.0), 20.0), Sense::click());
+    if reveal {
+        resp.scroll_to_me(Some(egui::Align::Center));
+    }
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, title));
+    let color = if resp.hovered() { theme::TEXT } else { theme::TEXT_DIM };
+    let p = ui.painter();
+    let caret = if state.is_open() { icon::CARET_DOWN } else { icon::CARET_RIGHT };
+    p.text(pos2(rect.left() + 6.0, rect.center().y), egui::Align2::CENTER_CENTER, caret, egui::FontId::proportional(11.0), color);
+    let g = p.layout_no_wrap(title.to_string(), egui::FontId::proportional(11.5), color);
+    let text_w = g.size().x;
+    p.galley(pos2(rect.left() + 16.0, rect.center().y - g.size().y / 2.0), g, color);
+    if active {
+        p.circle_filled(pos2(rect.left() + 16.0 + text_w + 7.0, rect.center().y), 3.0, theme::ACCENT);
+    }
+    let resp = if active { resp.on_hover_text("Hier ist etwas eingestellt") } else { resp };
+    if resp.clicked() {
+        state.toggle(ui);
+    }
+    state.show_body_unindented(ui, body);
+}
+
+/// Card naming the image's lens: an aperture icon, the name, and a dim line below it (focal
+/// length, where the correction comes from), with a spinner while something still loads.
+pub fn lens_card(ui: &mut Ui, name: Option<&str>, detail: &str, busy: bool) {
+    let width = (ui.available_width() - 8.0).max(60.0);
+    egui::Frame::new()
+        .fill(theme::CHROME)
+        .stroke(Stroke::new(1.0, theme::BORDER))
+        .corner_radius(6)
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .show(ui, |ui| {
+            // Less the margins and the border, so the card is exactly `width` wide.
+            ui.set_width(width - 22.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                let ic = if name.is_some() { theme::ACCENT } else { theme::TEXT_FAINT };
+                ui.label(RichText::new(icon::APERTURE).size(26.0).color(ic));
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    let title = match name {
+                        Some(n) => RichText::new(n).strong().color(theme::TEXT),
+                        None => RichText::new("Objektiv unbekannt").color(theme::TEXT_DIM),
+                    };
+                    let r = ui.add(egui::Label::new(title).truncate());
+                    if let Some(n) = name {
+                        r.on_hover_text(n);
+                    }
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        if busy {
+                            ui.add(egui::Spinner::new().size(10.0).color(theme::TEXT_DIM));
+                        }
+                        if !detail.is_empty() {
+                            ui.add(egui::Label::new(RichText::new(detail).small().color(theme::TEXT_DIM)).truncate()).on_hover_text(detail);
+                        }
+                    });
+                });
+            });
+        });
+    ui.add_space(4.0);
 }
 
 /// A row of a list like the layers': `h` high and as wide as the panel, filled when chosen or

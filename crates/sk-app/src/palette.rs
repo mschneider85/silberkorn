@@ -69,7 +69,11 @@ struct Command {
     ai: bool,
 }
 
-/// Tool sections per tab with search terms; titles as passed to `widgets::section`.
+/// Parts of a section that start closed (`widgets::subsection`): child, the section it is in.
+const SUBSECTIONS: &[(&str, &str)] = &[("Farbfehler", "Objektivkorrektur"), ("Fisheye", "Objektivkorrektur")];
+
+/// Tool sections per tab with search terms; titles as passed to `widgets::section` (or
+/// `widgets::subsection`, see [`SUBSECTIONS`]).
 const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Library, "Katalog", "catalog alle bilder letzter import bereinigen"),
     (Tab::Library, "Ordner", "folder verzeichnis baum"),
@@ -78,7 +82,9 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Lens, "Zuschnitt", "crop beschneiden seitenverhältnis format"),
     (Tab::Lens, "Drehen & Spiegeln", "rotate flip geraderichten horizont straighten"),
     (Tab::Lens, "Trapezkorrektur", "perspektive stürzende linien upright keystone trapez"),
-    (Tab::Lens, "Objektivkorrektur", "lens verzeichnung chromatische aberration ca farbsaum farbsäume defringe lila grün vignette vignettierung randabschattung lensfun profil fisheye fischauge entzerren defish"),
+    (Tab::Lens, "Objektivkorrektur", "lens verzeichnung vignette vignettierung randabschattung lensfun profil"),
+    (Tab::Lens, "Farbfehler", "chromatische aberration ca farbsaum farbsäume defringe lila grün objektivkorrektur"),
+    (Tab::Lens, "Fisheye", "fischauge entzerren defish bildwinkel objektivkorrektur"),
     (Tab::Exposure, "Belichtung", "exposure kontrast helligkeit sättigung"),
     (Tab::Exposure, "Lichter & Tiefen", "hdr lichter tiefen weiß schwarz highlights shadows"),
     (Tab::Exposure, "Tonwerte", "levels schwarzpunkt weißpunkt"),
@@ -171,7 +177,11 @@ impl App {
             }
             Action::Section(tab, title) => {
                 if self.open_tab(tab) {
-                    crate::widgets::reveal_section(ctx, title);
+                    // A part of a section: the section opens first, then the part in it.
+                    match SUBSECTIONS.iter().find(|(child, _)| *child == title) {
+                        Some((child, parent)) => crate::widgets::reveal_section(ctx, &format!("{parent}/{child}")),
+                        None => crate::widgets::reveal_section(ctx, title),
+                    }
                 }
             }
             Action::Run(f) => f(self, ctx),
@@ -453,5 +463,14 @@ mod help_tests {
     fn every_section_has_help() {
         let missing: Vec<&str> = super::SECTIONS.iter().map(|(_, t, _)| *t).filter(|t| crate::help::section_help(t).is_none()).collect();
         assert!(missing.is_empty(), "ohne Kurzhilfe: {missing:?}");
+    }
+
+    /// Parts of sections are found in the palette, inside a section it knows.
+    #[test]
+    fn subsections_are_listed_with_their_section() {
+        let known = |t: &str| super::SECTIONS.iter().any(|(_, s, _)| *s == t);
+        for (child, parent) in super::SUBSECTIONS {
+            assert!(known(child) && known(parent), "{parent}/{child}");
+        }
     }
 }

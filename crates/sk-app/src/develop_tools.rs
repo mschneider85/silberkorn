@@ -287,100 +287,25 @@ impl App {
         let adj = &mut cur.adjustments;
         let mut changed = false;
 
-        let mut reset_lens = false;
-        let lens_name = cur.meta.info.lens.clone();
-        let focal = cur.meta.info.focal_length.clone();
-        let camera_source = cur.meta.lens.as_ref().map(|l| l.source);
-        let mut profile_action: Option<bool> = None;
-        widgets::tool_section(ui, sk_core::tools::Tool::LensCorrection, Some(&mut || reset_lens = true), |ui| {
-            ui.label(RichText::new(lens_name.clone().unwrap_or_else(|| "Objektiv unbekannt".into())).color(Color32::from_gray(170)));
-            let l = &mut adj.lens;
-            // Where the correction comes from: never both, the profile would correct the same
-            // lens a second time. Choices that don't exist for this image are shown, but disabled.
-            let loading = downloading || (!db_loaded && lens_name.is_some());
-            let current = if l.profile.is_some() {
-                "Lokales Profil"
-            } else if l.camera && camera_source.is_some() {
-                "Kamera"
-            } else {
-                "Keine"
-            };
-            widgets::combo_field(ui, "Korrektur", current, |ui| {
-                if ui.selectable_label(current == "Keine", "Keine").clicked() && current != "Keine" {
-                    l.camera = false;
-                    changed = true;
-                    profile_action = Some(false);
-                }
-                let camera = ui
-                    .add_enabled(camera_source.is_some(), egui::Button::selectable(current == "Kamera", "Kamera"))
-                    .on_hover_text(match camera_source {
-                        Some(source) => format!("Verzeichnung, chromatische Aberration und Randabschattung, wie die Kamera sie für dieses Objektiv gespeichert hat ({source})"),
-                        None => String::new(),
-                    })
-                    .on_disabled_hover_text("Die RAW-Datei enthält keine Objektivkorrektur");
-                if camera.clicked() && current != "Kamera" {
-                    l.camera = true;
-                    l.profile = None;
-                    l.profile_coeffs = None;
-                    changed = true;
-                }
-                let profile = ui
-                    .add_enabled(match_name.is_some() || l.profile.is_some(), egui::Button::selectable(current == "Lokales Profil", "Lokales Profil"))
-                    .on_hover_text(match &match_name {
-                        Some(p) => format!("Profil „{p}“ aus der Lensfun-Datenbank"),
-                        None => String::new(),
-                    })
-                    .on_disabled_hover_text(if loading { "Die Objektivprofile werden noch geladen" } else { "Kein Profil für dieses Objektiv" });
-                if profile.clicked() && current != "Lokales Profil" {
-                    profile_action = Some(true);
-                }
-            });
-            if let Some(p) = &l.profile {
-                ui.add(egui::Label::new(RichText::new(format!("Profil: {p}")).color(Color32::from_gray(170))).truncate()).on_hover_text(p.as_str());
-            } else if loading {
-                ui.label("Lade Objektivprofile …");
-            }
-            if let Some(f) = &focal {
-                crate::widgets::hint(ui, format!("Brennweite {f}"));
-            }
-            changed |= slider_row(ui, "Verzeichnung", &mut l.distortion, -100.0..=100.0, 0.0, 0);
-            changed |= crate::widgets::slider_row_with(ui, "Fisheye", &mut l.fisheye, 0.0..=220.0, 0.0, 0, crate::widgets::SliderOpts { suffix: "°", ..Default::default() });
-            crate::widgets::hint(ui, "Fisheye: Bildwinkel über die Diagonale (meist 180°), rechnet in ein normales Weitwinkelbild um");
-            changed |= slider_row(ui, "Randabschattung", &mut l.vignetting, -100.0..=100.0, 0.0, 0);
-            // Two different faults, each under the name photographers know it by.
-            crate::widgets::subheading(ui, "Chromatische Aberration");
-            changed |= slider_row(ui, "Rot/Cyan", &mut l.ca_red, -100.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Blau/Gelb", &mut l.ca_blue, -100.0..=100.0, 0.0, 0);
-            crate::widgets::hint(ui, "Gleicht Rot- und Blaukanal zum Bildrand hin an; das Kameraprofil korrigiert sie meist schon");
-            crate::widgets::subheading(ui, "Farbsäume");
-            changed |= slider_row(ui, "Lila", &mut l.defringe_purple, 0.0..=100.0, 0.0, 0);
-            changed |= slider_row(ui, "Grün", &mut l.defringe_green, 0.0..=100.0, 0.0, 0);
-            crate::widgets::hint(ui, "Entfärbt lila und grüne Säume an kontrastreichen Kanten, auch in der Bildmitte");
-        });
-        if reset_lens {
-            adj.lens = LensCorrection::default();
-            changed = true;
-            // Back to what a new image gets.
-            if camera_source.is_none() && match_name.is_some() {
-                profile_action = Some(true);
-            }
-        }
-
         let mut reset_crop = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Crop, Some(&mut || reset_crop = true), |ui| {
-            ui.horizontal(|ui| {
-                if crop_active {
-                    // The keys are on the buttons of the bar in the image.
-                    if ui.button(format!("{}  Übernehmen", icon::CHECK)).on_hover_text(crate::commands::shortcut_of("finish-crop")).clicked() {
-                        finish_crop = true;
-                    }
-                    if ui.button("Abbrechen").on_hover_text("Esc").clicked() {
-                        cancel_crop = true;
-                    }
-                } else if ui.button(format!("{}  Zuschneiden", crate::theme::icon::CROP)).on_hover_text(crate::commands::hint("Zuschneiden", "crop")).clicked() {
+            if crop_active {
+                // The keys are on the buttons of the bar in the image.
+                let done = [
+                    widgets::BarButton::new(icon::CHECK, "Übernehmen").hover(crate::commands::shortcut_of("finish-crop")).primary(),
+                    widgets::BarButton::new(icon::X, "Abbrechen").hover("Esc"),
+                ];
+                match widgets::button_bar(ui, "crop-done", &done) {
+                    Some(0) => finish_crop = true,
+                    Some(1) => cancel_crop = true,
+                    _ => {}
+                }
+            } else {
+                let start = [widgets::BarButton::new(icon::CROP, "Zuschneiden").hover(crate::commands::hint("Zuschneiden", "crop"))];
+                if widgets::button_bar(ui, "crop-start", &start).is_some() {
                     start_crop = true;
                 }
-            });
+            }
             let g = &mut adj.geometry;
             ui.horizontal(|ui| {
                 widgets::combo_field(ui, "Seitenverhältnis", g.aspect.label(), |ui| {
@@ -410,77 +335,184 @@ impl App {
             let moved = widgets::slider_row_with(ui, "Geraderichten", &mut g.straighten, -45.0..=45.0, 0.0, 1, widgets::SliderOpts { suffix: "°", ..Default::default() });
             changed |= moved;
             grid_moved |= moved;
-            ui.horizontal_wrapped(|ui| {
-                let line = egui::Button::new(format!("{}  Linie ziehen", icon::LINE_SEGMENT)).selected(straighten_active);
-                if ui.add(line).on_hover_text("Horizont oder Kante nachziehen").clicked() {
-                    toggle_straighten = true;
-                }
-                if ui.button(format!("{}  90°", crate::theme::icon::ARROW_COUNTER_CLOCKWISE)).on_hover_text("90° nach links drehen").clicked() {
+            ui.add_space(4.0);
+            let turn = [
+                widgets::BarButton::new(icon::LINE_SEGMENT, "Linie").name("Linie ziehen").hover("Horizont oder Kante nachziehen").selected(straighten_active).weight(1.6),
+                widgets::BarButton::new(icon::ARROW_COUNTER_CLOCKWISE, "").name("90° nach links drehen"),
+                widgets::BarButton::new(icon::ARROW_CLOCKWISE, "").name("90° nach rechts drehen"),
+                widgets::BarButton::new(icon::FLIP_HORIZONTAL, "").name("Horizontal spiegeln").selected(g.flip_h),
+                widgets::BarButton::new(icon::FLIP_VERTICAL, "").name("Vertikal spiegeln").selected(g.flip_v),
+            ];
+            match widgets::button_bar(ui, "rotate", &turn) {
+                Some(0) => toggle_straighten = true,
+                Some(1) => {
                     adj.rotation = (adj.rotation + 3) % 4;
                     changed = true;
                 }
-                if ui.button(format!("{}  90°", crate::theme::icon::ARROW_CLOCKWISE)).on_hover_text("90° nach rechts drehen").clicked() {
+                Some(2) => {
                     adj.rotation = (adj.rotation + 1) % 4;
                     changed = true;
                 }
-            });
-            let g = &mut adj.geometry;
-            ui.horizontal(|ui| {
-                changed |= crate::widgets::checkbox(ui, &mut g.flip_h, "Horizontal spiegeln").changed();
-                changed |= crate::widgets::checkbox(ui, &mut g.flip_v, "Vertikal").changed();
-            });
+                Some(3) => {
+                    adj.geometry.flip_h = !adj.geometry.flip_h;
+                    changed = true;
+                }
+                Some(4) => {
+                    adj.geometry.flip_v = !adj.geometry.flip_v;
+                    changed = true;
+                }
+                _ => {}
+            }
         });
         if reset_rot {
             sk_core::tools::Tool::Rotation.copy(&Default::default(), adj);
             changed = true;
         }
 
+        let mut reset_lens = false;
+        let lens_name = cur.meta.info.lens.clone();
+        let focal = cur.meta.info.focal_length.clone();
+        let camera_source = cur.meta.lens.as_ref().map(|l| l.source);
+        let mut profile_action: Option<bool> = None;
+        widgets::tool_section(ui, sk_core::tools::Tool::LensCorrection, Some(&mut || reset_lens = true), |ui| {
+            let l = &mut adj.lens;
+            // Where the correction comes from: never both, the profile would correct the same
+            // lens a second time. Choices that don't exist for this image are shown, but disabled.
+            let loading = downloading || (!db_loaded && lens_name.is_some());
+            let current = if l.profile.is_some() {
+                2
+            } else if l.camera && camera_source.is_some() {
+                1
+            } else {
+                0
+            };
+            // The card: which lens, at which focal length, corrected from where.
+            let mut detail: Vec<String> = focal.iter().cloned().collect();
+            match (current, &l.profile) {
+                (2, Some(p)) => detail.push(format!("Profil {p}")),
+                (1, _) => detail.push(format!("Kameradaten ({})", camera_source.unwrap_or_default())),
+                _ if loading => detail.push("Lade Objektivprofile …".into()),
+                _ => detail.push("Nicht korrigiert".into()),
+            }
+            // The spinner only beside "Lade …", not beside a correction already in place.
+            widgets::lens_card(ui, lens_name.as_deref(), &detail.join("  ·  "), loading && current == 0);
+            let names = ["Keine", "Kamera", "Lokales Profil"];
+            let mut picked = None;
+            widgets::combo_field(ui, "Korrektur", names[current], |ui| {
+                if ui.selectable_label(current == 0, names[0]).clicked() {
+                    picked = Some(0);
+                }
+                let camera = ui
+                    .add_enabled(camera_source.is_some(), egui::Button::selectable(current == 1, names[1]))
+                    .on_hover_text(match camera_source {
+                        Some(source) => format!("Verzeichnung, chromatische Aberration und Randabschattung, wie die Kamera sie für dieses Objektiv gespeichert hat ({source})"),
+                        None => String::new(),
+                    })
+                    .on_disabled_hover_text("Die RAW-Datei enthält keine Objektivkorrektur");
+                if camera.clicked() {
+                    picked = Some(1);
+                }
+                let profile = ui
+                    .add_enabled(match_name.is_some() || l.profile.is_some(), egui::Button::selectable(current == 2, names[2]))
+                    .on_hover_text(match &match_name {
+                        Some(p) => format!("Profil „{p}“ aus der Lensfun-Datenbank"),
+                        None => String::new(),
+                    })
+                    .on_disabled_hover_text(if loading { "Die Objektivprofile werden noch geladen" } else { "Kein Profil für dieses Objektiv" });
+                if profile.clicked() {
+                    picked = Some(2);
+                }
+            });
+            let picked = picked.filter(|&i| i != current);
+            match picked {
+                Some(0) => {
+                    l.camera = false;
+                    changed = true;
+                    profile_action = Some(false);
+                }
+                Some(1) => {
+                    l.camera = true;
+                    l.profile = None;
+                    l.profile_coeffs = None;
+                    changed = true;
+                }
+                Some(2) => profile_action = Some(true),
+                _ => {}
+            }
+            changed |= slider_row(ui, "Verzeichnung", &mut l.distortion, -100.0..=100.0, 0.0, 0);
+            changed |= slider_row(ui, "Randabschattung", &mut l.vignetting, -100.0..=100.0, 0.0, 0);
+            // Rarely needed: closed until opened, a dot says when something in them is set.
+            let faults = l.ca_red != 0.0 || l.ca_blue != 0.0 || l.defringe_purple != 0.0 || l.defringe_green != 0.0;
+            widgets::subsection(ui, "Farbfehler", faults, |ui| {
+                // Two different faults, each under the name photographers know it by.
+                crate::widgets::subheading(ui, "Chromatische Aberration");
+                changed |= slider_row(ui, "Rot/Cyan", &mut l.ca_red, -100.0..=100.0, 0.0, 0);
+                changed |= slider_row(ui, "Blau/Gelb", &mut l.ca_blue, -100.0..=100.0, 0.0, 0);
+                crate::widgets::hint(ui, "Gleicht Rot- und Blaukanal zum Bildrand hin an; das Kameraprofil korrigiert sie meist schon");
+                crate::widgets::subheading(ui, "Farbsäume");
+                changed |= slider_row(ui, "Lila", &mut l.defringe_purple, 0.0..=100.0, 0.0, 0);
+                changed |= slider_row(ui, "Grün", &mut l.defringe_green, 0.0..=100.0, 0.0, 0);
+                crate::widgets::hint(ui, "Entfärbt lila und grüne Säume an kontrastreichen Kanten, auch in der Bildmitte");
+            });
+            widgets::subsection(ui, "Fisheye", l.fisheye != 0.0, |ui| {
+                changed |= crate::widgets::slider_row_with(ui, "Bildwinkel", &mut l.fisheye, 0.0..=220.0, 0.0, 0, crate::widgets::SliderOpts { suffix: "°", ..Default::default() });
+                crate::widgets::hint(ui, "Bildwinkel des Fisheyes über die Diagonale (meist 180°), rechnet in ein normales Weitwinkelbild um");
+            });
+        });
+        if reset_lens {
+            adj.lens = LensCorrection::default();
+            changed = true;
+            // Back to what a new image gets.
+            if camera_source.is_none() && match_name.is_some() {
+                profile_action = Some(true);
+            }
+        }
+
         let mut reset_key = false;
         widgets::tool_section(ui, sk_core::tools::Tool::Perspective, Some(&mut || reset_key = true), |ui| {
             use crate::crop::GuideMode;
             use sk_core::upright::UprightMode;
-            ui.horizontal_wrapped(|ui| {
-                // The vertical edges alone are the "A" in the header (as with every tool); here
-                // only what it doesn't do.
-                let label = format!("{}  Beide Richtungen", icon::MAGIC_WAND);
-                let tip = "Automatisch auch die horizontale Perspektive korrigieren, bei mehreren ausgewählten Bildern für alle; nur stürzende Linien: „A“ oben";
-                if ui.add_enabled(auto_free, egui::Button::new(label)).on_hover_text(tip).clicked() {
-                    upright = Some(UprightMode::Full);
-                }
-                ui.add_space(4.0);
-                ui.horizontal(|ui| {
-                    let tip = "Linien an Kanten legen, die vertikal oder horizontal sein sollen";
-                    let label = format!("{}  Linien ziehen", icon::LINE_SEGMENTS);
-                    if ui.add(egui::Button::new(label).selected(guide_mode.is_some())).on_hover_text(tip).clicked() {
-                        guides = Some(guide_mode.is_none().then_some(guide_pref));
+            // The vertical edges alone are the "A" in the header (as with every tool); here only
+            // what it doesn't do.
+            let actions = [
+                widgets::BarButton::new(icon::MAGIC_WAND, "Beide Richtungen")
+                    .hover("Automatisch auch die horizontale Perspektive korrigieren, bei mehreren ausgewählten Bildern für alle; nur stürzende Linien: „A“ oben")
+                    .enabled(auto_free),
+                widgets::BarButton::new(icon::LINE_SEGMENTS, "Linien ziehen").hover("Linien an Kanten legen, die vertikal oder horizontal sein sollen").selected(guide_mode.is_some()),
+            ];
+            match widgets::button_bar(ui, "keystone", &actions) {
+                Some(0) => upright = Some(UprightMode::Full),
+                Some(1) => guides = Some(guide_mode.is_none().then_some(guide_pref)),
+                _ => {}
+            }
+            // Which edges the lines go to: choosing starts drawing them.
+            let mode = guide_mode.unwrap_or(guide_pref);
+            let kinds = [
+                (GuideMode::Vertical, "Vertikale Kanten", "Zwei Linien an Kanten legen, die vertikal sein sollen"),
+                (GuideMode::Horizontal, "Horizontale Kanten", "Zwei Linien an Kanten legen, die horizontal sein sollen"),
+                (GuideMode::Both, "Vertikal und horizontal", "Je zwei Linien für vertikale und horizontale Kanten"),
+            ];
+            let shown = kinds.iter().find(|k| k.0 == mode).map_or("", |k| k.1);
+            widgets::combo_field(ui, "Linien für", shown, |ui| {
+                for (m, label, tip) in kinds {
+                    if ui.selectable_label(mode == m, label).on_hover_text(tip).clicked() && guide_mode != Some(m) {
+                        guides = Some(Some(m));
                     }
-                    crate::widgets::menu_button(ui, icon::CARET_DOWN, |ui| {
-                        ui.label(RichText::new("Linien für:").weak());
-                        for (mode, label, tip) in [
-                            (GuideMode::Vertical, "Vertikale Kanten", "Zwei Linien an Kanten legen, die vertikal sein sollen"),
-                            (GuideMode::Horizontal, "Horizontale Kanten", "Zwei Linien an Kanten legen, die horizontal sein sollen"),
-                            (GuideMode::Both, "Vertikale und horizontale Kanten", "Je zwei Linien für vertikale und horizontale Kanten"),
-                        ] {
-                            if ui.radio(guide_mode.unwrap_or(guide_pref) == mode, label).on_hover_text(tip).clicked() {
-                                guides = Some(Some(mode));
-                                ui.close();
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text("Welche Linien gezogen werden");
-                });
+                }
             });
             if guide_mode.is_some() {
-                ui.horizontal(|ui| {
-                    if ui.button(format!("{}  Übernehmen", icon::CHECK)).on_hover_text(crate::commands::shortcut_of("finish-crop")).clicked() {
-                        apply_guides = true;
-                    }
-                    if ui.button("Abbrechen").on_hover_text("Esc").clicked() {
-                        guides = Some(None);
-                    }
-                });
+                let done = [
+                    widgets::BarButton::new(icon::CHECK, "Übernehmen").hover(crate::commands::shortcut_of("finish-crop")).primary(),
+                    widgets::BarButton::new(icon::X, "Abbrechen").hover("Esc"),
+                ];
+                ui.add_space(2.0);
+                match widgets::button_bar(ui, "keystone-done", &done) {
+                    Some(0) => apply_guides = true,
+                    Some(1) => guides = Some(None),
+                    _ => {}
+                }
             }
+            ui.add_space(4.0);
             let g = &mut adj.geometry;
             let max = sk_core::params::KEYSTONE_MAX;
             let mut moved = slider_row(ui, "Vertikal", &mut g.keystone_v, -max..=max, 0.0, 0);

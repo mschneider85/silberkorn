@@ -1,38 +1,8 @@
 # Objektiv & Geometrie
 
-Der Tab **Objektiv & Geometrie** enthält alles, was den Bildausschnitt und die Form des Bildes verändert: Objektivfehler korrigieren, zuschneiden, drehen und stürzende Linien aufrichten. Diese Einstellungen gehören zum Inhalt eines Bildes: Beim Kopieren von Anpassungen sind sie nur dabei, wenn man sie ausdrücklich wählt.
+Der Tab **Objektiv & Geometrie** enthält alles, was den Bildausschnitt und die Form des Bildes verändert: zuschneiden, drehen, Objektivfehler korrigieren und stürzende Linien aufrichten. Diese Einstellungen gehören zum Inhalt eines Bildes: Beim Kopieren von Anpassungen sind sie nur dabei, wenn man sie ausdrücklich wählt.
 
 Auf einer Ebene ist der Tab deaktiviert; er wirkt immer auf das ganze Bild.
-
-## Objektivkorrektur
-
-Korrigiert Fehler des Objektivs: Verzeichnung, Randabschattung und Farbsäume. Oben steht das Objektiv aus den Aufnahmedaten.
-
-### Korrektur
-
-Woher die Korrektur kommt:
-
-- **Kamera**: die Korrektur, die die Kamera für das angesetzte Objektiv in der RAW-Datei gespeichert hat. Neue Bilder bekommen sie automatisch, wenn die Datei sie enthält.
-- **Lokales Profil**: ein Profil aus der Objektivdatenbank, passend zu Objektiv und Brennweite. Neue Bilder bekommen es automatisch, wenn die Datei keine eigene Korrektur mitbringt.
-- **Keine**: ohne Korrektur.
-
-Was es für das Bild nicht gibt, ist ausgegraut. Das **A** im Kopf wendet das passende Profil an, auch auf alle ausgewählten Bilder. ↺ stellt den Zustand eines neuen Bildes wieder her.
-
-> Die Objektivdatenbank lädt Silberkorn beim Programmstart im Hintergrund aus dem Internet und hält sie aktuell. Solange sie fehlt, steht „Lade Objektivprofile …“ im Abschnitt.
-
-### Regler
-
-- **Verzeichnung**: gleicht tonnen- oder kissenförmig gebogene Linien aus, zusätzlich zur Korrektur oben.
-- **Fisheye**: rechnet ein Fisheye-Bild in ein normales Weitwinkelbild um, sodass gekrümmte Linien wieder gerade werden. Der Wert ist der Bildwinkel des Fisheyes über die Diagonale, bei den meisten Vollformat-Fisheyes 180°. Das Bild wird so weit vergrößert, dass keine leeren Ränder entstehen.
-- **Randabschattung**: hellt dunkle Bildecken auf oder dunkelt sie ab.
-
-### Chromatische Aberration
-
-Farbige Ränder an Kanten zum Bildrand hin. **Rot/Cyan** und **Blau/Gelb** gleichen Rot- und Blaukanal an. Ein Profil oder die Kamerakorrektur erledigen das meist schon.
-
-### Farbsäume
-
-Lila und grüne Säume an kontrastreichen Kanten, auch in der Bildmitte, typisch bei offener Blende und Gegenlicht. **Lila** und **Grün** entfärben sie; Flächen gleicher Farbe bleiben unberührt. Grün trifft auch Blattränder, deshalb sparsam einsetzen.
 
 ## Zuschnitt
 
@@ -64,11 +34,46 @@ Seitenverhältnis und Ausrichtung stehen sowohl im Abschnitt als auch in der Lei
 ## Drehen & Spiegeln
 
 - **Geraderichten**: dreht das Bild um bis zu 45°, etwa für einen schiefen Horizont. Solange am Regler gezogen wird, liegt ein Raster über dem Bild.
-- **Linie ziehen**: im Bild an einem Horizont oder einer Kante entlangziehen, die waagerecht oder senkrecht sein soll; das Bild wird danach ausgerichtet.
-- Die zwei Knöpfe **90°** drehen nach links ({taste:rotate-left}) bzw. rechts ({taste:rotate-right}).
-- **Horizontal spiegeln** und **Vertikal** spiegeln das Bild.
+- **Linie** (erster Knopf der Leiste darunter): im Bild an einem Horizont oder einer Kante entlangziehen, die waagerecht oder senkrecht sein soll; das Bild wird danach ausgerichtet.
+- Die zwei Pfeile drehen um 90° nach links ({taste:rotate-left}) bzw. rechts ({taste:rotate-right}).
+- Die letzten zwei Knöpfe spiegeln das Bild horizontal bzw. vertikal; ein gespiegeltes Bild zeigt den Knopf hervorgehoben.
 
 Das **A** im Kopf richtet Horizont und Kanten automatisch waagerecht aus, auch für alle ausgewählten Bilder; die Perspektive bleibt dabei unverändert. Beim Geraderichten wird das Bild gerade so weit vergrößert, dass keine leeren Ecken entstehen.
+
+## Objektivkorrektur
+
+Korrigiert Fehler des Objektivs: Verzeichnung, Randabschattung und Farbsäume. Oben steht das Objektiv aus den Aufnahmedaten, mit Brennweite und der Quelle der Korrektur.
+
+### Korrektur
+
+Woher die Korrektur kommt:
+
+- **Kamera**: die Korrektur, die die Kamera für das angesetzte Objektiv in der RAW-Datei gespeichert hat. Neue Bilder bekommen sie automatisch, wenn die Datei sie enthält.
+- **Lokales Profil**: ein Profil aus der Objektivdatenbank, passend zu Objektiv und Brennweite. Neue Bilder bekommen es automatisch, wenn die Datei keine eigene Korrektur mitbringt.
+- **Keine**: ohne Korrektur.
+
+Was es für das Bild nicht gibt, ist ausgegraut. Das **A** im Kopf wendet das passende Profil an, auch auf alle ausgewählten Bilder. ↺ stellt den Zustand eines neuen Bildes wieder her.
+
+> Die Objektivdatenbank lädt Silberkorn beim Programmstart im Hintergrund aus dem Internet und hält sie aktuell. Solange sie fehlt, steht „Lade Objektivprofile …“ im Abschnitt.
+
+### Regler
+
+- **Verzeichnung**: gleicht tonnen- oder kissenförmig gebogene Linien aus, zusätzlich zur Korrektur oben.
+- **Randabschattung**: hellt dunkle Bildecken auf oder dunkelt sie ab.
+
+Seltener Gebrauchtes steht in zwei eingeklappten Bereichen darunter, **Farbfehler** und **Fisheye**. Ein Klick öffnet sie; ein blauer Punkt hinter dem Namen zeigt, dass darin etwas eingestellt ist.
+
+### Fisheye
+
+**Bildwinkel** rechnet ein Fisheye-Bild in ein normales Weitwinkelbild um, sodass gekrümmte Linien wieder gerade werden. Der Wert ist der Bildwinkel des Fisheyes über die Diagonale, bei den meisten Vollformat-Fisheyes 180°. Das Bild wird so weit vergrößert, dass keine leeren Ränder entstehen.
+
+### Chromatische Aberration
+
+Im Bereich **Farbfehler**. Farbige Ränder an Kanten zum Bildrand hin. **Rot/Cyan** und **Blau/Gelb** gleichen Rot- und Blaukanal an. Ein Profil oder die Kamerakorrektur erledigen das meist schon.
+
+### Farbsäume
+
+Im Bereich **Farbfehler**. Lila und grüne Säume an kontrastreichen Kanten, auch in der Bildmitte, typisch bei offener Blende und Gegenlicht. **Lila** und **Grün** entfärben sie; Flächen gleicher Farbe bleiben unberührt. Grün trifft auch Blattränder, deshalb sparsam einsetzen.
 
 ## Trapezkorrektur
 
@@ -91,7 +96,7 @@ Beides wirkt auf alle ausgewählten Bilder. Silberkorn sucht dafür gerade Kante
 
 Wenn die Automatik die falschen Kanten erwischt:
 
-1. **Linien ziehen** wählen. Im Menü daneben festlegen, ob **Vertikale Kanten**, **Horizontale Kanten** oder **Vertikale und horizontale Kanten** ausgerichtet werden.
+1. **Linien ziehen** wählen. Unter **Linien für** festlegen, ob **Vertikale Kanten**, **Horizontale Kanten** oder beide (**Vertikal und horizontal**) ausgerichtet werden; die Auswahl dort startet auch gleich.
 2. Die Linien im Bild an ihren Enden (oder als Ganzes) auf Kanten legen, die senkrecht bzw. waagerecht sein sollen.
 3. **Übernehmen** ({taste:finish-crop}) berechnet Drehung und Trapezkorrektur; Esc bricht ab.
 
