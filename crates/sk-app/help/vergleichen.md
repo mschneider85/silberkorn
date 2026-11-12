@@ -46,10 +46,12 @@ Nach dem Angleichen schwächt **Stärke** das Ergebnis stufenlos ab (0 bis 100 %
 
 ## Stile
 
-Ein Stil ist ein gespeicherter Satz von Einstellungen, der sich mit einem Klick auf andere Bilder legen lässt. Der Tab **Stile** zeigt jeden Stil als kleine Vorschau des aktuellen Bildes. Unter **Ansicht** wechselt **Liste** zur knappen Darstellung, **Vorschauen** zurück.
+Ein Stil ist ein gespeicherter Satz von Einstellungen, der sich mit einem Klick auf andere Bilder legen lässt. Der Tab **Stile** zeigt jeden Stil als kleine Vorschau des aktuellen Bildes. Die beiden Symbole im Kopf der Filmsimulationen wechseln zwischen **Vorschauen** und **Liste** (kleinere Bilder mit Beschreibung).
 
+- **Wirkt auf** oben nennt, wohin ein Klick geht: die ausgewählten Bilder oder die gewählte Ebene.
 - Zeiger auf einen Stil: Das Bild zeigt ihn groß, ohne ihn anzuwenden.
-- Klick (in der Liste **Anwenden**): Der Stil wird auf alle ausgewählten Bilder angewendet, als ein Rückgängig-Schritt.
+- Klick: Der Stil wird angewendet, auf mehrere Bilder als ein Rückgängig-Schritt.
+- Ein Haken und ein blauer Rand markieren Stile, die schon wirken: Erneutes Anwenden würde nichts ändern.
 
 Ein Stil setzt nur seine eigenen Werkzeuge; alle anderen bleiben, wie sie sind. So lassen sich Stile übereinander anwenden, etwa erst ein Farblook und danach eine Körnung.
 
@@ -59,14 +61,15 @@ Die **Filmsimulationen** sind mitgelieferte Looks nach bekannten Filmen wie Koda
 
 ### Eigene Stile
 
-Unter **Eigene Stile** stehen die selbst gespeicherten. Der Tooltip nennt, welche Werkzeuge ein Stil setzt. Rechtsklick (in der Liste das Papierkorb-Symbol) bietet **Stil löschen …**; Bilder, auf die er angewendet wurde, bleiben unverändert.
+Unter **Eigene Stile** stehen die selbst gespeicherten, mit der Zahl ihrer Werkzeuge; der Tooltip nennt sie. Der Papierkorb erscheint, wenn der Zeiger auf dem Stil steht (auch im Kontextmenü): **Stil löschen …**. Bilder, auf die er angewendet wurde, bleiben unverändert.
 
 ### Neuer Stil
 
 1. Ein Bild so bearbeiten, wie der Stil aussehen soll.
-2. Im Abschnitt **Neuer Stil** einen Namen eingeben.
-3. Unter **Enthält** die Werkzeuge wählen, die der Stil setzen soll. Vorgewählt sind die bearbeiteten; Zuschnitt, Drehen und Ähnliches meist besser weglassen.
-4. **Aktuelle Anpassungen speichern**.
+2. Die gestrichelte Kachel **Als Stil sichern** am Ende der eigenen Stile anklicken.
+3. Einen Namen eingeben.
+4. Unter **Enthält** stehen die bearbeiteten Werkzeuge, alle gewählt. Ein Klick nimmt eines heraus oder wieder auf.
+5. **Speichern**.
 
 ### Stile auf einer Ebene
 

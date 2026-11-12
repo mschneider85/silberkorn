@@ -15,6 +15,13 @@ use crate::app::App;
 /// Smallest width of a tile in points.
 const MIN_TILE: f32 = 104.0;
 
+impl StyleGrid {
+    /// The preview of a style or film look (`look`), once rendered.
+    pub(crate) fn texture(&self, style: &Style, look: bool) -> Option<&TextureHandle> {
+        self.textures.get(&id(style, look))
+    }
+}
+
 #[derive(Default)]
 pub struct StyleGrid {
     /// What the previews show: image, its adjustments and the saved styles.
@@ -189,39 +196,6 @@ impl App {
     #[cfg(test)]
     pub(crate) fn style_grid_count_for_test(&self) -> usize {
         self.style_grid.textures.len()
-    }
-
-    /// A grid of styles; returns the clicked one, the hovered one and one to delete (own
-    /// styles, from the context menu).
-    pub(crate) fn style_tiles(&self, ui: &mut Ui, list: &[(Style, bool, String)]) -> Picks {
-        let (mut clicked, mut hovered, mut delete) = (None, None, None);
-        let (cols, tile, image_h) = tile_size(ui.available_width());
-        for row in list.chunks(cols) {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = TILE_SPACING;
-                for (style, look, help) in row {
-                    let resp = thumb_tile(ui, self.style_grid.textures.get(&id(style, *look)), &style.name, tile, image_h, false);
-                    let hot = resp.hovered();
-                    let resp = resp.on_hover_text(help.as_str());
-                    if hot {
-                        hovered = Some((style.clone(), *look));
-                    }
-                    if resp.clicked() {
-                        clicked = Some((style.clone(), *look));
-                    }
-                    if !look {
-                        crate::widgets::context_menu(&resp, |ui| {
-                            if ui.button("Stil löschen …").clicked() {
-                                delete = Some(style.name.clone());
-                                ui.close();
-                            }
-                        });
-                    }
-                }
-            });
-            ui.add_space(TILE_SPACING);
-        }
-        (clicked, hovered, delete)
     }
 
     /// Requests new previews of the snapshots when the image or its snapshots changed (each

@@ -39,7 +39,8 @@ impl App {
         }
         let tools: &[LocalTool] = if tool.tab() == Tab::Retouch { &RETOUCH_TOOLS } else { &MASK_TOOLS };
         let mask_tools = tool.tab() == Tab::Layers;
-        let selected = self.selected_spot.is_some() || self.selected_removal.is_some() || self.selected_gradient.is_some();
+        // A gradient has no card to delete it from: here, for the chosen one.
+        let selected = self.selected_gradient.is_some();
         let show_mask = self.show_mask;
         let (mut chosen, mut toggle_mask, mut delete, mut brushes_changed) = (None, false, false, false);
         let (area, dock) = (self.bar_area(ui), self.bar_dock);
@@ -70,6 +71,16 @@ impl App {
                     brushes_changed |= bar_slider(ui, "Härte", &mut b.hardness, 0.0..=1.0, d.hardness, percent);
                     brushes_changed |= bar_slider(ui, "Deckkraft", &mut b.opacity, 0.05..=1.0, d.opacity, percent);
                 }
+                // Flow and automatic masking: set less often, behind a button.
+                if matches!(tool, LocalTool::Brush | LocalTool::Eraser | LocalTool::Remove) {
+                    let more = crate::widgets::menu_button(ui, RichText::new(theme::icon::SLIDERS_HORIZONTAL).size(14.0), |ui| {
+                        ui.set_width(260.0);
+                        crate::layers::brush_extras(ui, b, Some(tool))
+                    });
+                    brushes_changed |= more.inner.unwrap_or(false);
+                    let on = if b.auto_mask { " · Kanten beachten an" } else { "" };
+                    more.response.on_hover_text(format!("Mehr: Fluss, Kanten beachten, Toleranz{on}"));
+                }
             }
             if mask_tools || selected {
                 ui.separator();
@@ -78,7 +89,7 @@ impl App {
                 toggle_mask = true;
             }
             // Only the chosen pin or gradient: Entf on a layer deletes the layer, not wanted here.
-            if selected && ui.button(format!("{}  Löschen", theme::icon::TRASH)).on_hover_text(crate::commands::hint("Gewähltes löschen", "delete-spot")).clicked() {
+            if selected && ui.button(format!("{}  Löschen", theme::icon::TRASH)).on_hover_text(crate::commands::hint("Gewählten Verlauf löschen", "delete-spot")).clicked() {
                 delete = true;
             }
         });

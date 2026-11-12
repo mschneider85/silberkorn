@@ -5,7 +5,7 @@ use sk_core::mask;
 use sk_core::params::{BrushStroke, Layer, LayerAdjustments, Spot, SpotMode, SpotStroke};
 use sk_core::pipeline::Processor;
 use sk_core::tools::Tool;
-use egui::{Color32, Pos2, Rect, Response, RichText, Stroke, Ui, Vec2, pos2, vec2};
+use egui::{Color32, Pos2, Rect, Response, RichText, Stroke, Ui, Vec2, vec2};
 
 use crate::theme::{self, icon};
 
@@ -34,15 +34,16 @@ pub enum LocalTool {
     Remove,
 }
 
-/// What painting does with Reparieren, Klonen and Entfernen while an area is chosen.
+/// What painting does with Reparieren, Klonen and Entfernen while an area is chosen: a new
+/// one, unless Pinsel or Radierer of the chosen card is on.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AreaPaint {
     /// A new area (as without a chosen one).
     #[default]
     New,
-    /// Adds to the chosen area (Shift while painting).
+    /// Pinsel: adds to the chosen area (Shift while painting).
     Extend,
-    /// Takes part of the chosen area away (Alt while painting).
+    /// Radierer: takes part of the chosen area away (Alt while painting).
     Shrink,
 }
 
@@ -174,25 +175,19 @@ pub fn point_spacing(size: f32) -> f32 {
     (size * 0.05).max(1.5)
 }
 
-/// Controls of a brush: size, hardness, opacity, flow, automatic masking. Returns whether
-/// something changed.
-pub fn brush_controls(ui: &mut Ui, b: &mut BrushSettings, tool: Option<LocalTool>, flow_and_auto: bool) -> bool {
+/// The settings of a brush beyond size, hardness and opacity: flow and automatic masking (in
+/// the bar in the image, behind "Mehr"). Returns whether something changed.
+pub fn brush_extras(ui: &mut Ui, b: &mut BrushSettings, tool: Option<LocalTool>) -> bool {
     let d = Brushes::defaults_of(tool);
     let before = b.clone();
-    slider_row(ui, "Größe", &mut b.size, 2.0..=400.0, d.size, 0);
-    crate::widgets::unit_percent_row(ui, "Härte", &mut b.hardness, 0.0..=1.0, d.hardness, Default::default());
-    crate::widgets::unit_percent_row(ui, "Deckkraft", &mut b.opacity, 0.05..=1.0, d.opacity, Default::default());
-    if flow_and_auto {
-        crate::widgets::unit_percent_row(ui, "Fluss", &mut b.flow, 0.02..=1.0, d.flow, Default::default());
-        crate::widgets::checkbox(ui, &mut b.auto_mask, "Kanten beachten")
-            .on_hover_text("Wirkt nur, wo das Bild der Pinselmitte ähnelt – hält Kanten wie den Horizont sauber");
-        // Without it, the tolerance is shown but disabled.
-        ui.add_enabled_ui(b.auto_mask, |ui| {
-            slider_row(ui, "Toleranz", &mut b.tolerance, 0.0..=100.0, d.tolerance, 0);
-        })
-        .response
-        .on_hover_text("Wie verschieden das Bild von der Pinselmitte sein darf und trotzdem gemalt wird");
-    }
+    crate::widgets::unit_percent_row(ui, "Fluss", &mut b.flow, 0.02..=1.0, d.flow, Default::default());
+    crate::widgets::checkbox(ui, &mut b.auto_mask, "Kanten beachten").on_hover_text("Wirkt nur, wo das Bild der Pinselmitte ähnelt – hält Kanten wie den Horizont sauber");
+    // Without it, the tolerance is shown but disabled.
+    ui.add_enabled_ui(b.auto_mask, |ui| {
+        slider_row(ui, "Toleranz", &mut b.tolerance, 0.0..=100.0, d.tolerance, 0);
+    })
+    .response
+    .on_hover_text("Wie verschieden das Bild von der Pinselmitte sein darf und trotzdem gemalt wird");
     *b != before
 }
 
@@ -206,6 +201,11 @@ pub(crate) struct UvToScreen {
 }
 
 impl UvToScreen {
+    /// Size of the output (pixels at preview resolution) the map leads to.
+    pub fn out_size(&self) -> (f32, f32) {
+        (self.geo.out_w as f32, self.geo.out_h as f32)
+    }
+
     pub fn map(&self, uv: [f32; 2]) -> Pos2 {
         let (ox, oy) = self.geo.output_point(uv[0] * self.pw - 0.5, uv[1] * self.ph - 0.5);
         self.origin + vec2(ox, oy) * self.scale
@@ -504,16 +504,6 @@ impl App {
         });
     }
 
-    /// Settings of the object tool.
-    fn object_controls(&mut self, ui: &mut Ui) {
-        let faint = |t: &str| egui::RichText::new(t).small().color(crate::theme::TEXT_FAINT);
-        if let Some(p) = self.ai_download_shown(AiFeature::Object) {
-            crate::ai_models::download_progress(ui, AiFeature::Object, p, self.job_cancel(None, Some(&AiFeature::Object.job_label())));
-            return;
-        }
-        ui.label(faint("Klick: Objekt auswählen · weitere Klicks verfeinern · Umschalt+Klick: weiteres Objekt · Alt+Klick: Teil ausnehmen"));
-    }
-
     /// Object selection: a click adds the object under it, Alt+click takes the part under it away,
     /// Shift+click starts another object (all clicks of one go to the network together).
     fn object_interaction(&mut self, ui: &mut Ui, response: &Response, img_rect: Rect, scale: f32) {
@@ -738,20 +728,25 @@ impl App {
         let spots = cur.adjustments.retouch.clone();
         let painter = ui.painter_at(response.rect);
         let Some(map) = self.uv_mapper(img_rect, scale) else { return };
-        // Screen geometry of each area: its lines (the first starts at the target), the lines
-        // taken away, the offset to the source and the radius.
+        // Screen geometry of each area: its painted lines (the first starts at the target), all
+        // strokes in order with whether they take away, the offset to the source and the radius.
         let screen = |pts: &mut dyn Iterator<Item = &[f32; 2]>| pts.map(|p| map.map(*p)).collect::<Vec<Pos2>>();
-        type Shown = (Vec<Vec<Pos2>>, Vec<Vec<Pos2>>, Vec2, f32);
+        type Shown = (Vec<Vec<Pos2>>, Vec<(Vec<Pos2>, bool)>, Vec2, f32);
         let shown: Vec<Shown> = spots
             .iter()
             .map(|s| {
-                let mut lines = vec![screen(&mut std::iter::once(&s.target).chain(&s.path))];
-                let mut erased = Vec::new();
+                let first = screen(&mut std::iter::once(&s.target).chain(&s.path));
+                let mut order = vec![(first.clone(), false)];
+                let mut lines = vec![first];
                 for st in s.strokes.iter().filter(|st| !st.points.is_empty()) {
-                    if st.erase { erased.push(screen(&mut st.points.iter())) } else { lines.push(screen(&mut st.points.iter())) }
+                    let line = screen(&mut st.points.iter());
+                    if !st.erase {
+                        lines.push(line.clone());
+                    }
+                    order.push((line, st.erase));
                 }
                 let offset = map.map(s.source) - lines[0][0];
-                (lines, erased, offset, self.radius_screen(s.radius, scale))
+                (lines, order, offset, self.radius_screen(s.radius, scale))
             })
             .collect();
         let selected = self.selected_spot.filter(|i| *i < spots.len());
@@ -769,19 +764,15 @@ impl App {
         // Over a pin the cursor shows that it can be grabbed; elsewhere the brush outline.
         let moving = matches!(self.local_drag, LocalDrag::Spot(..));
         let hovered_pin = response.hover_pos().and_then(|p| pin_hit(p));
-        for (i, (lines, erased, offset, r)) in shown.iter().enumerate() {
+        for (i, (lines, order, offset, r)) in shown.iter().enumerate() {
             let sel = selected == Some(i);
-            for line in lines {
-                paint_area(&painter, line, *r, if sel { Color32::WHITE } else { Color32::from_white_alpha(150) });
-            }
+            // One shape: what is painted less what is taken away.
+            let bands: Vec<(&[Pos2], f32, bool)> = order.iter().map(|(l, e)| (l.as_slice(), *r, *e)).collect();
+            paint_region(&painter, &bands, if sel { Color32::WHITE } else { Color32::from_white_alpha(150) });
             if sel {
-                for line in erased {
-                    paint_area(&painter, line, *r, ERASED);
-                }
-                for line in lines {
-                    let src: Vec<Pos2> = line.iter().map(|p| *p + *offset).collect();
-                    paint_area(&painter, &src, *r, crate::theme::GUIDE);
-                }
+                let moved: Vec<Vec<Pos2>> = order.iter().map(|(l, _)| l.iter().map(|p| *p + *offset).collect()).collect();
+                let src: Vec<(&[Pos2], f32, bool)> = moved.iter().zip(&bands).map(|(m, b)| (m.as_slice(), b.1, b.2)).collect();
+                paint_region(&painter, &src, crate::theme::GUIDE);
                 painter.line_segment([lines[0][0], lines[0][0] + *offset], Stroke::new(1.0, crate::theme::GUIDE));
                 pin(&painter, lines[0][0] + *offset, crate::theme::GUIDE, hovered_pin == Some((i, true)));
             }
@@ -897,8 +888,20 @@ impl App {
         } else if m.shift {
             AreaPaint::Extend
         } else {
-            self.area_paint
+            self.area_paint_now()
         }
+    }
+
+    /// Pinsel or Radierer of the chosen area, if switched on for it; off again once another
+    /// area (or none) is chosen.
+    pub(crate) fn area_paint_now(&self) -> AreaPaint {
+        if self.area_paint_on == (self.selected_spot, self.selected_removal) { self.area_paint } else { AreaPaint::New }
+    }
+
+    /// Switches Pinsel or Radierer on for the chosen area (`New`: off).
+    pub(crate) fn set_area_paint(&mut self, mode: AreaPaint) {
+        self.area_paint = mode;
+        self.area_paint_on = (self.selected_spot, self.selected_removal);
     }
 
     /// Magic Brush: paint over what should be selected; the region of similar, connected
@@ -1021,197 +1024,6 @@ impl App {
         self.active_layer = Some(cur.adjustments.layers.len() - 1);
         self.local_tool = Some(LocalTool::Brush);
         self.request_render();
-    }
-
-    /// "Retuschen": everything retouched, removals first (they are applied first), then the heal
-    /// and clone areas, as a list like the layers'. Select one to edit it (also in the viewer), change its settings, find a
-    /// new source or delete it; settings a kind does not have are shown, but disabled.
-    fn areas_section(&mut self, ui: &mut Ui) {
-        #[derive(Clone, Copy)]
-        enum Area {
-            Removal(usize),
-            Spot(usize),
-        }
-        enum Act {
-            Select(Area),
-            Delete,
-            NewSource,
-            /// From the context menu of an area (it becomes the chosen one first).
-            DeleteAt(Area),
-            SourceOf(usize),
-            Clear,
-        }
-        let mut act = None;
-        let mut changed = false;
-        let (selected_spot, selected_removal) = (self.selected_spot, self.selected_removal);
-        let Some(cur) = self.current.as_mut() else { return };
-        let adj = &mut cur.adjustments;
-        let (spots, removals) = (&mut adj.retouch, &mut adj.removals);
-        use crate::commands::hint;
-        let help = format!(
-            "Alle Retuschen dieses Bildes. Eine wählen, um sie zu ändern; im Bild ist sie dann markiert. ↺ im Kopf löscht alle.\n\nPins ziehen: Bereich (weiß) oder Quelle (gelb) verschieben · {}\n\nGewählten Bereich ändern: mit Umschalt dazumalen, mit Alt wegnehmen; entfernte Bereiche werden dann neu gefüllt.",
-            hint("Löschen", "delete-spot")
-        );
-        let area_paint = &mut self.area_paint;
-        let mut reset = false;
-        let count = spots.len() + removals.len();
-        crate::widgets::list_section(ui, RETOUCH_SECTION, &help, count, Some(&mut || reset = true), |ui| {
-            // The settings of the chosen area; without one they are shown, but disabled.
-            let mut spot_placeholder = Spot { mode: SpotMode::Heal, target: [0.0; 2], source: [0.0; 2], path: Vec::new(), strokes: Vec::new(), radius: 0.0, feather: 0.4, opacity: 1.0 };
-            let mut removal_placeholder = sk_core::params::Removal::default();
-            let names: Vec<(Area, &str, &str, f32)> = (0..removals.len())
-                .map(|i| (Area::Removal(i), icon::SCRIBBLE_LOOP, "Entfernen", removals[i].opacity))
-                .chain((0..spots.len()).map(|i| match spots[i].mode {
-                    SpotMode::Heal => (Area::Spot(i), icon::BANDAIDS, "Reparieren", spots[i].opacity),
-                    SpotMode::Clone => (Area::Spot(i), icon::STAMP, "Klonen", spots[i].opacity),
-                }))
-                .collect();
-            let spot = selected_spot.and_then(|i| spots.get_mut(i));
-            let removal = selected_removal.and_then(|i| removals.get_mut(i)).filter(|_| spot.is_none());
-            let (is_spot, is_removal) = (spot.is_some(), removal.is_some());
-            let has = is_spot || is_removal;
-            let s = spot.unwrap_or(&mut spot_placeholder);
-            let r = removal.unwrap_or(&mut removal_placeholder);
-            // As with the layers: the opacity of the chosen one above the list.
-            ui.add_enabled_ui(has, |ui| {
-                let opacity = if is_removal { &mut r.opacity } else { &mut s.opacity };
-                changed |= crate::widgets::unit_percent_row(ui, "Deckkraft", opacity, 0.0..=1.0, 1.0, Default::default());
-            });
-            ui.add_space(4.0);
-            ui.scope(|ui| {
-                ui.spacing_mut().item_spacing.y = 1.0;
-                for (n, (area, ic, kind, opacity)) in names.iter().enumerate() {
-                    let chosen = match area {
-                        Area::Removal(i) => selected_removal == Some(*i),
-                        Area::Spot(i) => selected_spot == Some(*i),
-                    };
-                    let name = format!("{kind} {}", n + 1);
-                    let (rect, resp) = crate::widgets::list_row(ui, LIST_ROW, chosen, &name);
-                    let p = ui.painter();
-                    // The kind where the layers have their eye.
-                    let icon_rect = Rect::from_min_size(rect.min + vec2(4.0, (LIST_ROW - 22.0) / 2.0), vec2(22.0, 22.0));
-                    p.text(icon_rect.center(), egui::Align2::CENTER_CENTER, *ic, egui::FontId::proportional(15.0), theme::TEXT_DIM);
-                    p.text(pos2(icon_rect.right() + 6.0, rect.center().y), egui::Align2::LEFT_CENTER, &name, egui::FontId::proportional(13.0), theme::TEXT);
-                    let percent = format!("{:.0} %", opacity * 100.0);
-                    p.text(pos2(rect.right() - 8.0, rect.center().y), egui::Align2::RIGHT_CENTER, percent, egui::FontId::proportional(11.5), theme::TEXT_DIM);
-                    if resp.clicked() {
-                        act = Some(Act::Select(*area));
-                    }
-                    crate::widgets::context_menu(&resp, |ui| {
-                        if let Area::Spot(i) = area
-                            && ui.button(format!("{}  Neue Quelle", icon::MAGIC_WAND)).clicked()
-                        {
-                            act = Some(Act::SourceOf(*i));
-                        }
-                        if ui.button(format!("{}  Löschen", icon::TRASH)).clicked() {
-                            act = Some(Act::DeleteAt(*area));
-                        }
-                    });
-                }
-            });
-            if names.is_empty() {
-                crate::widgets::hint(ui, "Noch keine: mit Reparieren, Klonen oder Entfernen über eine Stelle malen.");
-            }
-            ui.add_space(4.0);
-            // Below the list, as with the layers: what acts on the chosen one.
-            ui.horizontal(|ui| {
-                let source = ui.add_enabled(is_spot, egui::Button::new(RichText::new(icon::MAGIC_WAND).size(15.0)));
-                if source.on_hover_text("Neue Quelle: erneut automatisch wählen").clicked() {
-                    act = Some(Act::NewSource);
-                }
-                let delete = ui.add_enabled(has, egui::Button::new(RichText::new(icon::TRASH).size(15.0)));
-                if delete.on_hover_text(crate::commands::hint("Gewählte Retusche löschen", "delete-spot")).clicked() {
-                    act = Some(Act::Delete);
-                }
-            });
-            ui.add_space(6.0);
-            ui.scope(|ui| {
-                if !has {
-                    ui.disable();
-                }
-                ui.add_enabled_ui(!is_removal, |ui| {
-                    crate::widgets::field(ui, "Art", |ui| {
-                        changed |= ui.selectable_value(&mut s.mode, SpotMode::Heal, "Reparieren").changed();
-                        changed |= ui.selectable_value(&mut s.mode, SpotMode::Clone, "Klonen").changed();
-                    });
-                    let mut feather = s.feather * 100.0;
-                    if slider_row(ui, "Weichheit", &mut feather, 0.0..=100.0, 40.0, 0) {
-                        s.feather = feather / 100.0;
-                        changed = true;
-                    }
-                });
-                area_paint_row(ui, area_paint, has);
-            });
-        });
-        if reset {
-            act = Some(Act::Clear);
-        }
-        if changed {
-            self.request_render();
-        }
-        // The context menu acts on its area as the panel buttons act on the chosen one.
-        let act = match act {
-            Some(Act::DeleteAt(Area::Removal(i))) => {
-                (self.selected_spot, self.selected_removal) = (None, Some(i));
-                Some(Act::Delete)
-            }
-            Some(Act::DeleteAt(Area::Spot(i))) => {
-                (self.selected_spot, self.selected_removal) = (Some(i), None);
-                Some(Act::Delete)
-            }
-            Some(Act::SourceOf(i)) => {
-                (self.selected_spot, self.selected_removal) = (Some(i), None);
-                Some(Act::NewSource)
-            }
-            a => a,
-        };
-        match act {
-            Some(Act::Select(Area::Removal(i))) => {
-                self.selected_removal = Some(i);
-                self.selected_spot = None;
-                // The outlines are shown with the tool.
-                if self.local_tool != Some(LocalTool::Remove) {
-                    self.set_local_tool(LocalTool::Remove);
-                }
-            }
-            Some(Act::Select(Area::Spot(i))) => {
-                self.selected_spot = Some(i);
-                self.selected_removal = None;
-                // The pins are shown with the heal and clone tools.
-                if !matches!(self.local_tool, Some(LocalTool::Heal | LocalTool::Clone)) {
-                    let heal = self.current.as_ref().and_then(|c| c.adjustments.retouch.get(i)).is_some_and(|s| s.mode == SpotMode::Heal);
-                    self.set_local_tool(if heal { LocalTool::Heal } else { LocalTool::Clone });
-                }
-            }
-            Some(Act::Delete) => {
-                // The list shows a chosen heal or clone area before a chosen removal.
-                if self.selected_spot.is_some() {
-                    self.selected_removal = None;
-                    self.delete_selected_spot();
-                } else {
-                    self.delete_selected_removal();
-                }
-            }
-            Some(Act::NewSource) => {
-                let Some(i) = self.selected_spot else { return };
-                let Some(cur) = self.current.as_ref() else { return };
-                let Some(s) = cur.adjustments.retouch.get(i) else { return };
-                let added = s.strokes.iter().filter(|st| !st.erase).flat_map(|st| st.points.iter().copied());
-                let pts: Vec<[f32; 2]> = std::iter::once(s.target).chain(s.path.iter().copied()).chain(added).collect();
-                let source = mask::auto_source_area(&cur.preview, &pts, s.radius);
-                self.edit(|a| a.retouch[i].source = source);
-            }
-            Some(Act::Clear) => {
-                self.selected_spot = None;
-                self.selected_removal = None;
-                self.edit(|a| {
-                    a.retouch.clear();
-                    a.removals.clear();
-                });
-            }
-            // Turned into Delete and NewSource above.
-            Some(Act::DeleteAt(_) | Act::SourceOf(_)) | None => {}
-        }
     }
 
     /// Looks for dust and blemishes in the background (see `sk_core::spots`).
@@ -1425,54 +1237,7 @@ impl App {
 
     // ---------------------------------------------------------------- tab
 
-    /// Three groups, top to bottom: which layer, where it acts (mask), what it does (adjustments).
-    /// Retouching: heal, clone and generative removal work on the image, not on a layer.
-    pub fn retouch_tab(&mut self, ui: &mut Ui) {
-        if self.current.is_none() {
-            crate::widgets::no_image(ui);
-            return;
-        }
-        use crate::commands::{hint, shortcut_of};
-        let help = format!(
-            "{}: übernimmt Struktur aus der Umgebung und gleicht Farbe und Helligkeit an. {}: kopiert eine Quelle 1:1. {}: die KI füllt die Stelle passend zur Umgebung. Jeweils über die Stelle malen.\n\n{} und {} oder Ziehen mit der rechten Maustaste: Pinselgröße und Härte.\n\nStaub und Flecken finden: repariert kleine dunkle Flecken auf ruhigen Flächen, etwa Sensorstaub.",
-            hint("Reparieren", "tool-heal"),
-            hint("Klonen", "tool-clone"),
-            hint("Entfernen", "tool-remove"),
-            shortcut_of("brush-smaller"),
-            shortcut_of("brush-larger")
-        );
-        let downloading = self.ai_download_shown(AiFeature::Inpaint);
-        let cancel = self.job_cancel(None, Some(&AiFeature::Inpaint.job_label()));
-        let mut find = false;
-        crate::widgets::section_help(ui, "Werkzeuge", &help, None, |ui| {
-            self.tool_tiles(ui, &[LocalTool::Heal, LocalTool::Clone, LocalTool::Remove]);
-            if let Some(p) = downloading {
-                crate::ai_models::download_progress(ui, AiFeature::Inpaint, p, cancel);
-            }
-            ui.add_space(6.0);
-            let searching = self.spot_search.is_some();
-            ui.horizontal(|ui| {
-                if ui.add_enabled(!searching, egui::Button::new(format!("{}  Staub und Flecken finden", crate::theme::icon::BROOM))).clicked() {
-                    find = true;
-                }
-                if searching {
-                    if let Some(c) = &self.spot_cancel {
-                        crate::widgets::cancel_button(ui, c);
-                    }
-                }
-            });
-            let mut percent = self.spot_sensitivity * 100.0;
-            if slider_row(ui, "Empfindlichkeit", &mut percent, 0.0..=100.0, 50.0, 0) {
-                self.spot_sensitivity = percent / 100.0;
-            }
-        });
-        if find {
-            self.find_spots();
-        }
-        self.areas_section(ui);
-    }
-
-    /// The tool tiles (three per row) and the settings of the active one.
+    /// The tool tiles (three per row); their settings are in the bar in the image.
     pub(crate) fn tool_tiles(&mut self, ui: &mut Ui, tools: &[LocalTool]) {
         let gap = 4.0;
         let w = ((ui.available_width() - 2.0 * gap) / 3.0).floor();
@@ -1485,6 +1250,7 @@ impl App {
                     let key = crate::commands::get(id).map(|c| c.shortcut()).unwrap_or_default();
                     let hover = crate::commands::hint(name, id);
                     let ai = matches!(t, LocalTool::Object | LocalTool::Remove);
+                    let hover = if t == LocalTool::Object { format!("{hover}\n\n{OBJECT_CLICKS}") } else { hover };
                     let hover = if ai { format!("{hover}\n\n{}", crate::widgets::AI_HINT) } else { hover };
                     if crate::widgets::tool_tile(ui, ic, name, &key, self.local_tool == Some(t), ai, w).on_hover_text(hover).clicked() {
                         tool_click = Some(t);
@@ -1492,31 +1258,15 @@ impl App {
                 }
             });
         }
-        ui.add_space(4.0);
-        let mut brushes_changed = false;
-        match self.local_tool.filter(|t| tools.contains(t)) {
-            Some(t @ (LocalTool::Brush | LocalTool::Eraser)) => {
-                brushes_changed |= brush_controls(ui, self.brushes.of(Some(t)), Some(t), true);
-            }
-            Some(t @ (LocalTool::Heal | LocalTool::Clone)) => {
-                brushes_changed |= brush_controls(ui, self.brushes.of(Some(t)), Some(t), false);
-            }
-            Some(LocalTool::Remove) => {
-                brushes_changed |= brush_controls(ui, &mut self.brushes.remove, Some(LocalTool::Remove), true);
-            }
-            Some(LocalTool::Magic) => {
-                let d = Brushes::defaults_of(Some(LocalTool::Magic));
-                brushes_changed |= slider_row(ui, "Größe", &mut self.brushes.magic.size, 2.0..=400.0, d.size, 0);
-                crate::widgets::unit_percent_row(ui, "Toleranz", &mut self.magic_tolerance, 0.0..=1.0, 0.3, Default::default());
-            }
-            Some(LocalTool::Object) => self.object_controls(ui),
-            _ => {}
+        if self.local_tool == Some(LocalTool::Object)
+            && tools.contains(&LocalTool::Object)
+            && let Some(p) = self.ai_download_shown(AiFeature::Object)
+        {
+            crate::ai_models::download_progress(ui, AiFeature::Object, p, self.job_cancel(None, Some(&AiFeature::Object.job_label())));
         }
+        ui.add_space(4.0);
         if let Some(t) = tool_click {
             self.set_local_tool(t);
-        }
-        if brushes_changed {
-            self.brushes_changed_at = Some(std::time::Instant::now());
         }
     }
 
@@ -1686,19 +1436,6 @@ pub(crate) fn layer_changes(a: &LayerAdjustments) -> Vec<Change> {
 /// Outline of what a stroke takes away from a retouch or removal area.
 pub(crate) const ERASED: Color32 = Color32::from_rgb(235, 90, 90);
 
-/// What painting does with a chosen area: a new one, extend it or make it smaller.
-pub(crate) fn area_paint_row(ui: &mut Ui, mode: &mut AreaPaint, chosen: bool) {
-    crate::widgets::field(ui, "Malen", |ui| {
-        ui.selectable_value(mode, AreaPaint::New, "Neu").on_hover_text("Ein neuer Bereich");
-        ui.add_enabled_ui(chosen, |ui| {
-            ui.selectable_value(mode, AreaPaint::Extend, "Erweitern").on_hover_text("Zum gewählten Bereich hinzufügen · Umschalt beim Malen");
-            ui.selectable_value(mode, AreaPaint::Shrink, "Verkleinern").on_hover_text("Vom gewählten Bereich wegnehmen · Alt beim Malen");
-        })
-        .response
-        .on_disabled_hover_text("Erst einen Bereich wählen");
-    });
-}
-
 /// Brush outline: the size, and inside it where the hard core ends.
 pub fn brush_cursor(painter: &egui::Painter, p: Pos2, b: &BrushSettings) {
     painter.circle_stroke(p, b.size, Stroke::new(2.5, Color32::from_black_alpha(120)));
@@ -1713,8 +1450,8 @@ const BRUSH_ADJUST_HARDNESS_SPAN: f32 = 200.0;
 
 /// Pointer distance (screen points) within which a pin of a retouch area is grabbed.
 pub(crate) const PIN_HIT: f32 = 9.0;
-/// Height of a row of the layer and retouch lists.
-const LIST_ROW: f32 = 26.0;
+/// How the object tool is used (its tooltip).
+const OBJECT_CLICKS: &str = "Klick: Objekt auswählen · weitere Klicks verfeinern · Umschalt+Klick: weiteres Objekt · Alt+Klick: Teil ausnehmen";
 /// Title of the list of retouches in the Retusche tab.
 pub(crate) const RETOUCH_SECTION: &str = "Retuschen";
 
@@ -1742,7 +1479,13 @@ pub(crate) fn pressed_on(ui: &Ui, response: &Response) -> Option<Pos2> {
 /// (a circle for one point). Only the outer edge is drawn, so strokes that go back and forth
 /// stay one clean shape; a dark halo keeps it visible on any image.
 pub(crate) fn paint_area(painter: &egui::Painter, pts: &[Pos2], r: f32, color: Color32) {
-    let pieces = cached_outline(painter.ctx(), pts, r);
+    paint_region(painter, &[(pts, r, false)], color);
+}
+
+/// Outline of an area made of several strokes `(points, radius, takes away)` in the order
+/// painted: one shape, each stroke adding to or taking from what the ones before left.
+pub(crate) fn paint_region(painter: &egui::Painter, bands: &[(&[Pos2], f32, bool)], color: Color32) {
+    let pieces = cached_outline(painter.ctx(), bands);
     for s in pieces.iter() {
         painter.line_segment(*s, Stroke::new(3.0, Color32::from_black_alpha(110)));
     }
@@ -1751,17 +1494,19 @@ pub(crate) fn paint_area(painter: &egui::Painter, pts: &[Pos2], r: f32, color: C
     }
 }
 
-/// Outlines computed in recent frames, by their points and radius: while nothing is edited,
-/// zoomed or panned, the areas look the same every frame.
+/// Outlines computed in recent frames, by their strokes: while nothing is edited, zoomed or
+/// panned, the areas look the same every frame.
 #[derive(Clone, Default)]
 struct OutlineCache(std::collections::HashMap<u64, (u64, std::sync::Arc<Vec<[Pos2; 2]>>)>);
 
-fn cached_outline(ctx: &egui::Context, pts: &[Pos2], r: f32) -> std::sync::Arc<Vec<[Pos2; 2]>> {
+fn cached_outline(ctx: &egui::Context, bands: &[(&[Pos2], f32, bool)]) -> std::sync::Arc<Vec<[Pos2; 2]>> {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    r.to_bits().hash(&mut h);
-    for p in pts {
-        (p.x.to_bits(), p.y.to_bits()).hash(&mut h);
+    for (pts, r, erase) in bands {
+        (r.to_bits(), erase, pts.len()).hash(&mut h);
+        for p in pts.iter() {
+            (p.x.to_bits(), p.y.to_bits()).hash(&mut h);
+        }
     }
     let key = h.finish();
     let frame = ctx.cumulative_pass_nr();
@@ -1775,7 +1520,7 @@ fn cached_outline(ctx: &egui::Context, pts: &[Pos2], r: f32) -> std::sync::Arc<V
     }) {
         return hit;
     }
-    let outline = std::sync::Arc::new(area_outline(pts, r));
+    let outline = std::sync::Arc::new(region_outline(bands));
     ctx.data_mut(|d| {
         let cache = d.get_temp_mut_or_default::<OutlineCache>(id);
         // Drop what was not drawn in the last frames.
@@ -1785,58 +1530,82 @@ fn cached_outline(ctx: &egui::Context, pts: &[Pos2], r: f32) -> std::sync::Arc<V
     outline
 }
 
-/// The pieces of the outline of [`paint_area`].
+#[cfg(test)]
 fn area_outline(pts: &[Pos2], r: f32) -> Vec<[Pos2; 2]> {
-    if pts.is_empty() || r < 0.5 {
-        return Vec::new();
+    region_outline(&[(pts, r, false)])
+}
+
+/// The pieces of the outline of [`paint_region`]: the parts of each stroke's edge where it
+/// makes a difference to the result.
+fn region_outline(bands: &[(&[Pos2], f32, bool)]) -> Vec<[Pos2; 2]> {
+    struct Band {
+        pts: Vec<Pos2>,
+        r: f32,
+        erase: bool,
+        /// Segments (a single point counts as one) with their bounding boxes grown by the
+        /// radius: a sample only needs the few segments whose box contains it.
+        segments: Vec<(Pos2, Pos2, Rect)>,
+        bounds: Rect,
     }
-    // Long strokes: every few points is enough for the outline (they lie 0.3 r apart).
-    let step = pts.len().div_ceil(96);
-    let mut pts: Vec<Pos2> = pts.iter().step_by(step).copied().collect();
-    if step > 1 {
-        pts.extend(pts.last().copied());
-    }
-    let pts = &pts;
-    // Segments (a single point counts as one) with their bounding boxes grown by the radius:
-    // a sample only needs the few segments whose box contains it.
-    let segments: Vec<(Pos2, Pos2, Rect)> = if pts.len() == 1 {
-        vec![(pts[0], pts[0], Rect::from_center_size(pts[0], Vec2::splat(2.0 * r)))]
-    } else {
-        pts.windows(2).map(|w| (w[0], w[1], Rect::from_two_pos(w[0], w[1]).expand(r))).collect()
-    };
-    let inside = |p: Pos2| {
-        let limit = (r - 0.75).powi(2);
-        segments.iter().any(|(a, b, bounds)| bounds.contains(p) && (p - closest_on_segment(p, *a, *b)).length_sq() < limit)
-    };
-    let mut pieces: Vec<[Pos2; 2]> = Vec::new();
-    let mut trace = |samples: &[Pos2]| {
-        let mut prev_out = None;
-        for &q in samples {
-            let out = !inside(q);
-            if out && let Some(Some(prev)) = prev_out {
-                pieces.push([prev, q]);
+    let bands: Vec<Band> = bands
+        .iter()
+        .filter(|(pts, r, _)| !pts.is_empty() && *r >= 0.5)
+        .map(|&(pts, r, erase)| {
+            // Long strokes: every few points is enough for the outline (they lie 0.3 r apart).
+            let step = pts.len().div_ceil(96);
+            let mut pts: Vec<Pos2> = pts.iter().step_by(step).copied().collect();
+            if step > 1 {
+                pts.extend(pts.last().copied());
             }
-            prev_out = Some(out.then_some(q));
-        }
+            let segments: Vec<(Pos2, Pos2, Rect)> = if pts.len() == 1 {
+                vec![(pts[0], pts[0], Rect::from_center_size(pts[0], Vec2::splat(2.0 * r)))]
+            } else {
+                pts.windows(2).map(|w| (w[0], w[1], Rect::from_two_pos(w[0], w[1]).expand(r))).collect()
+            };
+            let bounds = segments.iter().fold(Rect::NOTHING, |b, s| b.union(s.2));
+            Band { pts, r, erase, segments, bounds }
+        })
+        .collect();
+    let inside_band = |b: &Band, p: Pos2| {
+        let limit = (b.r - 0.75).powi(2);
+        b.bounds.contains(p) && b.segments.iter().any(|(a, c, bounds)| bounds.contains(p) && (p - closest_on_segment(p, *a, *c)).length_sq() < limit)
     };
-    // Candidate edges: a circle around each point and both sides of each segment; the parts
-    // inside the area are dropped.
-    let n = ((std::f32::consts::TAU * r) / 3.0).clamp(16.0, 128.0) as usize;
-    for &c in pts {
-        let circle: Vec<Pos2> = (0..=n).map(|k| c + Vec2::angled(k as f32 / n as f32 * std::f32::consts::TAU) * r).collect();
-        trace(&circle);
-    }
-    for w in pts.windows(2) {
-        let d = w[1] - w[0];
-        let len = d.length();
-        if len < 0.5 {
-            continue;
+    // Whether `p` belongs to the area, the strokes applied in order; `with`: counting that
+    // stroke as covering `p`.
+    let covered = |p: Pos2, with: Option<usize>| bands.iter().enumerate().fold(false, |on, (i, b)| if with == Some(i) || inside_band(b, p) { !b.erase } else { on });
+    let mut pieces: Vec<[Pos2; 2]> = Vec::new();
+    for (bi, b) in bands.iter().enumerate() {
+        // On a stroke's edge (just outside it): an edge of the area where the stroke decides.
+        let keep = |q: Pos2| covered(q, Some(bi)) != covered(q, None);
+        let mut trace = |samples: &[Pos2]| {
+            let mut prev: Option<Option<Pos2>> = None;
+            for &q in samples {
+                let on = keep(q);
+                if on && let Some(Some(p)) = prev {
+                    pieces.push([p, q]);
+                }
+                prev = Some(on.then_some(q));
+            }
+        };
+        // Candidate edges: a circle around each point and both sides of each segment.
+        let r = b.r;
+        let n = ((std::f32::consts::TAU * r) / 3.0).clamp(16.0, 128.0) as usize;
+        for &c in &b.pts {
+            let circle: Vec<Pos2> = (0..=n).map(|k| c + Vec2::angled(k as f32 / n as f32 * std::f32::consts::TAU) * r).collect();
+            trace(&circle);
         }
-        let normal = vec2(-d.y, d.x) / len * r;
-        let m = (len / 3.0).ceil().max(1.0) as usize;
-        for side in [normal, -normal] {
-            let line: Vec<Pos2> = (0..=m).map(|k| w[0] + side + d * (k as f32 / m as f32)).collect();
-            trace(&line);
+        for w in b.pts.windows(2) {
+            let d = w[1] - w[0];
+            let len = d.length();
+            if len < 0.5 {
+                continue;
+            }
+            let normal = vec2(-d.y, d.x) / len * r;
+            let m = (len / 3.0).ceil().max(1.0) as usize;
+            for side in [normal, -normal] {
+                let line: Vec<Pos2> = (0..=m).map(|k| w[0] + side + d * (k as f32 / m as f32)).collect();
+                trace(&line);
+            }
         }
     }
     pieces
@@ -1888,6 +1657,29 @@ mod tests {
         assert!(a.color_balance.is_neutral());
         assert!(a.curves.is_identity());
         assert_eq!(layer_changes(&a).len(), 2);
+    }
+
+    /// An area of several strokes is outlined as one shape: no edge inside another painted
+    /// stroke, none inside what is taken away, and the cut where something is taken away.
+    #[test]
+    fn region_outline_is_one_shape() {
+        let a = [egui::pos2(0.0, 0.0), egui::pos2(40.0, 0.0)];
+        let b = [egui::pos2(30.0, 0.0), egui::pos2(30.0, 40.0)];
+        let cut = [egui::pos2(0.0, -20.0)];
+        let pieces = region_outline(&[(&a, 10.0, false), (&b, 10.0, false), (&cut, 12.0, true)]);
+        assert!(!pieces.is_empty());
+        let dist = |p: Pos2, l: &[Pos2]| if l.len() == 1 { (p - l[0]).length() } else { (p - closest_on_segment(p, l[0], l[1])).length() };
+        for [p, q] in &pieces {
+            let mid = p.lerp(*q, 0.5);
+            assert!(dist(mid, &a) > 9.0 || dist(mid, &b) > 9.0, "Kante zwischen zwei Strichen bei {mid:?}");
+            assert!(dist(mid, &cut) > 11.0, "Kante im Weggenommenen bei {mid:?}");
+        }
+        // The cut shows as part of the edge (inside the first stroke).
+        assert!(pieces.iter().any(|[p, _]| (dist(*p, &cut) - 12.0).abs() < 0.5 && dist(*p, &a) < 9.5));
+        // Painted over the cut afterwards: it is part of the area again, a plain circle.
+        let dot = [egui::pos2(0.0, 0.0)];
+        let pieces = region_outline(&[(&dot, 10.0, false), (&dot, 12.0, true), (&dot, 10.0, false)]);
+        assert!(!pieces.is_empty() && pieces.iter().all(|[p, _]| (p.to_vec2().length() - 10.0).abs() < 0.01), "wieder dazugemalt");
     }
 
     /// The outline of a stroke that goes back and forth is only its outer edge: no piece of it

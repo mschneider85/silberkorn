@@ -36,6 +36,8 @@ mod hot_folder;
 mod import;
 mod jobs;
 mod layer_panel;
+mod retouch_panel;
+mod style_panel;
 mod layer_target;
 mod layers;
 mod licenses;

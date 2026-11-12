@@ -15,9 +15,9 @@ Drei Werkzeuge, die jeweils über die Stelle gemalt werden; ein einfacher Klick 
 - **Größe**: Durchmesser. {taste:brush-smaller} und {taste:brush-larger} ändern sie schrittweise; Ziehen mit der rechten Maustaste ändert Größe (links und rechts) und Härte (hoch und runter) im Bild.
 - **Härte**: weiche oder harte Kante.
 - **Deckkraft**: wie stark die Retusche wirkt.
-- Bei **Entfernen** zusätzlich **Fluss**, **Kanten beachten** und **Toleranz** wie beim Maskenpinsel, siehe [Pinsel einstellen](ebenen-masken#Pinsel einstellen).
+- Bei **Entfernen** zusätzlich **Fluss**, **Kanten beachten** und **Toleranz** wie beim Maskenpinsel, hinter dem Knopf **Mehr**; siehe [Pinsel einstellen](ebenen-masken#Pinsel einstellen).
 
-Größe, Härte und Deckkraft stehen auch in der Leiste unten im Bild, zusammen mit den drei Werkzeugen, **Löschen** für die gewählte Retusche und **Fertig** (Esc).
+Die Einstellungen stehen in der Leiste unten im Bild, zusammen mit den drei Werkzeugen und **Fertig** (Esc).
 
 Die Stelle großzügig, aber ganz übermalen, samt Schatten und Spiegelungen des Objekts.
 
@@ -29,13 +29,13 @@ Eine Quelle von Hand festlegen wie beim Kopierstempel:
 
 - **Alt-Klick** (ohne zu ziehen) ins Bild legt die Quelle fest: für den gewählten Bereich sofort, ohne gewählten Bereich für den nächsten Strich. Ein Fadenkreuz zeigt sie bis dahin.
 - Den gelben Pin auf eine passende Stelle ziehen.
-- **Neue Quelle** in der Liste sucht automatisch eine andere.
+- **Neu wählen** bei **Quelle** in der gewählten Retusche sucht automatisch eine andere.
 
 ## Staub und Flecken finden
 
-**Staub und Flecken finden** sucht kleine, runde, dunkle Flecken auf ruhigen Flächen wie Himmel, Wänden oder Haut und legt für jeden eine Reparieren-Stelle an. Typisch für Sensorstaub bei kleiner Blende.
+**Finden** in der Zeile **Staub und Flecken** sucht kleine, runde, dunkle Flecken auf ruhigen Flächen wie Himmel, Wänden oder Haut und legt für jeden eine Reparieren-Stelle an. Typisch für Sensorstaub bei kleiner Blende.
 
-- **Empfindlichkeit**: höher findet auch schwächere Flecken, aber eher auch falsche.
+- **Empfindlichkeit** (die Zeile aufklappen): höher findet auch schwächere Flecken, aber eher auch falsche.
 - Bereits reparierte Stellen werden übersprungen.
 - Danach zeigt das Werkzeug Reparieren alle Stellen zum Prüfen; Falsche mit {taste:delete-spot} löschen.
 
@@ -43,18 +43,18 @@ Den Befehl gibt es auch in der Befehlssuche (Strg+K).
 
 ## Retuschen
 
-Alle Retuschen des Bildes stehen in einer Liste wie die Ebenen: Art, Name und Deckkraft, die entfernten zuerst.
+Alle Retuschen des Bildes stehen als Karten wie die Ebenen, die entfernten zuerst: ein Ausschnitt der Stelle mit dem Symbol der Art, Name, Weichheit (bei Entfernen „KI-Füllung“) und Deckkraft. Ohne Retusche fehlt der Abschnitt.
 
-- Klick in der Liste oder auf den Pin im Bild wählt einen Bereich.
-- **Deckkraft** über der Liste ändert die Stärke des gewählten Bereichs.
-- **Art** wechselt zwischen Reparieren und Klonen, **Weichheit** ändert die Kante.
-- **Neue Quelle** wählt die Quelle erneut automatisch.
-- **Löschen** oder {taste:delete-spot} löscht den gewählten Bereich, ↺ im Kopf alle.
+- Klick auf eine Karte oder auf den Pin im Bild wählt einen Bereich. Die gewählte Karte zeigt seine Einstellungen.
+- **Deckkraft**: Stärke des Bereichs.
+- **Reparieren | Klonen** wechselt die Art, **Weichheit** ändert die Kante.
+- **Quelle**: **Neu wählen** sucht die Quelle erneut automatisch.
+- **Löschen** unten in der gewählten Karte oder {taste:delete-spot} löscht sie, ↺ im Kopf alle. Das Kontextmenü einer Karte hat Löschen auch.
 
-Was eine Art nicht hat, ist ausgegraut, etwa die Quelle bei Entfernen.
+Entfernte Bereiche haben weder Art noch Quelle.
 
 ### Bereich erweitern oder verkleinern
 
-Einen gewählten Bereich ändert man, indem man mit gedrückter Umschalttaste dazumalt oder mit gedrückter Alt-Taste einen Teil wegnimmt. Dasselbe geht über **Malen** in der Liste: **Neu**, **Erweitern** oder **Verkleinern**. Ein entfernter Bereich wird danach mit allen seinen Strichen neu gefüllt.
+Jeder Strich ergibt eine neue Retusche. Um eine gewählte zu ändern, in ihrer Karte **Pinsel** (dazumalen) oder **Radierer** (wegnehmen) einschalten; ein zweiter Klick schaltet aus, ebenso die Wahl einer anderen Retusche. Ohne Umschalten geht es mit gedrückter Umschalttaste (dazumalen) oder Alt-Taste (wegnehmen). Ein entfernter Bereich wird danach mit allen seinen Strichen neu gefüllt.
 
 > Bei Entfernen zeigt das Bild umrandet, was entfernt wurde. Der erste Gebrauch lädt das KI-Modell; mehr unter [KI-Werkzeuge](ki-werkzeuge#Entfernen).

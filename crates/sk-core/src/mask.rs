@@ -453,9 +453,11 @@ impl Shape {
 }
 
 struct PreparedSpot {
-    /// The area, and what strokes took away from it.
+    /// Everything painted (the area as far as it can reach).
     area: Shape,
-    erased: Option<Shape>,
+    /// After something was taken away: the strokes in order, runs of the same kind together
+    /// (`true`: taken away), each acting on what the ones before left.
+    steps: Vec<(Shape, bool)>,
     offset: (f32, f32),
     r: f32,
     inner: f32,
@@ -686,17 +688,19 @@ fn closest_on_segment(p: (f32, f32), a: (f32, f32), b: (f32, f32)) -> (f32, f32)
 
 type Line = Vec<(f32, f32)>;
 
-/// The area's lines in source pixels: the first one starts at the target; then the lines
-/// that took parts away.
-fn spot_lines(s: &Spot, sw: f32, sh: f32) -> (Vec<Line>, Vec<Line>) {
+/// The area's lines in source pixels in the order painted, the first starting at the target,
+/// runs of the same kind together: (lines, taken away).
+fn spot_lines(s: &Spot, sw: f32, sh: f32) -> Vec<(Vec<Line>, bool)> {
     let px = |p: &[f32; 2]| (p[0] * sw - 0.5, p[1] * sh - 0.5);
-    let mut area = vec![std::iter::once(&s.target).chain(&s.path).map(px).collect::<Vec<_>>()];
-    let mut erased = Vec::new();
+    let mut runs = vec![(vec![std::iter::once(&s.target).chain(&s.path).map(px).collect::<Vec<_>>()], false)];
     for st in s.strokes.iter().filter(|st| !st.points.is_empty()) {
         let line = st.points.iter().map(px).collect();
-        if st.erase { erased.push(line) } else { area.push(line) }
+        match runs.last_mut() {
+            Some((lines, erase)) if *erase == st.erase => lines.push(line),
+            _ => runs.push((vec![line], st.erase)),
+        }
     }
-    (area, erased)
+    runs
 }
 
 /// Applies heal/clone areas to a resampled region (camera space).
@@ -709,7 +713,8 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
     let prepared: Vec<PreparedSpot> = spots
         .iter()
         .map(|s| {
-            let (lines, erased_lines) = spot_lines(s, sw, sh);
+            let runs = spot_lines(s, sw, sh);
+            let lines: Vec<Line> = runs.iter().filter(|(_, e)| !e).flat_map(|(l, _)| l.iter().cloned()).collect();
             let target = lines[0][0];
             let source = (s.source[0] * sw - 0.5, s.source[1] * sh - 0.5);
             let offset = (source.0 - target.0, source.1 - target.1);
@@ -724,7 +729,7 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
             let output = output_box(geo, bounds);
             PreparedSpot {
                 area,
-                erased: Shape::new(&erased_lines, r),
+                steps: if runs.len() > 1 { runs.iter().filter_map(|(l, e)| Shape::new(l, r).map(|sh| (sh, *e))).collect() } else { Vec::new() },
                 offset,
                 r,
                 inner: r * (1.0 - s.feather.clamp(0.0, 1.0)),
@@ -758,14 +763,19 @@ pub fn apply_retouch(img: &mut LinearImage, src: &LinearImage, geo: &GeoMap, reg
                 if d >= s.r {
                     continue;
                 }
-                let mut w = (1.0 - smoothstep(s.inner, s.r, d)) * s.opacity;
-                // Taken away again: with the same soft edge.
-                if let Some(e) = &s.erased {
-                    w *= smoothstep(s.inner, s.r, e.distance((sx, sy)));
+                let mut w = 1.0 - smoothstep(s.inner, s.r, d);
+                // Taken away and painted again, in order, with the same soft edge.
+                if !s.steps.is_empty() {
+                    w = 0.0;
+                    for (shape, erase) in &s.steps {
+                        let c = 1.0 - smoothstep(s.inner, s.r, shape.distance((sx, sy)));
+                        w = if *erase { w * (1.0 - c) } else { w.max(c) };
+                    }
                     if w <= 0.0 {
                         continue;
                     }
                 }
+                let w = w * s.opacity;
                 let v = bilinear(src, sx + s.offset.0, sy + s.offset.1);
                 // The source pixels lack the vignetting correction: heal matches the target's
                 // uncorrected surroundings and then gets the target's correction, clone keeps the
@@ -1292,11 +1302,18 @@ mod tests {
             opacity: 1.0,
         };
         let mut img = src.clone();
-        apply_retouch(&mut img, &src, &geo, region, &[spot]);
+        apply_retouch(&mut img, &src, &geo, region, &[spot.clone()]);
         let at = |x: usize, y: usize| img.data[y * w + x][0];
         assert!(at(20, 10) > 0.7 && at(15, 25) > 0.7, "Linie und Erweiterung kopiert");
         assert!(at(6, 10) < 0.2, "weggenommen: {}", at(6, 10));
         assert!(at(25, 25) < 0.2, "außerhalb unverändert");
+
+        // Painted there again afterwards: it comes back.
+        let mut again = spot.clone();
+        again.strokes.push(SpotStroke { points: vec![p(5.0, 10.0), p(8.0, 10.0)], erase: false });
+        let mut img = src.clone();
+        apply_retouch(&mut img, &src, &geo, region, &[again]);
+        assert!(img.data[10 * w + 6][0] > 0.7, "wieder dazugemalt: {}", img.data[10 * w + 6][0]);
     }
 
     /// A removal shows its patch with its opacity.

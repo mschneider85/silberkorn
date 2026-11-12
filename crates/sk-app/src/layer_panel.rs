@@ -56,12 +56,6 @@ impl App {
         let active = self.active_layer.filter(|i| self.current.as_ref().is_some_and(|c| *i < c.adjustments.layers.len()));
         let mut action = None;
         widgets::nav_header(ui, "Ebenen", "Ebenen", |ui| {
-            let del = egui::Button::new(RichText::new(icon::TRASH).size(14.0).color(theme::TEXT_DIM)).frame_when_inactive(false).min_size(vec2(24.0, 22.0));
-            if ui.add_enabled(active.is_some(), del).on_hover_text(crate::commands::hint("Gewählte Ebene löschen", "delete-spot")).clicked()
-                && let Some(li) = active
-            {
-                action = Some(LayerAction::Delete(li));
-            }
             let plus = widgets::menu_button(ui, RichText::new(icon::PLUS).size(15.0).color(theme::TEXT_DIM), |ui| {
                 if let Some(a) = new_layer_menu(ui, &look_names, &style_names) {
                     action = Some(a);
@@ -110,7 +104,12 @@ impl App {
                         if let Some(t) = changes_chips(ui, l, &mut changed) {
                             jump = Some(t);
                         }
-                        ui.add_space(4.0);
+                        ui.add_space(6.0);
+                        crate::output::card_buttons(ui, |ui| {
+                            if ui.add(crate::output::card_button(icon::TRASH, "Löschen")).on_hover_text(crate::commands::hint("Diese Ebene löschen", "delete-spot")).clicked() {
+                                action = Some(LayerAction::Delete(li));
+                            }
+                        });
                     }
                 });
             });

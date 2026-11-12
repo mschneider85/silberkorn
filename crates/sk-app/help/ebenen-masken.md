@@ -10,7 +10,7 @@ Jede Ebene ist eine Karte, die oberste zuerst, ganz unten der Hintergrund. Die K
 
 - Klick wählt eine Ebene, Doppelklick oder ein Klick auf den Namen der gewählten benennt sie um.
 - Das Auge blendet eine Ebene aus. Alt-Klick auf das Auge zeigt nur diese Ebene, ein zweiter wieder alle.
-- Das Papierkorb-Symbol in der Überschrift löscht die gewählte Ebene ({taste:delete-spot}).
+- **Löschen** unten in der gewählten Karte löscht die Ebene ({taste:delete-spot}).
 
 Die Karte der gewählten Ebene klappt auf:
 
@@ -58,7 +58,7 @@ Darunter eine Leiste:
 
 ### Pinsel einstellen
 
-Pinsel und Radierer haben eigene, gespeicherte Einstellungen:
+Pinsel und Radierer haben eigene, gespeicherte Einstellungen. Sie stehen in der Leiste unten im Bild; Fluss, Kanten beachten und Toleranz hinter dem Knopf **Mehr**:
 
 - **Größe**: Durchmesser. {taste:brush-smaller} und {taste:brush-larger} ändern sie schrittweise.
 - **Härte**: weiche oder harte Kante.
@@ -68,7 +68,7 @@ Pinsel und Radierer haben eigene, gespeicherte Einstellungen:
 
 Ziehen mit der rechten Maustaste ändert die Größe (nach links und rechts) und die Härte (nach oben und unten) direkt im Bild.
 
-Solange ein Werkzeug der Maske gewählt ist, steht unten im Bild eine Leiste: die Werkzeuge nebeneinander (etwa zum Wechsel zwischen Pinsel und Radierer), **Größe**, **Härte** und **Deckkraft** des Pinsels (beim Zauberpinsel **Größe** und **Toleranz**), **Maske anzeigen**, bei einem gewählten Verlauf **Löschen** und **Fertig** (Esc), das das Werkzeug beendet. Was gemalt ist, bleibt. Am Anfasser links lässt sich die Leiste nach oben oder unten ziehen, jeweils links, mittig oder rechts.
+Solange ein Werkzeug der Maske gewählt ist, steht unten im Bild eine Leiste: die Werkzeuge nebeneinander (etwa zum Wechsel zwischen Pinsel und Radierer), **Größe**, **Härte** und **Deckkraft** des Pinsels, dazu **Mehr** mit Fluss, Kanten beachten und Toleranz (beim Zauberpinsel **Größe** und **Toleranz**), **Maske anzeigen**, bei einem gewählten Verlauf **Löschen** und **Fertig** (Esc), das das Werkzeug beendet. Was gemalt ist, bleibt. Am Anfasser links lässt sich die Leiste nach oben oder unten ziehen, jeweils links, mittig oder rechts.
 
 ### Verläufe ändern
 

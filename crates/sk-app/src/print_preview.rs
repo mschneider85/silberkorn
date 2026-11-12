@@ -444,7 +444,7 @@ impl App {
         let colors = s.profile.as_ref().map_or_else(|| "Drucker steuert".to_string(), |p| sk_core::softproof::profile_name(p));
         crate::output::fold_card(ui, "Farben", theme::icon::PALETTE, &colors, None, |ui| {
             widgets::field(ui, "Profil", |ui| {
-                let r = egui::ComboBox::from_id_salt("print-profile").selected_text(colors.clone()).width(ui.available_width() - 8.0).show_ui(ui, |ui| {
+                let r = egui::ComboBox::from_id_salt("print-profile").selected_text(colors.clone()).width(ui.available_width() - 8.0).truncate().show_ui(ui, |ui| {
                     ui.selectable_value(&mut s.profile, None, "Drucker steuert").on_hover_text("Der Drucker bekommt sRGB und rechnet die Farben selbst um");
                     let known = &self.softproof.settings.profiles;
                     let mut files: Vec<(std::path::PathBuf, String)> = known.iter().map(|p| (p.clone(), sk_core::softproof::profile_name(p))).collect();

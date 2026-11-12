@@ -388,14 +388,11 @@ fn recipe_editor(ui: &mut Ui, i: usize, r: &mut ExportRecipe, last: bool, sample
     }
 
     ui.add_space(6.0);
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        ui.add_space(2.0);
-        let del = egui::Button::new(RichText::new(format!("{}  Löschen …", icon::TRASH)).size(12.0)).fill(Color32::TRANSPARENT).stroke(Stroke::new(1.0, theme::BORDER_STRONG)).corner_radius(7.0);
-        if ui.add_enabled(!last, del).on_disabled_hover_text("Das einzige Rezept bleibt").clicked() {
+    card_buttons(ui, |ui| {
+        if ui.add_enabled(!last, card_button(icon::TRASH, "Löschen …")).on_disabled_hover_text("Das einzige Rezept bleibt").clicked() {
             action = Some(CardAction::Remove(i));
         }
-        let dup = egui::Button::new(RichText::new(format!("{}  Duplizieren", icon::COPY)).size(12.0)).fill(Color32::TRANSPARENT).stroke(Stroke::new(1.0, theme::BORDER_STRONG)).corner_radius(7.0);
-        if ui.add(dup).clicked() {
+        if ui.add(card_button(icon::COPY, "Duplizieren")).clicked() {
             action = Some(CardAction::Duplicate(i));
         }
     });
@@ -408,7 +405,7 @@ fn size_row(ui: &mut Ui, r: &mut ExportRecipe) {
         let label = if r.size.is_some() { r.resize.label() } else { "Originalgröße" };
         let mut resize = r.size.map(|_| r.resize);
         let w = if r.size.is_some() { ui.available_width() - 92.0 } else { ui.available_width() - 8.0 };
-        let c = egui::ComboBox::from_id_salt("Größe").selected_text(label).width(w.max(60.0)).show_ui(ui, |ui| {
+        let c = egui::ComboBox::from_id_salt("Größe").selected_text(label).width(w.max(60.0)).truncate().show_ui(ui, |ui| {
             ui.selectable_value(&mut resize, None, "Originalgröße");
             for m in Resize::ALL {
                 ui.selectable_value(&mut resize, Some(m), m.label());
@@ -693,6 +690,21 @@ fn add_button(ui: &mut Ui) -> Response {
 fn small_icon_button(ui: &mut Ui, ic: &str, hover: &str) -> Response {
     let b = egui::Button::new(RichText::new(ic).size(13.0)).min_size(vec2(26.0, 22.0));
     ui.add(b).on_hover_text(hover)
+}
+
+/// The buttons at the bottom of an open card, right-aligned in one row (the first added is the
+/// rightmost).
+pub(crate) fn card_buttons(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    let w = ui.available_width();
+    ui.allocate_ui_with_layout(vec2(w, 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.add_space(2.0);
+        add(ui);
+    });
+}
+
+/// A button of [`card_buttons`]: outlined, small text with its icon.
+pub(crate) fn card_button(ic: &str, text: &str) -> egui::Button<'static> {
+    egui::Button::new(RichText::new(format!("{ic}  {text}")).size(12.0)).fill(Color32::TRANSPARENT).stroke(Stroke::new(1.0, theme::BORDER_STRONG)).corner_radius(7.0)
 }
 
 /// A thin line across the card.

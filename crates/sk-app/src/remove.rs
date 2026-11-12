@@ -34,13 +34,9 @@ impl App {
         let replacing = self.remove_replaces.and_then(|id| removals.iter().position(|r| r.id == id));
         for (i, strokes) in shown.iter().enumerate().filter(|(i, _)| Some(*i) != replacing) {
             let sel = selected == Some(i);
-            for (pts, r, erase) in strokes {
-                if *erase && sel {
-                    crate::layers::paint_area(&painter, pts, *r, crate::layers::ERASED);
-                } else if !erase {
-                    crate::layers::paint_area(&painter, pts, *r, if sel { Color32::WHITE } else { Color32::from_white_alpha(150) });
-                }
-            }
+            // One shape: what is painted less what is taken away.
+            let bands: Vec<(&[egui::Pos2], f32, bool)> = strokes.iter().map(|(pts, r, erase)| (pts.as_slice(), *r, *erase)).collect();
+            crate::layers::paint_region(&painter, &bands, if sel { Color32::WHITE } else { Color32::from_white_alpha(150) });
             if let Some(p) = pin_at(i) {
                 crate::layers::pin(&painter, p, if sel { Color32::WHITE } else { Color32::from_white_alpha(170) }, hovered_pin == Some(i));
             }
