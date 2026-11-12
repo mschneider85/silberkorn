@@ -2223,8 +2223,8 @@ fn painting_extends_and_shrinks_the_chosen_retouch_area() {
     drag_with(&mut f, c + egui::vec2(90.0, 0.0), c + egui::vec2(110.0, 0.0), 3, egui::Modifiers::ALT);
     assert!(spots(&f)[0].strokes[1].erase);
 
-    // As chosen in the panel, without a key.
-    f.app.area_paint = crate::layers::AreaPaint::Extend;
+    // Pinsel of the chosen card, without a key.
+    f.app.set_area_paint(crate::layers::AreaPaint::Extend);
     drag(&mut f, c + egui::vec2(0.0, 60.0), c + egui::vec2(-60.0, 60.0), 4);
     assert_eq!(spots(&f)[0].strokes.len(), 3);
 
@@ -2234,10 +2234,13 @@ fn painting_extends_and_shrinks_the_chosen_retouch_area() {
     let after = spots(&f)[0].strokes[0].points[0];
     assert!(after[0] < before[0] - 0.01 && (after[1] - before[1]).abs() < 1e-4, "{before:?} -> {after:?}");
 
-    // A new area again with "Neu".
-    f.app.area_paint = crate::layers::AreaPaint::New;
+    // Choosing another area (or none) switches it off: a new area again.
+    f.app.selected_spot = None;
     drag(&mut f, c + egui::vec2(-200.0, -150.0), c + egui::vec2(-150.0, -150.0), 3);
     assert_eq!(spots(&f).len(), 2);
+    assert_eq!(f.app.selected_spot, Some(1));
+    drag(&mut f, c + egui::vec2(200.0, 150.0), c + egui::vec2(150.0, 150.0), 3);
+    assert_eq!(spots(&f).len(), 3, "Pinsel galt nur für die erste");
 }
 
 /// A removed area can be chosen, extended (filled anew in its place, keeping its opacity) and
@@ -4665,8 +4668,8 @@ fn delete_in_layer_tab_ignores_hidden_spot() {
     assert_eq!(adj.retouch.len(), 1);
 }
 
-/// The retouch tab lists removals and heal/clone areas together: a click chooses one (and the
-/// tool that shows it), ↺ in the header clears both kinds.
+/// The retouch tab shows removals and heal/clone areas together as cards: a click chooses one
+/// (and the tool that shows it) and opens its settings, ↺ in the header clears both kinds.
 #[test]
 fn retouch_tab_lists_all_areas_together() {
     use crate::app::Tab;
@@ -4689,23 +4692,83 @@ fn retouch_tab_lists_all_areas_together() {
     click_at(&mut f, removal.center());
     assert_eq!((f.app.selected_removal, f.app.selected_spot), (Some(0), None));
     assert_eq!(f.app.local_tool, Some(LocalTool::Remove));
-    // The tool's brush settings now show above the list.
+    // A removal has no kind or source; the brush settings are only in the bar in the image.
     let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(widget(&nodes, "Deckkraft").is_some() && widget(&nodes, "Neu wählen").is_none());
+    assert!(widget(&nodes, "Härte").is_none() && widget(&nodes, "Fluss").is_none());
     let nodes = click_at(&mut f, widget(&nodes, "Reparieren 2").unwrap().center());
     assert_eq!((f.app.selected_removal, f.app.selected_spot), (None, Some(0)));
     assert_eq!(f.app.local_tool, Some(LocalTool::Heal));
+    let nodes = if widget(&nodes, "Neu wählen").is_none() { tool_panel_frame(&mut f, vec![]) } else { nodes };
+    assert!(widget(&nodes, "Neu wählen").is_some(), "Quelle in der gewählten Karte");
+    // The chosen card: its kind as a bar (below the tile of the same name).
+    let kind = nodes.iter().filter(|(l, _)| l == "Klonen").map(|(_, r)| *r).max_by(|a, b| a.top().total_cmp(&b.top())).expect("Art Klonen");
+    let nodes = click_at(&mut f, kind.center());
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.retouch[0].mode, SpotMode::Clone);
+    assert!(widget(&nodes, "Klonen 2").is_some() || widget(&tool_panel_frame(&mut f, vec![]), "Klonen 2").is_some());
 
-    // The rows show the opacity, like the layers; ↺ in the header deletes all.
+    // ↺ in the header deletes all, and the list goes away.
+    let nodes = tool_panel_frame(&mut f, vec![]);
     let first = widget(&nodes, "Entfernen 1").unwrap();
     let reset = nodes
         .iter()
-        .filter(|(l, r)| l == crate::theme::icon::ARROWS_COUNTER_CLOCKWISE && r.bottom() <= first.top())
+        .filter(|(l, r)| l == crate::theme::icon::ARROW_COUNTER_CLOCKWISE && r.bottom() <= first.top())
         .max_by(|a, b| a.1.top().total_cmp(&b.1.top()))
         .map(|(_, r)| *r)
         .expect("↺ im Kopf der Retuschen");
     click_at(&mut f, reset.center());
     let adj = &f.app.current.as_ref().unwrap().adjustments;
     assert!(adj.retouch.is_empty() && adj.removals.is_empty());
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(widget(&nodes, "Entfernen 1").is_none() && !nodes.iter().any(|(l, _)| l.starts_with("RETUSCHEN")));
+}
+
+/// The Stile tab: where a click goes, a check on the styles that already act, the delete button
+/// of an own style, "Als Stil sichern" opening the card, and the list.
+#[test]
+fn styles_tab_marks_applied_styles() {
+    use sk_core::params::Adjustments;
+    use sk_core::styles::Style;
+    let Some(mut f) = Fixture::new("styles-tab") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.tab = crate::app::Tab::Styles;
+    f.app.style_list = false;
+    f.app.styles = vec![Style { name: "Hell".into(), adjustments: Adjustments { exposure: 1.0, ..Default::default() }, tools: Some(vec![sk_core::tools::Tool::Exposure]) }];
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(widget(&nodes, "Hell").is_some() && widget(&nodes, "Als Stil sichern").is_some());
+    let portra = f.app.film_looks.iter().position(|(s, _)| s.name == "Kodak Portra 400").unwrap();
+    assert!(!f.app.applied_styles(None)[portra]);
+
+    let nodes = click_at(&mut f, widget(&nodes, "Kodak Portra 400").expect("Kachel").center());
+    let on = f.app.applied_styles(None);
+    assert!(on[portra], "Haken nach dem Anwenden");
+    assert!(!on[on.len() - 1], "Hell wirkt noch nicht");
+
+    // An own style: delete button while the pointer is on it.
+    let hell = widget(&nodes, "Hell").expect("eigener Stil");
+    let nodes = tool_panel_frame(&mut f, vec![egui::Event::PointerMoved(hell.center())]);
+    let nodes = if widget(&nodes, "Hell löschen").is_none() { tool_panel_frame(&mut f, vec![]) } else { nodes };
+    click_at(&mut f, widget(&nodes, "Hell löschen").expect("Papierkorb").center());
+    assert!(matches!(&f.app.pending_deletion, Some(crate::deletion::Deletion::Style(n)) if n == "Hell"));
+    f.app.pending_deletion = None;
+
+    // "Als Stil sichern" opens the card; without a name it can't be saved.
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let nodes = click_at(&mut f, widget(&nodes, "Als Stil sichern").expect("gestrichelte Kachel").center());
+    assert!(f.app.library_ui.new_style_open);
+    let nodes = if widget(&nodes, "Speichern").is_none() { tool_panel_frame(&mut f, vec![]) } else { nodes };
+    assert!(widget(&nodes, "Speichern").is_some() && widget(&nodes, "Abbrechen").is_some());
+    let nodes = click_at(&mut f, widget(&nodes, "Abbrechen").unwrap().center());
+    assert!(!f.app.library_ui.new_style_open);
+
+    // The list: the same entries as rows.
+    let toggle = nodes.iter().find(|(l, _)| l == crate::theme::icon::LIST_BULLETS).expect("Liste").1;
+    let nodes = click_at(&mut f, toggle.center());
+    assert!(f.app.style_list);
+    let nodes = if widget(&nodes, "Kodak Portra 400").is_none() { tool_panel_frame(&mut f, vec![]) } else { nodes };
+    let row = widget(&nodes, "Kodak Portra 400").unwrap();
+    assert!(row.height() < 50.0, "Zeile: {row:?}");
+    f.app.style_list = false;
 }
 
 /// The results of an auto run join one undo step, a paste onto several images meanwhile stays a
@@ -5218,6 +5281,8 @@ fn local_tool_bar_switches_and_ends_tools() {
     for name in ["Radierer", "Zauberpinsel", "Maske anzeigen", "Fertig"] {
         assert!(nodes.iter().any(|(n, _)| n.contains(name)), "{name} fehlt");
     }
+    // Flow and automatic masking behind "Mehr" (not in the panel).
+    assert!(nodes.iter().any(|(n, _)| n == crate::theme::icon::SLIDERS_HORIZONTAL), "Mehr fehlt");
     // The mask tools only: retouching is in its own tab.
     assert!(!nodes.iter().any(|(n, _)| n.contains("Reparieren")));
     click(&mut f, &nodes, "Radierer");
@@ -5350,6 +5415,11 @@ fn output_tab_has_file_and_print_pages() {
     let nodes = click_at(&mut f, card.center());
     assert_eq!(f.app.selected_recipe, 1);
     assert!(widget(&nodes, "16 Bit").is_some(), "TIFF: Bittiefe");
+    // The buttons at the bottom of the open card take one row, not the rest of the panel.
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let dup = widget(&nodes, "Duplizieren").expect("Duplizieren");
+    let next = widget(&nodes, "Neues Rezept").expect("+ Rezept");
+    assert!(next.top() - dup.bottom() < 40.0, "Lücke unter der Karte: {}", next.top() - dup.bottom());
 
     // Druck: paper, the image on the page with the Kontur, up to 2 mm.
     let druck = nodes.iter().find(|(l, _)| l == "Druck").map(|(_, r)| *r).expect("Druck");

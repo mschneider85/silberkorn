@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 use sk_core::catalog::{self, Filter, ImageRecord, Scope, SortKey};
 use sk_core::params::Adjustments;
 use sk_core::sidecar::{self, ColorLabel, Sidecar};
-use sk_core::styles::{self, Style};
+use sk_core::styles;
 use egui::{Rect, RichText, Ui};
 
 use crate::app::App;
 use crate::undo::Meta;
-use crate::widgets::{self, section};
+use crate::widgets;
 use crate::workers::IndexJob;
 
 /// Catalog-derived lists shown in the library tab.
@@ -41,6 +41,9 @@ pub struct LibraryUi {
     pub new_style: String,
     /// The tools a new style takes; `None` until chosen: the edited ones.
     pub new_style_tools: Option<std::collections::BTreeSet<sk_core::tools::Tool>>,
+    /// The card for a new style is open ("Als Stil sichern"); its name field takes the focus once.
+    pub new_style_open: bool,
+    pub new_style_focus: bool,
     /// Person being named, with the text typed so far.
     pub naming: Option<(i64, String)>,
     /// The faces shown for the persons.
@@ -797,156 +800,6 @@ impl App {
             Err(e) => self.report_error(format!("Filteralbum nicht angelegt: {e}")),
         }
     }
-
-    pub fn styles_tab(&mut self, ui: &mut Ui) {
-        // (style, look only), see `styles::apply_look`.
-        let mut apply: Option<(Style, bool)> = None;
-        let mut delete: Option<String> = None;
-        let mut hovered: Option<(Style, bool)> = None;
-        let current = self.current.as_ref().map(|c| c.adjustments.clone());
-        ui.horizontal(|ui| {
-            ui.label("Ansicht");
-            let mut list = self.style_list;
-            ui.selectable_value(&mut list, false, "Vorschauen").on_hover_text("Jeder Stil als kleines Bild des aktuellen Fotos");
-            ui.selectable_value(&mut list, true, "Liste");
-            if list != self.style_list {
-                self.style_list = list;
-                self.save_settings();
-            }
-        });
-        let looks: Vec<(Style, bool, String)> = self
-            .film_looks
-            .iter()
-            .map(|(s, d)| (s.clone(), true, format!("{d}\n\nNachempfunden, keine offizielle Simulation. Belichtung, Weißabgleich und Korrekturen des Bildes bleiben erhalten.")))
-            .collect();
-        let own: Vec<(Style, bool, String)> = self
-            .styles
-            .iter()
-            .map(|s| {
-                let sets = match &s.tools {
-                    Some(t) => format!("Setzt: {}", t.iter().map(|t| t.label()).collect::<Vec<_>>().join(", ")),
-                    None => "Setzt alle Werkzeuge außer Zuschnitt, Drehen, Perspektive, Ebenen und Retusche".into(),
-                };
-                (s.clone(), false, sets)
-            })
-            .collect();
-        let grid = !self.style_list && self.current.is_some();
-        if !self.style_list && self.current.is_none() {
-            crate::widgets::hint(ui, "Die Vorschauen erscheinen, sobald ein Bild geöffnet ist.");
-        }
-        if grid {
-            self.pump_style_thumbs();
-        }
-        let mut take = |(c, h, d): crate::style_grid::Picks| {
-            apply = apply.take().or(c);
-            hovered = hovered.take().or(h);
-            delete = delete.take().or(d);
-        };
-        let help = if grid {
-            "Zeiger auf einen Stil: Vorschau im Bild. Ein Klick übernimmt ihn für die Auswahl."
-        } else {
-            "Zeiger auf einen Stil: Vorschau im Bild. „Anwenden“ übernimmt ihn für die Auswahl."
-        };
-        crate::widgets::section_help(ui, "Filmsimulationen", help, None, |ui| {
-            if grid {
-                take(self.style_tiles(ui, &looks));
-            } else {
-                take(style_rows(ui, &looks));
-            }
-        });
-        section(ui, "Eigene Stile", None, |ui| {
-            if own.is_empty() {
-                crate::widgets::hint(ui, "Noch keine Stile gespeichert.");
-            } else if grid {
-                take(self.style_tiles(ui, &own));
-                crate::widgets::hint(ui, "Rechtsklick auf einen Stil: löschen");
-            } else {
-                take(style_rows(ui, &own));
-            }
-        });
-        if let (Some((style, look)), Some(current)) = (hovered, current)
-            && apply.is_none()
-        {
-            self.preview_style(crate::style_grid::applied_to(&style, look, &current, self.active_layer));
-        }
-        let mut save = None;
-        section(ui, "Neuer Stil", None, |ui| {
-            let Some(cur) = &self.current else {
-                crate::widgets::hint(ui, "Ein Bild öffnen, um seine Einstellungen als Stil zu speichern.");
-                return;
-            };
-            ui.add(egui::TextEdit::singleline(&mut self.library_ui.new_style).hint_text("Name des Stils"));
-            let name = self.library_ui.new_style.trim().to_string();
-            // Until chosen by hand: the edited tools of the image.
-            let auto: std::collections::BTreeSet<_> = sk_core::tools::edited(&cur.adjustments).into_iter().collect();
-            let mut chosen = self.library_ui.new_style_tools.clone().unwrap_or(auto);
-            let list: Vec<sk_core::tools::Tool> = chosen.iter().copied().collect();
-            egui::CollapsingHeader::new(format!("Enthält: {}", crate::clipboard::tool_list(&list)))
-                .id_salt("new_style_tools")
-                .show(ui, |ui| {
-                    ui.label(
-                        RichText::new("Nur diese Werkzeuge werden gesetzt, alle anderen bleiben, wie sie sind; so lassen sich Stile übereinander anwenden.")
-                            .small()
-                            .color(crate::theme::TEXT_FAINT),
-                    );
-                    let before = chosen.clone();
-                    crate::clipboard::tool_checkboxes(ui, &cur.adjustments, &mut chosen);
-                    if chosen != before {
-                        self.library_ui.new_style_tools = Some(chosen.clone());
-                    }
-                });
-            if ui.add_enabled(!name.is_empty() && !list.is_empty(), egui::Button::new("Aktuelle Anpassungen speichern")).clicked() {
-                save = Some(Style { name, adjustments: cur.adjustments.clone(), tools: Some(list) });
-            }
-        });
-        if let Some(style) = save {
-            match styles::save_in(&styles::styles_dir(), &style) {
-                Ok(()) => self.status = format!("Stil „{}“ gespeichert", style.name),
-                Err(e) => self.report_error(format!("Fehler: {e:#}")),
-            }
-            self.library_ui.new_style.clear();
-            self.library_ui.new_style_tools = None;
-            self.reload_styles();
-        }
-        // A layer chosen: onto it, on the current image (layers belong to one image).
-        if let Some((style, look)) = &apply
-            && let Some(li) = self.active_layer.filter(|i| self.current.as_ref().is_some_and(|c| *i < c.adjustments.layers.len()))
-        {
-            self.apply_style_to_layer(style, *look, li);
-        } else if let Some((style, look)) = apply {
-            let paths = self.selected_paths();
-            self.set_adjustments_on(&paths, |a| if look { styles::apply_look(&style, a) } else { styles::apply(&style, a) });
-            self.status = format!("Stil „{}“ auf {} angewendet", style.name, crate::widgets::image_count(paths.len()));
-        }
-        if let Some(name) = delete {
-            self.request_deletion(crate::deletion::Deletion::Style(name));
-        }
-    }
-}
-
-/// Styles as rows with an "Anwenden" button; returns the clicked one, the hovered one and one to
-/// delete, like `App::style_tiles`.
-fn style_rows(ui: &mut Ui, list: &[(Style, bool, String)]) -> crate::style_grid::Picks {
-    let (mut clicked, mut hovered, mut delete) = (None, None, None);
-    for (style, look, help) in list {
-        let row = ui.horizontal(|ui| {
-            if ui.button("Anwenden").on_hover_text("Auf Auswahl anwenden").clicked() {
-                clicked = Some((style.clone(), *look));
-            }
-            ui.label(&style.name).on_hover_text(help.as_str());
-            if !look {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if widgets::small_button(ui, crate::theme::icon::TRASH, "Stil löschen …").clicked() {
-                        delete = Some(style.name.clone());
-                    }
-                });
-            }
-        });
-        if ui.rect_contains_pointer(row.response.rect) {
-            hovered = Some((style.clone(), *look));
-        }
-    }
-    (clicked, hovered, delete)
 }
 
 /// Takes images of a folder that was only browsed into the catalog, where they are: an album

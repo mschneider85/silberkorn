@@ -74,12 +74,6 @@ pub fn section_counted(ui: &mut Ui, title: &str, help: Option<&str>, count: usiz
     section_inner(ui, title, false, help, None, false, Some(count), None, body);
 }
 
-/// An open [`section_help`] of a list, with how many entries it has after the title (the
-/// section keeps whether it is open however many there are).
-pub fn list_section(ui: &mut Ui, title: &str, help: &str, count: usize, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
-    section_inner(ui, title, true, Some(help), None, false, Some(count), reset, body);
-}
-
 fn copy_targets_id() -> egui::Id {
     egui::Id::new("tool_copy_targets")
 }
@@ -446,7 +440,7 @@ fn section_inner(
 }
 
 /// Width of the label column of slider rows and form fields, so they line up.
-fn label_width(ui: &Ui) -> f32 {
+pub(crate) fn label_width(ui: &Ui) -> f32 {
     (ui.available_width() * 0.32).clamp(70.0, 112.0)
 }
 
@@ -472,7 +466,7 @@ pub fn field<R>(ui: &mut Ui, label: &str, add: impl FnOnce(&mut Ui) -> R) -> R {
 /// Drop-down list as a form row; `show` lists the choices.
 pub fn combo_field(ui: &mut Ui, label: &str, selected: impl Into<egui::WidgetText>, show: impl FnOnce(&mut Ui)) {
     field(ui, label, |ui| {
-        let r = egui::ComboBox::from_id_salt(label).selected_text(selected).width(ui.available_width() - 8.0).show_ui(ui, show);
+        let r = egui::ComboBox::from_id_salt(label).selected_text(selected).width(ui.available_width() - 8.0).truncate().show_ui(ui, show);
         // Named after the row (screen readers, tests), not after the chosen entry.
         r.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), label));
     });
@@ -673,22 +667,6 @@ pub fn lens_card(ui: &mut Ui, name: Option<&str>, detail: &str, busy: bool) {
             });
         });
     ui.add_space(4.0);
-}
-
-/// A row of a list like the layers': `h` high and as wide as the panel, filled when chosen or
-/// under the mouse, named for screen readers (and tests). The caller draws its content.
-pub fn list_row(ui: &mut Ui, h: f32, selected: bool, name: &str) -> (Rect, Response) {
-    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), h), Sense::click());
-    let fill = if selected {
-        theme::ACCENT_SOFT
-    } else if resp.hovered() {
-        Color32::from_rgb(54, 54, 60)
-    } else {
-        Color32::TRANSPARENT
-    };
-    ui.painter().rect_filled(rect, 4.0, fill);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, selected, name));
-    (rect, resp)
 }
 
 /// Options of a [`slider_row_with`].
@@ -2442,6 +2420,26 @@ pub fn images_dative(n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A long choice (a printer's name) is cut off in a form row, so that the panel does not
+    /// get wider than it is (it would cut off everything on its right).
+    #[test]
+    fn long_choices_do_not_widen_the_panel() {
+        let ctx = egui::Context::default();
+        let mut widest = 0.0f32;
+        for _ in 0..3 {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+            let out = ctx.run_ui(input, |ui| {
+                ui.allocate_ui(egui::vec2(300.0, 400.0), |ui| {
+                    super::combo_field(ui, "Drucker", "NPI3B024E (HP Color LaserJet Pro MFP M479fdw) an Anschluss USB001", |_| {});
+                    widest = widest.max(ui.min_rect().width());
+                });
+            });
+            let mut delta = out.textures_delta;
+            delta.clear();
+        }
+        assert!(widest <= 300.5, "Zeile {widest} breit");
+    }
+
     use super::*;
 
     #[test]

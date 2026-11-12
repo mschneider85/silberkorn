@@ -92,10 +92,10 @@ pub const SECTION_HELP: &[(&str, &str, &str)] = &[
     // Retusche
     (
         "Werkzeuge",
-        "Reparieren und Klonen beseitigen Flecken und kleine Störungen, Entfernen füllt größere Objekte per KI. Staub und Flecken finden sucht Sensorstaub.",
+        "Reparieren und Klonen beseitigen Flecken und kleine Störungen, Entfernen füllt größere Objekte per KI. Staub und Flecken sucht Sensorstaub.",
         "retusche#Werkzeuge",
     ),
-    ("Retuschen", "Alle Retuschen des Bildes: wählen, ändern, eine neue Quelle suchen oder löschen.", "retusche#Retuschen"),
+    ("Retuschen", "Alle Retuschen des Bildes als Karten: wählen, ändern, eine neue Quelle suchen oder löschen.", "retusche#Retuschen"),
     // Metadaten
     ("Bewertung", "Sterne und Farb-Label des Bildes oder der Auswahl; gestrichelt, was nur einige der ausgewählten Bilder haben.", "bibliothek#Bewertung"),
     ("Keywords", "Schlagwörter zum Wiederfinden der Bilder.", "bibliothek#Keywords"),
@@ -103,8 +103,7 @@ pub const SECTION_HELP: &[(&str, &str, &str)] = &[
     ("Datei", "Auflösung, Dateigröße und Ordner des Bildes.", "bibliothek#Aufnahme"),
     // Stile
     ("Filmsimulationen", "Fertige Looks nach klassischen Filmen; der Zeiger auf einem Stil zeigt ihn als Vorschau im Bild.", "vergleichen#Filmsimulationen"),
-    ("Eigene Stile", "Selbst gespeicherte Stile, auf die Auswahl anzuwenden.", "vergleichen#Eigene Stile"),
-    ("Neuer Stil", "Speichert Einstellungen des Bildes als Stil, um sie auf andere Bilder zu übertragen.", "vergleichen#Neuer Stil"),
+    ("Eigene Stile", "Selbst gespeicherte Stile; „Als Stil sichern“ speichert die Einstellungen des Bildes als neuen.", "vergleichen#Eigene Stile"),
     // Verlauf
     ("Schnappschüsse", "Gesicherte Stände der Bearbeitung, zu denen sich jederzeit zurückkehren lässt.", "verlauf#Schnappschüsse"),
     ("Verlauf", "Alle Bearbeitungsschritte; ein Klick springt zu einem früheren Stand.", "verlauf#Verlauf"),
