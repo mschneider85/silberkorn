@@ -82,13 +82,13 @@ pub const SECTION_HELP: &[(&str, &str, &str)] = &[
     ("Vignette", "Dunkelt die Bildränder ab oder hellt sie auf, um den Blick zur Mitte zu lenken.", "entwickeln#Vignette"),
     ("Körnung", "Fügt Filmkorn hinzu; Größe bestimmt, wie grob es ist.", "entwickeln#Körnung"),
     // Ebenen
-    ("Ebenen", "Ebenen ändern nur einen Teil des Bildes. Jede hat eine Maske, die festlegt wo, und Anpassungen, die festlegen was.", "ebenen-masken#Ebenen"),
+    ("Ebenen", "Ebenen ändern nur einen Teil des Bildes. Jede hat eine Maske, die festlegt wo; die gewählte zeigt Deckkraft und ihre Änderungen.", "ebenen-masken#Ebenen"),
     (
         "Maske",
-        "Wo die gewählte Ebene wirkt: malen, Verläufe ziehen, Motiv, Himmel oder Objekt auswählen und auf Helligkeit oder Farben eingrenzen.",
+        "Wo die gewählte Ebene wirkt: malen, Verläufe ziehen, Motiv, Himmel, Tiefe oder ein Objekt auswählen.",
         "ebenen-masken#Maske",
     ),
-    ("Anpassungen", "Was die gewählte Ebene ändert. Die Regler in Belichtung, Farbe und Details wirken auf sie.", "ebenen-masken#Anpassungen"),
+    ("Eingrenzen", "Beschränkt die Maske auf einen Helligkeits- oder Farbbereich, etwa einen Verlauf auf den hellen Himmel.", "ebenen-masken#Eingrenzen"),
     // Retusche
     (
         "Werkzeuge",

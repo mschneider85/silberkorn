@@ -26,17 +26,21 @@
 <main>
 <h1 id="ebenen-masken">Ebenen &amp; Masken</h1>
 <p>Mit Ebenen wirken Anpassungen nur auf einen Teil des Bildes: den Himmel abdunkeln, ein Gesicht aufhellen, den Hintergrund entsättigen. Jede Ebene hat eine <b>Maske</b>, die festlegt, wo sie wirkt, und eigene <b>Anpassungen</b>, die festlegen, was sie ändert. Die Bearbeitung ohne Ebene heißt <b>Hintergrund</b>.</p>
-<p>Der Tab <b>Ebenen</b> zeigt von oben nach unten: welche Ebene, wo sie wirkt, was sie ändert.</p>
+<p>Der Tab <b>Ebenen</b> zeigt von oben nach unten: die Ebenen, ihre Maske und wie die Maske eingegrenzt ist.</p>
 <h2 id="ebenen">Ebenen</h2>
-<p>Die Liste zeigt die oberste Ebene zuerst, ganz unten den Hintergrund.</p>
+<p>Jede Ebene ist eine Karte, die oberste zuerst, ganz unten der Hintergrund. Die Karte zeigt ein kleines Bild der Maske (weiß, wo sie wirkt), den Namen, woraus die Maske besteht und wie viele Änderungen die Ebene hat, rechts die Deckkraft und das Auge. Ein Stern markiert eine Maske, an der eine KI beteiligt ist.</p>
 <ul>
-<li>Klick wählt eine Ebene, Doppelklick benennt sie um.</li>
+<li>Klick wählt eine Ebene, Doppelklick oder ein Klick auf den Namen der gewählten benennt sie um.</li>
 <li>Das Auge blendet eine Ebene aus. Alt-Klick auf das Auge zeigt nur diese Ebene, ein zweiter wieder alle.</li>
-<li><b>Deckkraft</b> über der Liste bestimmt, wie stark die gewählte Ebene wirkt.</li>
-<li>Das Papierkorb-Symbol löscht die gewählte Ebene (Entf).</li>
+<li>Das Papierkorb-Symbol in der Überschrift löscht die gewählte Ebene (Entf).</li>
+</ul>
+<p>Die Karte der gewählten Ebene klappt auf:</p>
+<ul>
+<li><b>Deckkraft</b>: wie stark die Ebene wirkt (bei zugeklappten Karten steht sie als Zahl rechts).</li>
+<li>Ihre Änderungen als Chips, etwa „Belichtung +0.40“: ein Klick springt zum Werkzeug, × setzt die Änderung zurück. Siehe <a href="ebenen-masken.html#anpassungen">Anpassungen</a>.</li>
 </ul>
 <h3 id="ebene-anlegen">Ebene anlegen</h3>
-<p><b>+</b> unter der Liste bietet:</p>
+<p><b>+</b> in der Überschrift bietet:</p>
 <ul>
 <li><b>Neue Ebene</b>: mit leerer Maske; danach malen oder auswählen.</li>
 <li><b>Neue Ebene mit Stilpinsel</b>: eine Ebene mit fertigen Anpassungen, der Pinsel ist gleich gewählt. Zur Wahl stehen Aufhellen, Abdunkeln, Wärmer, Kühler, Mehr Farbe, Entsättigen, Details betonen, Haut glätten, Lichter zurückholen, Tiefen aufhellen, Dunst entfernen und Augen aufhellen.</li>
@@ -60,12 +64,12 @@
 <li><b>Zauberpinsel</b> (J): über einen Bereich malen; ausgewählt wird, was zusammenhängt und den überstrichenen Farben ähnelt. <b>Größe</b> und <b>Toleranz</b> sind einstellbar.</li>
 <li><b>Objekt</b> (Umschalt+J): auf ein Objekt klicken, es wird ausgewählt (KI). Siehe <a href="ebenen-masken.html#objekt-auswählen">Objekt auswählen</a>.</li>
 </ul>
-<p>Darunter:</p>
+<p>Darunter eine Leiste:</p>
 <ul>
 <li><b>Füllen</b>: Maske über das ganze Bild, etwa um sie danach unter <b>Eingrenzen</b> zu beschränken.</li>
 <li><b>Leeren</b>: Maske löschen.</li>
 <li><b>Invertieren</b>: kehrt die Maske um.</li>
-<li><b>Maske anzeigen</b> (M): färbt die Maske rot ein.</li>
+<li>Das Symbol rechts, <b>Maske anzeigen</b> (M): färbt die Maske rot ein.</li>
 </ul>
 <p>↺ im Kopf setzt die Maske zurück.</p>
 <h3 id="pinsel-einstellen">Pinsel einstellen</h3>
@@ -94,21 +98,21 @@
 </ol>
 <p>Jeder Klick ist ein Rückgängig-Schritt.</p>
 <h3 id="automatisch-auswählen">Automatisch auswählen</h3>
-<p>Die Knöpfe unter <b>Automatisch auswählen</b> erzeugen eine Maske aus dem Bildinhalt (KI, siehe <a href="ki-werkzeuge.html#motiv-himmel-und-tiefe">KI-Werkzeuge</a>):</p>
+<p>Die drei Knöpfe unter <b>Automatisch auswählen</b> erzeugen eine Maske aus dem Bildinhalt (KI, siehe <a href="ki-werkzeuge.html#motiv-himmel-und-tiefe">KI-Werkzeuge</a>):</p>
 <ul>
 <li><b>Motiv</b>: das Hauptmotiv, auch mit Haaren und feinen Teilen.</li>
 <li><b>Himmel</b>: den Himmel.</li>
 <li><b>Tiefe</b>: nach Entfernung, anfangs den nahen Teil des Bildes. Den Bereich stellt danach ein Trapez über der Verteilung der Entfernungen ein, von nah (links) bis fern (rechts), mit getrenntem Übergang nach vorn und hinten.</li>
 </ul>
-<p><b>Auswahl entfernen</b> löscht diese automatische Auswahl; Pinselstriche und Verläufe bleiben. Mit Pinsel und Radierer lässt sich die Auswahl nacharbeiten.</p>
-<h3 id="eingrenzen">Eingrenzen</h3>
-<p>Beschränkt die ganze Maske auf einen Helligkeits- oder Farbbereich, etwa einen Verlauf nur auf den hellen Himmel und nicht auf die Bäume davor.</p>
+<p>Der Knopf der gewählten Auswahl leuchtet gelb; × darauf löscht sie wieder, Pinselstriche und Verläufe bleiben. Stammt die Auswahl von <b>Objekt</b> oder dem Zauberpinsel, steht darunter ein eigener Knopf mit ×. Mit Pinsel und Radierer lässt sich jede Auswahl nacharbeiten.</p>
+<h2 id="eingrenzen">Eingrenzen</h2>
+<p>Beschränkt die ganze Maske auf einen Helligkeits- oder Farbbereich, etwa einen Verlauf nur auf den hellen Himmel und nicht auf die Bäume davor. Beides sind Zeilen mit Schalter; die Zeile zeigt, was eingestellt ist, ein Klick klappt sie auf.</p>
 <ul>
-<li><b>Helligkeitsbereich</b>: ein Trapez über dem Histogramm. Zwischen den oberen Griffen wirkt die Ebene voll, zu den unteren läuft sie aus. Das Trapez lässt sich auch als Ganzes verschieben.</li>
-<li><b>Farbbereich</b>: mit <b>Farbe aufnehmen</b> auf eine Farbe im Bild klicken; <b>Farbton</b>, <b>Breite</b> und <b>Weichheit</b> legen den erfassten Bereich fest, <b>Min. Chroma</b> schließt fast neutrale Farben aus.</li>
+<li><b>Helligkeit</b>: ein Trapez über dem Histogramm. Zwischen den oberen Griffen wirkt die Ebene voll, zu den unteren läuft sie aus. Das Trapez lässt sich auch als Ganzes verschieben.</li>
+<li><b>Farbe</b>: mit <b>Farbe aufnehmen</b> auf eine Farbe im Bild klicken; <b>Farbton</b>, <b>Breite</b> und <b>Weichheit</b> legen den erfassten Bereich fest, <b>Min. Chroma</b> schließt fast neutrale Farben aus.</li>
 </ul>
 <h2 id="anpassungen">Anpassungen</h2>
-<p>Was die gewählte Ebene ändert. Die Liste zeigt jede Änderung mit ihrem Wert; ein Klick springt zum Werkzeug, ↺ daneben setzt sie zurück, ↺ im Kopf alle.</p>
+<p>Was die gewählte Ebene ändert, steht als Chips in ihrer Karte: jede Änderung mit ihrem Wert; ein Klick springt zum Werkzeug, × setzt sie zurück.</p>
 <p>Ist eine Ebene gewählt, wirken diese Regler in den Tabs Belichtung, Farbe und Details auf sie:</p>
 <ul>
 <li><b>Belichtung</b>: Belichtung, Kontrast, Helligkeit.</li>
@@ -120,14 +124,14 @@
 <li><b>Farbbalance</b>.</li>
 <li><b>Klarheit</b> mit Struktur, <b>Dunst entfernen</b>.</li>
 </ul>
-<p>Die Knöpfe unter der Liste führen direkt zu den Tabs. Was nur aufs ganze Bild wirkt, ist im Ebenenmodus ausgegraut: etwa Tonwerte, Schärfen, Rauschreduzierung, die Tabs Objektiv, Effekte, Retusche und Stile sowie Automatisch anpassen.</p>
-<p class="note">Eine neue Ebene ändert nichts, bis sie eine Maske hat. „Neue Ebene“ führt darum gleich zum Abschnitt Maske.</p>
+<p>Was nur aufs ganze Bild wirkt, ist im Ebenenmodus ausgegraut: etwa Tonwerte, Schärfen, Rauschreduzierung, die Tabs Objektiv, Effekte, Retusche und Stile sowie Automatisch anpassen.</p>
+<p class="note">Eine neue Ebene ändert nichts, bis sie eine Maske hat.</p>
 <h2 id="beispiel-himmel-abdunkeln">Beispiel: Himmel abdunkeln</h2>
 <ol>
 <li><b>Himmel</b> unter Automatisch auswählen klicken; eine Ebene „Himmel“ entsteht.</li>
 <li>Im Tab Belichtung <b>Belichtung</b> senken, im Tab Farbe die <b>Dynamik</b> erhöhen.</li>
 <li>Mit <b>Maske anzeigen</b> prüfen und wenn nötig mit dem Radierer nacharbeiten.</li>
-<li>Mit <b>Deckkraft</b> die Wirkung insgesamt abschwächen.</li>
+<li>Mit <b>Deckkraft</b> in der Karte der Ebene die Wirkung insgesamt abschwächen.</li>
 </ol>
 </main>
 </body>

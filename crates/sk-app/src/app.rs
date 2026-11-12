@@ -625,6 +625,8 @@ pub struct App {
     /// Alt-clicked with Reparieren or Klonen and no area chosen: the source of the next one.
     pub(crate) next_source: Option<[f32; 2]>,
     pub show_mask: bool,
+    /// Small pictures of the layers' masks for the Ebenen tab, by layer id: (mask key, texture).
+    pub(crate) mask_thumbs: HashMap<u32, (u64, egui::TextureHandle)>,
     /// The mask is shown while the pointer is over the layer bar above the tools.
     pub peek_mask: bool,
     /// Mask overlay of the latest render request (see `send_render`).
@@ -1154,6 +1156,7 @@ impl App {
             stroke_paint: Default::default(),
             next_source: None,
             show_mask: false,
+            mask_thumbs: HashMap::new(),
             peek_mask: false,
             rendered_mask_overlay: None,
             split_view: false,
@@ -2882,7 +2885,7 @@ impl App {
                     self.export_cancel = None;
                     self.status = format!("Export abgebrochen ({done} von {total} fertig)");
                 }
-                Event::AiMask { generation, layer, result } => {
+                Event::AiMask { generation, layer, kind, result } => {
                     self.ai_busy = false;
                     if generation != self.generation {
                         continue;
@@ -2899,7 +2902,7 @@ impl App {
                                         Some(b) => b,
                                         None => l.mask.ai.take(),
                                     };
-                                    l.mask.ai = Some(merge_ai(old, m));
+                                    l.mask.ai = Some(merge_ai(old, m, kind));
                                 }
                             });
                             self.status = "Maske erstellt".into();
@@ -3553,8 +3556,13 @@ impl App {
     }
 }
 
-/// Union (max) of an existing AI mask with a new one of the same kind of resolution.
-fn merge_ai(old: Option<sk_core::params::AiMask>, new: sk_ai::MaskImage) -> sk_core::params::AiMask {
+/// Union (max) of an existing AI mask with a new one of the same kind of resolution. The kind
+/// stays what made it ("sky" …) while only one kind went into it, else "ai".
+fn merge_ai(old: Option<sk_core::params::AiMask>, new: sk_ai::MaskImage, kind: &str) -> sk_core::params::AiMask {
+    let kind = match &old {
+        Some(o) if o.kind != kind => "ai".to_string(),
+        _ => kind.to_string(),
+    };
     let mut data = new.data;
     if let Some(o) = old
         && o.width > 0
@@ -3567,7 +3575,7 @@ fn merge_ai(old: Option<sk_core::params::AiMask>, new: sk_ai::MaskImage) -> sk_c
             *v = (*v).max(o.data[oy * o.width + ox]);
         }
     }
-    sk_core::params::AiMask { kind: "ai".into(), width: new.width, height: new.height, data: data.into(), depth: None }
+    sk_core::params::AiMask { kind, width: new.width, height: new.height, data: data.into(), depth: None }
 }
 
 impl App {

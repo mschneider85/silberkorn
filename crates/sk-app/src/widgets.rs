@@ -1455,6 +1455,7 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 /// Tool tile: icon above the name, the key in the corner; `selected` highlights it.
 pub fn tool_tile(ui: &mut Ui, ic: &str, label: &str, key: &str, selected: bool, ai: bool, width: f32) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 50.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), selected, label));
     let p = ui.painter();
     let hovered = resp.hovered();
     let fill = if selected {

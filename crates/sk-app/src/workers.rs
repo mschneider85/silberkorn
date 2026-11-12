@@ -64,7 +64,8 @@ pub enum Event {
     /// The lensfun database was read (again after a download).
     LensDb(Arc<Vec<sk_core::lensfun::LensProfile>>),
     LensDbDownloading(bool),
-    AiMask { generation: u64, layer: u32, result: Result<sk_ai::MaskImage, String> },
+    /// `kind`: what made it ("subject", "sky", "object", "magic"), kept with the mask.
+    AiMask { generation: u64, layer: u32, kind: &'static str, result: Result<sk_ai::MaskImage, String> },
     /// An image of the compare view, rendered with its saved adjustments.
     CompareImage { path: PathBuf, image: ColorImage },
     /// A reference for "Look angleichen" is measured: its thumbnail, or why it can't be used.
@@ -681,6 +682,13 @@ impl Workers {
                         Err(RecvTimeoutError::Disconnected) => break,
                     };
                     let prepare = matches!(job.kind, AiKind::ObjectPrepare | AiKind::SubjectPrepare);
+                    let kind = match &job.kind {
+                        AiKind::Sky => "sky",
+                        AiKind::Magic { .. } => "magic",
+                        AiKind::Object { .. } | AiKind::ObjectPrepare => "object",
+                        AiKind::Subject | AiKind::SubjectPrepare => "subject",
+                    };
+
                     // A panic must still answer: the layer panel waits for the result.
                     let result = crate::guard::catch(|| {
                         let subject_key = crate::subject_worker::key(&job.meta.path, job.preview.width, job.preview.height);
@@ -743,7 +751,7 @@ impl Workers {
                     if prepare || result.as_ref().is_err_and(|e| e == SUBJECT_PENDING) {
                         continue;
                     }
-                    let _ = ev_tx.send(Event::AiMask { generation: job.generation, layer: job.layer, result });
+                    let _ = ev_tx.send(Event::AiMask { generation: job.generation, layer: job.layer, kind, result });
                     ctx.request_repaint();
                 }
             });

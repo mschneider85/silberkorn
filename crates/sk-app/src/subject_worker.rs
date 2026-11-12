@@ -82,7 +82,7 @@ pub fn spawn(rx: Receiver<SubjectJob>, cache: SubjectCache, ev_tx: std::sync::mp
                     }
                     continue;
                 };
-                let _ = ev_tx.send(Event::AiMask { generation: d.generation, layer: d.layer, result });
+                let _ = ev_tx.send(Event::AiMask { generation: d.generation, layer: d.layer, kind: "subject", result });
                 ctx.request_repaint();
             }
         }

@@ -3284,7 +3284,7 @@ fn ai_mask_lands_on_its_layer_after_deleting_another() {
         a.layers.remove(0);
     });
     let mask = sk_ai::MaskImage { width: 4, height: 4, data: vec![255; 16] };
-    f.app.workers.inject(crate::workers::Event::AiMask { generation: f.app.generation(), layer: target, result: Ok(mask) });
+    f.app.workers.inject(crate::workers::Event::AiMask { generation: f.app.generation(), layer: target, kind: "subject", result: Ok(mask) });
     f.app.handle_events(&f.ctx.clone());
     let layers = &f.app.current.as_ref().unwrap().adjustments.layers;
     assert!(layers[0].mask.ai.is_none(), "B unverändert");
@@ -5372,4 +5372,47 @@ fn output_tab_has_file_and_print_pages() {
     tool_panel_frame(&mut f, vec![]);
     let nodes = tool_panel_frame(&mut f, vec![]);
     assert!(f.app.output_print && widget(&nodes, "Helligkeit").is_some(), "Druckanpassung aufgeklappt");
+}
+
+/// The Ebenen tab: a layer is a card, the chosen one with opacity and its changes as chips (× resets one);
+/// Invertieren in the bar; Eingrenzen switches the brightness range on.
+#[test]
+fn layer_cards_masks_and_ranges() {
+    let Some(mut f) = Fixture::new("layer-cards") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.tab = crate::app::Tab::Layers;
+    let layers = |f: &Fixture| f.app.current.as_ref().unwrap().adjustments.layers.clone();
+    let exact = |nodes: &[(String, egui::Rect)], name: &str| nodes.iter().find(|(l, _)| l == name).map(|(_, r)| *r);
+
+    // Only the background: a mask tool starts with no layer; + makes one.
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(exact(&nodes, "Hintergrund").is_some());
+    assert!(widget(&nodes, "Mit Stilpinsel").is_none(), "kein zweites Menü neben +");
+    f.app.apply_layer_action(Some(crate::layers::LayerAction::Add));
+    assert_eq!(layers(&f).len(), 1);
+    assert_eq!(f.app.active_layer, Some(0));
+
+    // The chosen card: opacity and the changes as chips.
+    f.app.edit(|a| a.layers[0].adjustments.exposure = 0.4);
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(widget(&nodes, "Deckkraft").is_some());
+    let card = widget(&nodes, "Ebene Ebene 1").expect("Karte");
+    assert!(exact(&nodes, "Ebene 1 sichtbar").is_some(), "Auge");
+    let reset = nodes.iter().filter(|(l, r)| l == crate::theme::icon::X && r.top() > card.top()).map(|(_, r)| *r).next().expect("× am Chip");
+    click_at(&mut f, reset.center());
+    assert_eq!(layers(&f)[0].adjustments.exposure, 0.0, "× setzt zurück");
+
+    // Invertieren, and the brightness range by its switch.
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    click_at(&mut f, exact(&nodes, "Invertieren").expect("Invertieren").center());
+    assert!(layers(&f)[0].mask.invert);
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let luma = nodes.iter().filter(|(l, _)| l == "Helligkeit").map(|(_, r)| *r).max_by(|a, b| a.left().total_cmp(&b.left())).expect("Schalter Helligkeit");
+    click_at(&mut f, luma.center());
+    assert!(layers(&f)[0].mask.luma_range.is_some(), "Helligkeitsbereich an");
+
+    // The background row chooses the background; the mask bar is then disabled.
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    click_at(&mut f, exact(&nodes, "Hintergrund").unwrap().center());
+    assert_eq!(f.app.active_layer, None);
 }

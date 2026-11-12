@@ -2,20 +2,24 @@
 
 Mit Ebenen wirken Anpassungen nur auf einen Teil des Bildes: den Himmel abdunkeln, ein Gesicht aufhellen, den Hintergrund entsättigen. Jede Ebene hat eine **Maske**, die festlegt, wo sie wirkt, und eigene **Anpassungen**, die festlegen, was sie ändert. Die Bearbeitung ohne Ebene heißt **Hintergrund**.
 
-Der Tab **Ebenen** zeigt von oben nach unten: welche Ebene, wo sie wirkt, was sie ändert.
+Der Tab **Ebenen** zeigt von oben nach unten: die Ebenen, ihre Maske und wie die Maske eingegrenzt ist.
 
 ## Ebenen
 
-Die Liste zeigt die oberste Ebene zuerst, ganz unten den Hintergrund.
+Jede Ebene ist eine Karte, die oberste zuerst, ganz unten der Hintergrund. Die Karte zeigt ein kleines Bild der Maske (weiß, wo sie wirkt), den Namen, woraus die Maske besteht und wie viele Änderungen die Ebene hat, rechts die Deckkraft und das Auge. Ein Stern markiert eine Maske, an der eine KI beteiligt ist.
 
-- Klick wählt eine Ebene, Doppelklick benennt sie um.
+- Klick wählt eine Ebene, Doppelklick oder ein Klick auf den Namen der gewählten benennt sie um.
 - Das Auge blendet eine Ebene aus. Alt-Klick auf das Auge zeigt nur diese Ebene, ein zweiter wieder alle.
-- **Deckkraft** über der Liste bestimmt, wie stark die gewählte Ebene wirkt.
-- Das Papierkorb-Symbol löscht die gewählte Ebene ({taste:delete-spot}).
+- Das Papierkorb-Symbol in der Überschrift löscht die gewählte Ebene ({taste:delete-spot}).
+
+Die Karte der gewählten Ebene klappt auf:
+
+- **Deckkraft**: wie stark die Ebene wirkt (bei zugeklappten Karten steht sie als Zahl rechts).
+- Ihre Änderungen als Chips, etwa „Belichtung +0.40“: ein Klick springt zum Werkzeug, × setzt die Änderung zurück. Siehe [Anpassungen](ebenen-masken#Anpassungen).
 
 ### Ebene anlegen
 
-**+** unter der Liste bietet:
+**+** in der Überschrift bietet:
 
 - **Neue Ebene**: mit leerer Maske; danach malen oder auswählen.
 - **Neue Ebene mit Stilpinsel**: eine Ebene mit fertigen Anpassungen, der Pinsel ist gleich gewählt. Zur Wahl stehen Aufhellen, Abdunkeln, Wärmer, Kühler, Mehr Farbe, Entsättigen, Details betonen, Haut glätten, Lichter zurückholen, Tiefen aufhellen, Dunst entfernen und Augen aufhellen.
@@ -43,12 +47,12 @@ Legt fest, wo die gewählte Ebene wirkt. Mehrere Werkzeuge lassen sich in einer 
 - **Zauberpinsel** ({taste:tool-magic}): über einen Bereich malen; ausgewählt wird, was zusammenhängt und den überstrichenen Farben ähnelt. **Größe** und **Toleranz** sind einstellbar.
 - **Objekt** ({taste:tool-object}): auf ein Objekt klicken, es wird ausgewählt (KI). Siehe [Objekt auswählen](ebenen-masken#Objekt auswählen).
 
-Darunter:
+Darunter eine Leiste:
 
 - **Füllen**: Maske über das ganze Bild, etwa um sie danach unter **Eingrenzen** zu beschränken.
 - **Leeren**: Maske löschen.
 - **Invertieren**: kehrt die Maske um.
-- **Maske anzeigen** ({taste:show-mask}): färbt die Maske rot ein.
+- Das Symbol rechts, **Maske anzeigen** ({taste:show-mask}): färbt die Maske rot ein.
 
 ↺ im Kopf setzt die Maske zurück.
 
@@ -84,24 +88,24 @@ Jeder Klick ist ein Rückgängig-Schritt.
 
 ### Automatisch auswählen
 
-Die Knöpfe unter **Automatisch auswählen** erzeugen eine Maske aus dem Bildinhalt (KI, siehe [KI-Werkzeuge](ki-werkzeuge#Motiv, Himmel und Tiefe)):
+Die drei Knöpfe unter **Automatisch auswählen** erzeugen eine Maske aus dem Bildinhalt (KI, siehe [KI-Werkzeuge](ki-werkzeuge#Motiv, Himmel und Tiefe)):
 
 - **Motiv**: das Hauptmotiv, auch mit Haaren und feinen Teilen.
 - **Himmel**: den Himmel.
 - **Tiefe**: nach Entfernung, anfangs den nahen Teil des Bildes. Den Bereich stellt danach ein Trapez über der Verteilung der Entfernungen ein, von nah (links) bis fern (rechts), mit getrenntem Übergang nach vorn und hinten.
 
-**Auswahl entfernen** löscht diese automatische Auswahl; Pinselstriche und Verläufe bleiben. Mit Pinsel und Radierer lässt sich die Auswahl nacharbeiten.
+Der Knopf der gewählten Auswahl leuchtet gelb; × darauf löscht sie wieder, Pinselstriche und Verläufe bleiben. Stammt die Auswahl von **Objekt** oder dem Zauberpinsel, steht darunter ein eigener Knopf mit ×. Mit Pinsel und Radierer lässt sich jede Auswahl nacharbeiten.
 
-### Eingrenzen
+## Eingrenzen
 
-Beschränkt die ganze Maske auf einen Helligkeits- oder Farbbereich, etwa einen Verlauf nur auf den hellen Himmel und nicht auf die Bäume davor.
+Beschränkt die ganze Maske auf einen Helligkeits- oder Farbbereich, etwa einen Verlauf nur auf den hellen Himmel und nicht auf die Bäume davor. Beides sind Zeilen mit Schalter; die Zeile zeigt, was eingestellt ist, ein Klick klappt sie auf.
 
-- **Helligkeitsbereich**: ein Trapez über dem Histogramm. Zwischen den oberen Griffen wirkt die Ebene voll, zu den unteren läuft sie aus. Das Trapez lässt sich auch als Ganzes verschieben.
-- **Farbbereich**: mit **Farbe aufnehmen** auf eine Farbe im Bild klicken; **Farbton**, **Breite** und **Weichheit** legen den erfassten Bereich fest, **Min. Chroma** schließt fast neutrale Farben aus.
+- **Helligkeit**: ein Trapez über dem Histogramm. Zwischen den oberen Griffen wirkt die Ebene voll, zu den unteren läuft sie aus. Das Trapez lässt sich auch als Ganzes verschieben.
+- **Farbe**: mit **Farbe aufnehmen** auf eine Farbe im Bild klicken; **Farbton**, **Breite** und **Weichheit** legen den erfassten Bereich fest, **Min. Chroma** schließt fast neutrale Farben aus.
 
 ## Anpassungen
 
-Was die gewählte Ebene ändert. Die Liste zeigt jede Änderung mit ihrem Wert; ein Klick springt zum Werkzeug, ↺ daneben setzt sie zurück, ↺ im Kopf alle.
+Was die gewählte Ebene ändert, steht als Chips in ihrer Karte: jede Änderung mit ihrem Wert; ein Klick springt zum Werkzeug, × setzt sie zurück.
 
 Ist eine Ebene gewählt, wirken diese Regler in den Tabs Belichtung, Farbe und Details auf sie:
 
@@ -114,13 +118,13 @@ Ist eine Ebene gewählt, wirken diese Regler in den Tabs Belichtung, Farbe und D
 - **Farbbalance**.
 - **Klarheit** mit Struktur, **Dunst entfernen**.
 
-Die Knöpfe unter der Liste führen direkt zu den Tabs. Was nur aufs ganze Bild wirkt, ist im Ebenenmodus ausgegraut: etwa Tonwerte, Schärfen, Rauschreduzierung, die Tabs Objektiv, Effekte, Retusche und Stile sowie Automatisch anpassen.
+Was nur aufs ganze Bild wirkt, ist im Ebenenmodus ausgegraut: etwa Tonwerte, Schärfen, Rauschreduzierung, die Tabs Objektiv, Effekte, Retusche und Stile sowie Automatisch anpassen.
 
-> Eine neue Ebene ändert nichts, bis sie eine Maske hat. „Neue Ebene“ führt darum gleich zum Abschnitt Maske.
+> Eine neue Ebene ändert nichts, bis sie eine Maske hat.
 
 ## Beispiel: Himmel abdunkeln
 
 1. **Himmel** unter Automatisch auswählen klicken; eine Ebene „Himmel“ entsteht.
 2. Im Tab Belichtung **Belichtung** senken, im Tab Farbe die **Dynamik** erhöhen.
 3. Mit **Maske anzeigen** prüfen und wenn nötig mit dem Radierer nacharbeiten.
-4. Mit **Deckkraft** die Wirkung insgesamt abschwächen.
+4. Mit **Deckkraft** in der Karte der Ebene die Wirkung insgesamt abschwächen.

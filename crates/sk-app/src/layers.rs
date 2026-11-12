@@ -2,7 +2,7 @@
 //! (heal/clone spots), including the viewer interaction.
 
 use sk_core::mask;
-use sk_core::params::{BrushStroke, Layer, LayerAdjustments, Mask, Spot, SpotMode, SpotStroke};
+use sk_core::params::{BrushStroke, Layer, LayerAdjustments, Spot, SpotMode, SpotStroke};
 use sk_core::pipeline::Processor;
 use sk_core::tools::Tool;
 use egui::{Color32, Pos2, Rect, Response, RichText, Stroke, Ui, Vec2, pos2, vec2};
@@ -11,7 +11,7 @@ use crate::theme::{self, icon};
 
 use crate::ai_models::AiFeature;
 use crate::app::{App, CurveChannel, Tab};
-use crate::widgets::{SliderOpts, hue_rail, slider_row, slider_row_with, subheading};
+use crate::widgets::slider_row;
 
 /// How long an image stays in the Ebenen tab before its subject mask is computed ahead.
 const SUBJECT_AHEAD_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
@@ -458,7 +458,7 @@ impl App {
     /// Computes the image's subject mask in the background (once per image, without notice), so
     /// that Motiv is there at once when clicked (see `subject_worker`). Only for an image that
     /// stays in the Ebenen tab a moment: leafing through images computes nothing.
-    fn prepare_subject(&mut self, ctx: &egui::Context) {
+    pub(crate) fn prepare_subject(&mut self, ctx: &egui::Context) {
         let Some(cur) = &self.current else { return };
         let key = crate::subject_worker::key(&cur.meta.path, cur.preview.width, cur.preview.height);
         if !self.subject_ahead || self.subject_prepared == Some(key) || !sk_ai::subject::available() {
@@ -941,7 +941,7 @@ impl App {
     }
 
     /// Starts a content-based mask computation for layer `index`.
-    fn request_ai_on(&mut self, index: usize, kind: crate::workers::AiKind) {
+    pub(crate) fn request_ai_on(&mut self, index: usize, kind: crate::workers::AiKind) {
         let Some(layer) = self.layer_id(index) else { return };
         if !matches!(kind, crate::workers::AiKind::Object { .. }) {
             self.object_session = None;
@@ -1021,164 +1021,6 @@ impl App {
         self.active_layer = Some(cur.adjustments.layers.len() - 1);
         self.local_tool = Some(LocalTool::Brush);
         self.request_render();
-    }
-
-    /// Everything that shapes the mask, top to bottom: painting tools, whole-mask actions,
-    /// automatic selection from the image content, limiting to a brightness or color range.
-    fn mask_body(&mut self, ui: &mut Ui, changed: &mut bool) {
-        self.tool_tiles(ui, &[LocalTool::Brush, LocalTool::Eraser, LocalTool::Linear, LocalTool::Radial, LocalTool::Magic, LocalTool::Object]);
-        let mut ai_action = None;
-        let mut pick = false;
-        let busy = self.ai_busy;
-        let subject_download = self.ai_download_shown(AiFeature::Subject);
-        let subject_cancel = self.job_cancel(None, Some(&AiFeature::Subject.job_label()));
-        let busy = busy || subject_download.is_some();
-        let tool = self.local_tool;
-        let active = self.active_layer;
-        // The map only for a depth mask (looked up once per image, see `depth_mask_map`).
-        let depth_mask = self.current.as_ref().is_some_and(|c| {
-            active.and_then(|li| c.adjustments.layers.get(li)).is_some_and(|l| l.mask.ai.as_ref().is_some_and(|a| a.depth.is_some()))
-        });
-        let depth_map = if depth_mask { self.current_path().and_then(|p| self.depth_mask_map(&p)) } else { None };
-        let depth_bins = if depth_mask { self.depth_mask_bins() } else { None };
-        let luma_bins: Option<Vec<f32>> = self.histogram.as_ref().map(|h| h.luma.iter().map(|&n| n as f32).collect());
-        let show_mask = &mut self.show_mask;
-        let Some(cur) = self.current.as_mut() else { return };
-        // The background has no mask: its controls are shown, but disabled.
-        let mut placeholder = Layer::default();
-        let has_layer = active.is_some_and(|li| li < cur.adjustments.layers.len());
-        let mut layer = Some(active.and_then(|li| cur.adjustments.layers.get_mut(li)).unwrap_or(&mut placeholder));
-
-        if let Some(layer) = layer.as_deref_mut() {
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                if !has_layer {
-                    ui.disable();
-                }
-                if ui.button("Füllen").on_hover_text("Maske aufs ganze Bild; unter „Eingrenzen“ auf Helligkeit oder Farben beschränken").clicked() {
-                    layer.mask = Mask { fill: true, ..Default::default() };
-                    *changed = true;
-                }
-                if ui.button("Leeren").clicked() {
-                    layer.mask = Mask::default();
-                    *changed = true;
-                }
-                *changed |= crate::widgets::checkbox(ui, &mut layer.mask.invert, "Invertieren").changed();
-                if ui.selectable_label(*show_mask, crate::commands::hint("Maske anzeigen", "show-mask")).clicked() {
-                    *show_mask = !*show_mask;
-                    *changed = true;
-                }
-            });
-        }
-
-        subheading(ui, "Automatisch auswählen");
-        ui.horizontal_wrapped(|ui| {
-            let ai = |ui: &Ui, text: &str| crate::widgets::ai_text(ui, text);
-            if ui.add_enabled(!busy, egui::Button::new(ai(ui, &format!("{}  Motiv", crate::theme::icon::USER)))).on_hover_text(format!("Motiv auswählen\n\n{}", crate::widgets::AI_HINT)).clicked() {
-                ai_action = Some(1);
-            }
-            if ui.add_enabled(!busy, egui::Button::new(ai(ui, &format!("{}  Himmel", crate::theme::icon::CLOUD)))).on_hover_text(format!("Himmel auswählen\n\n{}", crate::widgets::AI_HINT)).clicked() {
-                ai_action = Some(2);
-            }
-            if ui
-                .add_enabled(!busy, egui::Button::new(ai(ui, &format!("{}  Tiefe", crate::theme::icon::MOUNTAINS))))
-                .on_hover_text(format!("Wählt nach Entfernung aus (anfangs den nahen Teil des Bildes); der Bereich lässt sich danach einstellen\n\n{}", crate::widgets::AI_HINT))
-                .clicked()
-            {
-                ai_action = Some(6);
-            }
-        });
-        if let Some(layer) = layer.as_deref_mut() {
-            if let Some(range) = layer.mask.ai.as_ref().and_then(|a| a.depth) {
-                let far = depth_map.as_ref().map_or(sk_core::params::DepthRange::default().far, |m| m.1);
-                if let Some(r) = App::depth_mask_controls(ui, &range, far, depth_bins.as_deref().map(|b| b.as_slice()))
-                    && let Some((map, _)) = &depth_map
-                {
-                    layer.mask.ai = Some(sk_core::depth::range_mask_cached(map, &r));
-                    *changed = true;
-                }
-            }
-            if ui.add_enabled(has_layer && layer.mask.ai.is_some(), egui::Button::new("Auswahl entfernen")).clicked() {
-                layer.mask.ai = None;
-                *changed = true;
-            }
-        }
-        if let Some(p) = subject_download {
-            crate::ai_models::download_progress(ui, AiFeature::Subject, p, subject_cancel);
-        }
-
-        if let Some(layer) = layer {
-            subheading(ui, "Eingrenzen");
-            ui.scope(|ui| {
-                if !has_layer {
-                    ui.disable();
-                }
-                let m = &mut layer.mask;
-                let mut luma_on = m.luma_range.is_some();
-                if crate::widgets::checkbox(ui, &mut luma_on, "Helligkeitsbereich").changed() {
-                    m.luma_range = luma_on.then(Default::default);
-                    *changed = true;
-                }
-                // Switched off: the range is shown, but disabled.
-                let mut r = m.luma_range.unwrap_or_default();
-                ui.add_enabled_ui(luma_on, |ui| {
-                    *changed |= crate::widgets::luma_range_editor(ui, &mut r, luma_bins.as_deref());
-                });
-                if luma_on {
-                    m.luma_range = Some(r);
-                }
-                let mut color_on = m.color_range.is_some();
-                if crate::widgets::checkbox(ui, &mut color_on, "Farbbereich").changed() {
-                    m.color_range = color_on.then(Default::default);
-                    *changed = true;
-                }
-                let mut c = m.color_range.unwrap_or_default();
-                ui.add_enabled_ui(color_on, |ui| {
-                    if ui.add(egui::Button::new(LocalTool::ColorPick.label()).selected(tool == Some(LocalTool::ColorPick))).clicked() {
-                        pick = true;
-                    }
-                    let rail = hue_rail();
-                    *changed |= slider_row_with(ui, "Farbton", &mut c.hue, 0.0..=360.0, 30.0, 0, SliderOpts { suffix: "°", rail: Some(&rail), ..Default::default() });
-                    *changed |= slider_row_with(ui, "Breite", &mut c.width, 2.0..=90.0, 25.0, 0, SliderOpts { suffix: "°", ..Default::default() });
-                    *changed |= slider_row_with(ui, "Weichheit", &mut c.falloff, 0.0..=60.0, 15.0, 0, SliderOpts { suffix: "°", ..Default::default() });
-                    *changed |= slider_row(ui, "Min. Chroma", &mut c.min_chroma, 0.0..=0.2, 0.03, 3);
-                });
-                if color_on {
-                    m.color_range = Some(c);
-                }
-            });
-        }
-        match ai_action {
-            // Found without a model.
-            Some(2) => {
-                if let Some(layer) = self.ensure_layer_named(Some("Himmel")) {
-                    self.request_ai_on(layer, crate::workers::AiKind::Sky);
-                }
-            }
-            Some(1) => {
-                let kind = crate::workers::AiKind::Subject;
-                let generation = self.generation();
-                // The layer chosen now, even if another one is active when the model is there.
-                let layer = self.ensure_layer_named(Some("Motiv")).and_then(|i| self.layer_id(i));
-                self.with_ai(AiFeature::Subject, move |app| {
-                    if app.generation() == generation
-                        && let Some(i) = layer.and_then(|id| app.layer_index(id))
-                    {
-                        app.request_ai_on(i, kind);
-                    }
-                });
-            }
-            Some(6) => {
-                if let Some(layer) = self.ensure_layer_named(Some("Tiefe")) {
-                    self.object_session = None;
-                    self.set_depth_mask(layer, None);
-                }
-            }
-            _ => {}
-        }
-        if pick {
-            self.set_local_tool(LocalTool::ColorPick);
-        }
     }
 
     /// "Retuschen": everything retouched, removals first (they are applied first), then the heal
@@ -1467,166 +1309,6 @@ impl App {
         });
     }
 
-    /// Layer overview: opacity of the chosen layer on top, one
-    /// compact row per layer (topmost first), rename by clicking the name, + and − below.
-    pub(crate) fn layer_list(&mut self, ui: &mut Ui) -> Option<LayerAction> {
-        use crate::theme::{self, icon};
-        let cur = self.current.as_mut()?;
-        let layers = &mut cur.adjustments.layers;
-        let active = self.active_layer.filter(|i| *i < layers.len());
-        let renaming = &mut self.renaming_layer;
-        if renaming.as_ref().is_some_and(|r| r.index >= layers.len()) {
-            *renaming = None;
-        }
-        let mut action = None;
-        let mut changed = false;
-        let count = layers.len();
-        let look_names: Vec<String> = self.film_looks.iter().map(|(s, _)| s.name.clone()).collect();
-        let style_names: Vec<String> = self.styles.iter().map(|s| s.name.clone()).collect();
-        let help = "Oberste Ebene zuerst. Klick wählt, Doppelklick benennt um, das Auge blendet aus.\n\nPinsel, Verlauf und Zauberpinsel legen selbst eine Ebene an, wenn keine gewählt ist.";
-        crate::widgets::list_section(ui, "Ebenen", help, count, None, |ui| {
-            // Opacity of the chosen layer; greyed out for the background.
-            match active {
-                Some(li) => changed |= crate::widgets::percent_row(ui, "Deckkraft", &mut layers[li].opacity, 0.0..=100.0, 100.0),
-                None => {
-                    ui.add_enabled_ui(false, |ui| crate::widgets::percent_row(ui, "Deckkraft", &mut 100.0, 0.0..=100.0, 100.0));
-                }
-            }
-            ui.add_space(4.0);
-            ui.spacing_mut().item_spacing.y = 1.0;
-            let h = LIST_ROW;
-            // The topmost layer first, the background at the bottom.
-            let rows = layers.len();
-            for i in (0..=rows).rev() {
-                let layer = (i < rows).then_some(i);
-                let selected = if layer.is_some() { active == Some(i) } else { active.is_none() };
-                let name = layer.map_or("Hintergrund".to_string(), |li| layers[li].name.clone());
-                let (rect, resp) = crate::widgets::list_row(ui, h, selected, &name);
-                let eye_rect = Rect::from_min_size(rect.min + vec2(4.0, (h - 22.0) / 2.0), vec2(22.0, 22.0));
-                let eye = layer.map(|_| ui.interact(eye_rect, ui.id().with(("eye", i)), egui::Sense::click()));
-                let x = eye_rect.right() + 6.0;
-                let Some(li) = layer else {
-                    let p = ui.painter();
-                    p.text(pos2(x, rect.center().y), egui::Align2::LEFT_CENTER, "Hintergrund", egui::FontId::proportional(13.0), theme::TEXT_DIM);
-                    if resp.clicked() {
-                        action = Some(LayerAction::Select(None));
-                    }
-                    continue;
-                };
-                let l = &mut layers[li];
-                let on = l.enabled;
-                let p = ui.painter().clone();
-                if let Some(eye) = &eye {
-                    let c = if eye.hovered() { Color32::WHITE } else if on { theme::TEXT_DIM } else { theme::TEXT_FAINT };
-                    let ic = if on { icon::EYE } else { icon::EYE_CLOSED };
-                    p.text(eye_rect.center(), egui::Align2::CENTER_CENTER, ic, egui::FontId::proportional(15.0), c);
-                }
-                let dim = if on { theme::TEXT_DIM } else { theme::TEXT_FAINT };
-                let g = p.layout_no_wrap(format!("{:.0} %", l.opacity), egui::FontId::proportional(11.5), dim);
-                let right = rect.right() - 8.0 - g.size().x;
-                p.galley(pos2(right, rect.center().y - g.size().y / 2.0), g, dim);
-                let name_rect = Rect::from_min_max(pos2(x, rect.top() + 3.0), pos2(right - 8.0, rect.bottom() - 3.0));
-                if let Some(r) = renaming.as_mut().filter(|r| r.index == li) {
-                    let edit = egui::TextEdit::singleline(&mut l.name).margin(vec2(4.0, 2.0)).desired_width(name_rect.width());
-                    let mut out = ui.scope_builder(egui::UiBuilder::new().max_rect(name_rect), |ui| edit.show(ui)).inner;
-                    if r.focus {
-                        r.focus = false;
-                        out.response.request_focus();
-                        let all = egui::text::CCursorRange::two(egui::text::CCursor::new(0), egui::text::CCursor::new(l.name.chars().count()));
-                        out.state.cursor.set_char_range(Some(all));
-                        out.state.store(ui.ctx(), out.response.id);
-                    } else if out.response.lost_focus() {
-                        if ui.input(|i| i.key_pressed(egui::Key::Escape)) || l.name.trim().is_empty() {
-                            l.name = std::mem::take(&mut r.original);
-                        }
-                        *renaming = None;
-                    }
-                } else {
-                    // Name, then what the mask consists of, faint and truncated.
-                    let text_color = if on { theme::TEXT } else { theme::TEXT_FAINT };
-                    let mut job = egui::text::LayoutJob::default();
-                    job.append(&l.name, 0.0, egui::TextFormat::simple(egui::FontId::proportional(13.0), text_color));
-                    job.append(&layer_summary(l), 8.0, egui::TextFormat::simple(egui::FontId::proportional(11.0), theme::TEXT_FAINT));
-                    job.wrap = egui::text::TextWrapping::truncate_at_width(name_rect.width());
-                    let g = p.layout_job(job);
-                    p.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, text_color);
-                    let on_name = resp.interact_pointer_pos().is_some_and(|pos| name_rect.contains(pos));
-                    let eye_hint = if on { "Ausblenden · Alt-Klick: nur diese Ebene" } else { "Einblenden · Alt-Klick: nur diese Ebene" };
-                    if eye.as_ref().is_some_and(|r| r.clone().on_hover_text(eye_hint).clicked()) {
-                        action = Some(if ui.input(|i| i.modifiers.alt) { LayerAction::Solo(li) } else { LayerAction::Toggle(li) });
-                    } else if resp.double_clicked() || (resp.clicked() && selected && on_name) {
-                        *renaming = Some(Rename { index: li, original: l.name.clone(), focus: true });
-                        action = Some(LayerAction::Select(Some(li)));
-                    } else if resp.clicked() {
-                        action = Some(LayerAction::Select(Some(li)));
-                    }
-                    crate::widgets::context_menu(&resp, |ui| {
-                        if ui.button("Umbenennen").clicked() {
-                            *renaming = Some(Rename { index: li, original: l.name.clone(), focus: true });
-                            action = Some(LayerAction::Select(Some(li)));
-                        }
-                        if ui.button(if on { "Ausblenden" } else { "Einblenden" }).clicked() {
-                            action = Some(LayerAction::Toggle(li));
-                        }
-                        if ui.button(format!("{}  Löschen", icon::TRASH)).clicked() {
-                            action = Some(LayerAction::Delete(li));
-                        }
-                    });
-                }
-            }
-            if rows == 0 {
-                crate::widgets::hint(ui, "Nur der Hintergrund: + oder ein Maskenwerkzeug legt eine Ebene an.");
-            }
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                let plus = crate::widgets::menu_button(ui, egui::RichText::new(icon::PLUS).size(15.0), |ui| {
-                    if ui.button("Neue Ebene").on_hover_text("Leere Maske, dann malen oder auswählen").clicked() {
-                        action = Some(LayerAction::Add);
-                    }
-                    crate::widgets::menu_button(ui, "Neue Ebene mit Stilpinsel", |ui| {
-                        for (k, (name, _)) in style_brushes().iter().enumerate() {
-                            if ui.button(*name).clicked() {
-                                action = Some(LayerAction::AddStyle(k));
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text("Ebene mit fertigen Anpassungen, der Pinsel ist gleich gewählt");
-                    crate::widgets::menu_button(ui, "Neue Ebene mit Look", |ui| {
-                        for (index, name) in look_names.iter().enumerate() {
-                            if ui.button(name).clicked() {
-                                action = Some(LayerAction::AddLook { look: true, index });
-                            }
-                        }
-                        if !style_names.is_empty() {
-                            ui.separator();
-                            for (index, name) in style_names.iter().enumerate() {
-                                if ui.button(name).clicked() {
-                                    action = Some(LayerAction::AddLook { look: false, index });
-                                }
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text("Ebene über das ganze Bild mit einem Look oder Stil: ihre Deckkraft ist die Stärke, ihre Maske schränkt ihn ein");
-                })
-                .response
-                .on_hover_text("Neue Ebene");
-                crate::tour::target(ui.ctx(), "new-layer", plus.rect);
-                let minus = ui.add_enabled(active.is_some(), egui::Button::new(egui::RichText::new(icon::TRASH).size(15.0)));
-                if minus.on_hover_text(crate::commands::hint("Gewählte Ebene löschen", "delete-spot")).clicked()
-                    && let Some(li) = active
-                {
-                    action = Some(LayerAction::Delete(li));
-                }
-            });
-        });
-        if changed {
-            self.request_render();
-        }
-        action
-    }
-
     /// Bar at the top of the develop tabs: what the tools change, the background or a layer
     /// (with the accent color), with a menu to choose and an X back to the background. Hovering
     /// it shows the layer's mask.
@@ -1744,80 +1426,6 @@ impl App {
     // ---------------------------------------------------------------- tab
 
     /// Three groups, top to bottom: which layer, where it acts (mask), what it does (adjustments).
-    pub fn layers_tab(&mut self, ui: &mut Ui) {
-        if self.current.is_none() {
-            crate::widgets::no_image(ui);
-            return;
-        }
-        self.prepare_subject(&ui.ctx().clone());
-        let action = self.layer_list(ui);
-        let mut changed = false;
-        let help = "Wo die gewählte Ebene wirkt: mit Pinsel, Verlauf, Zauberpinsel oder Objekt malen bzw. auswählen.\n\n[ und ] oder Ziehen mit der rechten Maustaste: Pinselgröße und Härte. Bei Objekt wählt Umschalt+Klick ein weiteres Objekt, Alt+Klick nimmt Teile aus. Eingrenzen beschränkt auf einen Helligkeits- oder Farbbereich.";
-        let mut reset_mask = false;
-        crate::widgets::section_help(ui, "Maske", help, Some(&mut || reset_mask = true), |ui| self.mask_body(ui, &mut changed));
-        if reset_mask && let Some(li) = self.active_layer {
-            self.edit(|a| {
-                if let Some(l) = a.layers.get_mut(li) {
-                    l.mask = Mask::default();
-                }
-            });
-        }
-
-        let mut jump = None;
-        let Some(cur) = self.current.as_mut() else { return };
-        let mut layer = self.active_layer.and_then(|li| cur.adjustments.layers.get_mut(li));
-        let mut reset = false;
-        let mut on_reset = || reset = true;
-        let on_reset: Option<&mut dyn FnMut()> = if layer.is_some() { Some(&mut on_reset) } else { None };
-        let help = "Was die gewählte Ebene ändert. Die Regler in Belichtung, Farbe und Details wirken auf sie; \
-                    ein Klick auf einen Eintrag springt zum Werkzeug.";
-        crate::widgets::section_full(ui, "Anpassungen", true, Some(help), on_reset, |ui| {
-            let Some(layer) = layer.as_deref_mut() else {
-                crate::widgets::hint(ui, "Eine Ebene wählen oder anlegen.");
-                return;
-            };
-            let a = &mut layer.adjustments;
-            let changes = layer_changes(a);
-            if changes.is_empty() {
-                crate::widgets::hint(ui, "Noch keine Änderungen. Die Regler in Belichtung, Farbe und Details wirken jetzt auf diese Ebene.");
-            }
-            for c in changes {
-                ui.horizontal(|ui| {
-                    let text = format!("{}  {}", c.label, c.value);
-                    if ui.add(egui::Button::new(text).frame(false)).on_hover_text(format!("Zu „{}“", c.tool.label())).clicked() {
-                        jump = Some(c.tool);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::widgets::small_button(ui, crate::theme::icon::ARROW_COUNTER_CLOCKWISE, "Zurücksetzen").clicked() {
-                            c.key.reset(a);
-                            changed = true;
-                        }
-                    });
-                });
-            }
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                for (tab, tool) in [(Tab::Exposure, Tool::Exposure), (Tab::Color, Tool::ColorBalance), (Tab::Details, Tool::Clarity)] {
-                    if ui.small_button(format!("{}  {}", tab.icon(), tab.title())).on_hover_text("Werkzeuge für diese Ebene").clicked() {
-                        jump = Some(tool);
-                    }
-                }
-            });
-        });
-        if reset && let Some(layer) = layer {
-            layer.adjustments = LayerAdjustments::default();
-            changed = true;
-        }
-        if changed {
-            self.request_render();
-        }
-        if let Some(tool) = jump {
-            self.tab = tab_of(tool);
-            crate::widgets::reveal_section(ui.ctx(), tool.label());
-        }
-        self.apply_layer_action(action);
-    }
-
     /// Retouching: heal, clone and generative removal work on the image, not on a layer.
     pub fn retouch_tab(&mut self, ui: &mut Ui) {
         if self.current.is_none() {
@@ -1865,7 +1473,7 @@ impl App {
     }
 
     /// The tool tiles (three per row) and the settings of the active one.
-    fn tool_tiles(&mut self, ui: &mut Ui, tools: &[LocalTool]) {
+    pub(crate) fn tool_tiles(&mut self, ui: &mut Ui, tools: &[LocalTool]) {
         let gap = 4.0;
         let w = ((ui.available_width() - 2.0 * gap) / 3.0).floor();
         let mut tool_click = None;
@@ -1981,7 +1589,7 @@ pub(crate) enum LayerAction {
 }
 
 /// The tab with a tool that works on layers.
-fn tab_of(tool: Tool) -> Tab {
+pub(crate) fn tab_of(tool: Tool) -> Tab {
     match tool {
         Tool::Exposure | Tool::HighlightsShadows | Tool::Curves => Tab::Exposure,
         Tool::Clarity | Tool::Dehaze => Tab::Details,
@@ -1991,7 +1599,7 @@ fn tab_of(tool: Tool) -> Tab {
 
 /// One value of a layer's adjustments (see [`layer_changes`]).
 #[derive(Clone, Copy)]
-enum ChangeKey {
+pub(crate) enum ChangeKey {
     Field(usize),
     Band(usize),
     Wheel(usize),
@@ -1999,7 +1607,7 @@ enum ChangeKey {
 }
 
 impl ChangeKey {
-    fn reset(self, a: &mut LayerAdjustments) {
+    pub(crate) fn reset(self, a: &mut LayerAdjustments) {
         match self {
             ChangeKey::Field(i) => *(LAYER_FIELDS[i].2)(a) = 0.0,
             ChangeKey::Band(i) => a.color_bands[i] = Default::default(),
@@ -2009,11 +1617,11 @@ impl ChangeKey {
     }
 }
 
-struct Change {
-    label: String,
-    value: String,
-    tool: Tool,
-    key: ChangeKey,
+pub(crate) struct Change {
+    pub label: String,
+    pub value: String,
+    pub tool: Tool,
+    pub key: ChangeKey,
 }
 
 type Field = fn(&mut LayerAdjustments) -> &mut f32;
@@ -2042,7 +1650,7 @@ fn wheels(a: &mut LayerAdjustments) -> [(&'static str, &mut sk_core::params::Col
 }
 
 /// What a layer changes, in the order of the tools.
-fn layer_changes(a: &LayerAdjustments) -> Vec<Change> {
+pub(crate) fn layer_changes(a: &LayerAdjustments) -> Vec<Change> {
     let mut a = a.clone();
     let mut out = Vec::new();
     for (i, (label, tool, field, decimals)) in LAYER_FIELDS.iter().enumerate() {
@@ -2073,37 +1681,6 @@ fn layer_changes(a: &LayerAdjustments) -> Vec<Change> {
         }
     }
     out
-}
-
-/// Short description of what a layer's mask consists of, e.g. "Pinsel · Verlauf".
-fn layer_summary(l: &Layer) -> String {
-    let m = &l.mask;
-    let mut parts: Vec<String> = Vec::new();
-    if m.fill {
-        parts.push("Gefüllt".into());
-    }
-    if !m.strokes.is_empty() {
-        parts.push("Pinsel".into());
-    }
-    if !m.linear.is_empty() {
-        parts.push("Verlauf".into());
-    }
-    if !m.radial.is_empty() {
-        parts.push("Radial".into());
-    }
-    if m.ai.is_some() {
-        parts.push("KI-Maske".into());
-    }
-    if m.is_empty() {
-        parts.push("Leere Maske".into());
-    }
-    if m.luma_range.is_some() || m.color_range.is_some() {
-        parts.push("Bereich".into());
-    }
-    if m.invert {
-        parts.push("Invertiert".into());
-    }
-    parts.join(" · ")
 }
 
 /// Outline of what a stroke takes away from a retouch or removal area.
