@@ -498,8 +498,6 @@ pub struct App {
     pub(crate) snapshot_grid: crate::style_grid::SnapshotGrid,
     /// Styles as a list instead of the grid of previews.
     pub(crate) style_list: bool,
-    /// Which styles already act on the image (see `style_panel`).
-    pub(crate) style_applied: Option<crate::style_panel::AppliedCache>,
     /// A folder shows the pictures of its subfolders too (setting "Unterordner einbeziehen").
     pub(crate) include_subfolders: bool,
     /// Lensfun profiles, read in the background at startup.
@@ -620,10 +618,8 @@ pub struct App {
     pub selected_spot: Option<usize>,
     /// The chosen area of the remove tool (index into `Adjustments::removals`).
     pub selected_removal: Option<usize>,
-    /// What painting does to a chosen retouch or removal area (see `AreaPaint`), switched on
-    /// for the area chosen then (`selected_spot`, `selected_removal`); see `App::area_paint_now`.
+    /// What painting does to a chosen retouch or removal area (see `AreaPaint`).
     pub area_paint: crate::layers::AreaPaint,
-    pub(crate) area_paint_on: (Option<usize>, Option<usize>),
     /// How the stroke being painted acts, fixed when it starts (with Shift or Alt).
     pub(crate) stroke_paint: crate::layers::AreaPaint,
     /// Alt-clicked with Reparieren or Klonen and no area chosen: the source of the next one.
@@ -1067,7 +1063,6 @@ impl App {
             style_grid: Default::default(),
             snapshot_grid: Default::default(),
             style_list: settings.style_list,
-            style_applied: None,
             include_subfolders: !settings.folder_only,
             lens_db: None,
             lens_db_downloading: false,
@@ -1158,7 +1153,6 @@ impl App {
             selected_spot: None,
             selected_removal: None,
             area_paint: Default::default(),
-            area_paint_on: (None, None),
             stroke_paint: Default::default(),
             next_source: None,
             show_mask: false,
