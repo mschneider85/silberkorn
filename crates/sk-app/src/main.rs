@@ -20,6 +20,7 @@ mod deletion;
 mod dialog;
 mod ai_products;
 mod noise;
+mod output;
 mod target_tool;
 mod depth;
 mod develop_tools;

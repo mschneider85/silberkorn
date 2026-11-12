@@ -5320,3 +5320,56 @@ fn metadata_sums_up_the_selection() {
     f.app.add_keyword("Bäume");
     assert!(f.app.meta_summary().unwrap().keywords.iter().all(|(_, n)| *n == 2));
 }
+
+/// The Ausgabe tab: the export on top, the recipes as cards (a click on the check switches one
+/// off, on the card closes it), "Druck" shows the print page with the Kontur; the palette
+/// switches pages and opens folded parts.
+#[test]
+fn output_tab_has_file_and_print_pages() {
+    let Some(mut f) = Fixture::new("output-tab") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.tab = crate::app::Tab::Output;
+    f.app.recipes = vec![
+        sk_core::export::ExportRecipe { name: "Web".into(), ..Default::default() },
+        sk_core::export::ExportRecipe { name: "Archiv".into(), format: sk_core::export::ExportFormat::Tiff16, ..Default::default() },
+    ];
+    f.app.recipes[1].enabled = true;
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(widget(&nodes, "Exportieren").is_some(), "Export oben");
+    assert!(widget(&nodes, "Rezept Web").is_some() && widget(&nodes, "Rezept Archiv").is_some());
+    assert!(widget(&nodes, "Qualität").is_some(), "das gewählte Rezept ist offen");
+    assert!(widget(&nodes, "16 Bit").is_none(), "JPEG hat keine Bittiefe");
+
+    // A click on the open card closes it; the check switches a recipe off.
+    let nodes = click_at(&mut f, widget(&nodes, "Rezept Web").unwrap().center());
+    assert!(!f.app.recipe_open && widget(&nodes, "Qualität").is_none(), "zugeklappt");
+    let check = widget(&nodes, "Archiv verwenden").expect("Haken");
+    click_at(&mut f, check.center());
+    assert!(!f.app.recipes[1].enabled);
+    let card = widget(&nodes, "Rezept Archiv").unwrap();
+    let nodes = click_at(&mut f, card.center());
+    assert_eq!(f.app.selected_recipe, 1);
+    assert!(widget(&nodes, "16 Bit").is_some(), "TIFF: Bittiefe");
+
+    // Druck: paper, the image on the page with the Kontur, up to 2 mm.
+    let druck = nodes.iter().find(|(l, _)| l == "Druck").map(|(_, r)| *r).expect("Druck");
+    let nodes = click_at(&mut f, druck.center());
+    assert!(f.app.output_print);
+    assert!(widget(&nodes, "Kontur").is_some() && widget(&nodes, "Rahmen").is_none());
+    assert!(widget(&nodes, "Helligkeit").is_none(), "Druckanpassung ist zu");
+    click_slider(&mut f, slider(&nodes, "Kontur"));
+    let b = f.app.print.settings.border_mm;
+    assert!(b > 1.0 && b <= 2.0, "{b}");
+
+    // The palette: a part of the file page switches back and opens it.
+    crate::widgets::reveal_section(&f.ctx, "Wasserzeichen");
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let nodes = if f.app.output_print { tool_panel_frame(&mut f, vec![]) } else { nodes };
+    assert!(!f.app.output_print && f.app.recipe_open);
+    let nodes = if widget(&nodes, "Deckkraft").is_none() { tool_panel_frame(&mut f, vec![]) } else { nodes };
+    assert!(widget(&nodes, "Deckkraft").is_some(), "Wasserzeichen aufgeklappt");
+    crate::widgets::reveal_section(&f.ctx, "Druckanpassung");
+    tool_panel_frame(&mut f, vec![]);
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    assert!(f.app.output_print && widget(&nodes, "Helligkeit").is_some(), "Druckanpassung aufgeklappt");
+}

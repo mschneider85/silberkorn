@@ -1,14 +1,12 @@
 //! Tool tabs: Library, Exposure, Color, Effects, Metadata, Output.
 
-use sk_core::export::{ExportFormat, OutputSharpening, Resize};
-use sk_core::watermark::{Anchor, WatermarkKind};
 use sk_core::params::{BaseCurve, Curve, Levels, WbMode, WhiteBalance};
 use sk_core::pipeline::SliderView;
-use egui::{Color32, RichText, Ui};
+use egui::{Color32, Ui};
 
 use crate::app::{App, CurveChannel, Tab};
 use crate::layer_target::Target;
-use crate::widgets::{self, section, slider_row};
+use crate::widgets::{self, slider_row};
 
 /// The crosshair of the Zielkorrektur (selected while on); returns whether it was clicked.
 pub(crate) fn target_button(ui: &mut Ui, on: bool, hint: &str) -> bool {
@@ -87,11 +85,7 @@ impl App {
             Tab::Exposure => self.exposure_tab(ui),
             Tab::Color => self.color_tab(ui),
             Tab::Metadata => self.metadata_tab(ui),
-            Tab::Output => {
-                self.output_tab(ui);
-                self.softproof_section(ui);
-                self.print_section(ui);
-            }
+            Tab::Output => self.output_tab(ui),
         }
     }
 
@@ -383,193 +377,5 @@ impl App {
             self.request_render();
         }
         self.color_advanced(ui);
-    }
-
-    fn output_tab(&mut self, ui: &mut Ui) {
-        let mut add = false;
-        let mut remove = None;
-        section(ui, "Ausgaberezepte", None, |ui| {
-            for (i, r) in self.recipes.iter_mut().enumerate() {
-                ui.horizontal(|ui| {
-                    crate::widgets::checkbox(ui, &mut r.enabled, "").on_hover_text("Beim Exportieren verwenden");
-                    if ui.selectable_label(self.selected_recipe == i, &r.name).clicked() {
-                        self.selected_recipe = i;
-                    }
-                    crate::widgets::hint(ui, format!("{} · {}", r.format.label(), r.output_space.label()));
-                });
-            }
-            ui.horizontal(|ui| {
-                if ui.button(format!("{}  Rezept", crate::theme::icon::PLUS)).clicked() {
-                    add = true;
-                }
-                if self.recipes.len() > 1 && ui.button(format!("{}  Löschen …", crate::theme::icon::TRASH)).clicked() {
-                    remove = Some(self.selected_recipe);
-                }
-            });
-        });
-        if add {
-            let mut r = self.recipes.get(self.selected_recipe).cloned().unwrap_or_default();
-            r.name = format!("Rezept {}", self.recipes.len() + 1);
-            self.recipes.push(r);
-            self.selected_recipe = self.recipes.len() - 1;
-        }
-        if let Some(i) = remove {
-            let name = self.recipes[i].name.clone();
-            self.request_deletion(crate::deletion::Deletion::Recipe(i, name));
-        }
-        self.selected_recipe = self.selected_recipe.min(self.recipes.len().saturating_sub(1));
-        let Some(r) = self.recipes.get_mut(self.selected_recipe) else { return };
-        section(ui, "Rezept bearbeiten", None, |ui| {
-            widgets::field(ui, "Name", |ui| ui.text_edit_singleline(&mut r.name));
-            widgets::combo_field(ui, "Format", r.format.label(), |ui| {
-                for f in ExportFormat::ALL {
-                    if ui.selectable_value(&mut r.format, f, f.label()).changed() && !f.supports(r.output_space) {
-                        r.output_space = sk_core::color::OutputSpace::Srgb;
-                    }
-                }
-            });
-            widgets::combo_field(ui, "Farbraum", r.output_space.label(), |ui| {
-                for sp in sk_core::color::OutputSpace::ALL {
-                    ui.add_enabled_ui(r.format.supports(sp), |ui| ui.selectable_value(&mut r.output_space, sp, sp.label()))
-                        .response
-                        .on_disabled_hover_text("AVIF-Dateien kennzeichnen den Farbraum ohne ICC-Profil; das geht nur für sRGB und Display P3");
-                }
-            });
-            // Lossless formats have no quality: shown, but disabled.
-            ui.add_enabled_ui(r.format.has_quality(), |ui| {
-                let mut q = r.quality as f32;
-                if slider_row(ui, "Qualität", &mut q, 1.0..=100.0, 90.0, 0) {
-                    r.quality = q.round() as _;
-                }
-            })
-            .response
-            .on_disabled_hover_text("Verlustfreies Format: ohne Qualitätsstufe");
-            let size_label = if r.size.is_some() { r.resize.label() } else { "Originalgröße" };
-            let mut resize = r.size.map(|_| r.resize);
-            widgets::combo_field(ui, "Größe", size_label, |ui| {
-                ui.selectable_value(&mut resize, None, "Originalgröße");
-                for m in Resize::ALL {
-                    ui.selectable_value(&mut resize, Some(m), m.label());
-                }
-            });
-            if let Some(m) = resize {
-                let percent = m == Resize::Percent;
-                // The value is kept in its unit when switching between the pixel modes.
-                let mut v = match r.size {
-                    Some(v) if (r.resize == Resize::Percent) == percent => v,
-                    _ if percent => 50,
-                    _ => 2048,
-                };
-                widgets::field(ui, "", |ui| {
-                    let drag = if percent { egui::DragValue::new(&mut v).range(1..=100).suffix(" %") } else { egui::DragValue::new(&mut v).range(16..=20000).suffix(" px") };
-                    ui.add(drag).on_hover_text("Nie größer als das entwickelte Bild")
-                });
-                r.resize = m;
-                r.size = Some(v);
-            } else {
-                r.size = None;
-            }
-            widgets::combo_field(ui, "Ausgabeschärfung", r.output_sharpening.label(), |ui| {
-                for s in OutputSharpening::ALL {
-                    ui.selectable_value(&mut r.output_sharpening, s, s.label());
-                }
-            });
-            widgets::field(ui, "Ordner", |ui| {
-                let mut dir = r.output_dir.to_string_lossy().to_string();
-                if ui.text_edit_singleline(&mut dir).changed() {
-                    r.output_dir = dir.into();
-                }
-            });
-            crate::widgets::hint(ui, "Relativ zum Bildordner, z. B. „Output“");
-            widgets::field(ui, "Dateiname", |ui| ui.add(egui::TextEdit::singleline(&mut r.name_template).hint_text("{Name}")));
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
-                for (token, help) in sk_core::naming::TOKENS {
-                    if ui.small_button(RichText::new(token).small()).on_hover_text(help).clicked() {
-                        r.name_template.push_str(token);
-                    }
-                }
-            });
-            widgets::field(ui, "Suffix", |ui| ui.text_edit_singleline(&mut r.suffix));
-        });
-        let mut reset_watermark = false;
-        section(ui, "Wasserzeichen", Some(&mut || reset_watermark = true), |ui| {
-            let wm = &mut r.watermark;
-            crate::widgets::checkbox(ui, &mut wm.enabled, "Wasserzeichen einfügen");
-            ui.add_enabled_ui(wm.enabled, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut wm.kind, WatermarkKind::Text, "Text");
-                    ui.selectable_value(&mut wm.kind, WatermarkKind::Image, "Logo");
-                });
-                match wm.kind {
-                    WatermarkKind::Text => {
-                        ui.text_edit_singleline(&mut wm.text);
-                        ui.horizontal(|ui| {
-                            ui.selectable_value(&mut wm.dark, false, "Weiß");
-                            ui.selectable_value(&mut wm.dark, true, "Schwarz");
-                        });
-                    }
-                    WatermarkKind::Image => {
-                        ui.horizontal(|ui| {
-                            if ui.button("Logo wählen …").clicked()
-                                && let Some(f) = rfd::FileDialog::new().set_title("Logo für das Wasserzeichen").add_filter("Bilder", &["png", "jpg", "jpeg", "tif", "tiff"]).pick_file()
-                            {
-                                wm.image = f;
-                            }
-                            let name = wm.image.file_name().map_or("kein Logo".into(), |n| n.to_string_lossy().to_string());
-                            ui.label(RichText::new(name).small().color(Color32::from_gray(160)));
-                        });
-                        crate::widgets::hint(ui, "PNG mit Transparenz empfohlen");
-                    }
-                }
-                widgets::combo_field(ui, "Position", wm.anchor.label(), |ui| {
-                    for a in Anchor::ALL {
-                        ui.selectable_value(&mut wm.anchor, a, a.label());
-                    }
-                });
-                let pct = widgets::SliderOpts { suffix: " %", ..Default::default() };
-                let d = sk_core::watermark::Watermark::default();
-                widgets::slider_row_with(ui, "Größe", &mut wm.size, 1.0..=30.0, d.size, 1, pct);
-                widgets::slider_row_with(ui, "Abstand", &mut wm.margin, 0.0..=20.0, d.margin, 1, pct);
-                let mut opacity = wm.opacity * 100.0;
-                if widgets::slider_row_with(ui, "Deckkraft", &mut opacity, 5.0..=100.0, d.opacity * 100.0, 0, pct) {
-                    wm.opacity = opacity / 100.0;
-                }
-                crate::widgets::hint(ui, format!("Größe und Abstand in % der kurzen Bildkante. {}.", crate::commands::hint("Vorschau in der Ausgabevorschau", "proof")));
-            });
-        });
-        if reset_watermark {
-            r.watermark = Default::default();
-        }
-        section(ui, "Metadaten", None, |ui| {
-            crate::widgets::checkbox(ui, &mut r.capture_metadata, "Aufnahmedaten übernehmen").on_hover_text("Kamera, Objektiv, Belichtung und Aufnahmedatum");
-            widgets::field(ui, "Fotograf", |ui| ui.text_edit_singleline(&mut r.artist));
-            widgets::field(ui, "Copyright", |ui| ui.text_edit_singleline(&mut r.copyright));
-            let note = if r.format.has_metadata() {
-                "GPS-Daten werden nie übernommen."
-            } else {
-                "TIFF-Dateien erhalten keine Metadaten."
-            };
-            crate::widgets::hint(ui, note);
-        });
-        section(ui, "Exportieren", None, |ui| {
-            let n = self.selected_count();
-            let k = self.recipes.iter().filter(|r| r.enabled).count();
-            let text = RichText::new(format!("{}  {} × {} exportieren", crate::theme::icon::EXPORT, widgets::image_count(n), if k == 1 { "1 Rezept".to_string() } else { format!("{k} Rezepte") })).color(Color32::WHITE);
-            let button = egui::Button::new(text).fill(crate::theme::ACCENT).corner_radius(6).min_size(egui::vec2(ui.available_width(), 30.0));
-            let enabled = self.command_available("export");
-            if ui.add_enabled(enabled, crate::dialog::unless_enabled(button, enabled)).on_disabled_hover_text(self.export_blocked_reason()).clicked() {
-                self.export_selection();
-            }
-            if let (Some((done, total)), Some(f)) = (self.export_progress, self.export_fraction()) {
-                ui.add(egui::ProgressBar::new(f).text(format!("{done} / {total}")));
-                if let Some(c) = &self.export_cancel {
-                    crate::widgets::cancel_button(ui, c);
-                }
-            }
-            for msg in self.export_log.iter().rev().take(8) {
-                ui.label(RichText::new(msg).small());
-            }
-        });
     }
 }

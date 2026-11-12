@@ -25,56 +25,56 @@
 </ul></nav>
 <main>
 <h1 id="ausgabe">Ausgabe</h1>
-<p>Der Tab <b>Ausgabe</b> legt fest, wie aus der Bearbeitung fertige Dateien werden: Format, Größe, Ordner, Wasserzeichen und Metadaten. Dazu kommen Softproof und Druckvorschau, die nur die Anzeige betreffen, und das Drucken.</p>
+<p>Der Tab <b>Ausgabe</b> hat oben zwei Seiten: <b>Datei</b> legt fest, wie aus der Bearbeitung fertige Dateien werden (Format, Größe, Ordner, Wasserzeichen, Metadaten), <b>Druck</b> das Drucken. Am Ende beider Seiten steht der Softproof, der nur die Anzeige betrifft.</p>
 <h2 id="exportieren">Exportieren</h2>
 <ol>
 <li>Bilder auswählen.</li>
-<li><b>Exportieren</b> drücken: der blaue Knopf rechts in der Werkzeugleiste, <b>Datei → Exportieren</b>, der Knopf im Abschnitt <b>Exportieren</b> des Tabs <b>Ausgabe</b> oder Strg+D.</li>
+<li><b>Exportieren</b> drücken: der blaue Knopf rechts in der Werkzeugleiste, <b>Datei → Exportieren</b>, der Knopf oben auf der Seite <b>Datei</b> des Tabs <b>Ausgabe</b> oder Strg+D.</li>
 </ol>
-<p>Jedes ausgewählte Bild wird mit jedem aktivierten Ausgaberezept geschrieben, in einem Durchgang. Der Fortschritt steht in der Statusleiste und im Abschnitt <b>Exportieren</b>; ✕ bricht ab. Man kann währenddessen weiterarbeiten, nur ein zweiter Export wartet, bis der erste fertig ist.</p>
+<p>Jedes ausgewählte Bild wird mit jedem eingeschalteten Ausgaberezept geschrieben, in einem Durchgang. Unter dem Knopf steht, wie viele Bilder, Rezepte und Dateien das sind. Der Fortschritt steht in der Statusleiste und an Stelle des Knopfs; <b>Abbrechen</b> bricht ab. Man kann währenddessen weiterarbeiten, nur ein zweiter Export wartet, bis der erste fertig ist.</p>
 <p>Ohne eigene Einstellungen schreibt das Rezept „JPEG“ ein JPEG in voller Größe und sRGB in den Unterordner <code>Output</code> neben dem Bild. In einer Session landen die Dateien im Ordner <b>Ausgabe</b> der Session.</p>
 <p class="note">Ist <b>Exportieren</b> ausgegraut, nennt der Tooltip den Grund, etwa „Kein Ausgaberezept aktiviert“.</p>
 <h2 id="ausgaberezepte">Ausgaberezepte</h2>
-<p>Ein Ausgaberezept ist eine gespeicherte Ausgabe-Einstellung, etwa „JPEG fürs Web“ und „TIFF für den Druck“. Der Abschnitt <b>Ausgaberezepte</b> listet alle Rezepte:</p>
+<p>Ein Ausgaberezept ist eine gespeicherte Ausgabe-Einstellung, etwa „JPEG fürs Web“ und „TIFF für den Druck“. Jedes Rezept ist eine Karte mit Name, Format und einer Zeile, was es schreibt, etwa „2048 px lang · sRGB · Output“:</p>
 <ul>
-<li>Das Häkchen davor bestimmt, ob ein Rezept beim Exportieren verwendet wird. Mehrere Rezepte zugleich sind möglich.</li>
-<li>Ein Klick auf den Namen wählt das Rezept zum Bearbeiten.</li>
-<li><b>+ Rezept</b> legt eine Kopie des gewählten an, <b>Löschen …</b> entfernt es.</li>
+<li>Das Häkchen links bestimmt, ob ein Rezept beim Exportieren verwendet wird. Mehrere Rezepte zugleich sind möglich.</li>
+<li>Ein Klick auf die Karte klappt sie zum Bearbeiten auf; ein zweiter Klick klappt sie zu. Das aufgeklappte Rezept gilt auch für die Ausgabevorschau.</li>
+<li><b>Duplizieren</b> und <b>Löschen …</b> stehen unten in der aufgeklappten Karte, <b>+ Rezept</b> unter den Karten legt eine Kopie des gewählten an.</li>
 </ul>
-<h3 id="rezept-bearbeiten">Rezept bearbeiten</h3>
+<h3 id="format-und-größe">Format und Größe</h3>
 <ul>
 <li><b>Name</b> des Rezepts.</li>
-<li><b>Format</b>: <b>JPEG</b>, <b>TIFF 8 Bit</b>, <b>TIFF 16 Bit</b>, <b>PNG</b>, <b>WebP</b> oder <b>AVIF</b>.</li>
+<li><b>Format</b>: <b>JPEG</b>, <b>TIFF</b>, <b>PNG</b>, <b>WebP</b> oder <b>AVIF</b>; bei TIFF dazu die <b>Bittiefe</b> 8 oder 16 Bit.</li>
+<li><b>Qualität</b>: für JPEG, WebP und AVIF; bei verlustfreien Formaten ausgegraut.</li>
 <li><b>Farbraum</b>: sRGB für Web und Bildschirm, Adobe RGB, Display P3 oder ProPhoto für Druck und Weiterbearbeitung. AVIF gibt es nur in sRGB und Display P3.</li>
-<li><b>Qualität</b>: für JPEG, WebP und AVIF; verlustfreie Formate haben keine.</li>
 <li><b>Größe</b>: <b>Originalgröße</b> oder <b>Lange Kante</b>, <b>Kurze Kante</b>, <b>Breite</b>, <b>Höhe</b> in Pixeln bzw. <b>Prozent</b>. Vergrößert wird nie.</li>
-<li><b>Ausgabeschärfung</b>: <b>Aus</b>, <b>Für Bildschirm</b> (dezent) oder <b>Für Druck</b> (kräftiger). Sie gleicht die Weichheit aus, die beim Verkleinern entsteht, und ist unabhängig vom Schärfen in der Entwicklung.</li>
-<li><b>Ordner</b>: Zielordner; ein relativer Name wie <code>Output</code> liegt neben dem jeweiligen Bild.</li>
-<li><b>Dateiname</b> und <b>Suffix</b>: siehe unten.</li>
+<li><b>Schärfen</b>: Ausgabeschärfung <b>Aus</b>, für <b>Bildschirm</b> (dezent) oder für <b>Druck</b> (kräftiger). Sie gleicht die Weichheit aus, die beim Verkleinern entsteht, und ist unabhängig vom Schärfen in der Entwicklung.</li>
 </ul>
 <h3 id="dateiname">Dateiname</h3>
-<p>Leer bleibt der ursprüngliche Name. Sonst gelten dieselben Platzhalter wie beim <a href="bibliothek.html#umbenennen">Umbenennen</a>, etwa <code>{Datum}_{Name}</code> oder <code>{Session}_{Zähler:3}</code>; der Zähler zählt die Bilder eines Durchgangs. Das <b>Suffix</b> wird angehängt, etwa <code>-web</code>. Varianten erhalten automatisch <code>-v2</code>, <code>-v3</code> usw.</p>
-<h2 id="wasserzeichen">Wasserzeichen</h2>
-<p>Der Abschnitt <b>Wasserzeichen</b> gehört zum gewählten Rezept. <b>Wasserzeichen einfügen</b> schaltet es ein.</p>
 <ul>
-<li><b>Text</b> (in <b>Weiß</b> oder <b>Schwarz</b>) oder <b>Logo</b> (<b>Logo wählen …</b>; ein PNG mit Transparenz ist am besten).</li>
-<li><b>Position</b>: neun Stellen von <b>Oben links</b> bis <b>Unten rechts</b>.</li>
+<li><b>Ordner</b>: Zielordner; ein relativer Name wie <code>Output</code> liegt neben dem jeweiligen Bild. Der Ordner-Knopf daneben wählt einen festen Ordner.</li>
+<li><b>Dateiname</b>: leer bleibt der ursprüngliche Name. Sonst gelten dieselben Platzhalter wie beim <a href="bibliothek.html#umbenennen">Umbenennen</a>, etwa <code>{Datum}_{Name}</code> oder <code>{Session}_{Zähler:3}</code>; <b>+</b> daneben fügt einen ein. Der Zähler zählt die Bilder eines Durchgangs.</li>
+<li><b>Suffix</b> wird angehängt, etwa <code>_web</code>. Varianten erhalten automatisch <code>-v2</code>, <code>-v3</code> usw.</li>
+</ul>
+<p>Darunter steht, welche Datei für das angezeigte Bild entsteht, etwa <code>Output/_DSC0009_web.jpg</code>.</p>
+<h3 id="wasserzeichen">Wasserzeichen</h3>
+<p>Gehört zum Rezept. Der Schalter in der Zeile <b>Wasserzeichen</b> schaltet es ein, ein Klick auf die Zeile klappt die Einstellungen auf:</p>
+<ul>
+<li><b>Art</b>: <b>Text</b> (in <b>Weiß</b> oder <b>Schwarz</b>) oder <b>Logo</b> (ein PNG mit Transparenz ist am besten).</li>
+<li><b>Position</b>: eine der neun Stellen im Raster, von oben links bis unten rechts.</li>
 <li><b>Größe</b> und <b>Abstand</b> in Prozent der kurzen Bildkante, dazu <b>Deckkraft</b>.</li>
 </ul>
 <p>Wie es im fertigen Bild aussieht, zeigt die <a href="ausgabe.html#ausgabevorschau">Ausgabevorschau</a>.</p>
-<h2 id="metadaten">Metadaten</h2>
-<p>Ebenfalls je Rezept:</p>
-<ul>
-<li><b>Aufnahmedaten übernehmen</b>: Kamera, Objektiv, Belichtung und Aufnahmedatum.</li>
-<li><b>Fotograf</b> und <b>Copyright</b> werden in jede Datei geschrieben.</li>
-</ul>
+<h3 id="metadaten">Metadaten</h3>
+<p>Ebenfalls je Rezept. Der Schalter übernimmt die Aufnahmedaten (Kamera, Objektiv, Belichtung, Aufnahmedatum); aufgeklappt stehen <b>Fotograf</b> und <b>Copyright</b>, die in jede Datei geschrieben werden.</p>
 <p>GPS-Daten werden nie übernommen. TIFF-Dateien erhalten keine Metadaten.</p>
+<h2 id="zuletzt-exportiert">Zuletzt exportiert</h2>
+<p>Nach einem Export listet die Seite <b>Datei</b> die zuletzt geschriebenen Dateien. Fehler stehen rot, der ganze Text im Tooltip. Das Symbol rechts in der Überschrift zeigt den Ordner im Explorer.</p>
 <h2 id="ausgabevorschau">Ausgabevorschau</h2>
 <p><b>Ausgabevorschau</b> (P) zeigt das Bild so, wie das gewählte Ausgaberezept es schreibt: in der Zielgröße, mit Ausgabeschärfung, Wasserzeichen und Kompression. Oben im Bild stehen Format, Pixelmaße und Farbraum. Mit eingeschalteter <b>Farbumfang-Warnung</b> im Softproof markiert sie magenta, was der Farbraum der Datei beschneidet.</p>
 <h2 id="softproof">Softproof</h2>
-<p><b>Softproof</b> (Umschalt+P) zeigt das Bild so, wie es in einem anderen Farbraum oder auf einem Drucker mit einem bestimmten Papier herauskommt. Eingestellt wird im Abschnitt <b>Softproof</b>:</p>
+<p><b>Softproof</b> (Umschalt+P) zeigt das Bild so, wie es in einem anderen Farbraum oder auf einem Drucker mit einem bestimmten Papier herauskommt. Er steht als eine Zeile am Ende beider Seiten: Der Schalter schaltet ihn ein, ein Klick auf die Zeile klappt die Einstellungen auf.</p>
 <ul>
-<li><b>Softproof anzeigen</b> schaltet ihn ein.</li>
 <li><b>Profil</b>: <b>Wie Ausgaberezept</b> (der Farbraum des gewählten Rezepts), sRGB, Adobe RGB, Display P3 oder ein ICC-Profil eines Druckers bzw. Papiers. Weitere Profile lädt <b>ICC-Profil laden …</b>.</li>
 <li><b>Priorität</b>: <b>Wahrnehmungsorientiert</b>, <b>Relativ farbmetrisch</b>, <b>Sättigung</b> oder <b>Absolut farbmetrisch</b>, dazu <b>Tiefenkompensierung</b>.</li>
 <li><b>Papier und Druckfarbe simulieren</b> zeigt den Papierton und das tatsächliche Schwarz des Drucks.</li>
@@ -83,39 +83,41 @@
 </ul>
 <p>Der Softproof ändert nur die Anzeige, nicht den Export.</p>
 <h2 id="druckvorschau">Druckvorschau</h2>
-<p><b>Druckvorschau</b> (Strg+Umschalt+P) zeigt das Bild auf dem Papier, so wie es gedruckt wird, mit Rand, Rahmen, Schnittmarken und Beschriftung. Eingestellt wird im Abschnitt <b>Druckvorschau</b>:</p>
+<p>Die Seite <b>Druck</b> zeigt oben die Seite im Kleinen, maßstabsgetreu mit Bild, Kontur, Schnittmarken und Beschriftung. Daneben stehen Papier und Ausrichtung, die Größe des Bildes auf dem Papier und die Auflösung: Unter 200 ppi wird sie gelb, unter 150 ppi rot, dort werden Details im Druck weich.</p>
+<p><b>Druckvorschau</b> (Strg+Umschalt+P) zeigt das Bild auf dem Papier im großen Bild, so wie es gedruckt wird. Für die richtigen Farben den Softproof mit dem Profil des Druckers dazuschalten.</p>
+<p><b>Druckgröße</b> (Umschalt+Z) zeigt das Bild auf dem Bildschirm genau so groß, wie es gedruckt wird.</p>
+<h3 id="papier">Papier</h3>
 <ul>
 <li><b>Drucker</b> (nur unter Windows): voreingestellt der Standarddrucker von Windows.</li>
-<li><b>Papierformat</b>: die Papiere, die der gewählte Drucker anbietet (unter Linux die üblichen Formate), oder <b>Eigenes (cm)</b>. Ein Format, das der Drucker nicht führt, steht gelb da.</li>
-<li><b>Bildgröße</b>: <b>Ganzes Blatt</b> (so groß, wie Papier und Rand erlauben) oder ein festes Format wie <b>10 × 15 cm</b>, auch eigene Maße. Das Bild sitzt dann mittig auf dem Papier, etwa ein 10 × 15 auf A4; mit <b>Schnittmarken</b> lässt es sich genau ausschneiden. Der Rand ergibt sich dabei von selbst.</li>
-<li><b>Ausrichtung</b>: <b>Hochformat</b> oder <b>Querformat</b>. Jede Seite beginnt so, wie ihr Bild liegt; die Knöpfe stellen nur die gezeigte Seite um, etwa ein Querformatbild auf ein hochkantes Blatt. Beim nächsten Öffnen der Druckleiste liegt wieder jede Seite wie ihr Bild. Mischt ein Druckauftrag Hoch- und Querformate, kommt jede Seite so aufs Papier, wie die Vorschau sie zeigt: Sie wird dafür gedreht an den Drucker geschickt.</li>
-<li><b>Anpassung</b>: <b>Einpassen</b> (ganzes Bild, weiße Streifen, wo die Seitenverhältnisse abweichen) oder <b>Füllen</b> (randlos wie im Fotolabor, das Bild wird beschnitten). Die Liste sagt für das angezeigte Bild, wie viel weiß bleibt oder abgeschnitten wird. Mit fester Bildgröße gilt sie für diese: Ein 3:2-Bild auf 9 × 13 hat mit <b>Einpassen</b> oben und unten je 2 mm weiß, mit <b>Füllen</b> fehlen links und rechts je 3 mm. Die Schnittmarken sitzen dann am Format.</li>
+<li><b>Format</b>: die Papiere, die der gewählte Drucker anbietet (unter Linux die üblichen Formate), oder <b>Eigenes</b> in cm. Ein Format, das der Drucker nicht führt, steht gelb da.</li>
+<li><b>Ausrichtung</b>: <b>Hoch</b> oder <b>Quer</b>. Jede Seite beginnt so, wie ihr Bild liegt; die Knöpfe stellen nur die gezeigte Seite um, etwa ein Querformatbild auf ein hochkantes Blatt. Beim nächsten Öffnen der Druckleiste liegt wieder jede Seite wie ihr Bild. Mischt ein Druckauftrag Hoch- und Querformate, kommt jede Seite so aufs Papier, wie die Vorschau sie zeigt: Sie wird dafür gedreht an den Drucker geschickt.</li>
 </ul>
-<p>Oben im Bild steht die Auflösung auf dem Papier. Unter 200 ppi wird sie gelb, unter 150 ppi rot: Dort werden Details im Druck weich. Für die richtigen Farben den Softproof mit dem Profil des Druckers dazuschalten.</p>
-<p><b>Druckgröße</b> (Umschalt+Z) zeigt das Bild auf dem Bildschirm genau so groß, wie es gedruckt wird.</p>
-<h3 id="bildschirm-kalibrieren">Bildschirm kalibrieren</h3>
-<p>Damit die Druckgröße stimmt, muss Silberkorn die echte Größe des Bildschirms kennen. <b>Bildschirm kalibrieren …</b> zeigt ein Rechteck: eine Scheckkarte an den Bildschirm halten und die Größe ändern, bis beide genau gleich groß sind, dann <b>Übernehmen</b>.</p>
-<h2 id="druckseite">Druckseite</h2>
-<p>Der Abschnitt <b>Druckseite</b> legt fest, was außer dem Bild auf dem Blatt steht. Die Druckvorschau zeigt es mit.</p>
+<h3 id="bild-auf-der-seite">Bild auf der Seite</h3>
 <ul>
-<li><b>Rand</b>: weißer Rand um das Bild auf allen Seiten, in mm (nur bei <b>Ganzes Blatt</b>). Bei <b>Füllen</b> füllt das Bild dann den Platz innerhalb des Randes.</li>
-<li><b>Rahmen</b>: eine dünne schwarze Linie um das Bild, in mm; 0 heißt kein Rahmen.</li>
-<li><b>Schnittmarken</b>: kurze Linien an den Ecken, außerhalb des Bildes, zum Zuschneiden, etwa wenn ein 13 × 18 auf A4 gedruckt wird. Sie brauchen einen Rand.</li>
+<li><b>Bildgröße</b>: <b>Ganzes Blatt</b> (so groß, wie Papier und Rand erlauben) oder ein festes Format wie <b>10 × 15 cm</b>, auch eigene Maße. Das Bild sitzt dann mittig auf dem Papier, etwa ein 10 × 15 auf A4; mit <b>Schnittmarken</b> lässt es sich genau ausschneiden.</li>
+<li><b>Anpassung</b>: <b>Einpassen</b> (ganzes Bild, weiße Streifen, wo die Seitenverhältnisse abweichen) oder <b>Füllen</b> (randlos wie im Fotolabor, das Bild wird beschnitten). Der Tooltip sagt für das angezeigte Bild, wie viel weiß bleibt oder abgeschnitten wird. Mit fester Bildgröße gilt sie für diese: Ein 3:2-Bild auf 9 × 13 hat mit <b>Einpassen</b> oben und unten je 2 mm weiß, mit <b>Füllen</b> fehlen links und rechts je 3 mm.</li>
+<li><b>Rand</b>: weißer Rand um das Bild auf allen Seiten, in mm (nur bei <b>Ganzes Blatt</b>; mit fester Bildgröße ergibt er sich von selbst). Bei <b>Füllen</b> füllt das Bild dann den Platz innerhalb des Randes.</li>
+<li><b>Kontur</b>: eine feine schwarze Linie um das Bild, 0 bis 2 mm; 0 heißt keine. Sie grenzt helle Bildränder, etwa einen weißen Himmel, sauber vom Papier ab.</li>
 <li><b>Beschriftung</b> unter dem Bild: <b>Dateiname</b>, <b>Aufnahmedaten</b> (Kamera, Brennweite, Blende, Zeit, ISO, Datum) oder beides.</li>
+<li><b>Schnittmarken</b>: kurze Linien an den Ecken, außerhalb des Bildes, zum Zuschneiden, etwa wenn ein 13 × 18 auf A4 gedruckt wird. Sie brauchen einen Rand.</li>
 </ul>
 <p>Bild und Beschriftung stehen immer in der Mitte des Blattes.</p>
+<h3 id="bildschirm-kalibrieren">Bildschirm kalibrieren</h3>
+<p>Damit die Druckgröße stimmt, muss Silberkorn die echte Größe des Bildschirms kennen. <b>Bildschirm kalibrieren …</b> (unten auf der Seite <b>Druck</b>) zeigt ein Rechteck: eine Scheckkarte an den Bildschirm halten und die Größe ändern, bis beide genau gleich groß sind, dann <b>Übernehmen</b>.</p>
 <h2 id="drucken">Drucken</h2>
-<p><b>Drucken …</b> (Strg+P, auch im Menü <b>Datei</b> und unten im Abschnitt <b>Drucken</b>) zeigt zuerst die Seite: Die Druckvorschau geht an, und unten im Bild erscheint eine Leiste mit Drucker, Papierformat, Bildgröße, Hoch- oder Querformat, Anpassung und <b>Einstellungen …</b>. Jedes ausgewählte Bild kommt auf eine eigene Seite; ist keines ausgewählt, das angezeigte. Bei mehreren Bildern blättern die Pfeile in der Leiste (oder die Pfeiltasten) durch die Seiten, die Auswahl bleibt.</p>
+<p><b>Drucken …</b> (Strg+P, auch im Menü <b>Datei</b> und oben auf der Seite <b>Druck</b>) zeigt zuerst die Seite: Die Druckvorschau geht an, und unten im Bild erscheint eine Leiste mit Drucker, Papierformat, Bildgröße, Hoch- oder Querformat, Anpassung und <b>Einstellungen …</b>. Jedes ausgewählte Bild kommt auf eine eigene Seite; ist keines ausgewählt, das angezeigte. Bei mehreren Bildern blättern die Pfeile in der Leiste (oder die Pfeiltasten) durch die Seiten, die Auswahl bleibt.</p>
 <p><b>Einstellungen …</b> in der Leiste öffnet die Einstellungen des Druckers, etwa Papiersorte, Qualität und Farbe; sie gelten, bis Silberkorn beendet wird. Papierformat und Ausrichtung kommen immer aus der Leiste. <b>Drucken</b> (Enter) schickt die Seiten an den Drucker. <b>Abbrechen</b> (Esc) schließt die Leiste.</p>
 <p>Führt der Drucker das Papierformat nicht, steht es in der Leiste gelb. Nimmt er es auch als eigenes Format nicht an, druckt er auf sein Standardpapier, und die Seite wird dafür neu aufgeteilt. Die Statusleiste sagt das danach.</p>
-<p>Im Abschnitt <b>Drucken</b>:</p>
-<ul>
-<li><b>Druckanpassung</b>: <b>Helligkeit</b> und <b>Kontrast</b> nur für den Druck. Drucke wirken oft dunkler und flacher als der leuchtende Bildschirm; die Vorschau zeigt die Anpassung nicht.</li>
-<li><b>Schärfung</b>: <b>Aus</b>, <b>Wenig</b>, <b>Normal</b> oder <b>Stark</b>, für <b>Glänzend</b> oder <b>Matt</b> (mattes Papier saugt die Tinte auf und braucht mehr). Sie gleicht die Weichheit des Drucks aus und ist unabhängig vom Schärfen in der Entwicklung.</li>
-<li><b>Farben</b>: <b>Drucker steuert</b> (der Drucker bekommt sRGB und rechnet selbst um) oder ein ICC-Profil für Drucker und Papier. Mit Profil rechnet Silberkorn die Farben um, mit der gewählten <b>Priorität</b>, und schaltet die Farbsteuerung des Treibers ab.</li>
-</ul>
-<p class="note">Mit einem eigenen Profil im Druckertreiber „Keine Farbkorrektur“ wählen, falls er das anbietet; sonst werden die Farben doppelt umgerechnet. Den Softproof mit demselben Profil einschalten, um vorher zu sehen, wie der Druck aussieht.</p>
 <p>Gedruckt wird mit bis zu 360 ppi; den Rest erledigt der Druckertreiber. Drucken gibt es nur unter Windows.</p>
+<h3 id="druckanpassung">Druckanpassung</h3>
+<p>Eingeklappt auf der Seite <b>Druck</b>; die Zeile sagt, was eingestellt ist.</p>
+<ul>
+<li><b>Helligkeit</b> und <b>Kontrast</b> nur für den Druck. Drucke wirken oft dunkler und flacher als der leuchtende Bildschirm; die Vorschau zeigt die Anpassung nicht.</li>
+<li><b>Schärfen</b>: <b>Aus</b>, <b>Wenig</b>, <b>Normal</b> oder <b>Stark</b>, für die <b>Oberfläche</b> <b>Glänzend</b> oder <b>Matt</b> (mattes Papier saugt die Tinte auf und braucht mehr). Sie gleicht die Weichheit des Drucks aus und ist unabhängig vom Schärfen in der Entwicklung.</li>
+</ul>
+<h3 id="farben">Farben</h3>
+<p><b>Profil</b>: <b>Drucker steuert</b> (der Drucker bekommt sRGB und rechnet selbst um) oder ein ICC-Profil für Drucker und Papier. Mit Profil rechnet Silberkorn die Farben um, mit der gewählten <b>Priorität</b> (<b>Wahrnehmung</b> oder <b>Relativ</b> farbmetrisch), und schaltet die Farbsteuerung des Treibers ab.</p>
+<p class="note">Mit einem eigenen Profil im Druckertreiber „Keine Farbkorrektur“ wählen, falls er das anbietet; sonst werden die Farben doppelt umgerechnet. Den Softproof mit demselben Profil einschalten, um vorher zu sehen, wie der Druck aussieht.</p>
 <h3 id="in-datei-drucken">In Datei drucken</h3>
 <p><b>In Datei …</b> (oder <b>Datei → In Datei drucken …</b>) speichert die Seiten statt sie zu drucken: als PDF mit allen Seiten oder als JPEG je Seite, mit 300 ppi und in der Papiergröße, etwa für ein Fotolabor oder einen Copyshop. Mit Druckerprofil sind die Farben schon umgerechnet und das Profil ist eingebettet.</p>
 </main>

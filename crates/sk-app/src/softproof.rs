@@ -10,7 +10,7 @@ use sk_core::softproof::{ProofSettings, ProofTarget, RenderIntent, SoftProof};
 
 use crate::app::App;
 use crate::theme::icon;
-use crate::widgets::{self, section};
+use crate::widgets;
 
 /// Soft proof state of the app.
 #[derive(Default)]
@@ -91,24 +91,27 @@ impl App {
     }
 
     /// Controls in the output tab.
-    pub fn softproof_section(&mut self, ui: &mut Ui) {
+    /// The soft proof in one line at the end of the Ausgabe tab: a switch and, opened, the profile
+    /// and its options.
+    pub fn softproof_card(&mut self, ui: &mut Ui) {
         if self.softproof.found.is_none() {
             self.softproof.found = Some(sk_core::softproof::find_profiles());
         }
         let mut s = self.softproof.settings.clone();
-        let mut toggle = false;
         let mut pick = false;
-        section(ui, "Softproof", None, |ui| {
-            let mut on = self.softproof.on;
-            let checkbox = crate::widgets::Check::new(&mut on, crate::commands::hint("Softproof anzeigen", "softproof"));
-            if ui.add_enabled(self.current.is_some() || self.softproof.on, checkbox).changed() {
-                toggle = true;
-            }
-            let name = match &s.target {
+        let name = match &s.target {
+            ProofTarget::Recipe => format!("Wie Rezept · {}", self.recipe_space().label()),
+            t => sk_core::softproof::target_name(t),
+        };
+        let mut on = self.softproof.on;
+        let can = self.current.is_some() || self.softproof.on;
+        let hover = crate::commands::hint("Softproof anzeigen", "softproof");
+        crate::output::fold_card(ui, "Softproof", icon::DROP_HALF, &name, Some((&mut on, can, &hover)), |ui| {
+            let shown = match &s.target {
                 ProofTarget::Recipe => format!("Wie Ausgaberezept ({})", self.recipe_space().label()),
                 t => sk_core::softproof::target_name(t),
             };
-            widgets::combo_field(ui, "Profil", name, |ui| {
+            widgets::combo_field(ui, "Profil", shown, |ui| {
                 ui.selectable_value(&mut s.target, ProofTarget::Recipe, "Wie Ausgaberezept")
                     .on_hover_text("Farbraum des gewählten Ausgaberezepts");
                 ui.separator();
@@ -153,7 +156,7 @@ impl App {
             s.target = ProofTarget::Icc(p);
         }
         self.change_proof_settings(|old| *old = s);
-        if toggle {
+        if on != self.softproof.on {
             self.toggle_softproof();
         }
     }

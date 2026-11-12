@@ -120,9 +120,13 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Styles, "Neuer Stil", "preset speichern"),
     (Tab::History, "Schnappschüsse", "snapshot stand sichern"),
     (Tab::History, "Verlauf", "history rückgängig schritte"),
-    (Tab::Output, "Ausgaberezepte", "export rezept jpeg tiff png"),
+    (Tab::Output, "Ausgaberezepte", "export rezept jpeg tiff png webp avif format qualität größe dateiname"),
     (Tab::Output, "Wasserzeichen", "watermark logo copyright"),
     (Tab::Output, "Softproof", "drucker icc profil farbumfang gamut"),
+    (Tab::Output, "Papier", "drucken drucker papierformat a4 ausrichtung hochformat querformat"),
+    (Tab::Output, "Bild auf der Seite", "drucken bildgröße 10x15 rand kontur rahmen keyline schnittmarken beschriftung einpassen füllen"),
+    (Tab::Output, "Druckanpassung", "drucken helligkeit kontrast schärfung glänzend matt"),
+    (Tab::Output, "Farben", "drucken druckerprofil icc farbmanagement priorität"),
 ];
 
 impl App {

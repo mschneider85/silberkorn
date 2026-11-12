@@ -18,6 +18,21 @@ pub fn reveal_section(ctx: &egui::Context, title: &str) {
     ctx.data_mut(|d| d.insert_temp(reveal_id(), title.to_string()));
 }
 
+/// The title the command palette asked to reveal, if any (left for the section to take).
+pub fn pending_reveal(ctx: &egui::Context) -> Option<String> {
+    ctx.data(|d| d.get_temp::<String>(reveal_id()))
+}
+
+/// Whether the command palette asked for `title` ("Section/Part" counts for the part); the
+/// request is taken.
+pub fn take_reveal(ui: &Ui, title: &str) -> bool {
+    let hit = pending_reveal(ui.ctx()).is_some_and(|t| t == title || t.rsplit_once('/').is_some_and(|(_, part)| part == title));
+    if hit {
+        ui.data_mut(|d| d.remove::<String>(reveal_id()));
+    }
+    hit
+}
+
 /// Collapsible tool section with an optional reset button.
 pub fn section(ui: &mut Ui, title: &str, reset: Option<&mut dyn FnMut()>, body: impl FnOnce(&mut Ui)) {
     section_full(ui, title, true, None, reset, body);
@@ -225,9 +240,6 @@ const SPECIALIZED: &[&str] = &[
     "Objektivunschärfe",
     "Atmosphäre",
     "Leuchten",
-    "Softproof",
-    "Wasserzeichen",
-    "Druckvorschau",
 ];
 
 #[allow(clippy::too_many_arguments)]

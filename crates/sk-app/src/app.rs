@@ -807,6 +807,10 @@ pub struct App {
     // output
     pub recipes: Vec<ExportRecipe>,
     pub selected_recipe: usize,
+    /// The selected recipe's card is open in the Ausgabe tab.
+    pub recipe_open: bool,
+    /// The Ausgabe tab shows the print page ("Druck") instead of the file page.
+    pub output_print: bool,
     pub export_progress: Option<(usize, usize)>,
     /// Cancels the running export.
     pub export_cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
@@ -1296,6 +1300,8 @@ impl App {
                 vec![settings.recipe.unwrap_or_default()]
             },
             selected_recipe: 0,
+            recipe_open: true,
+            output_print: false,
             export_progress: None,
             export_cancel: None,
             quit_asked: false,
@@ -3425,6 +3431,8 @@ impl App {
                 r.watermark = sk_core::watermark::Watermark { enabled: true, text, size: 6.0, opacity: 0.8, ..Default::default() };
             }
             self.proof_view |= std::env::var_os("SILBERKORN_PROOF").is_some();
+            // The print page of the Ausgabe tab.
+            self.output_print |= std::env::var_os("SILBERKORN_DRUCK").is_some();
             // `contain` or `fill`: print preview on 13 × 18 cm.
             if let Ok(fit) = std::env::var("SILBERKORN_PRINT") {
                 if !self.print.on {
