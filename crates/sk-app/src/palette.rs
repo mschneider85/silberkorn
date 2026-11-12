@@ -114,6 +114,7 @@ const SECTIONS: &[(Tab, &str, &str)] = &[
     (Tab::Retouch, "Retuschen", "retusche retuschen reparieren klonen entfernen bereiche stellen liste"),
     (Tab::Metadata, "Keywords", "schlagworte stichworte tags"),
     (Tab::Metadata, "Aufnahme", "exif kamera objektiv iso"),
+    (Tab::Metadata, "Datei", "dateigröße auflösung megapixel ordner explorer"),
     (Tab::Styles, "Filmsimulationen", "film look preset vorschau raster"),
     (Tab::Styles, "Eigene Stile", "preset stil"),
     (Tab::Styles, "Neuer Stil", "preset speichern"),

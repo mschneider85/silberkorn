@@ -55,6 +55,8 @@ Das automatische Öffnen schaltet **Importdialog öffnen, wenn eine Speicherkart
 
 Alle drei wirken auf die ganze Auswahl und lassen sich mit {taste:undo} zurücknehmen. Sie stehen im Tab **Metadaten**, im Menü **Foto** und im Rechtsklick-Menü eines Vorschaubilds.
 
+Sind mehrere Bilder ausgewählt, zeigt der Tab Metadaten gestrichelt, was nur einige davon haben: die Sterne bis zur höchsten Bewertung (daneben etwa **2–5 ★**), einen Ring um jedes vorkommende Farb-Label und Keywords mit **1/3**. Ein Klick auf einen Stern oder ein Label setzt es für alle, ein Klick auf **1/3** gibt das Keyword allen.
+
 ### Bewertung
 
 {taste:rating-1} bis {taste:rating-5} vergeben ein bis fünf Sterne, {taste:rating-0} entfernt sie.
@@ -65,13 +67,13 @@ Alle drei wirken auf die ganze Auswahl und lassen sich mit {taste:undo} zurückn
 
 ### Keywords
 
-Im Tab **Metadaten** unter **Keywords** ein Wort eingeben und Enter drücken; Vorschläge kommen aus den vorhandenen Keywords. ✕ an einem Keyword entfernt es.
+Im Tab **Metadaten** unter **Keywords** ein Wort in das Feld mit dem **+** eingeben und Enter drücken; passende vorhandene Keywords erscheinen darunter gestrichelt und lassen sich anklicken. ✕ an einem Keyword entfernt es.
 
 Darunter stehen unter **Vorschläge** bis zu acht Keywords, die zu dem passen, was auf dem Bild zu sehen ist (etwa *Strand*, *Hund*, *Sonnenuntergang*); ein Klick fügt eines hinzu. Sie kommen von derselben KI wie die Suche nach dem Bildinhalt und erscheinen, sobald das Bild einmal erfasst ist (beim ersten Öffnen etwa eine Sekunde).
 
 ### Aufnahme
 
-Im Tab **Metadaten** zeigt **Aufnahme** Datei, Ordner, Kamera, Objektiv, Brennweite, Blende, Belichtungszeit, ISO und Datum des gewählten Bildes. Lange Einträge stehen beim Überfahren ganz da.
+Oben im Tab **Metadaten** stehen Dateiname, Format und Aufnahmedatum. **Aufnahme** zeigt Blende, Belichtungszeit, ISO und Brennweite groß, darunter Kamera und Objektiv. **Datei** nennt Auflösung, Megapixel und Seitenverhältnis, die Dateigröße und den Ordner; **Im Explorer** öffnet ihn. Den ganzen Pfad zeigt der Zeiger auf dem Ordnernamen. Bei mehreren ausgewählten Bildern gelten **Aufnahme** und **Datei** für das Hauptbild.
 
 ## Filterleiste
 

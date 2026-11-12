@@ -44,6 +44,7 @@ mod library_bar;
 mod look;
 mod look_worker;
 mod merge;
+mod metadata;
 mod palette;
 mod print_preview;
 mod printer;

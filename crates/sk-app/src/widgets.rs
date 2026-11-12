@@ -2273,21 +2273,91 @@ pub fn curve_editor(ui: &mut Ui, curve: &mut Curve, color: Color32, hist: Option
 
 /// Star rating widget (0..5). Clicking the current rating clears it.
 pub fn stars(ui: &mut Ui, rating: &mut u8, size: f32) -> bool {
-    let mut changed = false;
+    match rating_stars(ui, *rating, None, size) {
+        Some(r) => {
+            *rating = r;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Five stars to click, filled up to `rating`. `mixed` (several images, the highest of their
+/// ratings): none filled, those up to it dashed. Returns the rating clicked (the same again
+/// takes it away).
+pub fn rating_stars(ui: &mut Ui, rating: u8, mixed: Option<u8>, size: f32) -> Option<u8> {
+    let mut clicked = None;
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 1.0;
+        ui.spacing_mut().item_spacing.x = 2.0;
         for i in 1..=5u8 {
-            let filled = i <= *rating;
-            let text = egui::RichText::new(if filled { "★" } else { "☆" })
-                .size(size)
-                .color(if filled { theme::STAR } else { Color32::from_gray(110) });
-            if ui.add(egui::Label::new(text).sense(Sense::click())).clicked() {
-                *rating = if *rating == i { 0 } else { i };
-                changed = true;
+            let (rect, resp) = ui.allocate_exact_size(vec2(size, size), Sense::click());
+            let hovered = resp.hovered();
+            let r = size * if hovered { 0.5 } else { 0.46 };
+            let pts = star_points(rect.center(), r);
+            let p = ui.painter();
+            match mixed {
+                None if i <= rating => fill_star(p, &pts, theme::STAR),
+                Some(hi) if i <= hi => p.extend(dashed_closed(&pts, Stroke::new(1.3, theme::STAR), 2.2, 2.8)),
+                _ => {
+                    p.add(egui::Shape::closed_line(pts, Stroke::new(1.3, if hovered { theme::TEXT_DIM } else { theme::TEXT_FAINT })));
+                }
+            }
+            if hovered {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            if resp.clicked() {
+                clicked = Some(if mixed.is_none() && rating == i { 0 } else { i });
             }
         }
     });
-    changed
+    clicked
+}
+
+/// The ten corners of a five-pointed star, the top point first.
+fn star_points(c: Pos2, r: f32) -> Vec<Pos2> {
+    (0..10)
+        .map(|k| {
+            let a = -std::f32::consts::FRAC_PI_2 + k as f32 * std::f32::consts::PI / 5.0;
+            let rr = if k % 2 == 0 { r } else { r * 0.48 };
+            c + vec2(a.cos(), a.sin()) * rr
+        })
+        .collect()
+}
+
+/// A filled star: the inner pentagon and the five tips (each convex), edged against seams.
+fn fill_star(p: &egui::Painter, pts: &[Pos2], color: Color32) {
+    let inner: Vec<Pos2> = pts.iter().skip(1).step_by(2).copied().collect();
+    p.add(egui::Shape::convex_polygon(inner, color, Stroke::NONE));
+    for k in 0..5 {
+        let tip = vec![pts[(2 * k + 9) % 10], pts[2 * k], pts[2 * k + 1]];
+        p.add(egui::Shape::convex_polygon(tip, color, Stroke::NONE));
+    }
+    p.add(egui::Shape::closed_line(pts.to_vec(), Stroke::new(1.0, color)));
+}
+
+/// The outline through `pts` (closed), dashed.
+pub fn dashed_closed(pts: &[Pos2], stroke: Stroke, dash: f32, gap: f32) -> Vec<egui::Shape> {
+    let mut path = pts.to_vec();
+    path.extend(pts.first().copied());
+    egui::Shape::dashed_line(&path, stroke, dash, gap)
+}
+
+/// The outline of a rectangle with round corners (radius `r`), as points.
+pub fn rounded_rect_points(rect: Rect, r: f32) -> Vec<Pos2> {
+    let r = r.min(rect.width() / 2.0).min(rect.height() / 2.0);
+    let corners = [
+        (rect.right_top() + vec2(-r, r), -90.0f32),
+        (rect.right_bottom() + vec2(-r, -r), 0.0),
+        (rect.left_bottom() + vec2(r, -r), 90.0),
+        (rect.left_top() + vec2(r, r), 180.0),
+    ];
+    corners
+        .iter()
+        .flat_map(|&(c, start)| (0..=6).map(move |k| {
+            let a = (start + k as f32 * 15.0).to_radians();
+            c + vec2(a.cos(), a.sin()) * r
+        }))
+        .collect()
 }
 
 /// Paints a small rating + color label overlay inside `rect`.
@@ -2309,6 +2379,11 @@ pub fn paint_badges(ui: &Ui, rect: Rect, rating: u8, label: Option<[u8; 3]>) {
 
 /// Clickable color label swatch.
 pub fn color_label_dot(ui: &mut Ui, label: sk_core::sidecar::ColorLabel, selected: bool) -> Response {
+    color_label_dot_mixed(ui, label, selected, false)
+}
+
+/// [`color_label_dot`]; `some`: only some of the selected images have it (a dashed ring).
+pub fn color_label_dot_mixed(ui: &mut Ui, label: sk_core::sidecar::ColorLabel, selected: bool, some: bool) -> Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
     let painter = ui.painter_at(rect);
     let c = rect.center();
@@ -2323,6 +2398,9 @@ pub fn color_label_dot(ui: &mut Ui, label: sk_core::sidecar::ColorLabel, selecte
     }
     if selected || resp.hovered() {
         painter.circle_stroke(c, 10.0, Stroke::new(1.5, if selected { Color32::WHITE } else { Color32::from_gray(120) }));
+    } else if some {
+        let ring: Vec<Pos2> = (0..24).map(|k| c + egui::Vec2::angled(k as f32 * std::f32::consts::TAU / 24.0) * 10.0).collect();
+        painter.extend(dashed_closed(&ring, Stroke::new(1.3, Color32::WHITE), 2.0, 2.6));
     }
     resp.on_hover_text(label.label())
 }

@@ -371,11 +371,14 @@ impl App {
         if suggested.is_empty() {
             return;
         }
+        ui.add_space(10.0);
         ui.label(crate::widgets::ai_text(ui, "Vorschläge")).on_hover_text(crate::widgets::AI_HINT);
+        ui.add_space(2.0);
         let mut add = None;
         ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
             for k in suggested {
-                if ui.add(egui::Button::new(format!("{}  {k}", crate::theme::icon::PLUS)).small()).on_hover_text("Hinzufügen").clicked() {
+                if crate::metadata::suggestion_chip(ui, k).on_hover_text("Hinzufügen").clicked() {
                     add = Some(k);
                 }
             }

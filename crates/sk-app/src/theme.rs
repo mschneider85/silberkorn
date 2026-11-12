@@ -11,6 +11,8 @@ pub use egui_phosphor::regular as icon;
 pub const CHROME: Color32 = Color32::from_rgb(24, 24, 26);
 /// Tool panel background.
 pub const PANEL: Color32 = Color32::from_rgb(36, 36, 39);
+/// A card on the tool panel (lighter than it).
+pub const CARD: Color32 = Color32::from_rgb(45, 45, 49);
 /// Neutral background behind the image, dark enough to judge tones.
 pub const VIEWER: Color32 = Color32::from_rgb(30, 30, 32);
 /// Browser / filmstrip background.

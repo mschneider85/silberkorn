@@ -3373,6 +3373,9 @@ impl App {
             if std::env::var_os("SILBERKORN_CROP").is_some() {
                 self.start_crop_tool();
             }
+            if std::env::var_os("SILBERKORN_SELECT_ALL").is_some() {
+                self.select_all();
+            }
             if let Some(i) = std::env::var("SILBERKORN_LAYER").ok().and_then(|v| v.parse().ok()) {
                 self.active_layer = Some(i);
                 self.show_mask = std::env::var_os("SILBERKORN_MASK").is_some();

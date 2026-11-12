@@ -5292,3 +5292,31 @@ fn palette_opens_a_closed_part_of_a_section() {
     assert!(widget(&nodes, "Rot/Cyan").is_none(), "Farbfehler bleiben zu");
     assert!(f.ctx.data(|d| d.get_temp::<String>(egui::Id::new("reveal_section"))).is_none(), "Anfrage erledigt");
 }
+
+/// With several images selected, the Metadaten tab sums up what they have: the range of their
+/// ratings, the labels present and how many have each keyword; "1/2" gives a keyword to all.
+#[test]
+fn metadata_sums_up_the_selection() {
+    let Some(mut f) = Fixture::new("meta-summary") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    let (a, b) = (f.photo("_DSC0009.dng"), f.photo("_DSC0010.dng"));
+    f.app.update_meta(&[a.clone()], |sc| {
+        sc.rating = 2;
+        sc.color_label = ColorLabel::Green;
+        sc.keywords = vec!["Garten".into(), "Bäume".into()];
+    });
+    f.app.update_meta(&[b.clone()], |sc| {
+        sc.rating = 5;
+        sc.color_label = ColorLabel::Blue;
+        sc.keywords = vec!["garten".into()];
+    });
+    f.app.select_all();
+    let sum = f.app.meta_summary().unwrap();
+    assert_eq!(sum.n(), 2);
+    assert_eq!(sum.rating, (2, 5));
+    assert_eq!(sum.labels.len(), 2);
+    assert_eq!(sum.keywords, vec![("Bäume".to_string(), 1), ("Garten".to_string(), 2)]);
+    // Giving "Bäume" to all.
+    f.app.add_keyword("Bäume");
+    assert!(f.app.meta_summary().unwrap().keywords.iter().all(|(_, n)| *n == 2));
+}

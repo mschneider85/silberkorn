@@ -4,7 +4,6 @@ use sk_core::export::{ExportFormat, OutputSharpening, Resize};
 use sk_core::watermark::{Anchor, WatermarkKind};
 use sk_core::params::{BaseCurve, Curve, Levels, WbMode, WhiteBalance};
 use sk_core::pipeline::SliderView;
-use sk_core::sidecar::ColorLabel;
 use egui::{Color32, RichText, Ui};
 
 use crate::app::{App, CurveChannel, Tab};
@@ -384,113 +383,6 @@ impl App {
             self.request_render();
         }
         self.color_advanced(ui);
-    }
-
-    /// Keyword chips (click removes), an input with catalog suggestions.
-    /// Rating, color label and keywords shown in the info tab: of the open image, or else of
-    /// the first selected one (they are set for the whole selection either way).
-    fn shown_meta(&self) -> Option<(u8, ColorLabel, Vec<String>)> {
-        if let Some(cur) = &self.current {
-            return Some((cur.rating, cur.color_label, cur.keywords.clone()));
-        }
-        let first = self.selected_paths().into_iter().next()?;
-        let e = self.entries.iter().find(|e| e.path == first)?;
-        Some((e.rating, e.color_label, e.keywords.clone()))
-    }
-
-    pub(crate) fn keywords_ui(&mut self, ui: &mut Ui) {
-        let Some((_, _, keywords)) = self.shown_meta() else { return };
-        let mut remove_kw = None;
-        let mut add_kw = None;
-        ui.horizontal_wrapped(|ui| {
-            for k in &keywords {
-                if ui.add(egui::Button::new(format!("{k}  {}", crate::theme::icon::X)).small()).on_hover_text("Entfernen").clicked() {
-                    remove_kw = Some(k.clone());
-                }
-            }
-            if keywords.is_empty() {
-                ui.label(RichText::new("Keine Keywords").color(crate::theme::TEXT_FAINT));
-            }
-        });
-        let resp = ui.add(egui::TextEdit::singleline(&mut self.keyword_input).hint_text("Keyword hinzufügen (Enter)"));
-        if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-            add_kw = Some(self.keyword_input.clone());
-            resp.request_focus();
-        }
-        // Suggestions from the catalog.
-        let typed = self.keyword_input.trim().to_lowercase();
-        if !typed.is_empty() {
-            ui.horizontal_wrapped(|ui| {
-                for (k, _) in self.lists.keywords.iter().filter(|(k, _)| k.to_lowercase().starts_with(&typed)).take(8) {
-                    if ui.small_button(k).clicked() {
-                        add_kw = Some(k.clone());
-                    }
-                }
-            });
-        }
-        if let Some(k) = remove_kw {
-            self.remove_keyword(&k);
-        }
-        if let Some(k) = add_kw {
-            self.add_keyword(&k);
-            self.keyword_input.clear();
-        }
-    }
-
-    fn metadata_tab(&mut self, ui: &mut Ui) {
-        let Some((mut rating, current_label, _)) = self.shown_meta() else {
-            crate::widgets::no_image(ui);
-            return;
-        };
-        let n_sel = self.selected_count();
-        let mut new_rating = None;
-        let mut new_label = None;
-        let title = if n_sel > 1 { format!("Bewertung ({n_sel} Bilder)") } else { "Bewertung".to_string() };
-        section(ui, &title, None, |ui| {
-            if widgets::stars(ui, &mut rating, 22.0) {
-                new_rating = Some(rating);
-            }
-            ui.horizontal_wrapped(|ui| {
-                for l in ColorLabel::ALL {
-                    if widgets::color_label_dot(ui, l, current_label == l).clicked() {
-                        new_label = Some(l);
-                    }
-                }
-            });
-        });
-        section(ui, "Keywords", None, |ui| {
-            self.keywords_ui(ui);
-            self.keyword_suggestions_ui(ui);
-        });
-        if let Some(r) = new_rating {
-            self.set_rating(r);
-        }
-        if let Some(l) = new_label {
-            self.set_color_label(l);
-        }
-
-        let Some(cur) = self.current.as_ref() else { return };
-        let info = &cur.meta.info;
-        section(ui, "Aufnahme", None, |ui| {
-            egui::Grid::new("meta").num_columns(2).striped(true).show(ui, |ui| {
-                let mut row = |k: &str, v: Option<String>| {
-                    ui.label(RichText::new(k).color(crate::theme::TEXT_DIM));
-                    let v = v.unwrap_or_else(|| "–".into());
-                    ui.add(egui::Label::new(&v).truncate()).on_hover_text(&v);
-                    ui.end_row();
-                };
-                row("Datei", Some(sk_core::variant::display_name(&cur.meta.path)));
-                row("Ordner", cur.meta.path.parent().map(|n| n.display().to_string()));
-                row("Kamera", Some(format!("{} {}", info.make, info.model)));
-                row("Objektiv", info.lens.clone());
-                row("Brennweite", info.focal_length.clone());
-                row("Blende", info.aperture.clone());
-                row("Belichtungszeit", info.exposure_time.clone());
-                row("ISO", info.iso.map(|v| v.to_string()));
-                row("Datum", info.date.as_deref().map(crate::browser::exif_date));
-                row("Sensor", Some(format!("{} × {}", info.width, info.height)));
-            });
-        });
     }
 
     fn output_tab(&mut self, ui: &mut Ui) {

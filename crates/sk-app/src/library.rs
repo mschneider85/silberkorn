@@ -55,6 +55,8 @@ pub struct LibraryUi {
     /// The subfolders read from disk for the tree below the folder shown, per folder (read
     /// when a folder becomes visible in it; forgotten when another folder is opened).
     pub listed: std::collections::HashMap<PathBuf, Vec<PathBuf>>,
+    /// The size of the file shown in the Metadaten tab (read once per file).
+    pub file_size: Option<(PathBuf, Option<u64>)>,
     /// Two persons to be merged once confirmed: (into, from).
     pub merging: Option<(i64, i64)>,
     /// The faces of the chosen person and those chosen among them.

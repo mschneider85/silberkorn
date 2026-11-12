@@ -97,10 +97,10 @@ pub const SECTION_HELP: &[(&str, &str, &str)] = &[
     ),
     ("Retuschen", "Alle Retuschen des Bildes: wählen, ändern, eine neue Quelle suchen oder löschen.", "retusche#Retuschen"),
     // Metadaten
-    // Title shown as "Bewertung" or "Bewertung (3 Bilder)".
-    ("Bewertung", "Sterne und Farb-Label des Bildes oder der Auswahl.", "bibliothek#Bewertung"),
+    ("Bewertung", "Sterne und Farb-Label des Bildes oder der Auswahl; gestrichelt, was nur einige der ausgewählten Bilder haben.", "bibliothek#Bewertung"),
     ("Keywords", "Schlagwörter zum Wiederfinden der Bilder.", "bibliothek#Keywords"),
-    ("Aufnahme", "Kamera, Objektiv, Belichtung und Datum der Aufnahme.", "bibliothek#Aufnahme"),
+    ("Aufnahme", "Blende, Belichtungszeit, ISO und Brennweite, dazu Kamera und Objektiv.", "bibliothek#Aufnahme"),
+    ("Datei", "Auflösung, Dateigröße und Ordner des Bildes.", "bibliothek#Aufnahme"),
     // Stile
     ("Filmsimulationen", "Fertige Looks nach klassischen Filmen; der Zeiger auf einem Stil zeigt ihn als Vorschau im Bild.", "vergleichen#Filmsimulationen"),
     ("Eigene Stile", "Selbst gespeicherte Stile, auf die Auswahl anzuwenden.", "vergleichen#Eigene Stile"),
