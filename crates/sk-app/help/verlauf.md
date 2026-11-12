@@ -10,10 +10,10 @@ Ein Zug an einem Regler ist ein Schritt, ebenso mehrere Pfeiltasten- oder Mausra
 
 ## Verlauf
 
-Der Tab **Verlauf** listet alle Schritte des geöffneten Bildes, benannt nach dem, was sich geändert hat, etwa „Belichtung 0.8“. Ganz unten steht **Geöffnet**, der Stand beim Öffnen.
+Der Tab **Verlauf** zeigt unter **Schritte** alle Schritte des geöffneten Bildes als Zeitleiste, der neueste oben. Jeder Schritt trägt das Symbol des Tabs, zu dem sein Werkzeug gehört, und ist nach dem benannt, was sich geändert hat, etwa „Belichtung 0.8“ (der neue Wert). Schritte einer Ebene tragen deren Namen als blaues Etikett. Ganz unten steht **Geöffnet**, der Stand beim Öffnen; der jetzige Stand ist blau hinterlegt und mit **JETZT** markiert.
 
 - Überfahren eines Schritts zeigt ihn im Bild, ohne ihn anzuwenden.
-- Ein Klick springt zu diesem Stand. Spätere Schritte bleiben grau erreichbar, bis eine neue Änderung sie verwirft.
+- Ein Klick springt zu diesem Stand. Spätere Schritte bleiben gestrichelt und kursiv erreichbar, bis eine neue Änderung sie verwirft.
 
 Der Verlauf gilt, solange das Bild geöffnet ist. Wer einen Stand dauerhaft behalten will, legt einen Schnappschuss an. Die letzten Schritte zeigt auch die Seitenleiste neben dem Bild.
 
@@ -21,8 +21,8 @@ Der Verlauf gilt, solange das Bild geöffnet ist. Wer einen Stand dauerhaft beha
 
 Ein Schnappschuss sichert den jetzigen Stand unter einem Namen, dauerhaft für dieses Bild bzw. diese Variante. So lassen sich etwa eine warme und eine kühle Fassung festhalten und vergleichen.
 
-- **+ Schnappschuss** im Tab **Verlauf** (oder in der Seitenleiste) legt einen an.
-- Die Schnappschüsse erscheinen als kleine Vorschauen. Überfahren zeigt einen im Bild, ein Klick wendet ihn an (ein Rückgängig-Schritt), ein Doppelklick benennt ihn um.
+- Die gestrichelte Kachel **Jetzigen Stand sichern** hinter den Schnappschüssen (im Tab **Verlauf** oder in der Seitenleiste) legt einen an; sein Name lässt sich gleich eingeben.
+- Die Schnappschüsse erscheinen als kleine Vorschauen; der, der dem jetzigen Stand entspricht, ist blau umrandet und hat einen Haken. Überfahren zeigt einen im Bild, ein Klick wendet ihn an (ein Rückgängig-Schritt), ein Doppelklick benennt ihn um.
 - Rechtsklick bietet **Anwenden**, **Umbenennen** und **Löschen …**.
 
 Mit **Liste** im Tab **Stile** erscheinen Schnappschüsse wie Stile als knappe Liste.

@@ -4374,7 +4374,7 @@ fn deleting_a_snapshot_asks_first() {
     assert_eq!(count(&f.app), 0);
 }
 
-/// "+ Schnappschuss" saves the state and offers its name for editing right away, in the side
+/// "Jetzigen Stand sichern" saves the state and offers its name for editing right away, in the side
 /// column as in the history tab (both draw the same list).
 #[test]
 fn a_new_snapshot_can_be_named_right_away() {
@@ -5415,4 +5415,39 @@ fn layer_cards_masks_and_ranges() {
     let nodes = tool_panel_frame(&mut f, vec![]);
     click_at(&mut f, exact(&nodes, "Hintergrund").unwrap().center());
     assert_eq!(f.app.active_layer, None);
+}
+
+/// The Verlauf tab: the steps as a timeline ("Geöffnet" at the bottom, the current one chosen),
+/// a click on an earlier one goes back; the dashed tile adds a snapshot, which is then marked
+/// as the current state.
+#[test]
+fn history_timeline_and_snapshot_tile() {
+    let Some(mut f) = Fixture::new("history-timeline") else { return };
+    f.pump("Bild geladen", |a| a.current.is_some());
+    f.app.tab = crate::app::Tab::History;
+    f.app.edit(|a| a.exposure = 0.7);
+    f.app.commit_and_save();
+    f.app.edit(|a| a.contrast = 15.0);
+    f.app.commit_and_save();
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let row = |nodes: &[(String, egui::Rect)], name: &str| nodes.iter().find(|(l, _)| l.trim() == name).map(|(_, r)| *r);
+    let opened = row(&nodes, "Geöffnet").expect("Geöffnet");
+    let exposure = row(&nodes, "Belichtung 0.7").expect("Schritt Belichtung");
+    let contrast = row(&nodes, "Kontrast 15").expect("Schritt Kontrast");
+    assert!(contrast.top() < exposure.top() && exposure.top() < opened.top(), "der neueste oben");
+    click_at(&mut f, exposure.center());
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.contrast, 0.0, "zurück zu Belichtung");
+    assert_eq!(f.app.current.as_ref().unwrap().adjustments.exposure, 0.7);
+
+    let nodes = tool_panel_frame(&mut f, vec![]);
+    let add = row(&nodes, "Jetzigen Stand sichern").expect("Kachel");
+    click_at(&mut f, add.center());
+    assert_eq!(f.app.current.as_ref().unwrap().snapshots.len(), 1);
+    // The name is offered for editing; a click elsewhere ends it (the focus does not stick).
+    tool_panel_frame(&mut f, vec![]);
+    assert!(f.app.snapshot_rename.is_some(), "Name wird bearbeitet");
+    click_at(&mut f, egui::pos2(1300.0, 2300.0));
+    tool_panel_frame(&mut f, vec![]);
+    assert!(f.app.snapshot_rename.is_none(), "Klick daneben beendet die Benennung");
+    assert_eq!(f.app.current.as_ref().unwrap().snapshots[0].name, "Schnappschuss 1");
 }
